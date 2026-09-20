@@ -93,14 +93,19 @@ function SnapshotsHeader({
 
   return (
     <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
-      <div>
+      <div className="min-w-0 sm:flex-1">
         <h1 className="text-3xl font-bold">Snapshots</h1>
         <p className="text-muted-foreground mt-2">
           Restore points for maintenance. Snapshots this console creates are named{" "}
           <span className="font-mono">ops-</span> and expire on their own.
         </p>
       </div>
-      <div className="flex w-full flex-wrap items-start gap-2 sm:w-auto sm:justify-end">
+      <div className="flex w-full flex-wrap items-start gap-2 sm:w-auto sm:shrink-0 sm:flex-nowrap sm:justify-end">
+        <RefreshButton
+          label="Refresh snapshots"
+          lastUpdatedAt={lastUpdatedAt}
+          onRefresh={onRefresh}
+        />
         <div className="flex flex-col items-start gap-1 sm:items-end">
           <Button
             type="button"
@@ -126,7 +131,7 @@ function SnapshotsHeader({
             ) : (
               <Camera className="mr-2 h-4 w-4" aria-hidden />
             )}
-            Take snapshot
+            Take Snapshot
           </Button>
           {disabledReason && (
             <p
@@ -138,11 +143,6 @@ function SnapshotsHeader({
             </p>
           )}
         </div>
-        <RefreshButton
-          label="Refresh snapshots"
-          lastUpdatedAt={lastUpdatedAt}
-          onRefresh={onRefresh}
-        />
       </div>
     </div>
   );
@@ -242,7 +242,7 @@ function SnapshotsContent() {
           : {
               title: "No snapshots here",
               description:
-                "Use Take snapshot above, or open an instance's Snapshots tab, before risky maintenance.",
+                "Use Take Snapshot above, or open an instance's Snapshots tab, before risky maintenance.",
             };
 
   // Never claimed before data exists: a note about sizes while loading states a measurement

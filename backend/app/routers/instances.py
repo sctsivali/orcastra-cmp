@@ -42,6 +42,7 @@ from app.core.api_key_capabilities import is_valid_project_name
 from app.core.org_scope import (
     can_view_instance,
     check_tenant_permission,
+    filter_projects_by_acl,
     get_scope_cache_key,
     org_scope_dependency,
     project_is_visible,
@@ -204,6 +205,23 @@ async def list_instances(
         verify_cluster_access(host)
     if project and not is_valid_project_name(project):
         raise HTTPException(status_code=422, detail="Invalid project name")
+    if host and project and (
+        not project_is_visible(host, project)
+        or not filter_projects_by_acl(host, [project])
+    ):
+        # Keep the list endpoint's established anti-enumeration behavior: a project outside
+        # the Partner bound or Tenant grant is indistinguishable from an empty project. This
+        # gate must precede the scoped LXD read; per-instance Tenant permissions are still
+        # applied to the returned rows below.
+        return VMListResponse(
+            total=0,
+            vms=[],
+            nodes=[],
+            unreachable_nodes=[],
+            offset=offset,
+            limit=limit,
+            has_more=False,
+        )
     # Try cache first (scope+ACL aware, 30s TTL). The project is part of the key, as it is
     # for profiles: two callers asking for two projects must not share one body.
     cache = get_cache_manager()
@@ -219,9 +237,14 @@ async def list_instances(
     
     try:
         generation = cache.instance_list_generation()
-        all_vms, connected_nodes, incomplete_nodes = (
-            await lxd_service.list_all_vms_with_failures()
-        )
+        if host and project:
+            all_vms, connected_nodes, incomplete_nodes = (
+                await lxd_service.list_vms_in_project_with_failures(host, project)
+            )
+        else:
+            all_vms, connected_nodes, incomplete_nodes = (
+                await lxd_service.list_all_vms_with_failures()
+            )
         
         # Filter by host if provided
         if host:
@@ -248,8 +271,8 @@ async def list_instances(
                 | set(incomplete_nodes)
             )
 
-        # Filter by project if provided. The bound and the tenant ACL below stay last, so a
-        # project the caller may not see is an empty list, the same silence as no such project.
+        # Keep a final project filter for the partially scoped fleet path and as defense in
+        # depth if a service implementation ever returns rows outside the requested project.
         if project:
             all_vms = [vm for vm in all_vms if (vm.project or "default") == project]
         

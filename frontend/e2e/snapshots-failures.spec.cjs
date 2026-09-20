@@ -65,7 +65,7 @@ for (const scenario of [
     await page.goto("/inventory/snapshots");
     const { dialog } = await openTakeSnapshotDialog(page);
     await prepareCreate(page, dialog);
-    await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+    await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
     const failure = dialog.getByRole("alert").filter({ hasText: "Snapshot not taken" });
     await expect(failure).toContainText(scenario.message);
@@ -102,12 +102,12 @@ for (const scenario of [
     await page.goto("/inventory/snapshots");
     const { dialog } = await openTakeSnapshotDialog(page);
     await prepareCreate(page, dialog);
-    await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+    await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
     const unknown = dialog.getByRole("alert").filter({ hasText: "Snapshot result unknown" });
     await expect(unknown).toContainText(UNKNOWN_RESULT_MESSAGE);
     await expect(dialog.getByLabel("What is this for")).toHaveValue(BASE_CREATE_BODY.label);
-    await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
     expect(api.snapshotMutations).toHaveLength(1);
     await expectCleanHarness(api);
   });
@@ -158,7 +158,7 @@ test("A snapshot 401 completes auth refresh without retrying the mutation", asyn
   await prepareCreate(page, dialog);
   const authRequestsBeforeSubmit = authSessionRequests;
   const authResponsesBeforeSubmit = authSessionResponses;
-  await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+  await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   const failure = dialog.getByRole("alert").filter({ hasText: "Snapshot not taken" });
   await expect(failure).toContainText(safeMessage);
@@ -196,13 +196,13 @@ test("A structured unknown result verifies the exact target before applying list
   await page.goto("/inventory/snapshots");
   const { dialog } = await openTakeSnapshotDialog(page);
   await prepareCreate(page, dialog);
-  await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+    await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   const unknown = dialog.getByRole("alert").filter({ hasText: "Snapshot result unknown" });
   await expect(unknown).toContainText(UNKNOWN_RESULT_MESSAGE);
   await expect(dialog.getByText(rawDetail, { exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel("What is this for")).toHaveValue(BASE_CREATE_BODY.label);
-  await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
   if (testInfo.project.name === "mobile-dark") {
     await expectProjectTheme(page, testInfo);
     await expectNoHorizontalOverflow(page);
@@ -264,7 +264,7 @@ test("HTTP 504 is unknown and a failed exact-target check retains the draft", as
   await page.goto("/inventory/snapshots");
   const { dialog } = await openTakeSnapshotDialog(page);
   await prepareCreate(page, dialog);
-  await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+  await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   const unknown = dialog.getByRole("alert").filter({ hasText: "Snapshot result unknown" });
   await expect(unknown).toContainText(UNKNOWN_RESULT_MESSAGE);
@@ -313,12 +313,12 @@ test("An interrupted create reports an unknown result and cannot be retried blin
   await page.goto("/inventory/snapshots");
   const { dialog } = await openTakeSnapshotDialog(page);
   await prepareCreate(page, dialog);
-  await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+    await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   const unknown = dialog.getByRole("alert").filter({ hasText: "Snapshot result unknown" });
   await expect(unknown).toContainText(UNKNOWN_RESULT_MESSAGE);
   await expect(unknown.getByRole("button", { name: "Check snapshots" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
   await expect(dialog.getByLabel("What is this for")).toHaveValue(BASE_CREATE_BODY.label);
   await expectCleanHarness(api);
 });

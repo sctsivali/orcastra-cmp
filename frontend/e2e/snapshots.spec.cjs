@@ -37,6 +37,20 @@ test("Partner takes one stateless snapshot through the explicit target cascade",
   await page.goto("/inventory/snapshots");
   await expect(page.getByRole("heading", { level: 1, name: "Snapshots" })).toBeVisible();
 
+  const headerRefresh = page.getByRole("button", { name: "Refresh snapshots" }).first();
+  const headerCreate = page.getByRole("button", { name: "Take Snapshot", exact: true }).first();
+  await expect(headerRefresh).toBeVisible();
+  await expect(headerCreate).toBeVisible();
+  const refreshPrecedesCreate = await headerRefresh.evaluate((refresh, create) => {
+    return Boolean(refresh.compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }, await headerCreate.elementHandle());
+  expect(refreshPrecedesCreate).toBe(true);
+  if ((page.viewportSize()?.width ?? 0) >= 640) {
+    const refreshBox = await headerRefresh.boundingBox();
+    const createBox = await headerCreate.boundingBox();
+    expect(createBox?.x ?? 0).toBeGreaterThan((refreshBox?.x ?? 0) + (refreshBox?.width ?? 0));
+  }
+
   const { dialog, trigger } = await openTakeSnapshotDialog(page);
   await expect(dialog).toHaveCSS("position", "fixed");
   await expect(dialog.getByRole("combobox", { name: "Project" })).toBeDisabled();
@@ -64,7 +78,7 @@ test("Partner takes one stateless snapshot through the explicit target cascade",
   await expect(dialog.getByText(/not an off-host backup/i)).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
-  const submit = dialog.getByRole("button", { name: "Take snapshot", exact: true });
+  const submit = dialog.getByRole("button", { name: "Take Snapshot", exact: true });
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(dialog.getByRole("button", { name: "Taking snapshot" })).toHaveAttribute(
@@ -137,7 +151,7 @@ test("Admin sees a disabled create entry point in read-only mode", async ({ page
   const api = await installApiFixtures(page, "admin", { snapshotPage: true, readOnly: true });
 
   await page.goto("/inventory/snapshots");
-  const create = page.getByRole("button", { name: "Take snapshot", exact: true }).first();
+  const create = page.getByRole("button", { name: "Take Snapshot", exact: true }).first();
   await expect(create).toBeVisible();
   await expect(create).toBeDisabled();
   await expect(create).toHaveAttribute("title", "Action disabled in read-only mode");
@@ -179,6 +193,137 @@ test("Snapshot dialog traps focus and restores its opener", async ({ page }, tes
   await expectCleanHarness(api);
 });
 
+test("Project and instance candidates stay interactive while authoritative checks finish", async (
+  { page },
+  testInfo,
+) => {
+  test.skip(testInfo.project.name !== "desktop-light", "Concurrency contract needs one profile");
+
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", {
+    snapshotPage: true,
+    snapshotReadSequences: { projects: [{ delayMs: 2_500 }] },
+  });
+
+  await page.goto("/inventory/snapshots");
+  await expect.poll(() => api.snapshotReadCounts.fleetProjects ?? 0).toBeGreaterThan(0);
+  const { dialog } = await openTakeSnapshotDialog(page);
+  await selectOption(page, dialog, "Cluster", "Core Cluster");
+
+  const project = dialog.getByRole("combobox", { name: "Project" });
+  const verifying = dialog.getByText("Verifying projects on this cluster", { exact: true });
+  await expect(verifying).toBeVisible();
+  await expect(project).toBeEnabled();
+  await selectOption(page, dialog, "Project", "tenant-a");
+
+  await expect.poll(() => api.snapshotReadCounts.instances ?? 0).toBeGreaterThan(0);
+  await expect(verifying).toBeVisible();
+  const instance = dialog.getByRole("combobox", { name: "Instance" });
+  await expect(instance).toBeEnabled();
+  await selectOption(page, dialog, "Instance", "tenant-owned-vm");
+
+  await expect(dialog.getByRole("region", { name: "Target", exact: true })).toHaveCount(0);
+  expect(api.snapshotReadCounts.detail ?? 0).toBe(0);
+  expect(api.snapshotReadCounts.policy ?? 0).toBe(0);
+  await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
+
+  await expect(dialog.getByRole("region", { name: "Target", exact: true })).toContainText(
+    "tenant-owned-vm",
+  );
+  expect(api.snapshotReadCounts.detail ?? 0).toBeGreaterThan(0);
+  expect(api.snapshotReadCounts.policy ?? 0).toBeGreaterThan(0);
+  await expectCleanHarness(api);
+});
+
+test("Authoritative project removal clears a provisional target", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-light", "Fail-closed target proof needs one profile");
+
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", {
+    snapshotPage: true,
+    snapshotReadSequences: {
+      projects: [
+        {
+          delayMs: 1_000,
+          body: {
+            host: "cluster-a",
+            projects: [
+              {
+                name: "operations",
+                description: "Authoritative project",
+                config: {},
+                used_by: [],
+                host: "cluster-a",
+                tags: [],
+              },
+            ],
+            total: 1,
+            reachable: true,
+            error: null,
+          },
+        },
+      ],
+    },
+  });
+
+  await page.goto("/inventory/snapshots");
+  await expect.poll(() => api.snapshotReadCounts.fleetProjects ?? 0).toBeGreaterThan(0);
+  const { dialog } = await openTakeSnapshotDialog(page);
+  await selectOption(page, dialog, "Cluster", "Core Cluster");
+  await selectOption(page, dialog, "Project", "tenant-a");
+  await selectOption(page, dialog, "Instance", "tenant-owned-vm");
+
+  await expect(
+    dialog.getByText("The filtered project is no longer available. Choose another project."),
+  ).toBeVisible();
+  await expect(dialog.getByRole("combobox", { name: "Project" })).not.toContainText("tenant-a");
+  await expect(dialog.getByRole("combobox", { name: "Instance" })).toBeDisabled();
+  await expect(dialog.getByRole("region", { name: "Target", exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
+  expect(api.snapshotReadCounts.detail ?? 0).toBe(0);
+  expect(api.snapshotReadCounts.policy ?? 0).toBe(0);
+  expect(api.snapshotMutations).toEqual([]);
+  await expectCleanHarness(api);
+});
+
+test("A cold scoped worker retries without a manual target reset", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-light", "Cold-worker retry needs one profile");
+
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", {
+    snapshotPage: true,
+    snapshotReadSequences: {
+      instances: [
+        {
+          status: 503,
+          body: { detail: "Instance inventory is temporarily unavailable" },
+        },
+        {
+          status: 503,
+          body: { detail: "Instance inventory is temporarily unavailable" },
+        },
+        {
+          status: 503,
+          body: { detail: "Instance inventory is temporarily unavailable" },
+        },
+      ],
+    },
+  });
+
+  await page.goto("/inventory/snapshots");
+  const { dialog } = await openTakeSnapshotDialog(page);
+  await selectOption(page, dialog, "Cluster", "Core Cluster");
+  await selectOption(page, dialog, "Project", "tenant-a");
+
+  await expect.poll(() => api.snapshotReadCounts.instances ?? 0).toBe(4);
+  await selectOption(page, dialog, "Instance", "tenant-owned-vm");
+  await expect(dialog.getByRole("region", { name: "Target", exact: true })).toContainText(
+    "tenant-owned-vm",
+  );
+  expect(api.snapshotMutations).toEqual([]);
+  await expectCleanHarness(api);
+});
+
 test("Changing project clears the instance and its snapshot draft", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "Cascade behavior needs one profile");
 
@@ -201,7 +346,7 @@ test("Changing project clears the instance and its snapshot draft", async ({ pag
   await expect(dialog.getByRole("combobox", { name: "Instance" })).not.toHaveText(
     "tenant-owned-vm",
   );
-  await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
 
   await selectOption(page, dialog, "Project", "tenant-a");
   await selectOption(page, dialog, "Instance", "tenant-owned-vm");
@@ -239,7 +384,7 @@ test("A late policy response cannot revive a target from the previous project", 
   await expect(dialog.getByRole("combobox", { name: "Instance" })).not.toHaveText(
     "tenant-owned-vm",
   );
-  await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
   expect(api.snapshotMutations).toEqual([]);
   await expectCleanHarness(api);
 });
@@ -270,8 +415,8 @@ test("A late instance detail cannot revive a target from the previous project", 
   await expect(dialog.getByRole("combobox", { name: "Instance" })).not.toHaveText(
     "tenant-owned-vm",
   );
-  await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
-  expect(api.snapshotReadCounts.policy ?? 0).toBe(0);
+  await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
+  expect(api.snapshotReadCounts.policy ?? 0).toBeGreaterThan(0);
   expect(api.snapshotMutations).toEqual([]);
   await expectCleanHarness(api);
 });
@@ -391,7 +536,7 @@ test("A full operator snapshot set blocks create and points to the existing list
 
   await expect(dialog.getByRole("alert").filter({ hasText: "Snapshot limit reached" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "View existing snapshots" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
   await expectCleanHarness(api);
 });
 
@@ -416,7 +561,7 @@ test("Pending refresh uses its create target, not page scope", async ({ page }, 
   await selectOption(page, dialog, "Project", "tenant-a");
   await selectOption(page, dialog, "Instance", "tenant-owned-vm");
   await dialog.getByLabel("What is this for").fill(BASE_CREATE_BODY.label);
-  await dialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+  await dialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   await expect(dialog).toBeHidden();
   const pending = page
@@ -519,7 +664,7 @@ test("Tenant deep link never mounts the fleet snapshot reads or create action", 
 
   await page.goto("/inventory/snapshots");
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("button", { name: "Take snapshot", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Take Snapshot", exact: true })).toHaveCount(0);
   expect(
     api.requests.filter(
       (entry) =>

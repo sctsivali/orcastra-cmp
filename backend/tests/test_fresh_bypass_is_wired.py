@@ -894,9 +894,9 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
         """Raising the wrong type is as broken as returning empty, and looks correct.
 
         LXDConnectionError and LXDOperationError are siblings off Exception
-        (exceptions.py), so `except LXDOperationError` never catches a connection failure
-        and vice versa. Routers map the two to different statuses: connection to 503,
-        operation to 400, 404 or 500 depending on the handler.
+        (exceptions.py), while typed availability errors subclass LXDConnectionError. Routers
+        map connection failures to 503 and operations to 400, 404 or 500 depending on the
+        handler.
 
         Raising the operation type from a `client is None` branch is what produced 14 x
         HTTP 500 on GET /api/v1/projects/blitz01, and a 404 claiming an instance did not
@@ -932,11 +932,12 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
                             continue
                         exc = stmt.exc.func if isinstance(stmt.exc, ast.Call) else stmt.exc
                         name = getattr(exc, "id", getattr(exc, "attr", None))
-                        if name != self.CONNECTION_ERROR:
+                        if name not in {self.CONNECTION_ERROR, "LXDLocalUnavailableError"}:
                             offenders.append(
                                 f"{path.name}:{stmt.lineno} {fn.name} raises {name} when it "
-                                f"cannot connect. Only {self.CONNECTION_ERROR} is mapped to "
-                                "503; every other type becomes a 400, 404 or 500."
+                                "cannot connect. Only LXDConnectionError or one of its typed "
+                                "subclasses is mapped to 503; every other type becomes a 400, "
+                                "404 or 500."
                             )
         self.assertEqual(offenders, [])
 

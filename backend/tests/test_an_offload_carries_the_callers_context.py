@@ -1,7 +1,7 @@
 """Structural guard: a new offload must carry the caller's context.
 
 `core/blocking.run_blocking` now copies the context, and `asyncio.to_thread` always did. Raw
-`loop.run_in_executor` does not, and this codebase has 31 of those left. Every one of them is a
+`loop.run_in_executor` does not, and this codebase has 29 of those left. Every one of them is a
 place where `get_client`'s org-scope filter cannot deny, `get_scope_cache_key` returns the ADMIN
 namespace, and `check_tenant_permission` fails open. None of that announces itself: the code
 runs, the numbers look right, and the check that was supposed to happen simply did not.
@@ -43,7 +43,6 @@ BASELINE: Dict[str, int] = {
     "routers/storage_volumes.py": 1,
     "routers/vms.py": 1,
     "services/lxd/lxd_service.py": 1,
-    "services/lxd/projects.py": 1,
 }
 
 

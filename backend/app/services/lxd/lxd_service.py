@@ -408,6 +408,17 @@ class LXDService:
     ) -> Tuple[List[VMInfo], List[str], List[str]]:
         """List instances and identify clusters whose project inventory was incomplete."""
         return await self.instance_manager.list_all_vms_with_failures()
+
+    async def list_vms_in_project_with_failures(
+        self,
+        node_name: str,
+        project: str,
+    ) -> Tuple[List[VMInfo], List[str], List[str]]:
+        """List instances in one exact cluster/project and preserve inventory failure detail."""
+        return await self.instance_manager.list_vms_in_project_with_failures(
+            node_name,
+            project,
+        )
     
     async def get_vm(
         self,
@@ -568,8 +579,8 @@ class LXDService:
     # Project operations
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:
         """List all projects on a specific LXD host."""
-        # Ensure connection (lazy loading)
-        self.ensure_connection(host)
+        # ProjectManager owns the bounded direct collection read. Ensuring a connection here first
+        # would add Vault and network I/O synchronously on the request event loop.
         return await self.project_manager.list_projects(host)
 
     async def get_project_usage(self, host: str, project: str) -> ProjectUsage:

@@ -36,7 +36,7 @@ test("The per-instance entry point submits through the shared stateless form", a
   await expect(target).toContainText(DEFAULT_TARGET.project);
   await expect(target).toContainText(DEFAULT_TARGET.instanceName);
   await createDialog.getByLabel("What is this for").fill(BASE_CREATE_BODY.label);
-  await createDialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+  await createDialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   await expect(page.getByText("Snapshot taken", { exact: true })).toBeVisible();
   await expect(createDialog).toBeHidden();
@@ -71,7 +71,7 @@ test("The per-instance dialog rejects a cached policy when fresh revalidation fa
       has: page.getByRole("heading", { name: DEFAULT_TARGET.instanceName, exact: true }),
     });
   await detailDialog.getByRole("tab", { name: "Snapshots", exact: true }).click();
-  const takeSnapshot = detailDialog.getByRole("button", { name: "Take snapshot", exact: true });
+  const takeSnapshot = detailDialog.getByRole("button", { name: "Take Snapshot", exact: true });
   await expect(takeSnapshot).toBeEnabled();
   await takeSnapshot.click();
 
@@ -82,7 +82,7 @@ test("The per-instance dialog rejects a cached policy when fresh revalidation fa
     createDialog.getByRole("alert").filter({ hasText: "Snapshot policy could not be verified" }),
   ).toBeVisible();
   await expect(createDialog.getByLabel("What is this for")).toHaveCount(0);
-  await expect(createDialog.getByRole("button", { name: "Take snapshot", exact: true })).toBeDisabled();
+  await expect(createDialog.getByRole("button", { name: "Take Snapshot", exact: true })).toBeDisabled();
   expect(api.snapshotReadCounts.policy).toBeGreaterThanOrEqual(2);
   expect(api.snapshotMutations).toEqual([]);
   await expectCleanHarness(api);
@@ -121,7 +121,7 @@ test("Per-instance unknown check failure retains its draft and guard until retry
   const { createDialog } = await openInstanceSnapshotForm(page);
   const label = createDialog.getByLabel("What is this for");
   await label.fill(BASE_CREATE_BODY.label);
-  await createDialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+  await createDialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
 
   const unknown = createDialog
     .getByRole("alert")
@@ -150,7 +150,7 @@ test("Per-instance unknown check failure retains its draft and guard until retry
   ).toBeVisible();
   await expect(unknown).toBeVisible();
   await expect(
-    createDialog.getByRole("button", { name: "Take snapshot", exact: true }),
+    createDialog.getByRole("button", { name: "Take Snapshot", exact: true }),
   ).toBeDisabled();
   const policyFailure = createDialog
     .getByRole("alert")
@@ -163,7 +163,7 @@ test("Per-instance unknown check failure retains its draft and guard until retry
   await expect(label).toHaveValue(BASE_CREATE_BODY.label);
   await expect(unknown).toBeVisible();
   await expect(
-    createDialog.getByRole("button", { name: "Take snapshot", exact: true }),
+    createDialog.getByRole("button", { name: "Take Snapshot", exact: true }),
   ).toBeDisabled();
 
   await unknown.getByRole("button", { name: "Check snapshots" }).click();
@@ -195,7 +195,7 @@ test("Per-instance reconnect revalidation cannot open a second create flight", a
   const { createDialog } = await openInstanceSnapshotForm(page);
   const label = createDialog.getByLabel("What is this for");
   await label.fill(BASE_CREATE_BODY.label);
-  await createDialog.getByRole("button", { name: "Take snapshot", exact: true }).click();
+  await createDialog.getByRole("button", { name: "Take Snapshot", exact: true }).click();
   await expect.poll(() => api.snapshotMutations.length).toBe(1);
   const policyReadsBeforeReconnect = api.snapshotReadCounts.policy;
 

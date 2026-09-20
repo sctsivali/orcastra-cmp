@@ -524,6 +524,22 @@ class LXDConnectionManager:
             # Not in cache, try auto-reconnect if we have connection info
             return self._auto_reconnect(cluster_id)
 
+    def get_cached_client(self, cluster_id: str) -> Optional[pylxd.Client]:
+        """Return an already connected client without probing or reconnecting.
+
+        Used by request paths whose own scoped LXD read is the liveness probe and whose wall
+        budget cannot also contain ``get_client`` validation/reconnect calls. Scope and breaker
+        checks remain mandatory even though this is a memory-only lookup.
+        """
+        from app.core.org_scope import get_current_allowed_clusters
+
+        allowed = get_current_allowed_clusters()
+        if allowed is not None and cluster_id not in allowed:
+            return None
+        if health.is_tripped(cluster_id):
+            return None
+        return self._clients.get(cluster_id)
+
     def get_project_client(self, cluster_id: str, project: str, timeout=(3, 8)) -> Optional[pylxd.Client]:
         """
         Build a short-lived pylxd client scoped to a specific LXD project,

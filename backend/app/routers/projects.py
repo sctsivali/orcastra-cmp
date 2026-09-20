@@ -4,7 +4,7 @@ Provides endpoints for listing and creating projects.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 import logging
 from datetime import datetime, timezone
 import asyncio
@@ -28,7 +28,7 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
-from app.services.lxd.exceptions import LXDProjectNotFoundError
+from app.services.lxd.exceptions import LXDLocalUnavailableError, LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.api_key_capabilities import is_valid_project_name
 from app.core.database import get_db
@@ -63,6 +63,28 @@ router = APIRouter(
 
 # Shared thread pool for blocking operations
 _projects_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="projects_")
+
+# The LXD project reader admits at most 10 blocking calls per worker. Keep fleet reads below
+# that ceiling so one cold fleet request cannot reject its own later clusters and so the
+# selected-cluster picker retains capacity while the fleet cache is rebuilding.
+_PROJECT_FLEET_BATCH_SIZE = 8
+
+
+async def _gather_project_reads(
+    hosts: List[str],
+    reader: Callable[[str], Awaitable[Any]],
+) -> List[Any]:
+    """Read a fleet in ordered batches without saturating the project worker pool."""
+    results: List[Any] = []
+    for start in range(0, len(hosts), _PROJECT_FLEET_BATCH_SIZE):
+        batch = hosts[start:start + _PROJECT_FLEET_BATCH_SIZE]
+        results.extend(await asyncio.gather(
+            *(reader(host) for host in batch),
+            return_exceptions=True,
+        ))
+        if any(isinstance(result, LXDLocalUnavailableError) for result in results):
+            break
+    return results
 
 
 def _parse_size_to_bytes(size_str: str) -> int:
@@ -137,6 +159,7 @@ def _refuse_cap_above_hardware(
     description="Get a list of all projects across all connected LXD nodes.",
     responses={
         200: {"description": "List of projects retrieved successfully"},
+        503: {"model": ErrorResponse, "description": "Local inventory reader unavailable"},
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
@@ -168,6 +191,8 @@ async def list_all_projects(
                     projects=projects,
                     total=len(projects),
                 )
+            except LXDLocalUnavailableError:
+                raise
             except Exception as e:
                 # important: return the host, labelled, rather than None. Dropping it made
                 # an unreachable cluster vanish from the response entirely, so the dashboard
@@ -181,12 +206,17 @@ async def list_all_projects(
                     error=str(e) or e.__class__.__name__,
                 )
         
-        # Fetch from all nodes in parallel
-        results = await asyncio.gather(
-            *[fetch_host_projects(host) for host in node_names],
-            return_exceptions=True
-        )
+        # Bound each wave below the service pool's admission limit. A single fleet refresh
+        # must not make healthy later clusters look unreachable or starve a direct picker read.
+        results = await _gather_project_reads(node_names, fetch_host_projects)
         
+        local_failure = next(
+            (result for result in results if isinstance(result, LXDLocalUnavailableError)),
+            None,
+        )
+        if local_failure is not None:
+            raise local_failure
+
         # Filter valid results
         all_projects = []
         answered = 0
@@ -228,6 +258,12 @@ async def list_all_projects(
         
         return all_projects
         
+    except LXDLocalUnavailableError as e:
+        logger.warning("Project inventory is locally unavailable: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Project inventory is temporarily unavailable",
+        )
     except Exception as e:
         logger.error(f"Error listing all projects: {e}")
         raise HTTPException(status_code=500, detail=str(e))

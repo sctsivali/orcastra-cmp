@@ -36,6 +36,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.services.lxd.lxd_service import LXDService
+from app.services.lxd import health
 from app.services.lxd.projects import ProjectManager
 from app.services.lxd.instance import InstanceManager
 from app.services.lxd.resources import ResourceManager
@@ -55,6 +56,9 @@ class _BreakerTrippedConnectionManager:
     def get_client(self, host, *args, **kwargs):
         return None
 
+    def get_cached_client(self, host, *args, **kwargs):
+        return None
+
     def get_node_names(self):
         return [HOST]
 
@@ -63,6 +67,15 @@ class _BreakerTrippedConnectionManager:
 
     def sync_registered_clusters(self, *args, **kwargs):
         return None
+
+
+@pytest.fixture(autouse=True)
+def _trip_test_breaker():
+    health.record_failure(HOST, "unreachable")
+    try:
+        yield
+    finally:
+        health.clear(HOST)
 
 
 def _service() -> LXDService:

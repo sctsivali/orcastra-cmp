@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -12,12 +13,33 @@ from requests import exceptions as requests_exceptions
 from app.core import org_scope
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.routers import instances, vms
-from app.services.lxd import instance as instance_module
-from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd import health, instance as instance_module
+from app.services.lxd.connection import LXDConnectionManager
+from app.services.lxd.exceptions import LXDConnectionError, LXDLocalUnavailableError
 from app.services.lxd.instance import InstanceManager
 
 
 HOST = "shared-cluster"
+
+
+def test_cached_client_lookup_keeps_scope_and_breaker_guards():
+    connection = LXDConnectionManager.__new__(LXDConnectionManager)
+    cached_client = object()
+    connection._clients = {HOST: cached_client}
+
+    token = org_scope._allowed_clusters_var.set({"another-cluster"})
+    try:
+        assert connection.get_cached_client(HOST) is None
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
+
+    health.clear(HOST)
+    assert connection.get_cached_client(HOST) is cached_client
+    health.record_failure(HOST, "offline")
+    try:
+        assert connection.get_cached_client(HOST) is None
+    finally:
+        health.clear(HOST)
 
 
 async def _thread_offload(fn, *args, **_kwargs):
@@ -185,6 +207,132 @@ async def test_inventory_uses_bounded_workers_and_preserves_a_partial_cluster(mo
     )
     assert ("instance.inventory[fast]", 30.0, 20) in calls
     assert ("instance.inventory[slow]", 30.0, 20) in calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        ((["vm"], True, True), (["vm"], [HOST], [])),
+        ((["vm"], True, False), (["vm"], [HOST], [HOST])),
+        ((["ignored"], False, False), ([], [], [HOST])),
+    ],
+)
+async def test_scoped_inventory_is_bounded_and_preserves_failure_detail(
+    monkeypatch,
+    result,
+    expected,
+):
+    manager = InstanceManager.__new__(InstanceManager)
+    seen = {}
+
+    async def _bounded(fn, *args, **kwargs):
+        seen.update(fn=fn, args=args, options=kwargs)
+        return result
+
+    monkeypatch.setattr(instance_module, "run_blocking", _bounded)
+
+    actual = await manager.list_vms_in_project_with_failures(HOST, "qa")
+
+    assert actual == expected
+    assert seen["fn"] == manager._fetch_project_inventory_node
+    assert seen["args"] == (HOST, "qa")
+    assert seen["options"]["timeout"] == 30.0
+    assert seen["options"]["max_in_flight"] == 20
+    assert seen["options"]["executor"] is instance_module._instance_inventory_executor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blocking_error",
+    [
+        BlockingTimeout("instance.inventory[only/qa]", 30.0),
+        BlockingPoolFull("instance.inventory[only/qa]", 20),
+    ],
+)
+async def test_scoped_inventory_timeout_or_saturation_is_unavailable(
+    monkeypatch,
+    blocking_error,
+):
+    manager = InstanceManager.__new__(InstanceManager)
+
+    async def _unavailable(*_args, **_kwargs):
+        raise blocking_error
+
+    monkeypatch.setattr(instance_module, "run_blocking", _unavailable)
+
+    with pytest.raises(LXDConnectionError) as caught:
+        await manager.list_vms_in_project_with_failures(HOST, "qa")
+
+    assert caught.value.__cause__ is blocking_error
+
+
+def test_scoped_inventory_does_not_start_a_vault_reconnect_after_cache_miss(monkeypatch):
+    manager = InstanceManager.__new__(InstanceManager)
+    get_cached_client = Mock(return_value=None)
+    get_client = Mock(side_effect=AssertionError("scoped inventory must not validate or reconnect"))
+    manager.connection_manager = SimpleNamespace(
+        get_cached_client=get_cached_client,
+        get_client=get_client,
+    )
+    get_cluster_info = Mock()
+    get_cluster_certificate = Mock()
+    manager.cert_manager = SimpleNamespace(
+        get_cluster_info=get_cluster_info,
+        get_cluster_certificate=get_cluster_certificate,
+    )
+    get_endpoint = Mock(return_value="endpoint")
+    monkeypatch.setattr(manager, "_get_node_endpoint", get_endpoint)
+
+    with pytest.raises(LXDLocalUnavailableError):
+        manager._fetch_project_inventory_node(HOST, "qa")
+    get_cached_client.assert_called_once_with(HOST)
+    get_client.assert_not_called()
+    get_endpoint.assert_not_called()
+    get_cluster_info.assert_not_called()
+    get_cluster_certificate.assert_not_called()
+
+
+def test_scoped_inventory_preserves_a_remote_breaker_failure(monkeypatch):
+    manager = InstanceManager.__new__(InstanceManager)
+    manager.connection_manager = SimpleNamespace(get_cached_client=Mock(return_value=None))
+    manager.cert_manager = None
+    get_endpoint = Mock(return_value="endpoint")
+    monkeypatch.setattr(manager, "_get_node_endpoint", get_endpoint)
+    monkeypatch.setattr(instance_module.health, "is_tripped", lambda host: host == HOST)
+
+    with pytest.raises(LXDConnectionError) as caught:
+        manager._fetch_project_inventory_node(HOST, "qa")
+
+    assert not isinstance(caught.value, LXDLocalUnavailableError)
+    assert str(caught.value) == "Instance inventory is temporarily unavailable"
+    get_endpoint.assert_not_called()
+
+
+def test_scoped_inventory_reuses_the_cached_client_without_a_validation_probe(monkeypatch):
+    manager = InstanceManager.__new__(InstanceManager)
+    cached_client = object()
+    get_cached_client = Mock(return_value=cached_client)
+    get_client = Mock(side_effect=AssertionError("cached scoped reads need no validation probe"))
+    manager.connection_manager = SimpleNamespace(
+        get_cached_client=get_cached_client,
+        get_client=get_client,
+    )
+    manager.cert_manager = None
+    monkeypatch.setattr(manager, "_get_node_endpoint", lambda _host: "endpoint")
+    scoped_read = Mock(return_value=(["vm"], True, True))
+    monkeypatch.setattr(manager, "_fetch_vms_from_node_detailed", scoped_read)
+
+    assert manager._fetch_project_inventory_node(HOST, "qa") == (["vm"], True, True)
+    get_cached_client.assert_called_once_with(HOST)
+    get_client.assert_not_called()
+    scoped_read.assert_called_once_with(
+        HOST,
+        "endpoint",
+        project="qa",
+        allow_vault_reconnect=False,
+        client_override=cached_client,
+    )
 
 
 @pytest.mark.asyncio

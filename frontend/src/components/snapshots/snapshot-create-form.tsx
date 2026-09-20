@@ -486,7 +486,7 @@ export function SnapshotCreateForm({
             ? "Taking snapshot"
             : billingLinked
               ? "Snapshot anyway"
-              : "Take snapshot"}
+              : "Take Snapshot"}
         </Button>
       </DialogFooter>
     </form>

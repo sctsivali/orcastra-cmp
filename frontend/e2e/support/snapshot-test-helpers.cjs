@@ -33,7 +33,7 @@ async function selectOption(page, dialog, label, optionText) {
 }
 
 async function openTakeSnapshotDialog(page) {
-  const trigger = page.getByRole("button", { name: "Take snapshot", exact: true }).first();
+  const trigger = page.getByRole("button", { name: "Take Snapshot", exact: true }).first();
   await expect(trigger).toBeVisible();
   await trigger.focus();
   await expect(trigger).toBeFocused();
@@ -103,7 +103,7 @@ async function expectTouchTargets(locators, minimum = 44) {
 
 async function expectPendingTouchTargets(page, pending, refresh) {
   await expectTouchTargets([
-    page.getByRole("button", { name: "Take snapshot", exact: true }).first(),
+    page.getByRole("button", { name: "Take Snapshot", exact: true }).first(),
     refresh,
     pending.getByRole("button", { name: "Dismiss snapshot progress" }),
   ]);
@@ -129,7 +129,7 @@ async function openInstanceSnapshotForm(page, instanceName = DEFAULT_TARGET.inst
   await expect(detailDialog).toBeVisible();
   await detailDialog.getByRole("tab", { name: "Snapshots", exact: true }).click();
   const takeSnapshot = detailDialog.getByRole("button", {
-    name: "Take snapshot",
+    name: "Take Snapshot",
     exact: true,
   });
   await expect(takeSnapshot).toBeEnabled();

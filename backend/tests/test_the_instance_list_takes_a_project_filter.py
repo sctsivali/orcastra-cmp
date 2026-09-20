@@ -32,15 +32,36 @@ class _Service:
         self.connected = ["nuc2", "nuc1"] if connected is None else connected
         self.incomplete = [] if incomplete is None else incomplete
         self.reads = 0
+        self.fleet_reads = 0
+        self.scoped_reads = []
 
     def get_node_names(self):
         return ["nuc2", "nuc1"]
 
     async def list_all_vms_with_failures(self):
         self.reads += 1
+        self.fleet_reads += 1
         return [
             _vm("a", "default"), _vm("b", "qa-a"), _vm("c", "qa-a"), _vm("d", "qa-b"), _vm("e", "qa-a", host="nuc1"),
         ], self.connected, self.incomplete
+
+    async def list_vms_in_project_with_failures(self, host, project):
+        self.reads += 1
+        self.scoped_reads.append((host, project))
+        if host not in self.connected:
+            return [], [], [host]
+        rows = [
+            _vm("a", "default"),
+            _vm("b", "qa-a"),
+            _vm("c", "qa-a"),
+            _vm("d", "qa-b"),
+            _vm("e", "qa-a", host="nuc1"),
+        ]
+        return (
+            [row for row in rows if row.host == host and row.project == project],
+            [host],
+            [host] if host in self.incomplete else [],
+        )
 
 
 def _client(monkeypatch, service=None):
@@ -63,11 +84,24 @@ def _names(r):
 
 
 def test_the_project_narrows_the_list_and_composes_with_host(monkeypatch):
-    client, _, _ = _client(monkeypatch)
+    client, _, service = _client(monkeypatch)
     assert _names(client.get("/instances?project=qa-a")) == ["b", "c", "e"]
     assert _names(client.get("/instances?host=nuc2&project=qa-a")) == ["b", "c"]
     assert _names(client.get("/instances?project=zz-absent")) == []
     assert _names(client.get("/instances")) == ["a", "b", "c", "d", "e"]
+    assert service.scoped_reads == [("nuc2", "qa-a")]
+    assert service.fleet_reads == 3
+
+
+def test_an_exact_host_and_project_never_reads_the_fleet(monkeypatch):
+    client, _, service = _client(monkeypatch)
+
+    response = client.get("/instances?host=nuc2&project=qa-a")
+
+    assert response.status_code == 200, response.text
+    assert _names(response) == ["b", "c"]
+    assert service.scoped_reads == [("nuc2", "qa-a")]
+    assert service.fleet_reads == 0
 
 
 def test_a_malformed_project_is_refused(monkeypatch):
@@ -88,7 +122,7 @@ def test_the_project_is_part_of_the_cache_key(monkeypatch):
 
 
 def test_a_project_outside_the_bound_is_an_empty_list_not_a_refusal(monkeypatch):
-    client, _, _ = _client(monkeypatch)
+    client, _, service = _client(monkeypatch)
 
     def run():
         org_scope._visible_projects_var.set({"nuc2": {"default", "qa-a"}})
@@ -97,6 +131,50 @@ def test_a_project_outside_the_bound_is_an_empty_list_not_a_refusal(monkeypatch)
 
     r = contextvars.copy_context().run(run)
     assert r.status_code == 200 and r.json()["vms"] == []
+    assert service.reads == 0, "a foreign project must be rejected before LXD I/O"
+
+
+def test_a_project_outside_the_tenant_grant_is_empty_before_lxd(monkeypatch):
+    client, _, service = _client(monkeypatch)
+
+    def run():
+        visible = org_scope._visible_projects_var.set({"nuc2": {"qa-a", "qa-b"}})
+        acl = org_scope._tenant_acl_var.set(
+            {"nuc2": {("qa-b", "*"): {"view"}}}
+        )
+        try:
+            return client.get("/instances?host=nuc2&project=qa-a")
+        finally:
+            org_scope._tenant_acl_var.reset(acl)
+            org_scope._visible_projects_var.reset(visible)
+
+    response = contextvars.copy_context().run(run)
+
+    assert response.status_code == 200
+    assert response.json()["vms"] == []
+    assert service.reads == 0
+
+
+def test_an_instance_specific_tenant_grant_reads_then_filters_the_project(monkeypatch):
+    client, _, service = _client(monkeypatch)
+
+    def run():
+        visible = org_scope._visible_projects_var.set({"nuc2": {"qa-a"}})
+        acl = org_scope._tenant_acl_var.set(
+            {"nuc2": {("qa-a", "b"): {"view"}}}
+        )
+        try:
+            return client.get("/instances?host=nuc2&project=qa-a")
+        finally:
+            org_scope._tenant_acl_var.reset(acl)
+            org_scope._visible_projects_var.reset(visible)
+
+    response = contextvars.copy_context().run(run)
+
+    assert response.status_code == 200, response.text
+    assert _names(response) == ["b"]
+    assert service.scoped_reads == [("nuc2", "qa-a")]
+    assert service.fleet_reads == 0
 
 
 def test_an_unreachable_selected_host_is_named_and_not_cached(monkeypatch):

@@ -29,6 +29,7 @@ import {
   useProjects,
 } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { useSnapshotProjectOptions } from "@/hooks/use-snapshot-project-options";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 import { formatInstanceType } from "@/lib/utils";
 import type { SnapshotCreateResponse } from "@/types/api";
@@ -119,7 +120,11 @@ function TakeSnapshotDialogBody({
   const selectedNode = nodePicker.options.find((option) => option.value === host);
   const hostVerified = Boolean(selectedNode && !selectedNode.disabled);
   const projects = useProjects(host, { enabled: hostVerified, verifyFresh: true });
-  const projectOptions = React.useMemo<SearchableSelectOption[]>(() => {
+  // The page already keeps this actor-scoped, ACL-filtered fleet project inventory warm for its
+  // filter. Use it only to make the picker immediately interactive while the authoritative
+  // per-cluster read lands. It never verifies a target or enables submit by itself.
+  const suggestedProjects = useSnapshotProjectOptions(host);
+  const verifiedProjectOptions = React.useMemo<SearchableSelectOption[]>(() => {
     if (!projects.data || projects.data.reachable === false) return [];
     const names = new Set(
       projects.data.projects
@@ -134,19 +139,26 @@ function TakeSnapshotDialogBody({
       })
       .map((name) => ({ value: name, label: name }));
   }, [projects.data]);
+  const projectOptions = projects.data ? verifiedProjectOptions : suggestedProjects.options;
+  const projectCandidate =
+    Boolean(project) && projectOptions.some((option) => option.value === project);
   const projectVerified =
-    Boolean(project) &&
+    projectCandidate &&
     projects.isSuccess &&
     !projects.isFetching &&
     projects.data.reachable !== false &&
-    projectOptions.some((option) => option.value === project);
+    verifiedProjectOptions.some((option) => option.value === project);
 
   const instances = useInstances(host, {
     project,
-    enabled: hostVerified && projectVerified,
+    // This scoped endpoint enforces cluster, project and actor authorization itself. Starting it
+    // from an actor-scoped candidate overlaps two independent reads, while every create control
+    // below still waits for the per-cluster project verification to finish.
+    enabled: hostVerified && projectCandidate && !projects.isError,
     // A point-in-time target choice does not need the background poll used by list pages.
     realtime: true,
     verifyFresh: true,
+    transientRetries: 3,
   });
   const instancesUnreachable = Boolean(instances.data?.unreachable_nodes?.includes(host));
   const instanceRows = React.useMemo(
@@ -171,6 +183,7 @@ function TakeSnapshotDialogBody({
   );
   const instanceVerified =
     Boolean(instanceName) &&
+    projectVerified &&
     instances.isSuccess &&
     !instances.isFetching &&
     !instancesUnreachable &&
@@ -185,7 +198,7 @@ function TakeSnapshotDialogBody({
     instanceName,
     host,
     project,
-    Boolean(hydratedMatches),
+    instanceVerified,
     true,
   );
 
@@ -260,15 +273,17 @@ function TakeSnapshotDialogBody({
   const target = busy ? verifiedTargetRef.current : verifiedTarget;
   const hydrating =
     Boolean(instanceName) &&
-    (instances.isFetching ||
+    (projects.isFetching ||
+      instances.isFetching ||
       detail.isLoading ||
       detail.isFetching ||
-      (Boolean(hydratedMatches) && (snapshots.isLoading || snapshots.isFetching)));
+      snapshots.isLoading ||
+      snapshots.isFetching);
   const preflightError =
     instances.isError ||
     instancesUnreachable ||
     detail.isError ||
-    (Boolean(hydratedMatches) && snapshots.isError);
+    (instanceVerified && snapshots.isError);
 
   const resetAfterHost = (next: string) => {
     if (busy) return;
@@ -360,7 +375,7 @@ function TakeSnapshotDialogBody({
               placeholder={
                 !host
                   ? "Select cluster first"
-                  : projects.isLoading || projects.isFetching
+                  : (projects.isLoading || projects.isFetching) && projectOptions.length === 0
                     ? "Reading projects"
                     : "Select project"
               }
@@ -373,14 +388,18 @@ function TakeSnapshotDialogBody({
               disabled={
                 busy ||
                 !hostVerified ||
-                projects.isLoading ||
-                projects.isFetching ||
+                ((projects.isLoading || projects.isFetching) && projectOptions.length === 0) ||
                 projects.isError
               }
               ariaInvalid={projects.isError || projects.data?.reachable === false}
               ariaDescribedBy="take-snapshot-project-status"
             />
             <div id="take-snapshot-project-status">
+              {(projects.isLoading || projects.isFetching) && projectOptions.length > 0 && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Verifying projects on this cluster
+                </p>
+              )}
               {(projects.isError || projects.data?.reachable === false) && (
                 <p role="alert" className="text-xs text-destructive">
                   The project list could not be verified.{" "}
@@ -409,9 +428,9 @@ function TakeSnapshotDialogBody({
               }}
               options={instanceOptions}
               placeholder={
-                !projectVerified
+                !projectCandidate
                   ? "Select project first"
-                  : instances.isLoading || instances.isFetching
+                  : (instances.isLoading || instances.isFetching) && instanceOptions.length === 0
                     ? "Reading instances"
                     : "Select instance"
               }
@@ -423,9 +442,8 @@ function TakeSnapshotDialogBody({
               }
               disabled={
                 busy ||
-                !projectVerified ||
-                instances.isLoading ||
-                instances.isFetching ||
+                !projectCandidate ||
+                ((instances.isLoading || instances.isFetching) && instanceOptions.length === 0) ||
                 instances.isError ||
                 instancesUnreachable
               }
@@ -433,6 +451,11 @@ function TakeSnapshotDialogBody({
               ariaDescribedBy="take-snapshot-instance-status"
             />
             <div id="take-snapshot-instance-status">
+              {(instances.isLoading || instances.isFetching) && instanceOptions.length > 0 && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Verifying instances in this project
+                </p>
+              )}
               {(instances.isError || instancesUnreachable) && (
                 <p className="text-xs text-destructive">
                   {instancesUnreachable
@@ -484,7 +507,7 @@ function TakeSnapshotDialogBody({
                     return;
                   }
                   if (detail.isError) void detail.refetch();
-                  if (hydratedMatches && snapshots.isError) void snapshots.refetch();
+                  if (instanceVerified && snapshots.isError) void snapshots.refetch();
                 }}
                 disabled={busy}
               >

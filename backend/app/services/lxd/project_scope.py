@@ -191,7 +191,13 @@ def _api_node(client: Any, path: str) -> Any:
 
 
 def list_in_project(
-    client: Any, collection: str, project: str, recursion: int = 1, path: Optional[str] = None
+    client: Any,
+    collection: str,
+    project: str,
+    recursion: int = 1,
+    path: Optional[str] = None,
+    *,
+    request_timeout: Any = ALL_PROJECTS_READ_TIMEOUT,
 ) -> List[Dict[str, Any]]:
     """One project's records, each stamped with the project it was read from.
 
@@ -202,7 +208,7 @@ def list_in_project(
     """
     response = _api_node(client, path or collection).get(
         params={"recursion": recursion, "project": project},
-        timeout=ALL_PROJECTS_READ_TIMEOUT,
+        timeout=request_timeout,
     )
     rows = []
     for row in _metadata(response) or []:
@@ -389,4 +395,3 @@ def list_pool_volumes(client: Any, pool: str) -> Tuple[List[Dict[str, Any]], boo
         location = row.get("location")
         row["location"] = "" if not location or location == "none" else location
     return rows, complete
-

@@ -1485,7 +1485,13 @@ export function useDeleteProfile() {
 // Instances Hooks (alternative to VMs for LXD terminology)
 export function useInstances(
   host?: string,
-  opts?: { realtime?: boolean; enabled?: boolean; project?: string; verifyFresh?: boolean },
+  opts?: {
+    realtime?: boolean;
+    enabled?: boolean;
+    project?: string;
+    verifyFresh?: boolean;
+    transientRetries?: number;
+  },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
@@ -1496,6 +1502,19 @@ export function useInstances(
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && (opts?.enabled ?? true),
     ...(opts?.verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
+    ...(opts?.transientRetries !== undefined
+      ? {
+          // Picker reads can briefly race process startup while the connection healer fills
+          // this worker's in-memory client cache. Retry only transient failures and keep auth,
+          // validation, missing-target and rate-limit responses terminal.
+          retry: (failureCount: number, error: unknown) =>
+            !(
+              error instanceof APIError &&
+              [400, 401, 403, 404, 409, 422, 429].includes(error.status)
+            ) && failureCount < opts.transientRetries!,
+          retryDelay: (attemptIndex: number) => Math.min(500 * 2 ** attemptIndex, 2000),
+        }
+      : {}),
     // Default: poll so newly-created instances and status transitions show
     // without a manual refresh. When `realtime` is set (instances page), polling
     // is disabled and the list is kept current via the LXD events stream

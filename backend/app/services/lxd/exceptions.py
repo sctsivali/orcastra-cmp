@@ -8,6 +8,16 @@ class LXDConnectionError(Exception):
     pass
 
 
+class LXDLocalUnavailableError(LXDConnectionError):
+    """The control-plane worker could not start or finish a bounded LXD read.
+
+    This is distinct from a remote cluster failure. Fleet callers must not cache it as an
+    unreachable cluster because another worker, or the same worker after its background healer
+    runs, may already have the connection needed to answer.
+    """
+    pass
+
+
 class LXDAuthorizationError(LXDConnectionError):
     """The host answered our probe and refused our certificate.
 
@@ -87,4 +97,3 @@ class LXDProjectNotFoundError(LXDOperationError):
     def __init__(self, project: str):
         self.project = project
         super().__init__(f"Project '{project}' not found")
-

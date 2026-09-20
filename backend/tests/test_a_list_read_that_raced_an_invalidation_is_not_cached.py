@@ -43,13 +43,20 @@ class _Service:
     def get_node_names(self):
         return ["mc-lab"]
 
-    async def list_all_vms_with_failures(self):
+    def _read(self):
         self.reads += 1
         if self.invalidate_during_read:
             self.manager.invalidate_instance_cache()
         vm = VMInfo(name="web01", status=VMStatus.STOPPED, status_code=102, host="mc-lab",
                     host_endpoint="https://lab:9444", project="UAT-Hermes", type="container", architecture="x86_64")
         return [vm], ["mc-lab"], []
+
+    async def list_all_vms_with_failures(self):
+        return self._read()
+
+    async def list_vms_in_project_with_failures(self, host, project):
+        assert (host, project) == ("mc-lab", "UAT-Hermes")
+        return self._read()
 
 
 def _client(manager: CacheManager, service: _Service, monkeypatch) -> TestClient:
@@ -142,6 +149,19 @@ def test_a_read_that_raced_an_invalidation_is_not_cached(monkeypatch):
     r = client.get("/instances")
     assert r.status_code == 200
     assert service.reads == 2, "the next read goes to the cluster, not to a stale entry"
+
+
+def test_a_scoped_read_that_raced_an_invalidation_is_not_cached(monkeypatch):
+    manager = _manager()
+    service = _Service(manager, invalidate_during_read=True)
+    client = _client(manager, service, monkeypatch)
+
+    response = client.get("/instances?host=mc-lab&project=UAT-Hermes")
+
+    assert response.status_code == 200, response.text
+    assert _cached_lists(manager) == 0
+    assert client.get("/instances?host=mc-lab&project=UAT-Hermes").status_code == 200
+    assert service.reads == 2, "the next scoped read must not use a stale cache entry"
 
 
 def test_an_undisturbed_read_is_cached_as_before(monkeypatch):

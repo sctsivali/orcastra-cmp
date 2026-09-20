@@ -7,16 +7,18 @@ import logging
 import asyncio
 from typing import Callable, List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
-from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
+from pylxd.exceptions import LXDAPIException, ClientConnectionFailed, NotFound
 from requests import exceptions as requests_exc
 
 from app.models.schemas import VMInfo
 from app.services.lxd.nic_preflight import NicPreflightError, check_nics
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from . import health
 from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
     LXDConnectionError,
+    LXDLocalUnavailableError,
     LXDLocalStorageError,
     LXDOperationError,
     LXDGracefulTimeoutError,
@@ -34,11 +36,12 @@ from .utils import (
 )
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
-from .project_scope import list_across_projects
+from .project_scope import list_across_projects, list_in_project
 from .audit import audit_operation
 from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
+_NO_CLIENT_OVERRIDE = object()
 
 
 def _announce_instance_created(host: str, project: str, name: str) -> None:
@@ -150,6 +153,12 @@ _INSTANCE_NODE_TIMEOUT_SECONDS = 30.0
 _INSTANCE_DETAIL_TIMEOUT_SECONDS = 30.0
 _INSTANCE_INVENTORY_WORKERS = 20
 _INSTANCE_DETAIL_WORKERS = 8
+# A scoped state read may retry once without state. The two socket attempts use at most 9 of the
+# worker's 30 seconds, leaving 21 seconds for response parsing, mapping, scheduling overhead and
+# thread cancellation lag. Otherwise the request can return while its worker remains occupied.
+_SCOPED_INSTANCE_PRELUDE_RESERVE_SECONDS = 21.0
+_SCOPED_INSTANCE_STATE_READ_TIMEOUT = (2, 4)
+_SCOPED_INSTANCE_LIST_READ_TIMEOUT = (1, 2)
 _instance_inventory_executor = ThreadPoolExecutor(
     max_workers=_INSTANCE_INVENTORY_WORKERS,
     thread_name_prefix="instance_inventory_",
@@ -216,6 +225,29 @@ def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -
         project=row.get("project") or "default",
         location=_cluster_member(row.get("location")),
     )
+
+
+def _list_instances_in_project(
+    client,
+    project: str,
+    recursion: int,
+    *,
+    request_timeout,
+) -> List[Dict[str, Any]]:
+    """List one project, treating a missing project as a complete empty answer."""
+    try:
+        return list_in_project(
+            client,
+            "instances",
+            project,
+            recursion=recursion,
+            request_timeout=request_timeout,
+        )
+    except (LXDAPIException, requests_exc.HTTPError) as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        if isinstance(exc, NotFound) or status_code == 404:
+            return []
+        raise
 
 
 # Config keys some LXD versions refuse outright for a given instance type, mapped to the first
@@ -418,6 +450,58 @@ class InstanceManager:
             max_in_flight=_INSTANCE_INVENTORY_WORKERS,
         )
 
+    def _fetch_project_inventory_node(
+        self,
+        node_name: str,
+        project: str,
+    ) -> Tuple[List[VMInfo], bool, bool]:
+        """Read one exact project on one cluster in a bounded inventory worker.
+
+        The scoped list itself is the liveness probe, so do not precede it with ``get_client``'s
+        validation/reconnect requests or start the second Vault-backed reconnect path. Those calls
+        have independent socket budgets that can outlive this worker's wall cap. The background
+        healer owns a genuinely cold worker; this read fails fast and is never cached, so Refresh
+        can use the repaired connection.
+        """
+        client = self.connection_manager.get_cached_client(node_name)
+        if client is None:
+            if health.is_tripped(node_name):
+                raise LXDConnectionError("Instance inventory is temporarily unavailable")
+            raise LXDLocalUnavailableError("Instance inventory is temporarily unavailable")
+        endpoint = self._get_node_endpoint(node_name)
+        return self._fetch_vms_from_node_detailed(
+            node_name,
+            endpoint,
+            project=project,
+            allow_vault_reconnect=False,
+            client_override=client,
+        )
+
+    async def list_vms_in_project_with_failures(
+        self,
+        node_name: str,
+        project: str,
+    ) -> Tuple[List[VMInfo], List[str], List[str]]:
+        """List one cluster/project without consulting or fanning out to the fleet registry."""
+        try:
+            vms, connected, complete = await run_blocking(
+                self._fetch_project_inventory_node,
+                node_name,
+                project,
+                timeout=_INSTANCE_NODE_TIMEOUT_SECONDS,
+                label=f"instance.inventory[{node_name}/{project}]",
+                executor=_instance_inventory_executor,
+                max_in_flight=_INSTANCE_INVENTORY_WORKERS,
+            )
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            raise LXDConnectionError(
+                "Instance inventory is temporarily unavailable"
+            ) from exc
+
+        connected_nodes = [node_name] if connected else []
+        incomplete_nodes = [node_name] if not connected or not complete else []
+        return vms if connected else [], connected_nodes, incomplete_nodes
+
     async def list_all_vms_with_failures(
         self,
     ) -> Tuple[List[VMInfo], List[str], List[str]]:
@@ -525,9 +609,18 @@ class InstanceManager:
         self,
         node_name: str,
         node_endpoint: str,
+        project: Optional[str] = None,
+        allow_vault_reconnect: bool = True,
+        client_override: Any = _NO_CLIENT_OVERRIDE,
     ) -> Tuple[List[VMInfo], bool, bool]:
         """
-        Fetch all VMs from a single node (synchronous, for thread pool execution).
+        Fetch VMs from a single node (synchronous, for thread pool execution).
+
+        When ``project`` is supplied, read only that project. Otherwise retain the fleet
+        inventory behavior and read every project on the cluster. ``allow_vault_reconnect`` is
+        false only for the request-bounded picker path; ordinary fleet reads retain cold-worker
+        recovery. ``client_override`` lets that scoped path use one already connected client
+        without a redundant liveness probe.
         Returns (vm_list, is_connected, is_complete).
         """
         from app.services.lxd import health
@@ -541,9 +634,13 @@ class InstanceManager:
 
         try:
             # Try to get or reconnect client
-            client = self.connection_manager.get_client(node_name)
+            client = (
+                self.connection_manager.get_client(node_name)
+                if client_override is _NO_CLIENT_OVERRIDE
+                else client_override
+            )
             
-            if client is None and self.cert_manager:
+            if client is None and self.cert_manager and allow_vault_reconnect:
                 try:
                     cluster_info = self.cert_manager.get_cluster_info(node_name)
                     cert_data = self.cert_manager.get_cluster_certificate(node_name)
@@ -585,12 +682,23 @@ class InstanceManager:
                 )
                 return [], False, False
             
-            # One request for every project's instances, state included (recursion=2), on a
-            # daemon that advertises instance_all_projects; list_across_projects walks the
-            # projects one by one otherwise. The per-project walk plus one /state call per
-            # running instance took 11 s on a 52-project host; this is well under a second.
+            # State is attached at recursion=2 so the row mapper does not make a request per
+            # running instance. A scoped read names its project directly; the fleet path keeps
+            # the all-projects optimization and compatibility fallback.
             try:
-                rows, complete = list_across_projects(client, "instances", recursion=2)
+                if project is None:
+                    rows, complete = list_across_projects(
+                        client,
+                        "instances",
+                        recursion=2,
+                    )
+                else:
+                    rows = _list_instances_in_project(
+                        client,
+                        project,
+                        2,
+                        request_timeout=_SCOPED_INSTANCE_STATE_READ_TIMEOUT,
+                    )
             except requests_exc.ReadTimeout:
                 # A large partner cloud can outrun the read budget with state attached.
                 # Listing without addresses beats reporting the cluster unreachable.
@@ -598,7 +706,19 @@ class InstanceManager:
                     "Instance list with state on %s exceeded the read budget; re-reading "
                     "without state, addresses omitted", node_name,
                 )
-                rows, complete = list_across_projects(client, "instances", recursion=1)
+                if project is None:
+                    rows, complete = list_across_projects(
+                        client,
+                        "instances",
+                        recursion=1,
+                    )
+                else:
+                    rows = _list_instances_in_project(
+                        client,
+                        project,
+                        1,
+                        request_timeout=_SCOPED_INSTANCE_LIST_READ_TIMEOUT,
+                    )
             if not complete:
                 logger.warning(
                     "Instance list on %s is partial: not every project could be read", node_name

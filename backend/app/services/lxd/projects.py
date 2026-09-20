@@ -4,20 +4,28 @@ Handles create, update, delete, and list operations for LXD projects.
 """
 
 import logging
-import asyncio
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException, NotFound
 
-from .exceptions import LXDConnectionError, LXDOperationError
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.lxd_path import safe_segment
+
+from . import health
+from .exceptions import LXDConnectionError, LXDLocalUnavailableError, LXDOperationError
 from .connection import LXDConnectionManager
 from .audit import audit_operation
-from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
-# Thread pool for blocking LXD operations
-_projects_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_projects_")
+# A project listing is one whole-cluster read. Keep it off the event loop, start every admitted
+# call immediately, and outlive the raw request's 3s connect + 20s read socket budget by a margin.
+_PROJECT_LIST_WORKERS = 10
+_PROJECT_LIST_TIMEOUT_SECONDS = 30.0
+_PROJECT_LIST_READ_TIMEOUT = (3, 20)
+_projects_executor = ThreadPoolExecutor(
+    max_workers=_PROJECT_LIST_WORKERS, thread_name_prefix="lxd_projects_"
+)
 
 
 class ProjectManager:
@@ -47,34 +55,66 @@ class ProjectManager:
         return client
     
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:
-        """List all projects on a specific LXD host (async with thread pool)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            _projects_executor,
-            self._list_projects_sync,
-            host
-        )
+        """List all projects on a host without an unbounded worker wait."""
+        try:
+            return await run_blocking(
+                self._list_projects_sync,
+                host,
+                timeout=_PROJECT_LIST_TIMEOUT_SECONDS,
+                label=f"project.list[{host}]",
+                executor=_projects_executor,
+                max_in_flight=_PROJECT_LIST_WORKERS,
+            )
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            raise LXDLocalUnavailableError(
+                f"Project list for {host} is temporarily unavailable"
+            ) from exc
     
     def _list_projects_sync(self, host: str) -> List[Dict[str, Any]]:
         """Synchronous implementation of list_projects."""
         try:
-            client = self._get_client_with_reconnect(host)
+            # The collection request below is the liveness proof. A preliminary get_client()
+            # validation/reconnect chain plus the collection read could outlive this worker's
+            # 30-second wall cap and retain its admission slot after the caller left.
+            # A genuinely cold worker is repaired by the background healer; callers receive a
+            # typed local-unavailable result that fleet routes must never cache as a dead cluster.
+            client = self.connection_manager.get_cached_client(host)
             
             if client is None:
-                raise LXDConnectionError(f"Could not connect to {host}")
+                # get_cached_client() also returns None for a known remote outage. Preserve
+                # that distinction: fleet reads may safely render a breaker-tripped host as
+                # partial, while a genuinely cold local worker must fail the whole response
+                # so it cannot cache a false remote outage.
+                if health.is_tripped(host):
+                    raise LXDConnectionError(
+                        f"Connection to {host} is temporarily unavailable"
+                    )
+                raise LXDLocalUnavailableError(
+                    f"Project list for {host} is temporarily unavailable"
+                )
             
-            projects = client.projects.all()
+            # pylxd's collection manager starts at recursion=0, then lazily syncs every
+            # Project attribute below. Ask LXD/Incus for the complete records directly so the
+            # list is one socket-bounded request regardless of project count.
+            response = client.api.projects.get(
+                params={"recursion": 1}, timeout=_PROJECT_LIST_READ_TIMEOUT
+            )
+            projects = response.json().get("metadata") or []
             
             project_list = []
             for project in projects:
-                tags_str = project.config.get("user.tags", "") if project.config else ""
+                if not isinstance(project, dict):
+                    raise ValueError("Project collection did not return recursive records")
+
+                config = project.get("config") or {}
+                tags_str = config.get("user.tags", "")
                 tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
                 
                 project_info = {
-                    "name": project.name,
-                    "description": project.description or "",
-                    "config": project.config or {},
-                    "used_by": project.used_by or [],
+                    "name": project.get("name") or "",
+                    "description": project.get("description") or "",
+                    "config": config,
+                    "used_by": project.get("used_by") or [],
                     "host": host,
                     "tags": tags,
                 }

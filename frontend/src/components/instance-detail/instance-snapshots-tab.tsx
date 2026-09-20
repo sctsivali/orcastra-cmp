@@ -228,7 +228,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
             }
           >
             <Camera className="h-4 w-4 mr-2" aria-hidden />
-            Take snapshot
+            Take Snapshot
           </Button>
           </div>
           {(isReadOnly || readOnlyLoading) && (
