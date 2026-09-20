@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Activity, Layers } from "lucide-react";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { formatInstanceType } from "@/lib/utils";
+import { instanceStatusDisplay } from "@/lib/instance-status";
 import type { MemberResources, VMInfo } from "@/types/api";
 
 interface MemberInstancesDialogProps {
@@ -96,8 +97,11 @@ export function MemberInstancesDialog({
                     <div className="space-y-1 flex-1">
                       <div className="flex items-center gap-2">
                         <h4 className="font-semibold">{instance.name}</h4>
-                        <Badge variant={instance.status === "Running" ? "default" : "secondary"} className="text-xs">
-                          {instance.status}
+                        <Badge
+                          variant={instanceStatusDisplay(instance.status).tone}
+                          className="text-xs"
+                        >
+                          {instanceStatusDisplay(instance.status).label}
                         </Badge>
                         <span className="text-xs text-muted-foreground">
                           {formatInstanceType(instance.type)}

@@ -62,8 +62,10 @@ import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { INSTANCES, InstancesTable } from "./components/instances-table";
 
 import { useInstanceActions } from "./components/use-instance-actions";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 
 function InstancesContent() {
+  const { scopeKey } = useActorQueryScope();
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useInstances(
@@ -109,10 +111,10 @@ function InstancesContent() {
     );
   useEffect(() => {
     for (const p of pendingCreates) {
-      if (isResolved(p)) resolvePendingCreate(p.id);
+      if (isResolved(p)) resolvePendingCreate(scopeKey, p.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instances, pendingCreates, dataUpdatedAt]);
+  }, [instances, pendingCreates, dataUpdatedAt, scopeKey]);
   // Hide placeholders that already resolved to a real row (avoids a duplicate).
   const visiblePendingCreates = pendingCreates.filter((p) => !isResolved(p));
 
@@ -159,6 +161,8 @@ function InstancesContent() {
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
+  const [selectionActorScope, setSelectionActorScope] = useState(scopeKey);
+  const selectionIsCurrent = selectionActorScope === scopeKey;
   const router = useRouter();
   const { navigate } = useNavigationProgress();
   // permsLoading matters for the reasons below: until the access rules arrive, hasPermission
@@ -166,6 +170,15 @@ function InstancesContent() {
   // "No permission" when the real answer is "not known yet". The items stay withheld, which is
   // the safe direction, but the reason must not claim a denial that has not been established.
   const { hasPermission, isLoading: permsLoading } = useTenantAccess();
+
+  // Dialog targets are local state, so a sign-out/sign-in in the same document must clear
+  // them explicitly. Query keys isolate the data, while this prevents an already-open detail
+  // or destructive confirmation from carrying the previous actor's instance identity.
+  useEffect(() => {
+    setSelectionActorScope(scopeKey);
+    setSelectedInstance(null);
+    setIsMonitoringModalOpen(false);
+  }, [scopeKey]);
 
   const permissionReason = (
     host: string,
@@ -210,9 +223,12 @@ function InstancesContent() {
   }, [searchParams, router, pathname]);
 
   const handleInstanceClick = (instance: VMInfo) => {
+    setSelectionActorScope(scopeKey);
     setSelectedInstance(instance);
     setIsMonitoringModalOpen(true);
   };
+
+  const currentSelectedInstance = selectionIsCurrent ? selectedInstance : null;
 
   const sortedInstances = useMemo(
     () => sortItems(filters.filteredRows),
@@ -336,13 +352,13 @@ function InstancesContent() {
       </Card>
 
       <InstanceDetailDialog
-        instance={selectedInstance}
-        isOpen={isMonitoringModalOpen}
+        instance={currentSelectedInstance}
+        isOpen={selectionIsCurrent && isMonitoringModalOpen}
         onClose={() => {
           setIsMonitoringModalOpen(false);
           setSelectedInstance(null);
         }}
-        project={selectedInstance?.project || "default"}
+        project={currentSelectedInstance?.project || "default"}
       />
 
       {/* Copy elsewhere (shared across rows, controlled by copyTarget) */}

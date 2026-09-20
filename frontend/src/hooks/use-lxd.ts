@@ -4,9 +4,9 @@
 
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useState } from "react";
-import { useSession } from "next-auth/react";
 import { APIError } from "@/types/api";
 import { 
   vmAPI, 
@@ -32,9 +32,49 @@ import {
 // Query Keys
 export const queryKeys = {
   vms: ["vms"] as const,
-  vm: (name: string, host: string) => ["vm", name, host] as const,
-  instanceMetrics: (host: string, instanceName: string, project: string) => 
-    ["instanceMetrics", host, instanceName, project] as const,
+  vmsFor: (actorScope: string, host?: string, status?: string) =>
+    ["vms", actorScope, { host, status }] as const,
+  instances: ["instances"] as const,
+  instancesFor: (actorScope: string, host?: string, project?: string) =>
+    ["instances", actorScope, host ?? "*", project ?? "*"] as const,
+  vm: (
+    actorScope: string,
+    name: string,
+    host: string,
+    project?: string,
+  ) => ["vm", actorScope, host, project ?? "default", name] as const,
+  instanceMetrics: (
+    actorScope: string,
+    host: string,
+    instanceName: string,
+    project: string,
+  ) => ["instanceMetrics", actorScope, host, project, instanceName] as const,
+  instanceDetail: (
+    actorScope: string,
+    host: string,
+    project: string,
+    name: string,
+  ) => ["instance", actorScope, host, project, name] as const,
+  instanceSnapshots: (
+    actorScope: string,
+    host: string,
+    project: string,
+    instanceName: string,
+  ) => ["instanceSnapshots", actorScope, host, project, instanceName] as const,
+  snapshotSchedules: (
+    actorScope: string,
+    host?: string,
+    project?: string,
+    instanceName?: string,
+  ) => [
+    "snapshotSchedules",
+    actorScope,
+    host ?? "*",
+    project ?? "*",
+    instanceName ?? "*",
+  ] as const,
+  memberResources: (actorScope: string, node: string, memberName: string) =>
+    ["memberResources", actorScope, node, memberName] as const,
   images: ["images"] as const,
   imagesByHost: (host: string) => ["images", host] as const,
   // A store read is keyed apart from the host's fleet slice, which useImages(host) owns with a
@@ -42,22 +82,29 @@ export const queryKeys = {
   imageStore: (host: string, project: string) => ["images", host, "store", project] as const,
   // Every store on a host, distinct from useImages(host)'s one-element array under ["images", host].
   imageStores: (host: string) => ["images", host, "stores"] as const,
-  // The instance list, by host and project; "*" stands for "every". Every reader and every
-  // prefetch keys through here so a stream upsert can tell which lists a row belongs in.
-  instances: (host?: string, project?: string) => ["instances", host ?? "*", project ?? "*"] as const,
   nodes: ["nodes"] as const,
+  nodesFor: (actorScope: string) => ["nodes", actorScope] as const,
   nodeNames: ["nodeNames"] as const,
+  nodeNamesFor: (actorScope: string) => ["nodeNames", actorScope] as const,
   nodeAvailability: ["nodeAvailability"] as const,
+  nodeAvailabilityFor: (actorScope: string) => ["nodeAvailability", actorScope] as const,
+  nodeResources: (actorScope: string, nodeName: string) =>
+    ["nodeResources", actorScope, nodeName] as const,
+  nodeGpus: (actorScope: string, nodeName: string) =>
+    ["nodeGpus", actorScope, nodeName] as const,
   projects: (host: string) => ["projects", host] as const,
+  projectsFor: (actorScope: string, host: string) =>
+    ["projects", host, actorScope] as const,
   allProjects: ["projects", "all"] as const,
+  allProjectsFor: (actorScope: string) => ["projects", "all", actorScope] as const,
+  clusters: ["clusters"] as const,
+  clustersFor: (actorScope: string, fresh: boolean) =>
+    ["clusters", actorScope, { fresh }] as const,
   health: ["health"] as const,
 };
 
 function useMonitoringScopeKey() {
-  const { data: session } = useSession();
-  const user = session?.user as any;
-  const groups = Array.isArray(user?.groups) ? [...user.groups].sort().join(",") : "";
-  return `${user?.id ?? user?.email ?? "anonymous"}:${groups}`;
+  return useActorQueryScope().scopeKey;
 }
 
 function normalizeProject(project?: string | null) {
@@ -99,16 +146,17 @@ function removeInstanceFromList(
 
 function removeInstanceFromCaches(
   queryClient: QueryClient,
+  actorScope: string,
   name: string,
   host: string,
   project?: string | null
 ) {
   queryClient.setQueriesData<VMListResponse | undefined>(
-    { queryKey: queryKeys.vms },
+    { queryKey: ["vms", actorScope] },
     (data) => removeInstanceFromList(data, name, host, project)
   );
   queryClient.setQueriesData<VMListResponse | undefined>(
-    { queryKey: ["instances"] },
+    { queryKey: ["instances", actorScope] },
     (data) => removeInstanceFromList(data, name, host, project)
   );
 }
@@ -121,9 +169,11 @@ const defaultRetryConfig = {
 
 // VMs Hooks
 export function useVMs(host?: string, status?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: [...queryKeys.vms, { host, status }],
+    queryKey: queryKeys.vmsFor(scopeKey, host, status),
     queryFn: () => vmAPI.list(host, status),
+    enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
     refetchInterval: jitter(POLL_MS.fleet),
@@ -132,11 +182,12 @@ export function useVMs(host?: string, status?: string) {
   });
 }
 
-export function useVM(name: string, host: string) {
+export function useVM(name: string, host: string, project = "default") {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.vm(name, host),
-    queryFn: () => vmAPI.get(name, host),
-    enabled: !!name && !!host,
+    queryKey: queryKeys.vm(scopeKey, name, host, project),
+    queryFn: () => vmAPI.get(name, host, project),
+    enabled: isAuthenticated && !!name && !!host,
   });
 }
 
@@ -204,6 +255,7 @@ export function useRestartVM() {
 
 export function useDeleteVM() {
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   
   return useMutation({
     mutationFn: ({
@@ -218,27 +270,58 @@ export function useDeleteVM() {
       project?: string;
     }) => vmAPI.delete(name, host, force, project),
     onSuccess: (_data, variables) => {
-      removeInstanceFromCaches(queryClient, variables.name, variables.host, variables.project);
+      removeInstanceFromCaches(
+        queryClient,
+        scopeKey,
+        variables.name,
+        variables.host,
+        variables.project,
+      );
       refreshInstanceQueries(queryClient);
     },
   });
 }
 
 // Instance Metrics Hook
+const instanceMetricsInterval = backingOffInterval(POLL_MS.live, 60 * 1000);
+
+function isTerminalMetricsError(error: unknown): boolean {
+  if (error instanceof APIError) {
+    return error.status === 401 || error.status === 403 || error.status === 429;
+  }
+  if (error instanceof Error) {
+    return /\b(?:401|403|429)\b/.test(error.message);
+  }
+  return false;
+}
+
 export function useInstanceMetrics(
   host: string,
   instanceName: string,
   project = "default",
   enabled = true
 ) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+
   return useQuery({
-    queryKey: queryKeys.instanceMetrics(host, instanceName, project),
+    queryKey: queryKeys.instanceMetrics(scopeKey, host, instanceName, project),
     queryFn: () => vmAPI.getMetrics(host, instanceName, project),
-    enabled: enabled && !!host && !!instanceName,
-    refetchInterval: 10000, // Poll every 10 seconds (balanced freshness vs load)
-    refetchIntervalInBackground: false, // Stop polling when tab is hidden
-    staleTime: 5000, // Consider fresh for 5 seconds
-    retry: 2,
+    enabled: (query) =>
+      isAuthenticated && enabled && !!host && !!instanceName &&
+      !isTerminalMetricsError(query.state.error),
+    // Five seconds is fast enough to read as live without opening a WebSocket per dialog.
+    // Failures back off to one minute. Authorization and rate-limit failures stop the automatic
+    // loop entirely, and a response that says the instance stopped does the same.
+    refetchInterval: (query) => {
+      if (query.state.data && query.state.data.status !== "Running") return false;
+      if (isTerminalMetricsError(query.state.error)) return false;
+      return instanceMetricsInterval(query);
+    },
+    refetchIntervalInBackground: false,
+    staleTime: POLL_MS.live / 2,
+    retry: (failureCount, error) => !isTerminalMetricsError(error) && failureCount < 2,
+    retryOnMount: false,
+    refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
 }
@@ -323,12 +406,14 @@ export function useRemoteImages() {
 
 // Nodes Hooks
 export function useNodesStatus() {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   // note: lazy initialiser, so the cadence is fixed per hook instance rather than wandering
   // on every render. Jitter keeps a page of cards from missing an expired TTL in one burst.
   const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
-    queryKey: queryKeys.nodes,
+    queryKey: queryKeys.nodesFor(scopeKey),
     queryFn: ({ fresh }) => nodeAPI.status({ fresh }),
+    enabled: isAuthenticated,
     // important: this was 3600000. One hour, against a backend that caches the same body for
     // 180s, so every number sourced from /nodes was up to an hour old and the cluster cards
     // simply did not move. Matched to the server TTL: polling faster cannot produce a newer
@@ -346,9 +431,11 @@ export function useNodesStatus() {
 }
 
 export function useNodeNames() {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.nodeNames,
+    queryKey: queryKeys.nodeNamesFor(scopeKey),
     queryFn: () => nodeAPI.names(),
+    enabled: isAuthenticated,
     // note: this was staleTime: Infinity with refetchOnMount: false. Membership does change,
     // and registering a cluster then opening a create form showed a stale list until a hard
     // reload, because the register mutation invalidates queryKeys.nodes and not this key.
@@ -370,9 +457,11 @@ export function useNodeNames() {
  * the cached /nodes fan-out rather than generating its own.
  */
 export function useNodeAvailability() {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: queryKeys.nodeAvailability,
+    queryKey: queryKeys.nodeAvailabilityFor(scopeKey),
     queryFn: ({ fresh }) => nodeAPI.availability({ fresh }),
+    enabled: isAuthenticated,
     // note: this hand-rolled set was character for character the attended tier. Using the
     // preset keeps the one place a 60s cadence is defined from drifting away from the
     // 45s backend TTL it is matched to.
@@ -423,38 +512,41 @@ export function useInvalidateAllNodesCache() {
  * important: GET /nodes/{node}/resources is uncached on the backend, so every poll is a real
  * call into that one cluster. Gate it on the panel being open, and back off geometrically once
  * it starts failing rather than holding a dead host on a connect timeout forever. The query key
- * is per node, which is the only place a per-cluster back-off is even expressible: /nodes is
- * one fan-out and cannot back off for a single member of it.
+ * is per actor and node, which is the only place a per-cluster back-off is even expressible:
+ * /nodes is one fan-out and cannot back off for a single member of it.
  */
 export function useNodeResources(nodeName: string, opts?: { enabled?: boolean }) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["nodeResources", nodeName],
+    queryKey: queryKeys.nodeResources(scopeKey, nodeName),
     queryFn: () => nodeAPI.resources(nodeName),
     ...DYNAMIC_DATA_CONFIG,
-    enabled: (opts?.enabled ?? true) && !!nodeName,
+    enabled: isAuthenticated && (opts?.enabled ?? true) && !!nodeName,
     refetchInterval: backingOffInterval(POLL_MS.active),
     refetchIntervalInBackground: false,
   });
 }
 
 export function useNodeGpus(nodeName: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["nodeGpus", nodeName],
+    queryKey: queryKeys.nodeGpus(scopeKey, nodeName),
     queryFn: () => nodeAPI.gpus(nodeName),
-    enabled: !!nodeName,
+    enabled: isAuthenticated && !!nodeName,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
 // Projects Hooks
 export function useAllProjects(options: { enabled?: boolean } = {}) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: queryKeys.allProjects,
+    queryKey: queryKeys.allProjectsFor(scopeKey),
     // note: opts carries {fresh} through to fetchRead, which appends the cache-bypass
     // parameter. Without it a Retry inside the API-key project picker would re-read the same
     // 30s server cache and report success on the identical unreachable cluster.
     queryFn: (opts) => projectAPI.listAll(opts),
-    enabled: options.enabled ?? true,
+    enabled: isAuthenticated && (options.enabled ?? true),
     refetchInterval: 300000, // refresh every 5 minutes (300 seconds)
     staleTime: 30000, // Consider data stale after 30 seconds
     retry: (failureCount: number, error: unknown) => {
@@ -469,10 +561,11 @@ export function useAllProjects(options: { enabled?: boolean } = {}) {
 }
 
 export function useProjects(host: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.projects(host),
+    queryKey: queryKeys.projectsFor(scopeKey, host),
     queryFn: () => projectAPI.list(host),
-    enabled: !!host,
+    enabled: isAuthenticated && !!host,
     staleTime: 30000,
   });
 }
@@ -908,13 +1001,14 @@ export function useHealth() {
 // dashboard mounts this unconditionally, which meant every tenant page load fired two
 // forbidden requests and logged two console errors. Gated here rather than at the call sites
 // so a new consumer cannot reintroduce it.
-export function useWarnings(host?: string) {
+export function useWarnings(host?: string, options: { enabled?: boolean } = {}) {
   const { isPartner } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["warnings", host],
+    queryKey: ["warnings", scopeKey, host],
     queryFn: ({ fresh }) => api.warnings.list(host, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
-    enabled: isPartner,
+    enabled: isAuthenticated && isPartner && (options.enabled ?? true),
     refetchInterval: 60000, // Check warnings every minute
   });
 }
@@ -1389,13 +1483,14 @@ export function useInstances(
   host?: string,
   opts?: { realtime?: boolean; enabled?: boolean; project?: string },
 ) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: queryKeys.instances(host, opts?.project),
+    queryKey: queryKeys.instancesFor(scopeKey, host, opts?.project),
     queryFn: ({ fresh }) =>
       api.instances.list(host, undefined, undefined, undefined, undefined, { fresh, project: opts?.project }),
-    enabled: opts?.enabled ?? true,
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
+    enabled: isAuthenticated && (opts?.enabled ?? true),
     // Default: poll so newly-created instances and status transitions show
     // without a manual refresh. When `realtime` is set (instances page), polling
     // is disabled and the list is kept current via the LXD events stream
@@ -1408,24 +1503,22 @@ export function useInstances(
 }
 
 // note: ON_DEMAND_CONFIG rather than DYNAMIC_DATA_CONFIG, because this is opened by a person
-// rather than polled. It is also the only way to get `resources`: the list path sets it to None
-// (services/lxd/instance.py:427) while the single-get path populates it (:266).
+// rather than polled. The only caller is the Monitoring Top Consumers drill-down: that summary
+// deliberately carries just enough data for its chart, so the detail dialog explicitly hydrates
+// it before rendering the full configuration. Normal instance rows already carry those fields.
 //
 // important: `enabled` is re-asserted AFTER the spread. ON_DEMAND_CONFIG sets enabled false by
 // design, so spreading it last would silently disable every caller.
 export function useInstance(name: string, host: string, enabled = true, project?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const effectiveProject = project || "default";
   return useQuery({
-    queryKey: ["instance", name, host, project ?? null],
-    queryFn: () => api.instances.get(name, host, project),
+    queryKey: queryKeys.instanceDetail(scopeKey, host, effectiveProject, name),
+    queryFn: () => api.instances.get(name, host, effectiveProject),
     ...ON_DEMAND_CONFIG,
-    enabled: enabled && !!name && !!host,
-    // important: both re-asserted after the spread, and staleTime is the one that does the work.
-    // ON_DEMAND_CONFIG holds a reading for five minutes, and the dialog does not unmount when it
-    // closes: `enabled` flips while the observer stays alive, so refetchOnMount alone never
-    // fires and reopening redrew the bar from a five-minute-old sample. A stale reading is
-    // tolerable as a static number and misleading as a bar, and the section tells the operator
-    // it is a reading taken on open, so it has to actually be one. The cached value still paints
-    // immediately while the fresh one lands, because gcTime keeps it.
+    enabled: isAuthenticated && enabled && !!name && !!host,
+    // important: both re-asserted after the spread. This payload completes a partial summary,
+    // so every opening revalidates it while the cached detail remains available immediately.
     staleTime: 0,
     refetchOnMount: "always",
   });
@@ -1488,12 +1581,19 @@ export function useRestartInstance() {
 
 export function useDeleteInstance() {
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   
   return useMutation({
     mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
       api.vms.delete(name, host, force, project),
     onSuccess: (_data, variables) => {
-      removeInstanceFromCaches(queryClient, variables.name, variables.host, variables.project);
+      removeInstanceFromCaches(
+        queryClient,
+        scopeKey,
+        variables.name,
+        variables.host,
+        variables.project,
+      );
       refreshInstanceQueries(queryClient);
     },
   });
@@ -1665,14 +1765,15 @@ export function useMemberResources(
   memberName: string,
   opts?: { enabled?: boolean },
 ) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["memberResources", node, memberName],
+    queryKey: queryKeys.memberResources(scopeKey, node, memberName),
     // note: getResources routes through the extended fan-out budget, which was unreachable
     // from the UI while this hook never passed a fresh flag.
     queryFn: ({ fresh }) => api.clusterMembers.getResources(node, memberName, { fresh }),
     // note: gated so a closed modal stops polling. The backend caches this for 60s, so the
     // interval matches: anything faster returns the same body.
-    enabled: (opts?.enabled ?? true) && !!node && !!memberName,
+    enabled: isAuthenticated && (opts?.enabled ?? true) && !!node && !!memberName,
     staleTime: 30 * 1000, // 30 seconds
     gcTime: 5 * 60 * 1000, // 5 minutes
     refetchInterval: backingOffInterval(POLL_MS.attended),
@@ -1682,9 +1783,11 @@ export function useMemberResources(
 
 // Clusters Hooks
 export function useClusters(fresh: boolean = false) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["clusters", { fresh }],
+    queryKey: queryKeys.clustersFor(scopeKey, fresh),
     queryFn: ({ fresh: manual }) => api.clusters.list(fresh || manual),
+    enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
     refetchInterval: jitter(POLL_MS.fleet),
@@ -1862,9 +1965,9 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
       .filter(r => r !== points)
       .sort((a, b) => Math.abs(a - points) - Math.abs(b - points));
 
-    sortedRanges.forEach((range, idx) => {
+    const timers = sortedRanges.map((range, idx) => {
       // Stagger prefetches slightly to avoid burst
-      setTimeout(() => {
+      return setTimeout(() => {
         queryClient.prefetchQuery({
           queryKey: ["monitoring", "history", scopeKey, range],
           queryFn: () => api.monitoring.getHistory(range),
@@ -1872,6 +1975,9 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
         });
       }, idx * 200);
     });
+    // Pausing during the stagger window must cancel work that has not started yet. Without
+    // cleanup, the page could still issue history requests after the operator pressed Pause.
+    return () => timers.forEach((timer) => clearTimeout(timer));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, scopeKey]); // Only on mount/enable change - not on points change
 
@@ -1984,12 +2090,13 @@ export function useCancelPendingCert() {
   });
 }
 
-export function useSystemWarnings() {
+export function useSystemWarnings(options: { enabled?: boolean } = {}) {
   // the same 403 as useWarnings: /warnings/system/all sits behind require_partner()
   const { isPartner } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    enabled: isPartner,
-    queryKey: ["systemWarnings"],
+    enabled: isAuthenticated && isPartner && (options.enabled ?? true),
+    queryKey: ["systemWarnings", scopeKey],
     // note: every sibling destructures { fresh }; this one did not, so the second half of
     // "Refresh all" on the warnings page silently reused whatever was already in flight.
     queryFn: ({ fresh }) => api.certificates.getSystemWarnings({ fresh }),
@@ -2029,8 +2136,9 @@ export function useInstanceSnapshots(
   project = "default",
   enabled = true,
 ) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["instanceSnapshots", instanceName, host, project],
+    queryKey: queryKeys.instanceSnapshots(scopeKey, host, project, instanceName),
     // note: `fresh` is deliberately NOT forwarded. It exists to bypass a backend response cache,
     // and the snapshot routes have none: they read the cluster on every call. Sending it anyway
     // spent the shared 12-per-minute cache-bypass budget on requests that had nothing to bypass,
@@ -2041,7 +2149,7 @@ export function useInstanceSnapshots(
     ...SEMI_STATIC_DATA_CONFIG,
     // After the spread on purpose: the preset carries its own `enabled` and would otherwise
     // re-enable a query the caller gated on the active tab.
-    enabled: enabled && !!instanceName && !!host,
+    enabled: isAuthenticated && enabled && !!instanceName && !!host,
   });
 }
 
@@ -2080,17 +2188,18 @@ export function useSnapshotSchedules(
   filters: { host?: string; project?: string; instance?: string } = {},
   enabled = true,
 ) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: [
-      "snapshotSchedules",
-      filters.host ?? null,
-      filters.project ?? null,
-      filters.instance ?? null,
-    ],
+    queryKey: queryKeys.snapshotSchedules(
+      scopeKey,
+      filters.host,
+      filters.project,
+      filters.instance,
+    ),
     queryFn: (opts) => api.snapshotSchedules.list(filters, opts),
     ...SEMI_STATIC_DATA_CONFIG,
     // After the spread on purpose: the preset carries its own `enabled` and its own `retry`.
-    enabled,
+    enabled: isAuthenticated && enabled,
     // important: a 404 here is the deployment saying the schedule routes are not mounted, which is
     // the documented default (SNAPSHOT_SCHEDULES_ENABLED is off unless set). The shared preset only
     // declines to retry 401, 403 and 429, so without this every mount of the snapshots page and of

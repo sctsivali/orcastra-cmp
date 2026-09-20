@@ -126,8 +126,9 @@ export function ConsoleWindow({
     setKillingSession(true);
     try {
       const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/active-sessions/${operationId}` +
-          `?host=${encodeURIComponent(consoleInstance.host)}`,
+        `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/active-sessions/${encodeURIComponent(operationId)}` +
+          `?host=${encodeURIComponent(consoleInstance.host)}` +
+          `&project=${encodeURIComponent(consoleInstance.project || "default")}`,
         { method: "DELETE", headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
       
@@ -507,7 +508,9 @@ export function ConsoleWindow({
               // 3. Kill all sessions for this instance
               try {
                 await fetch(
-                  `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/kill-all-sessions?host=${encodeURIComponent(consoleInstance.host)}`,
+                  `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/kill-all-sessions` +
+                    `?host=${encodeURIComponent(consoleInstance.host)}` +
+                    `&project=${encodeURIComponent(consoleInstance.project || "default")}`,
                   { method: 'POST', headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
                 );
               } catch (err) {

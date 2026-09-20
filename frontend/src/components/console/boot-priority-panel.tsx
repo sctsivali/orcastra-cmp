@@ -29,6 +29,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { instanceStatusDisplay } from "@/lib/instance-status";
 
 interface StartupOrderEntry {
   instanceName: string;
@@ -291,10 +292,10 @@ export function BootPriorityPanel({
                     )}
                     <span className="min-w-0 break-words font-medium">{entry.instanceName}</span>
                     <Badge
-                      variant={entry.status === 'Running' ? 'default' : 'secondary'}
+                      variant={instanceStatusDisplay(entry.status).tone}
                       className="shrink-0"
                     >
-                      {entry.status}
+                      {instanceStatusDisplay(entry.status).label}
                     </Badge>
                   </div>
                 </div>

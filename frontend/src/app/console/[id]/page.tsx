@@ -321,8 +321,8 @@ function ConsoleContent() {
     setKillingSession(true);
     try {
       const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions/${operationId}` +
-          `?host=${encodeURIComponent(host)}`,
+        `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions/${encodeURIComponent(operationId)}` +
+          `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
         {
           method: "DELETE",
           headers: {
@@ -1324,7 +1324,9 @@ function ConsoleContent() {
     // Kill sessions when tab is closed
     const handleBeforeUnload = () => {
       // Use sendBeacon with Blob for POST request during unload
-      const killUrl = `${API_URL}/console/${encodeURIComponent(instanceName)}/kill-all-sessions?host=${encodeURIComponent(host)}`;
+      const killUrl =
+        `${API_URL}/console/${encodeURIComponent(instanceName)}/kill-all-sessions` +
+        `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
       // sendBeacon needs a body (Blob) to trigger POST method
       const blob = new Blob([''], { type: 'application/json' });
       navigator.sendBeacon(killUrl, blob);
@@ -1348,7 +1350,7 @@ function ConsoleContent() {
         try { spiceRef.current.stop(); } catch (e) {}
       }
     };
-  }, [handleResize, instanceName, host]);
+  }, [handleResize, instanceName, host, project]);
 
   // Keyboard shortcuts
   useEffect(() => {

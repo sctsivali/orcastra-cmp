@@ -9,6 +9,10 @@ import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { formatDateTime, formatLabel } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
+import {
+  warningSeverityDisplay,
+  warningStatusDisplay,
+} from "./warning-severity";
 
 // One dialog for all three warning tabs.
 //
@@ -37,6 +41,8 @@ export function WarningDetailDialog({
   const { kind, record } = selected;
 
   if (kind === "platform") {
+    const severity = warningSeverityDisplay(record.severity);
+    const status = warningStatusDisplay(record.status);
     return (
       <RecordDetailDialog
         open={open}
@@ -46,7 +52,7 @@ export function WarningDetailDialog({
         // has never shown it.
         recordId={record.uuid ?? ""}
         recordIdLabel="Warning"
-        status={<Badge variant="outline">{record.severity}</Badge>}
+        status={<Badge variant={severity.tone}>{severity.label}</Badge>}
         size="lg"
       >
         <div className="space-y-4">
@@ -61,7 +67,7 @@ export function WarningDetailDialog({
               <DetailField label="Location" value={record.location} />
               <DetailField label="Source Node" value={record.source_node} />
               <DetailField label="Project" value={record.project} />
-              <DetailField label="Status" value={record.status} />
+              <DetailField label="Status" value={status.label} />
               <DetailField label="Seen" value={record.count?.toLocaleString?.() ?? record.count} />
               <DetailField label="First Seen" value={formatDateTime(record.first_seen_at)} />
               <DetailField label="Last Seen" value={formatDateTime(record.last_seen_at)} />
@@ -74,6 +80,7 @@ export function WarningDetailDialog({
 
   if (kind === "certificate") {
     const expired = record.warning_type === "cert_expired" || record.days_until_expiry <= 0;
+    const severity = warningSeverityDisplay(record.severity);
     return (
       <RecordDetailDialog
         open={open}
@@ -92,7 +99,7 @@ export function WarningDetailDialog({
         }
       >
         <DetailGrid cols={2}>
-          <DetailField label="Severity" value={record.severity} />
+          <DetailField label="Severity" value={severity.label} />
           <DetailField label="Warning Type" value={formatLabel(record.warning_type ?? "")} />
           <DetailField
             label="Days Until Expiry"
@@ -104,6 +111,7 @@ export function WarningDetailDialog({
     );
   }
 
+  const severity = warningSeverityDisplay(record.severity || "critical");
   return (
     <RecordDetailDialog
       open={open}
@@ -111,7 +119,7 @@ export function WarningDetailDialog({
       title={record.display_name || record.cluster_id}
       recordId={record.cluster_id}
       recordIdLabel="Cluster"
-      status={<Badge variant="destructive">{record.severity || "critical"}</Badge>}
+      status={<Badge variant={severity.tone}>{severity.label}</Badge>}
       // The connection error, in full. The table clips it to two lines behind a tooltip, which
       // no touch or keyboard user opens.
       error={record.message || "Connection failed"}

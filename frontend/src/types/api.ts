@@ -29,6 +29,14 @@ export interface ResourceUsage {
 }
 
 // Instance Metrics
+export type InstanceCpuSampleStatus =
+  | "ready"
+  | "calculating"
+  | "unavailable"
+  | "not_applicable";
+
+export type InstanceMetricSection = "cpu" | "memory" | "disk" | "network" | "processes";
+
 export interface InstanceMetrics {
   instance_name: string;
   host: string;
@@ -46,6 +54,10 @@ export interface InstanceMetrics {
   ipv4_addresses: string[];
   ipv6_addresses: string[];
   pid: number | null;
+  /** Server truth for whether cpu_usage_percent is usable, still sampling, or absent. */
+  cpu_sample_status: InstanceCpuSampleStatus;
+  /** Sections omitted or incomplete in this sample. Empty or zero can still be valid data. */
+  unavailable_sections: InstanceMetricSection[];
   timestamp: string;
 }
 
@@ -90,6 +102,55 @@ export interface VMListResponse {
   offset: number;
   limit: number;
   has_more: boolean;
+}
+
+/** How LXD resolved a CPU or memory limit for an instance. */
+export type InstanceSpecificationSource =
+  | "explicit"
+  | "inherited"
+  | "default"
+  | "unlimited"
+  | "unknown";
+
+/** A raw LXD limit plus enough provenance to avoid inventing an effective value. */
+export interface InstanceResourceSpecification {
+  value: string | null;
+  source: InstanceSpecificationSource;
+}
+
+export type InstanceRootDiskSource =
+  | "explicit"
+  | "inherited"
+  | "pool_default"
+  | "unknown";
+
+export interface InstanceRootDiskSpecification {
+  value: string | null;
+  pool: string | null;
+  source: InstanceRootDiskSource;
+}
+
+/** Tenant-safe projection of the configuration LXD currently applies to one instance. */
+export interface InstanceSpecification {
+  name: string;
+  host: string;
+  project: string;
+  status: VMStatus;
+  type: string;
+  architecture: string | null;
+  cpu: InstanceResourceSpecification;
+  memory: InstanceResourceSpecification;
+  root_disk: InstanceRootDiskSpecification;
+  gpu_count: number;
+  gpu_devices: string[];
+}
+
+export interface InstanceSpecificationsResponse {
+  total: number;
+  instances: InstanceSpecification[];
+  /** Scoped cluster ids that could not be read. The list can therefore be incomplete. */
+  unreachable_nodes: string[];
+  collected_at: string;
 }
 
 // VM Create Request

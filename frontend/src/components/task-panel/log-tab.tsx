@@ -21,7 +21,7 @@ import type { ClusterLogEntry } from "@/types/tasks";
 import { useClusterLog } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
 import { SeverityCell } from "./task-cells";
-import { SEVERITY_ORDER, logActorLabel } from "./task-format";
+import { SEVERITY_ORDER, logActorLabel, logSeverityLabel } from "./task-format";
 import type { TaskFeedSnapshot } from "./use-task-feed";
 
 const FIRST_PAGE = 200;
@@ -40,7 +40,7 @@ const LOG = defineTable<ClusterLogEntry>()({
       label: "Severity",
       sort: (e) => e.severity,
       facet: (e) => e.severity,
-      facetSpec: { primary: true, format: formatLabel, order: SEVERITY_ORDER },
+      facetSpec: { primary: true, format: logSeverityLabel, order: SEVERITY_ORDER },
     },
     { field: "kind", label: "Kind", sort: (e) => e.kind, facet: (e) => e.kind, facetSpec: { format: formatLabel } },
     {
@@ -72,7 +72,7 @@ export interface LogTabProps {
 }
 
 function logLine(entry: ClusterLogEntry): string {
-  return `${formatDateTime(entry.ts)} [${entry.severity}] ${entry.message}`;
+  return `${formatDateTime(entry.ts)} [${logSeverityLabel(entry.severity)}] ${entry.message}`;
 }
 
 function dayOf(ts: string): string {

@@ -1,68 +1,69 @@
 "use client";
 
 import * as React from "react";
-import { Cpu, Database, HardDrive, Network, Sparkles } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Cpu, Database, HardDrive, Sparkles, type LucideIcon } from "lucide-react";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import type { NodeStatus } from "@/types/api";
+import { HardwareDetailDialog } from "./hardware-detail-dialog";
+import {
+  TechnologySummaryCard,
+  type TechnologySummaryItem,
+} from "./technology-summary-card";
 
 /**
  * The fleet-wide hardware totals.
  *
- * Moved out of page.tsx unchanged. Every figure is reduced from node.resources, and the two
- * fallbacks that used to invent a value when nothing was reported now resolve to the shared
- * placeholder instead.
+ * Every figure is reduced from node.resources. Missing fleet readings stay missing rather than
+ * becoming zero capacity, and partial totals state exactly how many nodes contributed.
  */
 
 export interface HardwareCategory {
-  icon: React.ElementType;
+  id: "cpu" | "memory" | "storage" | "gpu";
+  icon: LucideIcon;
   title: string;
   description: string;
-  items: { label: string; value: string; detail?: string }[];
+  items: TechnologySummaryItem[];
 }
 
 export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[] | null {
-
   if (!nodes || nodes.length === 0) return null;
 
-  const connectedNodes = nodes.filter(n => n.connected);
+  const reportingNodes = nodes.filter((node) => node.resources);
+  const reportingNodeCount = reportingNodes.length;
+  const coverageDetail =
+    reportingNodeCount === 0
+      ? "No node reported this value"
+      : reportingNodeCount < nodes.length
+        ? `Reported by ${reportingNodeCount} of ${nodes.length} nodes`
+        : "Aggregate across all reporting nodes";
 
-  const totalCores = nodes.reduce((sum: number, node: NodeStatus) => {
+  const totalThreads = reportingNodes.reduce((sum: number, node: NodeStatus) => {
     return sum + (node.resources?.cpu_total || 0);
   }, 0);
 
-  const totalMemory = nodes.reduce((sum: number, node: NodeStatus) => {
+  const totalMemory = reportingNodes.reduce((sum: number, node: NodeStatus) => {
     return sum + (node.resources?.memory_total || 0);
   }, 0);
 
   // Get real architecture from node environment
   const cpuArchitectures = new Set<string>(
-    nodes
+    reportingNodes
       .map((node: NodeStatus) => node.environment?.kernel_architecture)
       .filter((arch): arch is string => Boolean(arch))
   );
 
-  // Get total storage capacity
-  const totalStorageCapacity = nodes.reduce((sum: number, node: NodeStatus) => {
-    return sum + (node.resources?.storage_total || 0);
-  }, 0);
-
-  const totalStorageAvailable = nodes.reduce((sum: number, node: NodeStatus) => {
-    return sum + (node.resources?.storage_available || 0);
-  }, 0);
-
   // Compute GPUs (sellable capacity) and detected cards are different numbers about the
   // same hardware. Both are derived from /nodes, the endpoint this page already reads: two
   // endpoints for one fact is how the counts came to disagree in the first place.
-  const totalGPUs = nodes.reduce((sum: number, node: NodeStatus) => {
+  const totalGPUs = reportingNodes.reduce((sum: number, node: NodeStatus) => {
     return sum + (node.resources?.gpu_total || 0);
   }, 0);
-  const totalGpuCards = nodes.reduce((sum: number, node: NodeStatus) => {
+  const totalGpuCards = reportingNodes.reduce((sum: number, node: NodeStatus) => {
     return sum + (node.resources?.gpu_cards_total ?? node.resources?.gpu_cards?.length ?? 0);
   }, 0);
   const gpuVendors = Array.from(
     new Set(
-      nodes.flatMap((node: NodeStatus) =>
+      reportingNodes.flatMap((node: NodeStatus) =>
         (node.resources?.gpu_cards ?? [])
           .filter((card) => card.is_compute)
           .map((card) => card.vendor)
@@ -72,7 +73,7 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
   );
   const gpuModels = Array.from(
     new Set(
-      nodes.flatMap((node: NodeStatus) =>
+      reportingNodes.flatMap((node: NodeStatus) =>
         (node.resources?.gpu_cards ?? [])
           .filter((card) => card.is_compute)
           .map((card) => card.model_name || card.product)
@@ -82,7 +83,7 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
   );
 
   const storageBackends = new Set<string>(
-    nodes.flatMap((node: NodeStatus) =>
+    reportingNodes.flatMap((node: NodeStatus) =>
       node.resources?.storage_pools
         ? node.resources.storage_pools.map((pool) => pool.driver)
         : []
@@ -91,14 +92,18 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
 
   const categories: HardwareCategory[] = [
     {
+      id: "cpu",
       icon: Cpu,
       title: "CPU Resources",
       description: "Processor information across all nodes",
       items: [
         {
-          label: "Total Cores",
-          value: totalCores.toString(),
-          detail: "Aggregate across all nodes",
+          label: "Total Threads",
+          value: reportingNodeCount > 0 ? totalThreads.toString() : EMPTY_VALUE,
+          detail:
+            reportingNodeCount > 0
+              ? `${coverageDetail}. LXD reports this capacity as hardware threads`
+              : coverageDetail,
         },
         {
           label: "Architectures",
@@ -106,30 +111,41 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
           detail: "Supported CPU architectures",
         },
         {
-          label: "Nodes",
-          value: connectedNodes.length.toString(),
-          detail: "Active compute nodes",
+          label: "Reporting Nodes",
+          value: `${reportingNodeCount} of ${nodes.length}`,
+          detail: "Nodes included in these totals",
         },
       ],
     },
     {
+      id: "memory",
       icon: HardDrive,
       title: "Memory",
       description: "RAM resources available in the cluster",
       items: [
         {
           label: "Total Memory",
-          value: `${(totalMemory / (1024 ** 3)).toFixed(2)} GiB`,
-          detail: "Aggregate across all nodes",
+          value:
+            reportingNodeCount > 0
+              ? `${(totalMemory / 1024 ** 3).toFixed(2)} GiB`
+              : EMPTY_VALUE,
+          detail: coverageDetail,
         },
         {
           label: "Memory per Node",
-          value: connectedNodes.length > 0 ? `~${(totalMemory / connectedNodes.length / (1024 ** 3)).toFixed(2)} GiB` : EMPTY_VALUE,
-          detail: "Average memory allocation",
+          value:
+            reportingNodeCount > 0
+              ? `~${(totalMemory / reportingNodeCount / 1024 ** 3).toFixed(2)} GiB`
+              : EMPTY_VALUE,
+          detail:
+            reportingNodeCount > 0
+              ? `Average across ${reportingNodeCount} reporting node${reportingNodeCount === 1 ? "" : "s"}`
+              : "No node reported memory",
         },
       ],
     },
     {
+      id: "storage",
       icon: Database,
       title: "Storage",
       description: "Storage systems and backends",
@@ -141,33 +157,40 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
         },
         {
           label: "Storage Pools",
-          value: nodes
-            .reduce(
-              (sum: number, node: NodeStatus) =>
-                sum + (node.resources?.storage_pools?.length || 0),
-              0
-            )
-            .toString(),
-          detail: "Total configured storage pools",
+          value:
+            reportingNodeCount > 0
+              ? reportingNodes
+                  .reduce(
+                    (sum: number, node: NodeStatus) =>
+                      sum + (node.resources?.storage_pools?.length || 0),
+                    0,
+                  )
+                  .toString()
+              : EMPTY_VALUE,
+          detail: coverageDetail,
         },
       ],
     },
   ];
 
   categories.push({
+    id: "gpu",
     icon: Sparkles,
     title: "GPU Resources",
     description: "Graphics processing units for acceleration",
     items: [
       {
         label: "Compute GPUs",
-        value: totalGPUs.toString(),
-        detail: "Allocatable across all nodes",
+        value: reportingNodeCount > 0 ? totalGPUs.toString() : EMPTY_VALUE,
+        detail: coverageDetail,
       },
       {
         label: "Cards Detected",
-        value: totalGpuCards.toString(),
-        detail: "Includes display controllers",
+        value: reportingNodeCount > 0 ? totalGpuCards.toString() : EMPTY_VALUE,
+        detail:
+          reportingNodeCount > 0
+            ? `Includes display controllers; ${coverageDetail.toLowerCase()}`
+            : coverageDetail,
       },
       {
         label: "Vendors",
@@ -185,60 +208,60 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
   return categories;
 }
 
-export function HardwareAggregate({ categories }: { categories: HardwareCategory[] }) {
+export function HardwareAggregate({
+  categories,
+  nodes,
+  isRefreshing = false,
+  refreshError = false,
+}: {
+  categories: HardwareCategory[];
+  nodes: NodeStatus[];
+  isRefreshing?: boolean;
+  refreshError?: boolean;
+}) {
+  const [selectedId, setSelectedId] = React.useState<HardwareCategory["id"] | null>(null);
+  const selected = categories.find((category) => category.id === selectedId) ?? null;
+  const reportingNodeCount = nodes.filter((node) => node.resources).length;
+
   return (
-    <section className="space-y-3">
-      <div>
-        <h2 className="text-xl font-semibold">Fleet Totals</h2>
-        {/* note: --foreground, not --muted-foreground. On --background the muted token measures
-            4.27:1 where AA wants 4.5:1, which is why the page subtitle is a declared exception
-            in the contrast sweep. One exception is enough. */}
-        <p className="text-sm text-foreground">
-          Summed across every node the dashboard can reach.
-        </p>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-        {categories.map((category) => {
-          const Icon = category.icon;
-          return (
-            <Card key={category.title} className="hover:shadow-md transition-all duration-200">
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <CardTitle>{category.title}</CardTitle>
-                    <CardDescription>{category.description}</CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {category.items.map((item) => (
-                  <div
-                    key={item.label}
-                    className="flex flex-col gap-2 pb-4 mb-4 border-b last:border-b-0 last:pb-0 last:mb-0"
-                  >
-                    <div className="flex justify-between items-start gap-4">
-                      <span className="text-sm font-medium text-muted-foreground flex-shrink-0">
-                        {item.label}
-                      </span>
-                      <span className="text-sm font-semibold text-right break-words">
-                        {item.value}
-                      </span>
-                    </div>
-                    {item.detail && (
-                      <span className="text-xs text-muted-foreground mt-1">
-                        {item.detail}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-    </section>
+    <>
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-xl font-semibold">Fleet Totals</h2>
+          {/* note: --foreground, not --muted-foreground. On --background the muted token measures
+              4.27:1 where AA wants 4.5:1, which is why the page subtitle is a declared exception
+              in the contrast sweep. One exception is enough. */}
+          <p className="text-sm text-foreground">
+            {reportingNodeCount === nodes.length
+              ? `Summed across all ${nodes.length} reporting node${nodes.length === 1 ? "" : "s"}.`
+              : `Partial totals from ${reportingNodeCount} of ${nodes.length} nodes.`}{" "}
+            Open a category for node detail.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">
+          {categories.map((category) => (
+            <TechnologySummaryCard
+              key={category.id}
+              icon={category.icon}
+              title={category.title}
+              description={category.description}
+              items={category.items}
+              onOpen={() => setSelectedId(category.id)}
+            />
+          ))}
+        </div>
+      </section>
+
+      <HardwareDetailDialog
+        category={selected}
+        nodes={nodes}
+        open={selected !== null}
+        isRefreshing={isRefreshing}
+        refreshError={refreshError}
+        onOpenChange={(open) => {
+          if (!open) setSelectedId(null);
+        }}
+      />
+    </>
   );
 }

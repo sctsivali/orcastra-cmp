@@ -3,12 +3,11 @@
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { DetailField, DetailGrid } from "@/components/detail/detail-field";
-import { EMPTY_VALUE } from "@/components/ui/table-text";
-import { formatBytes, formatFrequency, formatLinkSpeed } from "@/lib/utils";
-import type { CPUSocketInfo, NetworkCardInfo, StorageDeviceInfo } from "@/types/api";
+import { formatBytes, formatFrequency } from "@/lib/utils";
+import type { CPUSocketInfo, StorageDeviceInfo } from "@/types/api";
 
 /**
- * Sockets, disks and NICs as description lists.
+ * Sockets and disks as description lists.
  *
  * Deliberately not tables. check-table-filters.mjs is at its ratchet, so a TableBody outside
  * components/ui without a defineTable contract fails the frontend gate, and config-panel.tsx
@@ -137,68 +136,6 @@ export function StorageDeviceList({ devices }: { devices: StorageDeviceInfo[] })
               value={disk.numa_node === null || disk.numa_node === undefined ? undefined : disk.numa_node}
             />
           </DetailGrid>
-        </DeviceRow>
-      ))}
-    </div>
-  );
-}
-
-export function NetworkCardList({ cards }: { cards: NetworkCardInfo[] }) {
-  if (cards.length === 0) return null;
-  return (
-    <div className="space-y-2">
-      {cards.map((card, index) => (
-        <DeviceRow
-          key={`${card.member ?? ""}-${card.pci_address ?? card.driver ?? index}`}
-          // A card with no vendor or product still has a driver, and on a Jetson that driver
-          // (mttcan) is the only name the interface has. Naming it beats an empty row.
-          title={card.product || card.driver || "Network interface"}
-          subtitle={card.product ? card.vendor || undefined : undefined}
-          badges={
-            <>
-              {card.driver ? (
-                <Badge variant="outline" className="font-mono font-normal">
-                  {card.driver}
-                </Badge>
-              ) : null}
-              <MemberBadge member={card.member} />
-            </>
-          }
-        >
-          <DetailGrid cols={4}>
-            <DetailField label="Driver Version" value={card.driver_version || undefined} mono />
-            <DetailField label="Firmware" value={card.firmware_version || undefined} mono />
-            <DetailField label="PCI Address" value={card.pci_address || undefined} mono />
-            <DetailField
-              label="NUMA Node"
-              value={card.numa_node === null || card.numa_node === undefined ? undefined : card.numa_node}
-            />
-          </DetailGrid>
-
-          {card.ports.length > 0 ? (
-            <ul className="space-y-1 pt-1">
-              {card.ports.map((port, portIndex) => (
-                <li
-                  key={port.id ?? portIndex}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
-                >
-                  <span className="font-mono">{port.id || EMPTY_VALUE}</span>
-                  {port.link_detected ? (
-                    <Badge variant="success">Link up</Badge>
-                  ) : (
-                    <Badge variant="muted">No link</Badge>
-                  )}
-                  <span className="text-muted-foreground">{formatLinkSpeed(port.link_speed)}</span>
-                  {port.link_duplex ? (
-                    <span className="text-muted-foreground">{port.link_duplex} duplex</span>
-                  ) : null}
-                  {port.port_type ? (
-                    <span className="text-muted-foreground">{port.port_type}</span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
         </DeviceRow>
       ))}
     </div>

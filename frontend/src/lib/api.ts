@@ -30,6 +30,7 @@ import {
   ProjectCreateRequest,
   ProjectCreateResponse,
   InstanceMetrics,
+  InstanceSpecificationsResponse,
   APIError,
   ClusterRegisterRequest,
   ClusterRegisterResponse,
@@ -94,7 +95,11 @@ export const API_URL = API_PREFIX;
  * fetchAPI() automatically attaches it to all backend requests.
  */
 let _accessToken: string | null = null;
+let _authActorScope: string | null = null;
+let _authGeneration = 0;
+let _authActorGeneration = 0;
 let _onTokenRefreshed: (() => void) | null = null;
+const _authActorChangedListeners = new Set<() => void>();
 
 /**
  * Register a callback fired when the access token is REPLACED with a new value
@@ -105,11 +110,55 @@ export function onTokenRefreshed(fn: () => void) {
   _onTokenRefreshed = fn;
 }
 
-export function setAccessToken(token: string | null | undefined) {
+/**
+ * Subscribe to authenticated actor boundaries.
+ *
+ * A listener runs synchronously after the new context is installed and before TokenSync marks
+ * it ready. Throwing therefore fails closed: descendants stay withheld instead of mounting B
+ * above A's browser cache.
+ */
+export function onAuthActorChanged(fn: () => void): () => void {
+  _authActorChangedListeners.add(fn);
+  return () => {
+    _authActorChangedListeners.delete(fn);
+  };
+}
+
+export function setAccessToken(
+  token: string | null | undefined,
+  actorScope?: string | null,
+) {
   const next = token ?? null;
-  // token rotated (not the initial set) - let listeners recover failed queries
-  const rotated = next !== null && _accessToken !== null && next !== _accessToken;
+  const nextActorScope = next === null ? null : actorScope ?? _authActorScope;
+  const tokenChanged = next !== _accessToken;
+  const actorChanged = nextActorScope !== _authActorScope;
+  // A silent rotation belongs to the same actor. A direct A -> B sign-in is an identity
+  // boundary, not a reason to refetch A's failed queries under B's credentials.
+  const rotated =
+    tokenChanged &&
+    !actorChanged &&
+    next !== null &&
+    _accessToken !== null;
+
+  if (tokenChanged || actorChanged) {
+    // A monotonically increasing, non-secret request scope. Never put a bearer token in a map
+    // key: keys are inspectable in a debugger and are too easy to include in diagnostics.
+    _authGeneration += 1;
+  }
+  if (actorChanged) {
+    _authActorGeneration += 1;
+    // Auth recovery state belongs to the actor that produced the 401. A completed refresh or
+    // in-place prompt from A must not suppress B's own recovery attempt.
+    _refreshCompleted = false;
+    _authFailureAnnounced = false;
+    _sessionRefreshInFlight = false;
+  }
+
   _accessToken = next;
+  _authActorScope = nextActorScope;
+  if (actorChanged) {
+    for (const listener of _authActorChangedListeners) listener();
+  }
   if (rotated && _onTokenRefreshed) {
     _onTokenRefreshed();
   }
@@ -117,6 +166,21 @@ export function setAccessToken(token: string | null | undefined) {
 
 export function getAccessToken(): string | null {
   return _accessToken;
+}
+
+/** True while the installed bearer still belongs to this actor, including during rotation. */
+export function isAuthActorSynchronized(actorScope: string): boolean {
+  return _accessToken !== null && _authActorScope === actorScope;
+}
+
+/** True only after TokenSync has installed the session's complete auth context. */
+export function isAuthContextSynchronized(
+  token: string | null | undefined,
+  actorScope: string | null,
+): boolean {
+  const expectedToken = token ?? null;
+  const expectedActorScope = expectedToken === null ? null : actorScope;
+  return _accessToken === expectedToken && _authActorScope === expectedActorScope;
 }
 
 /**
@@ -169,8 +233,12 @@ function handle401() {
   if (_sessionRefreshInFlight) return false;
 
   if (!_refreshCompleted && _sessionRefreshFn) {
+    const refreshActorGeneration = _authActorGeneration;
     _sessionRefreshInFlight = true;
     _sessionRefreshFn().finally(() => {
+      // A direct account transition makes this A refresh irrelevant to B. setAccessToken()
+      // already released B's in-flight gate, so the old promise must not close it again.
+      if (_authActorGeneration !== refreshActorGeneration) return;
       _sessionRefreshInFlight = false;
       // whatever the outcome, we have now tried. A further 401 means it did not help.
       _refreshCompleted = true;
@@ -240,7 +308,7 @@ async function fetchWithTimeout(
 
 /**
  * In-flight GET request deduplication.
- * Prevents duplicate concurrent GET requests to the same endpoint.
+ * Prevents duplicate concurrent GET requests to the same endpoint and auth generation.
  */
 const _inflightGets = new Map<string, Promise<unknown>>();
 
@@ -265,29 +333,41 @@ export async function fetchAPI<T>(
 ): Promise<T> {
   const url = `${API_BASE_URL}${API_PREFIX}${endpoint}`;
   const method = (options.method || "GET").toUpperCase();
+  const authGeneration = _authGeneration;
+  const requestActorGeneration = _authActorGeneration;
+  const inflightKey = `${authGeneration}:${endpoint}`;
 
-  // Deduplicate concurrent GET requests to the same endpoint
+  // Deduplicate concurrent GET requests only inside one installed auth context. Without the
+  // generation, B can join A's still-pending promise for the same endpoint after an account
+  // switch and receive A's response without issuing a request under B's bearer.
   if (method === "GET" && !_isRetry && !fetchOptions.force) {
-    const existing = _inflightGets.get(endpoint);
+    const existing = _inflightGets.get(inflightKey);
     if (existing) {
       return existing as Promise<T>;
     }
   }
 
-  const request = _fetchAPIInternal<T>(endpoint, url, options, timeoutMs, _isRetry);
+  const request = _fetchAPIInternal<T>(
+    endpoint,
+    url,
+    options,
+    timeoutMs,
+    _isRetry,
+    requestActorGeneration,
+  );
 
-  // Track in-flight GET requests for deduplication, keyed on the endpoint as sent.
+  // Track in-flight GET requests for deduplication, keyed on auth generation and endpoint.
   // note: a forced read carries `?fresh=true`, so it keys separately from the poll of
   // the same resource and the two never join. That is the point: the click must reach
   // the server. `force` above covers the reads that cannot say so in the URL, where the
   // backend has no response cache to bypass.
   if (method === "GET") {
-    _inflightGets.set(endpoint, request);
+    _inflightGets.set(inflightKey, request);
     request
       .finally(() => {
         // only clear our own entry - a forced request may have replaced it
-        if (_inflightGets.get(endpoint) === request) {
-          _inflightGets.delete(endpoint);
+        if (_inflightGets.get(inflightKey) === request) {
+          _inflightGets.delete(inflightKey);
         }
       })
       // important: .finally() returns a NEW promise that rejects with the same reason, and
@@ -364,6 +444,7 @@ async function _fetchAPIInternal<T>(
   options: RequestInit,
   timeoutMs: number,
   _isRetry: boolean,
+  requestActorGeneration: number,
 ): Promise<T> {
 
   try {
@@ -419,6 +500,11 @@ async function _fetchAPIInternal<T>(
 
       // On 401, trigger session refresh and retry once after token is refreshed
       if (response.status === 401 && typeof window !== 'undefined') {
+        // A response from the previous actor is stale by definition. It must neither drive the
+        // current actor's refresh state nor retry a mutation using the current actor's bearer.
+        if (_authActorGeneration !== requestActorGeneration) {
+          throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
+        }
         const refreshTriggered = handle401();
 
         // Retry once after waiting for session refresh to complete
@@ -435,7 +521,13 @@ async function _fetchAPIInternal<T>(
             }, 200);
           });
 
-          // Retry with potentially refreshed token
+          // A same-actor token rotation may retry. A direct A -> B transition may not: the
+          // original request, including a mutation body, was authorised and intended by A.
+          if (_authActorGeneration !== requestActorGeneration) {
+            throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
+          }
+
+          // Retry with the same actor's potentially refreshed token.
           return fetchAPI<T>(endpoint, options, timeoutMs, true);
         }
 
@@ -446,7 +538,10 @@ async function _fetchAPIInternal<T>(
     }
 
     // a request got through, so whatever was failing has cleared
-    if (_refreshCompleted || _authFailureAnnounced) {
+    if (
+      _authActorGeneration === requestActorGeneration &&
+      (_refreshCompleted || _authFailureAnnounced)
+    ) {
       clearAuthFailureState();
     }
 
@@ -492,8 +587,11 @@ export const vmAPI = {
     return fetchRead<VMListResponse>(endpoint, opts);
   },
 
-  get: async (name: string, host: string): Promise<VMInfo> => {
-    return fetchAPI<VMInfo>(`/vms/${name}?host=${encodeURIComponent(host)}`);
+  get: async (name: string, host: string, project = "default"): Promise<VMInfo> => {
+    const params = new URLSearchParams({ host, project });
+    return fetchAPI<VMInfo>(
+      `/vms/${encodeURIComponent(name)}?${params.toString()}`,
+    );
   },
 
   create: async (data: VMCreateRequest): Promise<VMCreateResponse> => {
@@ -1076,6 +1174,12 @@ export const instanceAPI = {
     });
   },
 
+  specifications: async (
+    opts: ReadOptions = {},
+  ): Promise<InstanceSpecificationsResponse> => {
+    return fetchRead<InstanceSpecificationsResponse>("/instances/specifications", opts);
+  },
+
   // Read-only pre-check for the Rebuild dialog (snapshots block, volumes survive).
   rebuildPreflight: async (name: string, host: string, project = "default"): Promise<RebuildPreflight> => {
     const p = new URLSearchParams({ host, project });
@@ -1125,11 +1229,18 @@ export const instanceAPI = {
   get: async (name: string, host: string, project?: string): Promise<VMInfo> => {
     const params = new URLSearchParams({ host });
     if (project) params.set("project", project);
-    return fetchAPI<VMInfo>(`/instances/${name}?${params.toString()}`);
+    return fetchAPI<VMInfo>(`/instances/${encodeURIComponent(name)}?${params.toString()}`);
   },
 
-  getMetrics: async (name: string, host: string): Promise<InstanceMetrics> => {
-    return fetchAPI<InstanceMetrics>(`/instances/${name}/metrics?host=${encodeURIComponent(host)}`);
+  getMetrics: async (
+    name: string,
+    host: string,
+    project = "default",
+  ): Promise<InstanceMetrics> => {
+    const params = new URLSearchParams({ host, project });
+    return fetchAPI<InstanceMetrics>(
+      `/instances/${encodeURIComponent(name)}/metrics?${params.toString()}`,
+    );
   },
 };
 
@@ -1980,6 +2091,7 @@ export interface BreakGlassCheck {
   target_organization_slug: string | null;
   grant_expires_at?: string | null;
 }
+export type BreakGlassGrantStatus = "active" | "expired" | "revoked";
 export interface BreakGlassGrant {
   id: number;
   admin_email: string;
@@ -1988,7 +2100,7 @@ export interface BreakGlassGrant {
   target_org_slug: string | null;
   reason: string;
   ticket_ref: string | null;
-  status: string;
+  status: BreakGlassGrantStatus;
   created_by: string;
   created_at: string;
   expires_at: string;

@@ -12,6 +12,7 @@ import { APIError } from "@/types";
  * the identical cached body and a log line, and on these endpoints a miss is a fan-out across
  * every cluster in scope. Each value below is the TTL of the endpoints it serves:
  *
+ *   live      uncached, single-instance metrics while its Metrics tab is visible
  *   watched   uncached, single-cluster reads a person is looking at right now
  *   active    30s   /instances, /monitoring/*
  *   attended  60s   /nodes/availability (45), /cluster-members/{m}/resources, pool resources
@@ -21,6 +22,7 @@ import { APIError } from "@/types";
  * an operator acts in this console, and every mutation already invalidates its key.
  */
 export const POLL_MS = {
+  live: 5 * 1000,
   watched: 10 * 1000,
   active: 30 * 1000,
   attended: 60 * 1000,
@@ -34,6 +36,7 @@ export const POLL_MS = {
  * cry wolf on every ordinary resume and operators would learn to ignore the marker.
  */
 export const STALE_AFTER_MS = {
+  live: 3 * POLL_MS.live,
   watched: 3 * POLL_MS.watched,
   active: 3 * POLL_MS.active,
   attended: 3 * POLL_MS.attended,

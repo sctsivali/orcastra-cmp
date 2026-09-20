@@ -37,6 +37,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { PoolCapacityCell, poolCapacity, type PoolCapacity } from "./components/pool-capacity-cell";
 import { PageReadError } from "@/components/ui/read-error-state";
 import { NodeLink } from "@/components/ui/node-link";
+import { storagePoolStatusDisplay } from "@/lib/resource-status";
 
 interface PoolInfo {
   name: string;
@@ -83,7 +84,7 @@ const POOLS = defineTable<PoolRow>()({
       label: "Status",
       sort: (p) => p.status,
       facet: (p) => p.status,
-      facetSpec: { primary: true },
+      facetSpec: { primary: true, format: (status) => storagePoolStatusDisplay(status).label },
     },
     { field: "used_by", label: "Used By", sort: (p) => p.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
     {
@@ -270,6 +271,7 @@ function StoragePoolsContent() {
               ) : (
                 paginatedPools.map((pool: PoolRow, idx: number) => {
                   const poolKey = `${pool.node}-${pool.name}`;
+                  const status = storagePoolStatusDisplay(pool.status);
 
                   return (
                     <TableRow key={`${poolKey}-${idx}`}>
@@ -288,8 +290,8 @@ function StoragePoolsContent() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Badge variant={pool.status === "Created" ? "default" : "secondary"}>
-                          {pool.status}
+                        <Badge variant={status.tone}>
+                          {status.label}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -363,7 +365,7 @@ function poolSubject(pool: StoragePoolInfo, resources: Record<string, any>): Use
     usedBy: pool.used_by ?? [],
     facts: [
       { label: "Driver", value: formatLabel(pool.driver) },
-      { label: "Status", value: pool.status },
+      { label: "Status", value: storagePoolStatusDisplay(pool.status).label },
       { label: "Node", value: <NodeLink clusterId={pool.node} /> },
     ],
     panels: [

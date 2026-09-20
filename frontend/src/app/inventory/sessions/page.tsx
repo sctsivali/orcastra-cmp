@@ -57,7 +57,6 @@ import {
   ShieldAlert,
   AlertTriangle } from "lucide-react";
 import { cn, formatLabel } from "@/lib/utils";
-import { getAccessToken } from "@/lib/api";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -68,6 +67,11 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { NodeLink } from "@/components/ui/node-link";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import {
+  sessionConnectionStatusDisplay,
+  type SessionConnectionStatus,
+} from "./components/session-connection-status";
 
 // ============ Types ============
 
@@ -79,7 +83,7 @@ interface SessionData {
   protocol: string;
   started_at: number;
   duration_seconds: number;
-  connection_status: string;
+  connection_status: SessionConnectionStatus;
   target_org_slug: string | null;
   is_break_glass: boolean;
   user: { id: string; email: string; role: string };
@@ -247,13 +251,23 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
       label: "Status",
       sort: (s) => s.connection_status,
       facet: (s) => s.connection_status,
-      facetSpec: { primary: true, format: formatLabel } },
+      facetSpec: {
+        primary: true,
+        format: (status) => sessionConnectionStatusDisplay(status).label,
+      } },
     { field: "node", label: "Node", facet: (s) => s.host, facetSpec: { role: "node",} },
   ] });
 
 function ActiveSessionsTab() {
+  const {
+    scopeKey: actorScope,
+    isAuthenticated,
+    accessToken: actorAccessToken,
+  } = useActorQueryScope();
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
+  const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
   const [sessions, setSessions] = useState<SessionData[]>([]);
+  const [sessionsActorScope, setSessionsActorScope] = useState(actorScope);
   const [scope, setScope] = useState<SessionScope>("self");
   const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -264,8 +278,49 @@ function ActiveSessionsTab() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
+  const previousActorScopeRef = useRef(actorScope);
+  const activeActorScopeRef = useRef(actorScope);
+  const activeRequestScopeRef = useRef(`${actorScope}:${scope}`);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  activeActorScopeRef.current = actorScope;
+  activeRequestScopeRef.current = `${actorScope}:${scope}`;
 
-  const filters = useTableFilters(ACTIVE_SESSIONS, sessions, {
+  // Session routes survive a same-document sign-out/sign-in. Gate actor-owned state during
+  // render so the next actor cannot see the previous rows while effect cleanup is pending.
+  const sessionsAreCurrent = sessionsActorScope === actorScope;
+  const currentSessions = sessionsAreCurrent ? sessions : [];
+  const currentSelectedSession =
+    selectedSessionActorScope === actorScope ? selectedSession : null;
+  const currentDegraded = sessionsAreCurrent ? degraded : false;
+  const currentLoading = sessionsAreCurrent ? loading : true;
+  const currentError = sessionsAreCurrent ? error : null;
+  const currentLastRefresh = sessionsAreCurrent ? lastRefresh : null;
+
+  useEffect(() => {
+    if (previousActorScopeRef.current === actorScope) return;
+    previousActorScopeRef.current = actorScope;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+    setSessionsActorScope(actorScope);
+    setSelectedSessionActorScope(actorScope);
+    setSessions([]);
+    setSelectedSession(null);
+    setScope("self");
+    setDegraded(false);
+    setLoading(true);
+    setError(null);
+    setLastRefresh(null);
+    setPage(1);
+  }, [actorScope]);
+
+  useEffect(
+    () => () => {
+      requestControllerRef.current?.abort();
+    },
+    [],
+  );
+
+  const filters = useTableFilters(ACTIVE_SESSIONS, currentSessions, {
     onFilterChange: resetPage,
   });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
@@ -276,28 +331,53 @@ function ActiveSessionsTab() {
   );
 
   const fetchSessions = useCallback(async (showLoading = false) => {
+    const requestActorScope = actorScope;
+    const requestScope = `${requestActorScope}:${scope}`;
+    if (!isAuthenticated || activeRequestScopeRef.current !== requestScope) return;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     if (showLoading) setLoading(true);
     setError(null);
     try {
-      const token = getAccessToken();
       const params = new URLSearchParams({ scope });
       const res = await fetch(`${API_URL}/api/v1/console/sessions/active?${params}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
+        signal: controller.signal,
+      });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
+      const payload: SessionData[] = await res.json();
+      if (
+        controller.signal.aborted ||
+        activeActorScopeRef.current !== requestActorScope ||
+        activeRequestScopeRef.current !== requestScope
+      ) return;
       // The backend sets this when the cross-worker view is unavailable, so the list is
       // one worker's slice rather than the whole picture. Same origin, so the header is
       // readable without any CORS work.
       setDegraded(res.headers.get("X-Session-Registry-Degraded") === "1");
-      setSessions(await res.json());
+      setSessions(payload);
+      setSessionsActorScope(requestActorScope);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
+      if (
+        controller.signal.aborted ||
+        activeActorScopeRef.current !== requestActorScope ||
+        activeRequestScopeRef.current !== requestScope
+      ) return;
       setError(err instanceof Error ? err.message : "Failed to fetch sessions");
       throw err;
     } finally {
-      setLoading(false);
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+      if (
+        activeActorScopeRef.current === requestActorScope &&
+        activeRequestScopeRef.current === requestScope
+      ) setLoading(false);
     }
-  }, [scope]);
+  }, [actorAccessToken, actorScope, isAuthenticated, scope]);
 
   useEffect(() => { void fetchSessions(true).catch(() => {}); }, [fetchSessions]);
 
@@ -322,8 +402,8 @@ function ActiveSessionsTab() {
   const currentPage = Math.min(page, totalPages);
   const pagedSessions = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  const totalDlRate = sessions.reduce((sum, s) => sum + s.bandwidth.download_rate_bps, 0);
-  const totalUlRate = sessions.reduce((sum, s) => sum + s.bandwidth.upload_rate_bps, 0);
+  const totalDlRate = currentSessions.reduce((sum, s) => sum + s.bandwidth.download_rate_bps, 0);
+  const totalUlRate = currentSessions.reduce((sum, s) => sum + s.bandwidth.upload_rate_bps, 0);
 
   return (
     <div className="space-y-4">
@@ -333,7 +413,7 @@ function ActiveSessionsTab() {
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Active</p>
-              <p className="text-2xl font-bold mt-1">{sessions.length}</p>
+              <p className="text-2xl font-bold mt-1">{currentSessions.length}</p>
             </div>
             <Wifi className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
@@ -384,7 +464,7 @@ function ActiveSessionsTab() {
               </Button>
               <RefreshButton
                 label="Refresh active sessions"
-                lastUpdatedAt={lastRefresh ? lastRefresh.getTime() : null}
+                lastUpdatedAt={currentLastRefresh ? currentLastRefresh.getTime() : null}
                 onRefresh={() => fetchSessions(false)}
               />
             </div>
@@ -394,7 +474,7 @@ function ActiveSessionsTab() {
         <CardContent>
           {/* A short list and a correct list look identical, which is how the
               per-worker bug went unnoticed for so long. Say when it is partial. */}
-          {degraded && (
+          {currentDegraded && (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
               <span className="text-foreground">
@@ -405,26 +485,26 @@ function ActiveSessionsTab() {
           )}
           {/* important: only replace the table when there is nothing to show. A
               5s poll that blips would otherwise wipe rows we still hold. */}
-          {error && sessions.length > 0 && (
+          {currentError && currentSessions.length > 0 && (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
               <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
-              <span className="text-foreground">Showing the last known data. {error}</span>
+              <span className="text-foreground">Showing the last known data. {currentError}</span>
             </div>
           )}
-          {error && sessions.length === 0 ? (
+          {currentError && currentSessions.length === 0 ? (
             <EmptyState
               icon={WifiOff}
-              title={error}
+              title={currentError}
               action={<Button variant="outline" size="sm" onClick={() => void fetchSessions(true).catch(() => {})}>Retry</Button>}
             />
-          ) : loading && sessions.length === 0 ? (
+          ) : currentLoading && currentSessions.length === 0 ? (
             <EmptyState icon={Loader2} title="Loading sessions..." iconClassName="animate-spin" />
           ) : sorted.length === 0 ? (
-            sessions.length > 0 && filters.activeFilterCount > 0 ? (
+            currentSessions.length > 0 && filters.activeFilterCount > 0 ? (
               <EmptyState
                 icon={Terminal}
                 title="No session matches the current filters"
-                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${sessions.length} session${sessions.length === 1 ? "" : "s"}.`}
+                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${currentSessions.length} session${currentSessions.length === 1 ? "" : "s"}.`}
                 action={
                   <Button size="sm" variant="outline" onClick={() => filters.clearAll()}>
                     Clear filters
@@ -453,7 +533,16 @@ function ActiveSessionsTab() {
                 </TableHeader>
                 <TableBody>
                   {pagedSessions.map((s) => (
-                    <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} scope={scope} />
+                    <ActiveRow
+                      key={s.session_id}
+                      session={s}
+                      scope={scope}
+                      onSelect={(selected) => {
+                        if (activeActorScopeRef.current !== actorScope) return;
+                        setSelectedSessionActorScope(actorScope);
+                        setSelectedSession(selected);
+                      }}
+                    />
                   ))}
                 </TableBody>
               </Table>
@@ -481,10 +570,10 @@ function ActiveSessionsTab() {
       </Card>
 
       <SessionDetailDialog
-        selected={selectedSession}
-        open={!!selectedSession}
+        selected={currentSelectedSession}
+        open={!!currentSelectedSession}
         onOpenChange={(next) => {
-          if (!next) setSelectedSession(null);
+          if (!next && activeActorScopeRef.current === actorScope) setSelectedSession(null);
         }}
       />
     </div>
@@ -541,8 +630,15 @@ const AUDIT_PAGE = 500;
 const AUDIT_CEILING = 5000;
 
 function SessionHistoryTab() {
+  const {
+    scopeKey: actorScope,
+    isAuthenticated,
+    accessToken: actorAccessToken,
+  } = useActorQueryScope();
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
+  const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [logsActorScope, setLogsActorScope] = useState(actorScope);
   // What the server says the whole trail holds, which is not always what we fetched.
   const [trailTotal, setTrailTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -551,9 +647,48 @@ function SessionHistoryTab() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [scope, setScope] = useState<SessionScope>("self");
+  const previousActorScopeRef = useRef(actorScope);
+  const activeActorScopeRef = useRef(actorScope);
+  const activeRequestScopeRef = useRef(`${actorScope}:${scope}`);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  activeActorScopeRef.current = actorScope;
+  activeRequestScopeRef.current = `${actorScope}:${scope}`;
+
+  const logsAreCurrent = logsActorScope === actorScope;
+  const currentLogs = logsAreCurrent ? logs : [];
+  const currentSelectedSession =
+    selectedSessionActorScope === actorScope ? selectedSession : null;
+  const currentTrailTotal = logsAreCurrent ? trailTotal : 0;
+  const currentLoading = logsAreCurrent ? loading : true;
+  const currentError = logsAreCurrent ? error : null;
+  const currentLastRefresh = logsAreCurrent ? lastRefresh : null;
+
+  useEffect(() => {
+    if (previousActorScopeRef.current === actorScope) return;
+    previousActorScopeRef.current = actorScope;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+    setLogsActorScope(actorScope);
+    setSelectedSessionActorScope(actorScope);
+    setLogs([]);
+    setTrailTotal(0);
+    setSelectedSession(null);
+    setScope("self");
+    setLoading(true);
+    setError(null);
+    setLastRefresh(null);
+    setCurrentPage(1);
+  }, [actorScope]);
+
+  useEffect(
+    () => () => {
+      requestControllerRef.current?.abort();
+    },
+    [],
+  );
 
   const resetPage = () => setCurrentPage(1);
-  const filters = useTableFilters(SESSION_HISTORY, logs, { onFilterChange: resetPage });
+  const filters = useTableFilters(SESSION_HISTORY, currentLogs, { onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     SESSION_HISTORY.sortAccessors,
     SESSION_HISTORY.defaultSort.field,
@@ -562,10 +697,15 @@ function SessionHistoryTab() {
   );
 
   const fetchLogs = useCallback(async (showLoading = false) => {
+    const requestActorScope = actorScope;
+    const requestScope = `${requestActorScope}:${scope}`;
+    if (!isAuthenticated || activeRequestScopeRef.current !== requestScope) return;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     if (showLoading) setLoading(true);
     setError(null);
     try {
-      const token = getAccessToken();
       // scope has always been supported here and the page never sent it, so the
       // organisation trail the backend maintains was unreachable from the UI.
       const collected: AuditLogEntry[] = [];
@@ -579,9 +719,16 @@ function SessionHistoryTab() {
           scope,
         });
         const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {} });
+          headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
+          signal: controller.signal,
+        });
         if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
         const payload = await res.json();
+        if (
+          controller.signal.aborted ||
+          activeActorScopeRef.current !== requestActorScope ||
+          activeRequestScopeRef.current !== requestScope
+        ) return;
         const rows: AuditLogEntry[] = Array.isArray(payload?.logs) ? payload.logs : [];
         collected.push(...rows);
         total = typeof payload?.total === "number" ? payload.total : collected.length;
@@ -592,17 +739,34 @@ function SessionHistoryTab() {
         if (!payload?.has_more || rows.length === 0 || collected.length >= AUDIT_CEILING) break;
       }
 
+      if (
+        controller.signal.aborted ||
+        activeActorScopeRef.current !== requestActorScope ||
+        activeRequestScopeRef.current !== requestScope
+      ) return;
       setLogs(collected);
+      setLogsActorScope(requestActorScope);
       setTrailTotal(total);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
+      if (
+        controller.signal.aborted ||
+        activeActorScopeRef.current !== requestActorScope ||
+        activeRequestScopeRef.current !== requestScope
+      ) return;
       setError(err instanceof Error ? err.message : "Failed to fetch session history");
       throw err;
     } finally {
-      setLoading(false);
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+      }
+      if (
+        activeActorScopeRef.current === requestActorScope &&
+        activeRequestScopeRef.current === requestScope
+      ) setLoading(false);
     }
-  }, [scope]);
+  }, [actorAccessToken, actorScope, isAuthenticated, scope]);
 
   useEffect(() => { void fetchLogs(true).catch(() => {}); }, [fetchLogs]);
 
@@ -619,7 +783,7 @@ function SessionHistoryTab() {
   }, [sorted, currentPage, pageSize]);
 
   // aggregate stats from disconnect events
-  const disconnects = logs.filter((l) => l.event_type === "disconnect");
+  const disconnects = currentLogs.filter((l) => l.event_type === "disconnect");
   const totalDuration = disconnects.reduce((sum, l) => sum + (l.duration_seconds ?? 0), 0);
   const totalDl = disconnects.reduce((sum, l) => sum + (l.download_bytes ?? 0), 0);
   const totalUl = disconnects.reduce((sum, l) => sum + (l.upload_bytes ?? 0), 0);
@@ -680,7 +844,7 @@ function SessionHistoryTab() {
               <RefreshButton
                 iconClassName="h-3.5 w-3.5"
                 label="Refresh session history"
-                lastUpdatedAt={lastRefresh ? lastRefresh.getTime() : null}
+                lastUpdatedAt={currentLastRefresh ? currentLastRefresh.getTime() : null}
                 onRefresh={() => fetchLogs(false)}
               />
             </div>
@@ -688,34 +852,34 @@ function SessionHistoryTab() {
           <TableToolbar filters={filters} noun="log entries" />
         </CardHeader>
         <CardContent>
-          {trailTotal > logs.length && (
+          {currentTrailTotal > currentLogs.length && (
             <div className="mb-3">
               <PartialReadNotice>
-                Showing the {logs.length.toLocaleString()} most recent entries of{" "}
-                {trailTotal.toLocaleString()}. Narrow the scope or the filters to reach older
+                Showing the {currentLogs.length.toLocaleString()} most recent entries of{" "}
+                {currentTrailTotal.toLocaleString()}. Narrow the scope or the filters to reach older
                 sessions.
               </PartialReadNotice>
             </div>
           )}
-          {error && logs.length > 0 && (
+          {currentError && currentLogs.length > 0 && (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
               <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
-              <span className="text-foreground">Showing the last known data. {error}</span>
+              <span className="text-foreground">Showing the last known data. {currentError}</span>
             </div>
           )}
-          {error && logs.length === 0 ? (
+          {currentError && currentLogs.length === 0 ? (
             <EmptyState
               icon={WifiOff}
-              title={error}
+              title={currentError}
               action={<Button variant="outline" size="sm" onClick={() => void fetchLogs(true).catch(() => {})}>Retry</Button>}
             />
-          ) : loading && logs.length === 0 ? (
+          ) : currentLoading && currentLogs.length === 0 ? (
             <EmptyState icon={Loader2} title="Loading history..." iconClassName="animate-spin" />
           ) : sorted.length === 0 ? (
             <EmptyState
               icon={History}
-              title={logs.length === 0 ? "No session history" : "No matching entries"}
-              description={logs.length === 0 ? "Your past sessions will appear here once you disconnect." : "Try adjusting your filter."}
+              title={currentLogs.length === 0 ? "No session history" : "No matching entries"}
+              description={currentLogs.length === 0 ? "Your past sessions will appear here once you disconnect." : "Try adjusting your filter."}
             />
           ) : (
             <>
@@ -732,7 +896,16 @@ function SessionHistoryTab() {
                 </TableHeader>
                 <TableBody>
                   {paginated.map((log) => (
-                    <HistoryRow key={`${log.id}-${log.event_type}`} log={log} onSelect={setSelectedSession} scope={scope} />
+                    <HistoryRow
+                      key={`${log.id}-${log.event_type}`}
+                      log={log}
+                      scope={scope}
+                      onSelect={(selected) => {
+                        if (activeActorScopeRef.current !== actorScope) return;
+                        setSelectedSessionActorScope(actorScope);
+                        setSelectedSession(selected);
+                      }}
+                    />
                   ))}
                 </TableBody>
               </Table>
@@ -751,10 +924,10 @@ function SessionHistoryTab() {
       </Card>
 
       <SessionDetailDialog
-        selected={selectedSession}
-        open={!!selectedSession}
+        selected={currentSelectedSession}
+        open={!!currentSelectedSession}
         onOpenChange={(next) => {
-          if (!next) setSelectedSession(null);
+          if (!next && activeActorScopeRef.current === actorScope) setSelectedSession(null);
         }}
       />
     </div>
@@ -770,6 +943,7 @@ function ActiveRow({ session, onSelect, scope }: {
 }) {
   const isGraphics = session.protocol === "spice-graphics";
   const protocolLabel = protocolLabelFor(session.protocol);
+  const connectionStatus = sessionConnectionStatusDisplay(session.connection_status);
 
   return (
     <TableRow className="hover:bg-muted/50">
@@ -842,19 +1016,9 @@ function ActiveRow({ session, onSelect, scope }: {
         </div>
       </TableCell>
       <TableCell>
-        <Badge
-          variant="secondary"
-          className={cn(
-            "gap-1",
-            session.connection_status === "connected"
-              ? "bg-green-500/10 text-green-600 dark:text-green-400"
-              : session.connection_status === "connecting"
-              ? "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400"
-              : "bg-red-500/10 text-red-600 dark:text-red-400"
-          )}
-        >
+        <Badge variant={connectionStatus.tone} className="gap-1">
           <Wifi className="h-3 w-3" />
-          {session.connection_status}
+          {connectionStatus.label}
         </Badge>
       </TableCell>
     </TableRow>
@@ -919,4 +1083,3 @@ function HistoryRow({ log, onSelect, scope }: {
 }
 
 // ============ Shared Components ============
-

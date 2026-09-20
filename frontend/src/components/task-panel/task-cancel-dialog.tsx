@@ -3,7 +3,11 @@
 import * as React from "react";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import type { TaskRecord } from "@/types/tasks";
-import { useCancelTask } from "./hooks/use-tasks";
+import {
+  useActorMutationGuard,
+  useCancelTask,
+  type ActorMutationGuard,
+} from "./hooks/use-tasks";
 
 export interface TaskCancelDialogProps {
   task: TaskRecord | null;
@@ -20,28 +24,74 @@ export interface TaskCancelDialogProps {
  */
 export function TaskCancelDialog({ task, open, onOpenChange }: TaskCancelDialogProps) {
   const cancel = useCancelTask();
-  const cancelInFlightRef = React.useRef(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const activeActorGuardRef = useActorMutationGuard();
+  const cancelInFlightRef = React.useRef<{
+    actorGuard: ActorMutationGuard;
+    token: symbol;
+  } | null>(null);
+  const [ownedError, setOwnedError] = React.useState<{
+    actorGuard: ActorMutationGuard;
+    message: string;
+  } | null>(null);
   // Held one render past the real target so the body does not blank during the exit fade.
-  const shown = React.useRef<TaskRecord | null>(null);
-  if (task) shown.current = task;
-  const target = task ?? shown.current;
+  // The owner guard keeps that courtesy within one actor. A scope transition removes the old
+  // instance-identifying body immediately instead of leaving it mounted for the exit fade.
+  const shown = React.useRef<{
+    actorGuard: ActorMutationGuard;
+    task: TaskRecord;
+  } | null>(null);
+  if (task) shown.current = { actorGuard: activeActorGuardRef.current, task };
+  const target =
+    task ??
+    (shown.current?.actorGuard === activeActorGuardRef.current
+      ? shown.current.task
+      : null);
+  const error =
+    ownedError?.actorGuard === activeActorGuardRef.current
+      ? ownedError.message
+      : null;
 
   React.useEffect(() => {
-    if (!open) setError(null);
+    if (!open) setOwnedError(null);
   }, [open]);
 
   const confirmCancel = async () => {
-    if (!target || cancelInFlightRef.current) return;
-    cancelInFlightRef.current = true;
-    setError(null);
+    const requestActorGuard = activeActorGuardRef.current;
+    if (
+      !target ||
+      requestActorGuard.scopeKey === null ||
+      cancelInFlightRef.current?.actorGuard === requestActorGuard
+    ) {
+      return;
+    }
+    const requestToken = Symbol("cancel-task");
+    cancelInFlightRef.current = {
+      actorGuard: requestActorGuard,
+      token: requestToken,
+    };
+    setOwnedError(null);
     try {
-      await cancel.mutateAsync(target.id);
-      onOpenChange(false);
+      const resultIsCurrent = await cancel.mutateAsync(target.id);
+      if (
+        resultIsCurrent &&
+        activeActorGuardRef.current === requestActorGuard
+      ) {
+        onOpenChange(false);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The task could not be cancelled.");
+      if (activeActorGuardRef.current === requestActorGuard) {
+        setOwnedError({
+          actorGuard: requestActorGuard,
+          message:
+            err instanceof Error
+              ? err.message
+              : "The task could not be cancelled.",
+        });
+      }
     } finally {
-      cancelInFlightRef.current = false;
+      if (cancelInFlightRef.current?.token === requestToken) {
+        cancelInFlightRef.current = null;
+      }
     }
   };
 

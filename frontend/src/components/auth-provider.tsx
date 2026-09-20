@@ -14,8 +14,16 @@
  */
 
 import { SessionProvider, useSession, signIn } from "next-auth/react";
-import { ReactNode, useEffect, useRef, useState, useCallback } from "react";
-import { setAccessToken, onSessionRefreshNeeded, onAuthFailure, onAuthRecovered } from "@/lib/api";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { getActorQueryScope } from "@/hooks/use-query-scope";
+import {
+  isAuthActorSynchronized,
+  isAuthContextSynchronized,
+  onAuthFailure,
+  onAuthRecovered,
+  onSessionRefreshNeeded,
+  setAccessToken,
+} from "@/lib/api";
 
 // Session refresh interval (seconds) - refresh token before it expires.
 // Authentik default access token lifetime is ~5 min, so refresh every 4 min.
@@ -34,11 +42,27 @@ const SESSION_REFRESH_INTERVAL_S = 4 * 60;
  */
 function TokenSync({ children }: { children: ReactNode }) {
   const { data: session, status, update: updateSession } = useSession();
-  const [tokenReady, setTokenReady] = useState(false);
+  const [synchronizedAuth, setSynchronizedAuth] = useState<
+    { token: string | null; actorScope: string | null } | undefined
+  >(undefined);
   const [authError, setAuthError] = useState(false);
   const retryCountRef = useRef(0);
   const wasAuthenticatedRef = useRef(false);
   const signOutConfirmedRef = useRef(false);
+  const sessionToken = session?.accessToken ?? null;
+  const actorScope = sessionToken ? getActorQueryScope(session) : null;
+
+  const synchronizeAuth = useCallback((token: string | null, scope: string | null) => {
+    // Install the module-global bearer before recording this context as ready. An actor change
+    // keeps descendants withheld until the following render; a silent rotation for the same
+    // actor leaves their forms and sockets mounted while this effect replaces the bearer.
+    setAccessToken(token, scope);
+    setSynchronizedAuth((current) =>
+      current?.token === token && current.actorScope === scope
+        ? current
+        : { token, actorScope: scope },
+    );
+  }, []);
 
   // Register session refresh callback so api.ts can trigger re-auth on 401
   useEffect(() => {
@@ -61,6 +85,8 @@ function TokenSync({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
     if (status === "authenticated" && session?.accessToken) {
       // Check if token refresh failed - the IdP may be unreachable
       if (session.error === "RefreshAccessTokenError") {
@@ -71,8 +97,7 @@ function TokenSync({ children }: { children: ReactNode }) {
         // api.ts no longer redirects on a 401 either: it raises the same banner.
         console.warn("[Auth] Token refresh failed, using stale token");
         setAuthError(true);
-        setAccessToken(session.accessToken); // stale but non-null
-        setTokenReady(true);
+        synchronizeAuth(session.accessToken, actorScope); // stale but non-null
         return;
       }
 
@@ -85,8 +110,7 @@ function TokenSync({ children }: { children: ReactNode }) {
       // stayed pinned to the top of the viewport for the life of the tab after the
       // session had fully recovered.
       setAuthError(false);
-      setAccessToken(session.accessToken);
-      setTokenReady(true);
+      synchronizeAuth(session.accessToken, actorScope);
     } else if (status === "unauthenticated") {
       // important: next-auth's fetchData() returns null on ANY failure, including a
       // transient network error, and SessionProvider commits that null verdict. Once
@@ -98,20 +122,40 @@ function TokenSync({ children }: { children: ReactNode }) {
         signOutConfirmedRef.current = true;
         void (async () => {
           const confirmed = await updateSession().catch(() => null);
-          if (!confirmed) {
-            setAccessToken(null);
-            setTokenReady(true);
+          if (!cancelled && !confirmed) {
+            synchronizeAuth(null, null);
           }
         })();
-        return;
+        return () => {
+          cancelled = true;
+        };
       }
-      setAccessToken(null);
-      setTokenReady(true); // resolved - no token needed
+      synchronizeAuth(null, null); // resolved - no token needed
     }
-  }, [session, status, updateSession]);
 
-  // don't render children (or React Query hooks) until token is set
-  if (!tokenReady) {
+    return () => {
+      cancelled = true;
+    };
+  }, [actorScope, session, status, synchronizeAuth, updateSession]);
+
+  const retainedSessionIsLoading = status === "loading" && sessionToken !== null;
+  const authenticatedContextReady =
+    (status === "authenticated" || retainedSessionIsLoading) &&
+    sessionToken !== null &&
+    synchronizedAuth?.actorScope === actorScope &&
+    actorScope !== null &&
+    isAuthActorSynchronized(actorScope);
+  const unauthenticatedContextReady =
+    status === "unauthenticated" &&
+    synchronizedAuth?.token === null &&
+    synchronizedAuth?.actorScope === null &&
+    isAuthContextSynchronized(null, null);
+  const authContextReady = authenticatedContextReady || unauthenticatedContextReady;
+
+  // Returning null commits an unmount only on initial resolution, sign-out, or a direct
+  // authenticated A -> B transition. The effect then installs B and triggers a clean remount;
+  // silent token rotation for the same actor never crosses this gate.
+  if (!authContextReady) {
     return null;
   }
 
