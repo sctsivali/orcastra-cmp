@@ -79,8 +79,11 @@ def _read_project_disk_allocation(client: Any, project: str) -> Optional[int]:
     instance root devices would undercount and could approve a growth the daemon must reject,
     so no local approximation is used.
     """
-    has_extension = getattr(client, "has_extension", None)
-    if not callable(has_extension) or not has_extension("project_usage"):
+    # PyLXD exposes ``has_api_extension``, not ``has_extension``. Read the cached
+    # handshake directly, as the rest of this service layer does, because test doubles and
+    # unusual daemons can omit the extension list and PyLXD's helper then raises KeyError.
+    info = getattr(client, "host_info", None) or {}
+    if "project_usage" not in (info.get("api_extensions") or []):
         return None
     response = client.api.projects[safe_segment(project)].state.get()
     metadata = response.json().get("metadata") or {}

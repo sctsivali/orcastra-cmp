@@ -124,7 +124,7 @@ def test_disk_usage_comes_from_authoritative_project_state(monkeypatch):
         state = _State()
 
     client = SimpleNamespace(
-        has_extension=lambda extension: extension == "project_usage",
+        host_info={"api_extensions": ["project_usage"]},
         api=SimpleNamespace(projects={"web-tier": _Project()}),
     )
     monkeypatch.setattr(
@@ -143,7 +143,7 @@ def test_disk_usage_comes_from_authoritative_project_state(monkeypatch):
 def test_configured_disk_quota_fails_closed_without_project_state(monkeypatch):
     from app.services.lxd import project_usage as mod
 
-    client = SimpleNamespace(has_extension=lambda extension: False)
+    client = SimpleNamespace(host_info={"api_extensions": []})
     monkeypatch.setattr(
         mod,
         "_read_project_config",
