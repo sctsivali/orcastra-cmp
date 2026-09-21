@@ -1044,8 +1044,13 @@ async def create_operation_job(
             status="pending",
         )
         db.add(row)
-        enqueue_instance_operation_audit(db, job_id=row.job_id, stage="accepted")
         try:
+            # important: the outbox row references ``job_id`` rather than the database primary
+            # key and has no ORM relationship to teach the unit-of-work its insert order. Flush
+            # the parent first so PostgreSQL cannot schedule the outbox insert ahead of it. This
+            # is still one transaction; a later failure rolls both rows back.
+            await db.flush()
+            enqueue_instance_operation_audit(db, job_id=row.job_id, stage="accepted")
             await db.commit()
         except IntegrityError:
             await db.rollback()

@@ -6,9 +6,10 @@ import inspect
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects import postgresql
 
-from app.models.db_models import InstanceOperationAuditOutbox
+from app.models.db_models import InstanceOperationAuditOutbox, InstanceOperationJob
 from app.services import instance_operation_audit as audit
 from app.services import instance_specifications
 from app.services.lxd import instance as instance_module
@@ -121,6 +122,14 @@ class _Rows:
         return self._rows
 
 
+class _Scalar:
+    def __init__(self, value=None):
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
 class _Session:
     def __init__(self, rows):
         self.rows = rows
@@ -208,15 +217,118 @@ async def test_failed_accepted_emit_blocks_the_same_jobs_terminal_event(monkeypa
     assert terminal.delivered_at is None
 
 
+class _CreateJobSession:
+    def __init__(self, *, fail_commit: bool = False):
+        self.fail_commit = fail_commit
+        self.trace = []
+        self.pending = []
+        self.rollback_snapshot = []
+        self.execute_count = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, _query):
+        self.execute_count += 1
+        self.trace.append(f"execute:{self.execute_count}")
+        return _Scalar()
+
+    def add(self, row):
+        self.pending.append(row)
+        self.trace.append(f"add:{type(row).__name__}")
+
+    async def flush(self):
+        self.trace.append("flush")
+
+    async def commit(self):
+        self.trace.append("commit")
+        if self.fail_commit:
+            raise IntegrityError("insert", {}, Exception("foreign key violation"))
+        self.pending.clear()
+
+    async def rollback(self):
+        self.trace.append("rollback")
+        self.rollback_snapshot = [type(row).__name__ for row in self.pending]
+        self.pending.clear()
+
+    async def refresh(self, _row):
+        self.trace.append("refresh")
+
+
+def _create_job_kwargs():
+    return {
+        "kind": "create",
+        "host": "cluster-a",
+        "project": "project-a",
+        "instance_name": "vm-a",
+        "requester": "actor-123",
+        "idempotency_key": "request-123",
+        "payload_hash": "payload-123",
+        "requested": {"profiles": ["default"], "start_on_create": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_job_flushes_parent_before_enqueuing_accepted_audit(monkeypatch):
+    session = _CreateJobSession()
+    monkeypatch.setattr(instance_specifications, "async_session_maker", lambda: session)
+    monkeypatch.setattr(instance_specifications.secrets, "token_hex", lambda _size: "job-123")
+
+    job, created = await instance_specifications.create_operation_job(
+        **_create_job_kwargs()
+    )
+
+    assert created is True
+    assert isinstance(job, InstanceOperationJob)
+    assert session.trace == [
+        "execute:1",
+        "execute:2",
+        "add:InstanceOperationJob",
+        "flush",
+        "add:InstanceOperationAuditOutbox",
+        "commit",
+        "refresh",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_job_commit_failure_rolls_back_parent_and_audit_pointer(monkeypatch):
+    session = _CreateJobSession(fail_commit=True)
+    monkeypatch.setattr(instance_specifications, "async_session_maker", lambda: session)
+    monkeypatch.setattr(instance_specifications.secrets, "token_hex", lambda _size: "job-123")
+
+    with pytest.raises(instance_specifications.SpecificationConflict):
+        await instance_specifications.create_operation_job(**_create_job_kwargs())
+
+    assert session.trace == [
+        "execute:1",
+        "execute:2",
+        "add:InstanceOperationJob",
+        "flush",
+        "add:InstanceOperationAuditOutbox",
+        "commit",
+        "rollback",
+        "execute:3",
+    ]
+    assert session.rollback_snapshot == [
+        "InstanceOperationJob",
+        "InstanceOperationAuditOutbox",
+    ]
+    assert session.pending == []
+
+
 def test_job_state_and_outbox_pointer_share_each_commit_boundary():
     create_source = inspect.getsource(instance_specifications.create_operation_job)
     set_source = inspect.getsource(instance_specifications._set_job)
     spec_terminal_source = inspect.getsource(instance_specifications._terminal)
     create_terminal_source = inspect.getsource(instance_module._finish_create_job)
 
-    assert create_source.index("enqueue_instance_operation_audit") < create_source.index(
-        "await db.commit()"
-    )
+    assert create_source.index("await db.flush()") < create_source.index(
+        "enqueue_instance_operation_audit"
+    ) < create_source.index("await db.commit()")
     assert set_source.index("enqueue_instance_operation_audit") < set_source.index(
         "await db.commit()"
     )
