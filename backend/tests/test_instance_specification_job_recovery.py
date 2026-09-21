@@ -883,8 +883,11 @@ async def test_terminal_explicitly_clears_a_previous_phase_operation(monkeypatch
         return True
 
     monkeypatch.setattr(service, "_set_job", set_job)
-    monkeypatch.setattr(service, "_load_job", lambda *args, **kwargs: _async(row))
-    monkeypatch.setattr(service.activity_logger, "log_activity", lambda **kwargs: None)
+    monkeypatch.setattr(
+        service,
+        "drain_instance_operation_audits",
+        lambda **kwargs: _async(1),
+    )
 
     await service._terminal(
         row,
@@ -896,6 +899,7 @@ async def test_terminal_explicitly_clears_a_previous_phase_operation(monkeypatch
     )
 
     assert updates[-1]["operation_id"] is None
+    assert updates[-1]["audit_stage"] == "terminal"
 
 
 @pytest.mark.asyncio
@@ -908,12 +912,10 @@ async def test_terminal_audit_failure_does_not_change_durable_verdict(monkeypatc
         return True
 
     monkeypatch.setattr(service, "_set_job", set_job)
-    monkeypatch.setattr(service, "_load_job", lambda *args, **kwargs: _async(row))
-    monkeypatch.setattr(
-        service.activity_logger,
-        "log_activity",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("audit offline")),
-    )
+    async def audit_offline(**_kwargs):
+        raise RuntimeError("audit offline")
+
+    monkeypatch.setattr(service, "drain_instance_operation_audits", audit_offline)
 
     transitioned = await service._terminal(
         row,
@@ -927,6 +929,7 @@ async def test_terminal_audit_failure_does_not_change_durable_verdict(monkeypatc
     assert updates == [
         {
             "worker_id": "worker-1",
+            "audit_stage": "terminal",
             "status": "success",
             "phase": "success",
             "result": {"specification": {"cpu": 6}},
@@ -940,17 +943,17 @@ async def test_terminal_audit_failure_does_not_change_durable_verdict(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_terminal_audit_keeps_the_jobs_target_organization_snapshot(monkeypatch):
+async def test_terminal_audit_is_drained_from_the_durable_job(monkeypatch):
     row = _row(status="running", phase="verifying")
     audits = []
 
     monkeypatch.setattr(service, "_set_job", lambda *args, **kwargs: _async(True))
-    monkeypatch.setattr(service, "_load_job", lambda *args, **kwargs: _async(row))
-    monkeypatch.setattr(
-        service.activity_logger,
-        "log_activity",
-        lambda **kwargs: audits.append(kwargs),
-    )
+
+    async def drain(**kwargs):
+        audits.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(service, "drain_instance_operation_audits", drain)
 
     transitioned = await service._terminal(
         row,
@@ -961,9 +964,7 @@ async def test_terminal_audit_keeps_the_jobs_target_organization_snapshot(monkey
     )
 
     assert transitioned is True
-    assert audits[0]["target_organization_id"] == 17
-    assert audits[0]["target_organization_slug"] == "org-seventeen"
-    assert audits[0]["target_organization_resolution"] == "exact"
+    assert audits == [{"job_id": row.job_id}]
 
 
 @pytest.mark.asyncio

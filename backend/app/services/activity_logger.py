@@ -55,12 +55,13 @@ class ActivityLogger:
         target_organization_slug: Optional[str] = None,
         target_organization_resolution: Optional[str] = None,
         actor_user_id: Optional[str] = None,
+        event_id: Optional[str] = None,
     ) -> str:
         """
         Log an activity/audit event.
         """
         # Generate event ID
-        event_id = generate_event_id()
+        event_id = event_id or generate_event_id()
         
         # Get request context
         ctx = get_request_context()

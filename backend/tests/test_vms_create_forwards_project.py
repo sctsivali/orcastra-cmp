@@ -64,11 +64,15 @@ def isolated_create_executor(monkeypatch):
     async def completed_job(_job_id):
         return SimpleNamespace(status="success", error=None)
 
+    async def drain_audit(**_kwargs):
+        return 1
+
     monkeypatch.setattr(vms, "resolve_cluster_write_policy", exclusive_policy)
     monkeypatch.setattr(vms, "_legacy_effective_payload", effective_payload)
     monkeypatch.setattr(vms, "resolve_instance_job_organization", target_organization)
     monkeypatch.setattr(vms, "create_operation_job", create_job)
     monkeypatch.setattr(vms, "get_operation_job", completed_job)
+    monkeypatch.setattr(vms, "drain_instance_operation_audits", drain_audit)
     try:
         yield
     finally:
@@ -110,7 +114,7 @@ def partner_project_scope():
 @pytest.mark.asyncio
 async def test_post_vms_forwards_the_authorized_project_and_audits_it(monkeypatch, partner_project_scope):
     seen = []
-    activity = _ActivityRecorder()
+    drained = []
 
     class Service:
         def get_node_names(self):
@@ -127,7 +131,11 @@ async def test_post_vms_forwards_the_authorized_project_and_audits_it(monkeypatc
         async def fail_create_job(self, *args, **kwargs):
             pytest.fail("successful create must not fail its durable job")
 
-    monkeypatch.setattr(vms, "activity_logger", activity)
+    async def drain_audit(**kwargs):
+        drained.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(vms, "drain_instance_operation_audits", drain_audit)
 
     response = await vms.create_vm(
         request=VMCreateRequest(
@@ -144,7 +152,7 @@ async def test_post_vms_forwards_the_authorized_project_and_audits_it(monkeypatc
     assert seen[0]["project"] == PROJECT
     assert response.vm is not None
     assert response.vm.project == PROJECT
-    assert activity.entries[-1]["target_project"] == PROJECT
+    assert drained == [{"job_id": "legacy-create-job"}]
 
 
 @pytest.mark.asyncio
@@ -478,7 +486,7 @@ async def test_create_sheds_load_when_its_pool_is_full(monkeypatch):
 )
 @pytest.mark.asyncio
 async def test_post_vms_maps_executor_pressure_to_503(monkeypatch, partner_project_scope, blocking_error):
-    activity = _ActivityRecorder()
+    drained = []
 
     class Service:
         def get_node_names(self):
@@ -493,7 +501,11 @@ async def test_post_vms_maps_executor_pressure_to_503(monkeypatch, partner_proje
         async def fail_create_job(self, *_args, **_kwargs):
             return None
 
-    monkeypatch.setattr(vms, "activity_logger", activity)
+    async def drain_audit(**kwargs):
+        drained.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(vms, "drain_instance_operation_audits", drain_audit)
 
     with pytest.raises(HTTPException) as caught:
         await vms.create_vm(
@@ -506,8 +518,7 @@ async def test_post_vms_maps_executor_pressure_to_503(monkeypatch, partner_proje
             lxd_service=Service(),
             _rbac=SimpleNamespace(email="partner@example.test"),
             db=_DB(),
-        )
+    )
 
     assert caught.value.status_code == 503
-    assert activity.entries[-1]["action"] == "instance.create"
-    assert activity.entries[-1]["result"] == "accepted"
+    assert drained == [{"job_id": "legacy-create-job"}]

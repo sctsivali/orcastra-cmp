@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any, Dict, List, Literal, Optional
 
@@ -24,8 +25,8 @@ from app.core.org_scope import (
     org_scope_dependency,
     verify_instance_view_access,
 )
-from app.services.activity_logger import get_activity_logger
 from app.services.instance_job_identity import resolve_instance_job_organization
+from app.services.instance_operation_audit import drain_instance_operation_audits
 from app.services.instance_specifications import (
     SpecificationError,
     create_operation_job,
@@ -44,7 +45,7 @@ router = APIRouter(
     tags=["Instances - Specifications"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
-activity_logger = get_activity_logger()
+logger = logging.getLogger(__name__)
 LXD_NAME_RE = re.compile(LXD_NAME_PATTERN)
 
 
@@ -402,23 +403,13 @@ async def update_instance_specification(
         _raise_service_error(exc, body.host)
 
     if created:
-        activity_logger.log_activity(
-            action="instance.specification.update.accepted",
-            target_type="instance",
-            target_id=instance_name,
-            target_host=body.host,
-            target_project=scoped_project,
-            result="accepted",
-            details={
-                "job_id": row.job_id,
-                "project": scoped_project,
-                "requested": requested,
-                "apply_mode": body.apply_mode,
-            },
-            actor_user_id=requester,
-            target_organization_id=job_organization.organization_id,
-            target_organization_slug=job_organization.organization_slug,
-            target_organization_resolution=job_organization.resolution,
-        )
+        try:
+            await drain_instance_operation_audits(job_id=row.job_id)
+        except Exception as exc:  # noqa: BLE001 - startup recovery replays the outbox
+            logger.warning(
+                "Could not drain accepted audit for specification job %s: %s",
+                row.job_id,
+                sanitize_error(str(exc)),
+            )
         asyncio.create_task(run_specification_job(row.job_id))
     return job_payload(row)

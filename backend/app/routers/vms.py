@@ -60,6 +60,7 @@ from app.services.instance_security_policy import (
     validate_target_project_isolation,
 )
 from app.services.instance_job_identity import resolve_instance_job_organization
+from app.services.instance_operation_audit import drain_instance_operation_audits
 from app.services.instance_specifications import (
     SpecificationConflict,
     create_operation_job,
@@ -287,26 +288,14 @@ async def _create_vm_under_policy(
             raise HTTPException(status_code=409, detail=exc.detail) from exc
         job_id = job.job_id
 
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="accepted",
-            details={
-                "instance_type": request.instance_type,
-                "profiles": request.profiles or ["default"],
-                "project": request.project,
-                "start_on_create": request.start_on_create,
-                "job_id": job_id,
-                "legacy_api": True,
-            },
-            actor_user_id=requester,
-            target_organization_id=target_organization.organization_id,
-            target_organization_slug=target_organization.organization_slug,
-            target_organization_resolution=target_organization.resolution,
-        )
+        try:
+            await drain_instance_operation_audits(job_id=job_id)
+        except Exception as exc:  # noqa: BLE001 - startup recovery replays the outbox
+            logger.warning(
+                "Could not drain accepted audit for legacy create job %s: %s",
+                job_id,
+                sanitize_error(str(exc)),
+            )
 
         try:
             await lxd_service.create_instance(

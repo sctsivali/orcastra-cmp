@@ -140,12 +140,16 @@ def _wire_route(
     async def completed_job(_job_id):
         return SimpleNamespace(job_id="legacy-job", status="success", error=None)
 
+    async def drain_audit(**_kwargs):
+        return 1
+
     monkeypatch.setattr(vms, "verify_project_access", authorize)
     monkeypatch.setattr(vms, "resolve_cluster_write_policy", resolved_policy)
     monkeypatch.setattr(vms, "_legacy_effective_payload", effective_payload)
     monkeypatch.setattr(vms, "resolve_instance_job_organization", target_organization)
     monkeypatch.setattr(vms, "create_operation_job", create_job)
     monkeypatch.setattr(vms, "get_operation_job", completed_job)
+    monkeypatch.setattr(vms, "drain_instance_operation_audits", drain_audit)
     monkeypatch.setattr(vms.activity_logger, "log_activity", lambda **kwargs: None)
     monkeypatch.setattr(
         vms,

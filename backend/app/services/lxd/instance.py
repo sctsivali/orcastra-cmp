@@ -22,7 +22,10 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.cache import get_cache_manager
 from app.core.database import async_session_maker
 from app.core.error_sanitizer import sanitize_error
-from app.services.activity_logger import get_activity_logger
+from app.services.instance_operation_audit import (
+    drain_instance_operation_audits,
+    enqueue_instance_operation_audit,
+)
 from . import health
 from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
@@ -395,6 +398,12 @@ async def _finish_create_job(
                 finished_at=now,
             )
         )
+        if update_result.rowcount:
+            enqueue_instance_operation_audit(
+                db,
+                job_id=row.job_id,
+                stage="terminal",
+            )
         await db.commit()
         transitioned = bool(update_result.rowcount)
     if not transitioned:
@@ -411,33 +420,13 @@ async def _finish_create_job(
             )
 
     try:
-        get_activity_logger().log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=row.instance_name,
-            target_host=row.cluster_id,
-            target_project=row.project,
-            result="success" if status == "success" else "failure",
-            error_code=None if status == "success" else status.upper(),
-            error_message=safe_error,
-            details={
-                "job_id": row.job_id,
-                "operation_id": final_operation_id,
-                "operation_ids": operation_ids,
-                "project": row.project,
-                "status": status,
-                "requested": row.requested or {},
-            },
-            after_state=result,
-            actor_user_id=row.requester,
-            target_organization_id=getattr(row, "target_organization_id", None),
-            target_organization_slug=getattr(row, "target_organization_slug", None),
-            target_organization_resolution=getattr(
-                row, "target_organization_resolution", None
-            ),
+        await drain_instance_operation_audits(job_id=row.job_id)
+    except Exception as exc:  # noqa: BLE001 - the outbox will be replayed
+        logger.warning(
+            "Could not drain terminal audit for create job %s: %s",
+            row.job_id,
+            _create_error(exc),
         )
-    except Exception:  # noqa: BLE001 - the database verdict remains authoritative
-        logger.exception("Could not write terminal audit for create job %s", row.job_id)
 
     if announce_created:
         await _emit_instance_created(

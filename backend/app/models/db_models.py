@@ -1071,3 +1071,41 @@ class InstanceOperationJob(Base):
         Index("ix_instance_operation_status_updated", "status", "updated_at"),
         Index("ix_instance_operation_lease", "locked_at"),
     )
+
+
+class InstanceOperationAuditOutbox(Base):
+    """Durable pointer to an accepted or terminal instance-operation audit event.
+
+    Event data is reconstructed from the safe projection in ``InstanceOperationJob``. Keeping
+    only the job pointer and stage here prevents cloud-init, credentials or raw daemon config
+    from being copied into another persistence surface.
+    """
+
+    __tablename__ = "instance_operation_audit_outbox"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    event_id = Column(String(64), unique=True, nullable=False)
+    job_id = Column(
+        String(64),
+        ForeignKey("instance_operation_jobs.job_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    stage = Column(String(16), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    last_error = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+        nullable=False,
+    )
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "stage", name="uq_instance_operation_audit_job_stage"),
+        CheckConstraint(
+            "stage IN ('accepted', 'terminal')",
+            name="ck_instance_operation_audit_stage",
+        ),
+        Index("ix_instance_operation_audit_pending", "delivered_at", "created_at"),
+    )

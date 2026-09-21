@@ -27,6 +27,7 @@ refactor that improves the thing it is guarding.
 """
 
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -252,12 +253,31 @@ async def test_no_operation_id_is_not_treated_as_a_failure(audit):
 def test_the_router_records_acceptance_not_success() -> None:
     """One create must not produce two contradictory audit verdicts."""
     from app.routers import instances as instances_router
+    from app.services.instance_operation_audit import _audit_values
 
     src = inspect.getsource(instances_router.create_instance)
-    assert 'result="accepted"' in src, (
+    accepted = _audit_values(
+        SimpleNamespace(stage="accepted", event_id="event-1"),
+        SimpleNamespace(
+            job_id="job-1",
+            kind="create",
+            cluster_id="nuc2",
+            project="default",
+            instance_name="web-01",
+            instance_type="container",
+            requester="user-1",
+            target_organization_id=None,
+            target_organization_slug=None,
+            target_organization_resolution="unbound",
+            requested={"profiles": ["default"], "start_on_create": True},
+            apply_mode=None,
+        ),
+    )
+    assert accepted["result"] == "accepted", (
         "recording success before LXD has validated anything produced a success record and a "
         "failure record for the same create, with nothing to say which was final"
     )
+    assert "drain_instance_operation_audits" in src
     assert 'result="success"' not in src
 
 

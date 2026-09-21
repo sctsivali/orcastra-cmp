@@ -73,10 +73,18 @@ logger = logging.getLogger(__name__)
 
 async def _recover_durable_instance_jobs_once() -> tuple[int, int]:
     """Run both durable instance-job reconcilers under their database leases."""
+    from app.services.instance_operation_audit import drain_instance_operation_audits
     from app.services.instance_specifications import recover_instance_operation_jobs
 
     specification_jobs = 0
     create_jobs = 0
+    try:
+        await drain_instance_operation_audits()
+    except Exception as exc:  # noqa: BLE001 - job reconciliation must still run
+        logger.warning(
+            "Could not replay durable instance-operation audits: %s",
+            sanitize_error(str(exc)),
+        )
     try:
         specification_jobs = await recover_instance_operation_jobs()
     except Exception as exc:  # noqa: BLE001 - create recovery must still get its turn
@@ -89,6 +97,14 @@ async def _recover_durable_instance_jobs_once() -> tuple[int, int]:
     except Exception as exc:  # noqa: BLE001 - specification recovery already completed
         logger.warning(
             "Could not recover instance create jobs: %s",
+            sanitize_error(str(exc)),
+        )
+    try:
+        # A recovered worker may have committed a terminal verdict after the first drain.
+        await drain_instance_operation_audits()
+    except Exception as exc:  # noqa: BLE001 - the next sweep retains the same event identity
+        logger.warning(
+            "Could not drain recovered instance-operation audits: %s",
             sanitize_error(str(exc)),
         )
     return specification_jobs, create_jobs

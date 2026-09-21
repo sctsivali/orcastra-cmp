@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from requests import exceptions as requests_exc
 
+from app.models.db_models import InstanceOperationAuditOutbox
 from app.models.schemas import (
     InstanceCreateEffectiveSummary,
     InstanceCreatePreflightResponse,
@@ -89,6 +90,15 @@ def _job(request, **changes):
     }
     values.update(changes)
     return SimpleNamespace(**values)
+
+
+@pytest.fixture(autouse=True)
+def _keep_unit_tests_off_the_real_audit_database(monkeypatch):
+    async def drain(**_kwargs):
+        return 1
+
+    monkeypatch.setattr(instances_router, "drain_instance_operation_audits", drain)
+    monkeypatch.setattr(instance_module, "drain_instance_operation_audits", drain)
 
 
 @pytest.mark.asyncio
@@ -237,7 +247,7 @@ async def test_reused_idempotency_key_with_different_payload_is_a_conflict(monke
 async def test_ambiguous_submission_returns_pollable_unknown_job(monkeypatch):
     request = _request()
     row = _job(request)
-    audits = []
+    drained = []
     monkeypatch.setattr(instances_router, "verify_project_access", lambda _host, project: project)
     monkeypatch.setattr(
         instances_router,
@@ -277,11 +287,11 @@ async def test_ambiguous_submission_returns_pollable_unknown_job(monkeypatch):
         "create_operation_job",
         lambda **_kwargs: asyncio.sleep(0, result=(row, True)),
     )
-    monkeypatch.setattr(
-        instances_router.activity_logger,
-        "log_activity",
-        lambda **kwargs: audits.append(kwargs),
-    )
+    async def drain(**kwargs):
+        drained.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(instances_router, "drain_instance_operation_audits", drain)
 
     class Service:
         async def create_instance(self, **_kwargs):
@@ -297,11 +307,7 @@ async def test_ambiguous_submission_returns_pollable_unknown_job(monkeypatch):
 
     assert response.job_id == row.job_id
     assert response.status == "unknown"
-    assert len(audits) == 1
-    assert audits[0]["result"] == "accepted"
-    assert audits[0]["details"]["job_id"] == row.job_id
-    assert audits[0]["target_organization_id"] is None
-    assert audits[0]["target_organization_resolution"] == "ambiguous"
+    assert drained == [{"job_id": row.job_id}]
 
 
 @pytest.mark.asyncio
@@ -1213,6 +1219,10 @@ class _JobSession:
         self.row = row
         self.select_statement = None
         self.update_statement = None
+        self.added = []
+
+    def add(self, row):
+        self.added.append(row)
 
     async def execute(self, statement):
         if getattr(statement, "is_select", False):
@@ -1263,18 +1273,18 @@ async def test_terminal_create_audit_correlates_create_and_start_operations(monk
     request = _request()
     row = _job(request, operation_id="create-op", operation_ids=["create-op"])
     db = _JobSession(row)
-    audits = []
+    drained = []
 
     @asynccontextmanager
     async def session_maker():
         yield db
 
     monkeypatch.setattr(instance_module, "async_session_maker", session_maker)
-    monkeypatch.setattr(
-        instance_module,
-        "get_activity_logger",
-        lambda: SimpleNamespace(log_activity=lambda **values: audits.append(values)),
-    )
+    async def drain(**kwargs):
+        drained.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(instance_module, "drain_instance_operation_audits", drain)
 
     transitioned = await instance_module._finish_create_job(
         row,
@@ -1290,10 +1300,11 @@ async def test_terminal_create_audit_correlates_create_and_start_operations(monk
         "create-op",
         "start-op",
     ]
-    assert audits[0]["details"]["operation_ids"] == ["create-op", "start-op"]
-    assert audits[0]["target_organization_id"] == 17
-    assert audits[0]["target_organization_slug"] == "org-seventeen"
-    assert audits[0]["target_organization_resolution"] == "exact"
+    assert [(event.job_id, event.stage) for event in db.added] == [
+        (row.job_id, "terminal")
+    ]
+    assert isinstance(db.added[0], InstanceOperationAuditOutbox)
+    assert drained == [{"job_id": row.job_id}]
 
 
 @pytest.mark.asyncio

@@ -307,7 +307,7 @@ async def test_apply_refuses_stale_etag_before_creating_a_job(monkeypatch) -> No
 async def test_apply_accepts_one_durable_job_and_returns_202(monkeypatch) -> None:
     accepted = []
     started = []
-    audits = []
+    drained = []
 
     async def preflight(*args):
         return _current(), _plan()
@@ -340,11 +340,12 @@ async def test_apply_accepts_one_durable_job_and_returns_202(monkeypatch) -> Non
     monkeypatch.setattr(router_module, "get_operation_job_by_request", no_replay)
     monkeypatch.setattr(router_module, "create_operation_job", create_job)
     monkeypatch.setattr(router_module, "run_specification_job", run_job)
-    monkeypatch.setattr(
-        router_module.activity_logger,
-        "log_activity",
-        lambda **kwargs: audits.append(kwargs),
-    )
+
+    async def drain(**kwargs):
+        drained.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(router_module, "drain_instance_operation_audits", drain)
     app = _app(monkeypatch, ["role_partner"])
 
     async with _client(app) as client:
@@ -358,9 +359,7 @@ async def test_apply_accepts_one_durable_job_and_returns_202(monkeypatch) -> Non
     assert accepted[0]["requested"] == {"cpu_count": 4}
     assert accepted[0]["target_organization_id"] == 17
     assert accepted[0]["target_organization_resolution"] == "exact"
-    assert audits[0]["target_organization_id"] == 17
-    assert audits[0]["target_organization_slug"] == "org-seventeen"
-    assert audits[0]["target_organization_resolution"] == "exact"
+    assert drained == [{"job_id": "job-1"}]
     assert started == ["job-1"]
 
 

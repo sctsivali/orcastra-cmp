@@ -63,6 +63,7 @@ from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.core.lxd_errors import lxd_http_error
 from app.services.activity_logger import get_activity_logger
+from app.services.instance_operation_audit import drain_instance_operation_audits
 from app.services.tag_service import TagService
 from app.services.lxd.instance_devices import (
     DeviceNotFound,
@@ -810,27 +811,16 @@ async def create_instance(
                 status="unknown" if job.status == "unknown" else "accepted",
             )
 
-        # This accepts the durable request, not the eventual daemon result. The idempotent row
-        # makes it exactly-once even when the network drops during submission.
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="accepted",
-            details={
-                "instance_type": request.instance_type,
-                "profiles": request.profiles or ["default"],
-                "project": request.project,
-                "start_on_create": request.start_on_create,
-                "job_id": job.job_id,
-            },
-            actor_user_id=requester,
-            target_organization_id=job_organization.organization_id,
-            target_organization_slug=job_organization.organization_slug,
-            target_organization_resolution=job_organization.resolution,
-        )
+        # The accepted event was enqueued atomically with the durable job. Delivery is best
+        # effort here; startup recovery uses the same stable event ID if this process exits.
+        try:
+            await drain_instance_operation_audits(job_id=job.job_id)
+        except Exception as exc:  # noqa: BLE001 - startup recovery replays the outbox
+            logger.warning(
+                "Could not drain accepted audit for create job %s: %s",
+                job.job_id,
+                sanitize_error(str(exc)),
+            )
 
         try:
             operation_id = await lxd_service.create_instance(

@@ -34,13 +34,15 @@ from app.core.database import async_session_maker
 from app.core.error_sanitizer import sanitize_error
 from app.core.lxd_path import safe_segment
 from app.models.db_models import InstanceOperationJob
-from app.services.activity_logger import get_activity_logger
+from app.services.instance_operation_audit import (
+    drain_instance_operation_audits,
+    enqueue_instance_operation_audit,
+)
 from app.services.lxd.project_usage import parse_lxd_size, read_project_usage
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd_service import get_lxd_service
 
 logger = logging.getLogger(__name__)
-activity_logger = get_activity_logger()
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="instance-spec")
 _MAX_IN_FLIGHT = 8
@@ -1042,6 +1044,7 @@ async def create_operation_job(
             status="pending",
         )
         db.add(row)
+        enqueue_instance_operation_audit(db, job_id=row.job_id, stage="accepted")
         try:
             await db.commit()
         except IntegrityError:
@@ -1085,6 +1088,7 @@ async def _set_job(
     job_id: str,
     *,
     worker_id: Optional[str] = None,
+    audit_stage: Optional[str] = None,
     **values: Any,
 ) -> bool:
     """Update a job, optionally fencing the write to its current lease owner."""
@@ -1092,6 +1096,10 @@ async def _set_job(
     predicates = (InstanceOperationJob.job_id == job_id,)
     if worker_id is not None:
         predicates = (*predicates, InstanceOperationJob.locked_by == worker_id)
+    if audit_stage == "terminal":
+        predicates = (*predicates, InstanceOperationJob.status.in_(ACTIVE_STATUSES))
+    elif audit_stage is not None:
+        raise ValueError(f"Unsupported operation job audit stage: {audit_stage}")
     async with async_session_maker() as db:
         operation_id = values.get("operation_id")
         if operation_id:
@@ -1111,6 +1119,8 @@ async def _set_job(
         result = await db.execute(
             update(InstanceOperationJob).where(*predicates).values(**values)
         )
+        if result.rowcount and audit_stage is not None:
+            enqueue_instance_operation_audit(db, job_id=job_id, stage=audit_stage)
         await db.commit()
         transitioned = bool(result.rowcount)
     # Queue bookkeeping must not evict a healthy inventory view. Invalidate only once a
@@ -1208,6 +1218,7 @@ async def _terminal(
     transitioned = await _set_job(
         row.job_id,
         worker_id=getattr(row, "locked_by", None),
+        audit_stage="terminal" if status in TERMINAL_STATUSES else None,
         status=status,
         phase=phase,
         result=result,
@@ -1223,40 +1234,14 @@ async def _terminal(
         # Unknown is deliberately not a terminal audit verdict. Reconciliation will emit the
         # single success/failure/partial record after actual daemon state can be established.
         return True
-    # ``row`` was loaded before stop/apply/start operation IDs were appended by later phase
-    # updates. Read the committed row so the one terminal audit record correlates every daemon
-    # operation, not only the final one visible on this detached object.
-    persisted = await _load_job(row.job_id)
-    operation_ids = list(getattr(persisted, "operation_ids", None) or [])
     try:
-        activity_logger.log_activity(
-            action="instance.specification.update",
-            target_type="instance",
-            target_id=row.instance_name,
-            target_host=row.cluster_id,
-            target_project=row.project,
-            result="success" if status == "success" else "failure",
-            error_code=(status.upper() if status != "success" else None),
-            error_message=error,
-            details={
-                "job_id": row.job_id,
-                "operation_id": final_operation_id,
-                "operation_ids": operation_ids,
-                "status": status,
-                "project": row.project,
-                "requested": row.requested,
-            },
-            before_state=row.before_spec,
-            after_state=result,
-            actor_user_id=row.requester,
-            target_organization_id=getattr(row, "target_organization_id", None),
-            target_organization_slug=getattr(row, "target_organization_slug", None),
-            target_organization_resolution=getattr(
-                row, "target_organization_resolution", None
-            ),
+        await drain_instance_operation_audits(job_id=row.job_id)
+    except Exception as exc:  # noqa: BLE001 - the outbox will be replayed
+        logger.warning(
+            "Could not drain terminal audit for specification job %s: %s",
+            row.job_id,
+            sanitize_error(str(exc)),
         )
-    except Exception:  # noqa: BLE001 - the durable verdict remains authoritative
-        logger.exception("Could not write terminal audit for specification job %s", row.job_id)
     return True
 
 
