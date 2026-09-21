@@ -46,6 +46,8 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="instance-spec"
 _MAX_IN_FLIGHT = 8
 _MAX_IN_FLIGHT_PER_CLUSTER = 2
 _READ_TIMEOUT_SECONDS = 35.0
+_INSTANCE_READ_REQUEST_TIMEOUT = (3, 20)
+_VM_ROOT_STATE_REQUEST_TIMEOUT = (3, 8)
 _WRITE_TIMEOUT_SECONDS = 90.0
 _STATE_TIMEOUT_SECONDS = 75.0
 _LEASE_SECONDS = 5 * 60
@@ -178,29 +180,49 @@ def _root_device(data: Mapping[str, Any]) -> tuple[Optional[str], Dict[str, Any]
     return None, {}, "default"
 
 
-def _root_volume_size(
+def _vm_effective_root_size(
     client: Any,
     *,
     instance_name: str,
-    instance_type: str,
     project: str,
     pool: Optional[str],
 ) -> Optional[int]:
+    """Read the daemon's effective VM block allocation when no size is configured.
+
+    VM root volumes are block devices and Incus rejects block shrink through ordinary quota
+    updates. Container filesystems do not share that invariant, so this fallback must never be
+    used for a container.
+    """
     if not pool:
         return None
-    volume_type = "virtual-machine" if instance_type == "virtual-machine" else "container"
     try:
-        response = (
-            client.api.storage_pools[safe_segment(pool)]
-            .volumes[safe_segment(volume_type)][safe_segment(instance_name)]
-            .get(params=_params(project))
+        volume = client.api.storage_pools[safe_segment(pool)].volumes[
+            safe_segment("virtual-machine")
+        ][safe_segment(instance_name)]
+        state_response = volume.state.get(
+            params=_params(project),
+            timeout=_VM_ROOT_STATE_REQUEST_TIMEOUT,
         )
-        metadata = response.json().get("metadata") or {}
-        config = metadata.get("config") or {}
-        return parse_lxd_size(config.get("size") or config.get("size.state"))
+        state_body = state_response.json()
+        if not isinstance(state_body, Mapping):
+            return None
+        state_metadata = state_body.get("metadata")
+        if not isinstance(state_metadata, Mapping):
+            return None
+        usage = state_metadata.get("usage")
+        if not isinstance(usage, Mapping):
+            return None
+        raw_total = usage.get("total")
+        if isinstance(raw_total, bool) or not isinstance(raw_total, (int, str)):
+            return None
+        try:
+            total = int(raw_total.strip()) if isinstance(raw_total, str) else raw_total
+        except ValueError:
+            return None
+        return total if total > 0 else None
     except Exception as exc:  # noqa: BLE001 - absence means editing is disabled, not guessed
         logger.info(
-            "Could not resolve root-volume size for %s/%s: %s",
+            "Could not resolve the effective VM root size for %s/%s: %s",
             project,
             instance_name,
             sanitize_error(str(exc)),
@@ -213,7 +235,10 @@ def read_specification_sync(
 ) -> SpecificationRead:
     """Read one exact instance and project as a safe specification projection."""
     try:
-        response = client.api.instances[safe_segment(instance_name)].get(params=_params(project))
+        response = client.api.instances[safe_segment(instance_name)].get(
+            params=_params(project),
+            timeout=_INSTANCE_READ_REQUEST_TIMEOUT,
+        )
     except pylxd_exc.NotFound:
         raise SpecificationNotFound(f"Instance '{instance_name}' was not found") from None
     except Exception as exc:
@@ -227,23 +252,42 @@ def read_specification_sync(
     expanded_config = data.get("expanded_config") or local_config
     instance_type = data.get("type") or "container"
     root_name, root, root_source = _root_device(data)
-    configured_root_size = parse_lxd_size(root.get("size") or root.get("size.state"))
-    # A profile/device size can lag behind a volume that was already enlarged elsewhere. Using
-    # that lower value would let a nominal "growth" request become an attempted shrink. When a
-    # pool is known, only the backing volume readback is authoritative enough for grow-only.
-    if root.get("pool"):
-        root_size = _root_volume_size(
+    configured_root_size = parse_lxd_size(root.get("size"))
+    if configured_root_size is not None and configured_root_size <= 0:
+        configured_root_size = None
+    root_size = configured_root_size
+    if root_size is None and instance_type == "virtual-machine":
+        root_size = _vm_effective_root_size(
             client,
             instance_name=instance_name,
-            instance_type=instance_type,
             project=project,
             pool=root.get("pool"),
         )
-    else:
-        root_size = configured_root_size
+
+    # A running container can accept a logical size decrease while Incus defers the physical
+    # quota change until its next start. Treat that marker as an unknown backing-size boundary;
+    # replacing it with a value between the logical and physical sizes could perform a shrink.
+    pending_quota_change = bool(
+        root_name
+        and str(local_config.get(f"volatile.{root_name}.apply_quota") or "").strip()
+    )
 
     etag = _etag_value(getattr(response, "headers", {}).get("ETag"))
     status = data.get("status") or "Unknown"
+    if not root_name:
+        root_reason = "The instance has no effective root disk."
+    elif pending_quota_change:
+        root_reason = (
+            "Incus has a deferred root-disk quota change pending. Resolve and verify it "
+            "directly in Incus before requesting another resize; Orcastra will not start "
+            "the instance automatically."
+        )
+    elif root_size is None:
+        root_reason = "The current root-disk allocation could not be read safely."
+    elif not etag:
+        root_reason = "The instance version could not be read safely."
+    else:
+        root_reason = None
     public: Dict[str, Any] = {
         "instance_name": instance_name,
         "host": host,
@@ -262,12 +306,11 @@ def read_specification_sync(
             "value_bytes": root_size,
             "pool": root.get("pool"),
             "source": root_source,
-            "editable": bool(root_name and root_size is not None and etag),
-            "reason": (
-                None
-                if root_name and root_size is not None and etag
-                else "The current root-disk allocation or instance version could not be read safely."
+            "editable": bool(
+                root_name and root_size is not None and etag and not pending_quota_change
             ),
+            "pending_quota_change": pending_quota_change,
+            "reason": root_reason,
         },
         "capabilities": {
             # CPU and ordinary memory-limit writes are live-capable for both instance types.
@@ -347,7 +390,15 @@ def build_preflight(
                 )
             )
     if root is not None:
-        if current_root is None or not current.public["root_disk"]["editable"]:
+        if current.public["root_disk"].get("pending_quota_change"):
+            blockers.append(
+                _message(
+                    "ROOT_DISK_QUOTA_PENDING",
+                    current.public["root_disk"]["reason"],
+                    field="root_disk_bytes",
+                )
+            )
+        elif current_root is None or not current.public["root_disk"]["editable"]:
             blockers.append(
                 _message(
                     "ROOT_SIZE_UNAVAILABLE",
@@ -423,21 +474,27 @@ def build_preflight(
             or memory > _VM_MEMORY_HOTPLUG_SAFE_MAX_BYTES
         )
     )
-    vm_restart_needed = vm_running and (
-        "root_disk_bytes" in changed_fields
-        or cpu_restart_needed
-        or (memory_increase and (memory_hotplug_disabled or memory_hotplug_limit_exceeded))
+    root_restart_needed = status == "Running" and "root_disk_bytes" in changed_fields
+    restart_needed = root_restart_needed or (
+        vm_running
+        and (
+            cpu_restart_needed
+            or (
+                memory_increase
+                and (memory_hotplug_disabled or memory_hotplug_limit_exceeded)
+            )
+        )
     )
 
     if status == "Stopped":
         execution = "stopped"
-    elif vm_restart_needed:
+    elif restart_needed:
         execution = "restart_required"
         acknowledgements.append("restart_instance")
         warnings.append(
             _warning(
                 "RESTART_REQUIRED",
-                "This virtual machine must be gracefully stopped and started for the requested field change.",
+                "This instance must be gracefully stopped and started for the requested field change.",
                 acknowledgement="restart_instance",
             )
         )
@@ -456,6 +513,22 @@ def build_preflight(
             _message(
                 "INSTANCE_STATE_UNSUPPORTED",
                 f"Specification changes are unavailable while the instance is {status}.",
+            )
+        )
+
+    if (
+        execution == "restart_required"
+        and current.public["root_disk"].get("pending_quota_change")
+        and not any(item["code"] == "ROOT_DISK_QUOTA_PENDING" for item in blockers)
+    ):
+        blockers.append(
+            _message(
+                "ROOT_DISK_QUOTA_PENDING",
+                (
+                    "Incus has a deferred root-disk quota change pending, so an automatic "
+                    "restart is unsafe until that change has been verified."
+                ),
+                field="root_disk_bytes",
             )
         )
 
@@ -546,6 +619,10 @@ def _writable_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _matches_target(public: Mapping[str, Any], requested: Mapping[str, Any]) -> bool:
+    if requested.get("root_disk_bytes") is not None:
+        root_disk = public.get("root_disk") or {}
+        if root_disk.get("pending_quota_change") or not root_disk.get("editable"):
+            return False
     comparisons = {
         "cpu_count": (public.get("cpu") or {}).get("value"),
         "memory_bytes": (public.get("memory") or {}).get("value_bytes"),
@@ -584,6 +661,13 @@ def apply_specification_sync(
         raise SpecificationConflict(
             "Required warnings were not acknowledged.",
             detail={"message": "Required warnings were not acknowledged.", "missing": sorted(missing)},
+        )
+    if (
+        requested.get("root_disk_bytes") is not None
+        and current.public.get("status") != "Stopped"
+    ):
+        raise SpecificationConflict(
+            "Root-disk growth requires a fresh Stopped readback immediately before the update."
         )
 
     payload = _writable_payload(current.raw)
@@ -1239,6 +1323,58 @@ async def _mark_unknown(
         asyncio.create_task(_reconcile_unknown_later(row.job_id))
 
 
+async def _read_before_automatic_start(
+    row: InstanceOperationJob,
+    client: Any,
+    current: SpecificationRead,
+    *,
+    outcome_prefix: str,
+) -> Optional[SpecificationRead]:
+    """Return a fresh safe state or terminate without starting the instance.
+
+    Incus applies ``volatile.<root>.apply_quota`` during start. An automatic start while that
+    marker is present can turn an earlier logical size decrease into a physical filesystem
+    shrink, so inability to prove the marker absent is a hard safety boundary.
+    """
+    try:
+        fresh = await _read_for_job(client, row)
+    except Exception as exc:  # noqa: BLE001 - an unreadable safety boundary stays stopped
+        await _terminal(
+            row,
+            "partial",
+            phase="partial",
+            operation_id=row.operation_id,
+            result={
+                "specification": current.public,
+                "instance_status": current.public.get("status") or "Unknown",
+            },
+            error=(
+                f"{outcome_prefix}, but automatic start was withheld because the root-disk "
+                f"safety state could not be read: {sanitize_error(str(exc))}"
+            )[:1000],
+        )
+        return None
+
+    if (fresh.public.get("root_disk") or {}).get("pending_quota_change"):
+        await _terminal(
+            row,
+            "partial",
+            phase="partial",
+            operation_id=row.operation_id,
+            result={
+                "specification": fresh.public,
+                "instance_status": fresh.public.get("status"),
+            },
+            error=(
+                f"{outcome_prefix}, but automatic start was withheld because Incus reports "
+                "a deferred root-disk quota change that could resize storage during start."
+            )[:1000],
+        )
+        return None
+
+    return fresh
+
+
 async def _complete_restart_after_apply(
     row: InstanceOperationJob,
     client: Any,
@@ -1250,6 +1386,55 @@ async def _complete_restart_after_apply(
     """Start a guest stopped by this job and verify that it is actually running."""
     if completion_status not in {"success", "partial"}:
         raise ValueError("Unsupported restart completion status")
+    guarded = await _read_before_automatic_start(
+        row,
+        client,
+        current,
+        outcome_prefix="The specification was applied",
+    )
+    if guarded is None:
+        return
+    current = guarded
+    current_status = current.public.get("status")
+    if current_status == "Running":
+        if _matches_target(current.public, row.requested or {}):
+            await _terminal(
+                row,
+                completion_status,
+                phase=completion_status,
+                result=_success_result(row, current),
+                error=completion_error,
+                operation_id=row.operation_id,
+            )
+        else:
+            await _terminal(
+                row,
+                "partial",
+                phase="partial",
+                result={
+                    "specification": current.public,
+                    "instance_status": current_status,
+                },
+                error=(
+                    "The instance was already running before automatic restart, but verified "
+                    "readback does not match every requested value."
+                ),
+                operation_id=row.operation_id,
+            )
+        return
+    if current_status != "Stopped":
+        await _terminal(
+            row,
+            "partial",
+            phase="partial",
+            result={"specification": current.public, "instance_status": current_status},
+            error=(
+                "The specification was applied, but automatic start was withheld because "
+                f"the instance state is {current_status or 'Unknown'} rather than Stopped."
+            ),
+            operation_id=row.operation_id,
+        )
+        return
     if not await _set_job(
         row.job_id,
         worker_id=getattr(row, "locked_by", None),
@@ -1342,6 +1527,25 @@ async def _complete_restart_after_apply(
             operation_id=operation_id,
         )
         return
+    if (
+        not _matches_target(verified.public, row.requested or {})
+        or (verified.public.get("root_disk") or {}).get("pending_quota_change")
+    ):
+        await _terminal(
+            row,
+            "partial",
+            phase="partial",
+            result={
+                "specification": verified.public,
+                "instance_status": "Running",
+            },
+            error=(
+                "The instance returned to Running, but verified readback does not match every "
+                "requested value or reports a deferred root-disk quota change."
+            ),
+            operation_id=operation_id,
+        )
+        return
     await _terminal(
         row,
         completion_status,
@@ -1359,6 +1563,40 @@ async def _restore_after_failed_apply(
     apply_error: str,
 ) -> None:
     """Restore a guest stopped by the job after a known update failure."""
+    guarded = await _read_before_automatic_start(
+        row,
+        client,
+        current,
+        outcome_prefix=f"The specification update failed ({apply_error})",
+    )
+    if guarded is None:
+        return
+    current = guarded
+    current_status = current.public.get("status")
+    if current_status == "Running":
+        await _terminal(
+            row,
+            "failure",
+            phase="failure",
+            result={"specification": current.public, "instance_status": "Running"},
+            error=apply_error,
+            operation_id=row.operation_id,
+        )
+        return
+    if current_status != "Stopped":
+        await _terminal(
+            row,
+            "partial",
+            phase="partial",
+            result={"specification": current.public, "instance_status": current_status},
+            error=(
+                f"The specification update failed ({apply_error}), and automatic restore "
+                f"was withheld because the instance state is {current_status or 'Unknown'} "
+                "rather than Stopped."
+            )[:1000],
+            operation_id=row.operation_id,
+        )
+        return
     if not await _set_job(
         row.job_id,
         worker_id=getattr(row, "locked_by", None),
@@ -1798,6 +2036,29 @@ async def _run_claimed_specification_job(
                 ):
                     return
 
+            if (
+                stopped_by_job
+                and (current.public.get("root_disk") or {}).get(
+                    "pending_quota_change"
+                )
+            ):
+                await _terminal(
+                    row,
+                    "partial",
+                    phase="partial",
+                    operation_id=operation_id,
+                    result={
+                        "specification": current.public,
+                        "instance_status": current_status,
+                    },
+                    error=(
+                        "The job stopped the instance, but Incus now reports a deferred "
+                        "root-disk quota change. No specification update was submitted and "
+                        "automatic start was withheld."
+                    ),
+                )
+                return
+
             usage = await _bounded(
                 read_project_usage,
                 client,
@@ -1824,7 +2085,7 @@ async def _run_claimed_specification_job(
             elif initial_plan["execution"] == "restart_required":
                 if row.apply_mode != "graceful_restart":
                     raise SpecificationConflict(
-                        "This running virtual machine requires explicit graceful-restart approval."
+                        "This running instance requires explicit graceful-restart approval."
                     )
                 if not await _set_job(
                     row.job_id,

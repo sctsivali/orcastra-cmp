@@ -308,6 +308,7 @@ export interface EditableMemorySpecification {
 export interface EditableRootDiskSpecification extends EditableMemorySpecification {
   pool: string | null;
   editable: boolean;
+  pending_quota_change: boolean;
   reason: string | null;
 }
 

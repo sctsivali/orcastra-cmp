@@ -26,6 +26,7 @@ def _read(*, cpu: int, status: str) -> SpecificationRead:
             "pool": "pool-a",
             "source": "instance",
             "editable": True,
+            "pending_quota_change": False,
             "reason": None,
         },
         "capabilities": {"live_update": True, "restart_supported": True},
@@ -42,6 +43,20 @@ def _read(*, cpu: int, status: str) -> SpecificationRead:
         etag='"v1"',
         root_device_name="root",
     )
+
+
+def _pending_quota_read(*, cpu: int, status: str) -> SpecificationRead:
+    current = _read(cpu=cpu, status=status)
+    current.public["root_disk"].update(
+        {
+            "editable": False,
+            "pending_quota_change": True,
+            "reason": "Incus reports a deferred root-disk quota change.",
+        }
+    )
+    current.raw["config"]["volatile.root.apply_quota"] = "true"
+    current.raw["expanded_config"]["volatile.root.apply_quota"] = "true"
+    return current
 
 
 def _row(**overrides):
@@ -73,6 +88,13 @@ def _row(**overrides):
     return SimpleNamespace(**values)
 
 
+def _pending_quota(read: SpecificationRead) -> SpecificationRead:
+    read.public["root_disk"]["pending_quota_change"] = True
+    read.public["root_disk"]["editable"] = False
+    read.public["root_disk"]["reason"] = "A deferred root-disk quota change is pending."
+    return read
+
+
 @pytest.mark.asyncio
 async def test_recovery_after_graceful_stop_applies_then_restarts(monkeypatch):
     """A stopped readback is the transition this job caused, not a stale-plan refusal."""
@@ -80,7 +102,7 @@ async def test_recovery_after_graceful_stop_applies_then_restarts(monkeypatch):
     stopped_before = _read(cpu=4, status="Stopped")
     stopped_after = _read(cpu=6, status="Stopped")
     running_after = _read(cpu=6, status="Running")
-    reads = iter([stopped_before, running_after])
+    reads = iter([stopped_before, stopped_after, running_after])
     calls: list[str] = []
     terminal = []
 
@@ -181,7 +203,7 @@ async def test_a_known_update_failure_restores_the_instance_before_reporting_fai
     row = _row(phase="applying", stopped_by_job=True)
     stopped_before = _read(cpu=4, status="Stopped")
     running_restored = _read(cpu=4, status="Running")
-    reads = iter([stopped_before, running_restored])
+    reads = iter([stopped_before, stopped_before, running_restored])
     calls: list[str] = []
     terminal = []
 
@@ -223,6 +245,127 @@ async def test_a_known_update_failure_restores_the_instance_before_reporting_fai
     assert terminal[-1][0][1] == "failure"
     assert terminal[-1][1]["result"]["instance_status"] == "Running"
     assert "daemon refused the update" in terminal[-1][1]["error"]
+
+
+@pytest.mark.parametrize("helper_name", ["complete", "restore"])
+@pytest.mark.parametrize("guard_result", ["pending", "unreadable"])
+@pytest.mark.asyncio
+async def test_automatic_start_is_withheld_when_root_safety_is_not_proven(
+    monkeypatch,
+    helper_name,
+    guard_result,
+):
+    row = _row(operation_id="apply-op", stopped_by_job=True, phase="verifying")
+    current = _read(cpu=6 if helper_name == "complete" else 4, status="Stopped")
+    terminal = []
+
+    async def guarded_read(*args, **kwargs):
+        if guard_result == "unreadable":
+            raise service.SpecificationUnavailable("fresh read failed")
+        return _pending_quota_read(cpu=current.public["cpu"]["value"], status="Stopped")
+
+    async def must_not_start(*args, **kwargs):
+        raise AssertionError("automatic start must be withheld")
+
+    monkeypatch.setattr(service, "_read_for_job", guarded_read)
+    monkeypatch.setattr(service, "_bounded", must_not_start)
+    monkeypatch.setattr(
+        service,
+        "_terminal",
+        lambda *args, **kwargs: _capture_async(terminal, args, kwargs),
+    )
+
+    if helper_name == "complete":
+        await service._complete_restart_after_apply(row, object(), current)
+    else:
+        await service._restore_after_failed_apply(
+            row,
+            object(),
+            current,
+            "the update was refused",
+        )
+
+    assert terminal[-1][0][1] == "partial"
+    assert "withheld" in terminal[-1][1]["error"]
+
+
+@pytest.mark.parametrize("verdict", ["success", "failure", "expired"])
+@pytest.mark.asyncio
+async def test_unknown_apply_recovery_never_starts_with_pending_root_quota(
+    monkeypatch,
+    verdict,
+):
+    row = _row(
+        status="unknown",
+        phase="unknown",
+        operation_id="apply-op",
+        stopped_by_job=True,
+        result={"ambiguous_action": "apply"},
+        requested={"cpu_count": 6},
+    )
+    pending = _pending_quota_read(cpu=6, status="Stopped")
+    terminal = []
+
+    monkeypatch.setattr(
+        service,
+        "_operation_verdict",
+        lambda *args, **kwargs: _async(
+            {
+                "verdict": verdict,
+                "error": "daemon refused the update" if verdict == "failure" else None,
+            }
+        ),
+    )
+    monkeypatch.setattr(service, "_read_for_job", lambda *args, **kwargs: _async(pending))
+    monkeypatch.setattr(
+        service,
+        "_bounded",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("recovery must not start an instance with pending root quota")
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_terminal",
+        lambda *args, **kwargs: _capture_async(terminal, args, kwargs),
+    )
+
+    await service._reconcile_unknown(row, object())
+
+    assert terminal[-1][0][1] == "partial"
+    assert "deferred root-disk quota" in terminal[-1][1]["error"]
+
+
+@pytest.mark.asyncio
+async def test_pending_quota_after_graceful_stop_prevents_put_and_restore_start(monkeypatch):
+    row = _row(phase="applying", stopped_by_job=True)
+    pending = _pending_quota_read(cpu=4, status="Stopped")
+    calls = []
+    terminal = []
+
+    async def bounded(fn, *args, **kwargs):
+        if fn is service.read_project_usage:
+            calls.append("usage")
+            return ProjectUsage(limits={}, used={}, complete=True)
+        calls.append(getattr(fn, "__name__", str(fn)))
+        raise AssertionError("pending quota must prevent every daemon mutation")
+
+    monkeypatch.setattr(service, "get_client", lambda *args, **kwargs: _async(object()))
+    monkeypatch.setattr(service, "_read_for_job", lambda *args, **kwargs: _async(pending))
+    monkeypatch.setattr(service, "_bounded", bounded)
+    monkeypatch.setattr(service, "_set_job", lambda *args, **kwargs: _async(True))
+    monkeypatch.setattr(
+        service,
+        "_terminal",
+        lambda *args, **kwargs: _capture_async(terminal, args, kwargs),
+    )
+    service._cluster_locks.pop(row.cluster_id, None)
+
+    await service._run_claimed_specification_job(row, "worker-1")
+
+    assert calls == []
+    assert terminal[-1][0][1] == "partial"
+    assert "deferred root-disk quota" in terminal[-1][1]["error"]
 
 
 @pytest.mark.asyncio
@@ -596,6 +739,9 @@ async def test_start_timeout_without_new_operation_id_never_reuses_apply_operati
         unknown.append(kwargs)
 
     monkeypatch.setattr(service, "_bounded", bounded)
+    monkeypatch.setattr(
+        service, "_read_for_job", lambda *args, **kwargs: _async(stopped)
+    )
     monkeypatch.setattr(service, "_set_job", set_job)
     monkeypatch.setattr(service, "_mark_unknown", mark_unknown)
 
@@ -667,8 +813,13 @@ async def test_start_readback_outage_preserves_a_partial_apply_verdict(monkeypat
         assert fn is service.change_instance_state_sync
         return "start-op"
 
+    reads = iter([stopped, service.SpecificationUnavailable("readback unavailable")])
+
     async def unreadable(*args, **kwargs):
-        raise service.SpecificationUnavailable("readback unavailable")
+        value = next(reads)
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
     async def mark_unknown(*args, **kwargs):
         unknown.append(kwargs)
@@ -867,6 +1018,71 @@ async def test_terminal_start_requires_running_readback(monkeypatch):
     assert updates[0]["result"]["ambiguous_action"] == "start"
     assert updates[1]["phase"] == "starting"
     assert updates[1]["operation_id"] == "start-op"
+
+
+@pytest.mark.asyncio
+async def test_terminal_start_requires_matching_root_readback(monkeypatch):
+    row = _row(
+        requested={"root_disk_bytes": 20 * GIB},
+        stopped_by_job=True,
+        phase="verifying",
+    )
+    stopped = _read(cpu=6, status="Stopped")
+    stopped.public["root_disk"]["value_bytes"] = 20 * GIB
+    running_mismatch = _read(cpu=6, status="Running")
+    reads = iter([stopped, running_mismatch])
+    terminal = []
+
+    async def bounded(fn, *args, **kwargs):
+        assert fn is service.change_instance_state_sync
+        return "start-op"
+
+    monkeypatch.setattr(service, "_bounded", bounded)
+    monkeypatch.setattr(
+        service, "_read_for_job", lambda *args, **kwargs: _async(next(reads))
+    )
+    monkeypatch.setattr(service, "_set_job", lambda *args, **kwargs: _async(True))
+    monkeypatch.setattr(
+        service,
+        "_terminal",
+        lambda *args, **kwargs: _capture_async(terminal, args, kwargs),
+    )
+
+    await service._complete_restart_after_apply(row, object(), stopped)
+
+    assert terminal[-1][0][1] == "partial"
+    assert terminal[-1][1]["result"]["instance_status"] == "Running"
+    assert "does not match" in terminal[-1][1]["error"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_start_rejects_a_new_pending_root_quota(monkeypatch):
+    row = _row(stopped_by_job=True, phase="verifying")
+    stopped = _read(cpu=6, status="Stopped")
+    running_pending = _pending_quota_read(cpu=6, status="Running")
+    reads = iter([stopped, running_pending])
+    terminal = []
+
+    async def bounded(fn, *args, **kwargs):
+        assert fn is service.change_instance_state_sync
+        return "start-op"
+
+    monkeypatch.setattr(service, "_bounded", bounded)
+    monkeypatch.setattr(
+        service, "_read_for_job", lambda *args, **kwargs: _async(next(reads))
+    )
+    monkeypatch.setattr(service, "_set_job", lambda *args, **kwargs: _async(True))
+    monkeypatch.setattr(
+        service,
+        "_terminal",
+        lambda *args, **kwargs: _capture_async(terminal, args, kwargs),
+    )
+
+    await service._complete_restart_after_apply(row, object(), stopped)
+
+    assert terminal[-1][0][1] == "partial"
+    assert terminal[-1][1]["result"]["instance_status"] == "Running"
+    assert "deferred root-disk quota" in terminal[-1][1]["error"]
 
 
 def test_state_wait_timeout_is_ambiguous_not_a_known_failure(monkeypatch):

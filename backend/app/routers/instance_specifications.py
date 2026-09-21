@@ -106,6 +106,7 @@ class RootDiskValue(_StrictModel):
     pool: Optional[str]
     source: Literal["instance", "profile", "default"]
     editable: bool
+    pending_quota_change: bool = False
     reason: Optional[str]
 
 
