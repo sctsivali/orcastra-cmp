@@ -1,4 +1,5 @@
 const { expect } = require("@playwright/test");
+const { webcrypto } = require("node:crypto");
 const {
   fullInstance,
   instanceMetrics,
@@ -24,6 +25,12 @@ const AUTH_SECRET =
   process.env.NEXTAUTH_SECRET ||
   "orcastra-e2e-only-secret-32-characters-minimum";
 const SESSION_COOKIE = "authjs.session-token";
+
+// Node 18 does not expose WebCrypto globally, while Auth.js/Jose expects the
+// browser-compatible API when generating the synthetic E2E session token.
+if (!globalThis.crypto) {
+  globalThis.crypto = webcrypto;
+}
 
 const ROLE_GROUPS = {
   admin: ["role_admin"],

@@ -10,7 +10,11 @@ import { isStalePending, removePendingCreate, type PendingCreate } from "@/lib/p
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { CREATE_PARAM } from "@/components/instance-create/prefill";
-import { requestRowFocus } from "@/lib/row-focus";
+
+interface PendingCreateRowsProps {
+  pending: readonly PendingCreate[];
+  onViewInstance: (pending: PendingCreate) => void;
+}
 
 function pendingLabel(pending: PendingCreate): string {
   if (pending.pollingHalted) return "Status unavailable";
@@ -30,7 +34,7 @@ function pendingLabel(pending: PendingCreate): string {
 
 // The "Creating..." placeholder rows, rendered above the real rows and outside the filters,
 // the sort and the pager: a create in flight is always visible, whatever the list is showing.
-export function PendingCreateRows({ pending }: { pending: readonly PendingCreate[] }) {
+export function PendingCreateRows({ pending, onViewInstance }: PendingCreateRowsProps) {
   const { scopeKey } = useActorQueryScope();
   const { navigate } = useNavigationProgress();
   return (
@@ -103,7 +107,7 @@ export function PendingCreateRows({ pending }: { pending: readonly PendingCreate
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => requestRowFocus("instances", p.id, p.name)}
+                    onClick={() => onViewInstance(p)}
                   >
                     View instance
                   </Button>

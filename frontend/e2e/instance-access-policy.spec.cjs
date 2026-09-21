@@ -133,7 +133,9 @@ test("cached full policy cannot authorize advanced create after a refetch error"
 
   await page.goto("/inventory/instances/create?node=cluster-a&type=container&project=tenant-a");
   await expect(page.getByText("GPU Passthrough")).toBeVisible();
-  await page.locator('a[href="/inventory/instances"]').first().click();
+  const openSidebar = page.getByRole("button", { name: "Open sidebar" });
+  if (await openSidebar.isVisible()) await openSidebar.click();
+  await page.getByRole("link", { name: "Instances", exact: true }).click();
   await expect(page).toHaveURL(/\/inventory\/instances$/);
   await page.goBack();
   await expect.poll(() => policyReads).toBeGreaterThan(1);

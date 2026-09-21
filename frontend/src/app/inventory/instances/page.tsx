@@ -18,7 +18,12 @@ import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner
 import { Loader2 } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
 
-import { isStalePending, keyFor, resolvePendingCreate } from "@/lib/pending-creates";
+import {
+  isStalePending,
+  keyFor,
+  resolvePendingCreate,
+  type PendingCreate,
+} from "@/lib/pending-creates";
 
 import { VMInfo } from "@/types/api";
 
@@ -56,6 +61,7 @@ import { MoveInstanceDialog } from "@/components/instance-detail/move-instance-d
 import { PageReadError } from "@/components/ui/read-error-state";
 
 import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
 
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 
@@ -261,6 +267,13 @@ function InstancesContent() {
     dataUpdatedAt,
     clearFilters: filters.clearAll,
   });
+  const handleViewPendingInstance = useCallback(
+    (pending: PendingCreate) => {
+      requestRowFocus("instances", pending.id, pending.name);
+      void refreshNow();
+    },
+    [refreshNow],
+  );
 
   // Pagination
   const totalPages = Math.ceil(sortedInstances.length / pageSize);
@@ -340,6 +353,7 @@ function InstancesContent() {
             activeFilterCount={filters.activeFilterCount}
             canCreateInstance={canCreateInstance}
             onCreate={() => navigate("/inventory/instances/create")}
+            onViewPendingInstance={handleViewPendingInstance}
             rowProps={focus.rowProps}
             onOpen={handleInstanceClick}
             onAction={actions.handleAction}

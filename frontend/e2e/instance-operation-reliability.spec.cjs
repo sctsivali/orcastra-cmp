@@ -78,7 +78,9 @@ async function openEditor(page) {
 }
 
 async function routeSpecification(page, onPatch) {
-  await page.route("**/api/v1/instances/tenant-owned-vm/specification**", async (route) => {
+  await page.route(
+    /\/api\/v1\/instances\/tenant-owned-vm\/specification(?:\/preflight)?(?:\?.*)?$/,
+    async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (request.method() === "GET" && url.pathname.endsWith("/specification")) {
@@ -103,7 +105,8 @@ async function routeSpecification(page, onPatch) {
       return;
     }
     await route.fallback();
-  });
+    },
+  );
 }
 
 test("an interrupted PATCH replays the exact key once and renders partial readback", async ({ page }) => {
@@ -220,7 +223,9 @@ test("a specification job resumes after reload and shows VM guest guidance", asy
   expect(Object.keys(JSON.parse(persisted[1])).sort()).toEqual([
     "host", "instanceName", "jobId", "project",
   ]);
-  await dialog.getByRole("button", { name: "Close" }).click();
+  await dialog.getByRole("button", { name: "Close" }).filter({
+    hasNot: page.locator("svg"),
+  }).click();
 
   await page.reload();
   complete = true;
@@ -266,7 +271,9 @@ test("a missing durable job stops polling and keeps recovery actions visible", a
   await page.waitForTimeout(3_000);
   expect(reads).toBe(readsAfterHalt);
   await expect(dialog.getByRole("button", { name: "Reload actual state" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Close" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close" }).filter({
+    hasNot: page.locator("svg"),
+  })).toBeVisible();
   await expectCleanHarness(api);
 });
 

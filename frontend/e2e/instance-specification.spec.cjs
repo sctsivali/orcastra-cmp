@@ -65,7 +65,9 @@ for (const role of ["admin", "partner"]) {
     const calls = [];
     let operationReads = 0;
 
-    await page.route("**/api/v1/instances/tenant-owned-vm/specification**", async (route) => {
+    await page.route(
+      /\/api\/v1\/instances\/tenant-owned-vm\/specification(?:\/preflight)?(?:\?.*)?$/,
+      async (route) => {
       const request = route.request();
       const url = new URL(request.url());
       const method = request.method();
@@ -138,8 +140,9 @@ for (const role of ["admin", "partner"]) {
         return;
       }
 
-      await route.fallback();
-    });
+        await route.fallback();
+      },
+    );
 
     await page.route("**/api/v1/instances/operations/spec-job-1", async (route) => {
       operationReads += 1;
@@ -213,7 +216,9 @@ test("tenant cannot see the specification edit action", async ({ page }) => {
 test("validation explains root shrink, memory pressure, and irreversible disk growth", async ({ page }) => {
   await authenticate(page.context(), "admin");
   const api = await installApiFixtures(page, "admin", { snapshotInstancePage: true });
-  await page.route("**/api/v1/instances/tenant-owned-vm/specification**", async (route) => {
+  await page.route(
+    /\/api\/v1\/instances\/tenant-owned-vm\/specification(?:\?.*)?$/,
+    async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (request.method() === "GET" && url.pathname.endsWith("/specification")) {
@@ -225,8 +230,9 @@ test("validation explains root shrink, memory pressure, and irreversible disk gr
       });
       return;
     }
-    await route.fallback();
-  });
+      await route.fallback();
+    },
+  );
 
   await page.goto("/inventory/instances");
   const actions = page.getByRole("button", {
@@ -247,14 +253,14 @@ test("validation explains root shrink, memory pressure, and irreversible disk gr
   await expect(dialog.getByText("Enter a positive whole number.")).toBeVisible();
   await cpu.fill("4");
 
-  const rootDisk = dialog.getByLabel("Root disk size");
+  const rootDisk = dialog.getByRole("spinbutton", { name: "Root disk size", exact: true });
   await rootDisk.fill("70");
   await expect(rootDisk).toHaveAttribute("aria-invalid", "true");
   await expect(dialog.getByText("Root disk size can only be increased.")).toBeVisible();
   await rootDisk.fill("100");
   await expect(dialog.getByText("Root disk growth cannot be rolled back by shrinking the disk.")).toBeVisible();
 
-  await dialog.getByLabel("Memory limit").fill("4");
+  await dialog.getByRole("spinbutton", { name: "Memory limit", exact: true }).fill("4");
   await expect(dialog.getByText("Lowering memory can pressure or terminate workloads.", { exact: false })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();

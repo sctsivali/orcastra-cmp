@@ -291,7 +291,9 @@ test("NETWORKLESS acceptance tracks the exact create job across reload", async (
   await page.getByLabel("Tags").press("Enter");
   await expect(page.getByRole("button", { name: "Create & Start" })).toBeEnabled();
   await page.getByRole("button", { name: "Create & Start" }).click();
-  await expect(page.getByText("An instance with this name already exists")).toBeVisible();
+  await expect(page.locator("#create-name-error")).toHaveText(
+    "An instance with this name already exists in the selected project.",
+  );
   await expect(name).toHaveAttribute("aria-invalid", "true");
   await expect(name).toBeFocused();
   expect(creates).toHaveLength(0);
@@ -374,10 +376,14 @@ test("an async create failure keeps Review configuration routed to the original 
   });
 
   await page.goto("/inventory/instances");
-  await expect(page.getByText("The daemon rejected the image.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Review configuration" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "View instance" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Review configuration" }).click();
+  const failedJobRow = page.locator('tr[data-state="pending"]').filter({
+    has: page.getByText("failed-create", { exact: true }),
+  });
+  await expect(failedJobRow).toHaveCount(1);
+  await expect(failedJobRow.getByText("The daemon rejected the image.", { exact: true })).toBeVisible();
+  await expect(failedJobRow.getByRole("button", { name: "Review configuration" })).toBeVisible();
+  await expect(failedJobRow.getByRole("button", { name: "View instance" })).toHaveCount(0);
+  await failedJobRow.getByRole("button", { name: "Review configuration" }).click();
   await expect(page).toHaveURL(
     /\/inventory\/instances\/create\?node=cluster-a&type=vm&project=tenant-a/,
   );
@@ -431,17 +437,24 @@ test("a create-success then start-failure keeps the partial job beside the real 
     '[data-row-key="cluster-a/tenant-a/start-failed-vm"]',
   )).toHaveCount(0);
   releasePartial();
-  await expect(page.getByText("Partially created")).toBeVisible();
-  await expect(page.getByText("The instance was created, but it did not start.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Review configuration" })).toHaveCount(0);
+  const partialJobRow = page.locator('tr[data-state="pending"]').filter({
+    has: page.getByText("start-failed-vm", { exact: true }),
+  });
+  await expect(partialJobRow).toHaveCount(1);
+  await expect(partialJobRow.getByText("Partially created", { exact: true })).toBeVisible();
+  await expect(partialJobRow.getByText(
+    "The instance was created, but it did not start.",
+    { exact: true },
+  )).toBeVisible();
+  await expect(partialJobRow.getByRole("button", { name: "Review configuration" })).toHaveCount(0);
   await expect(page.locator(
     '[data-row-key="cluster-a/tenant-a/start-failed-vm"]',
   )).toBeVisible();
-  await page.getByRole("button", { name: "View instance" }).click();
+  await partialJobRow.getByRole("button", { name: "View instance" }).click();
   await expect(page.locator(
     '[data-row-key="cluster-a/tenant-a/start-failed-vm"][data-row-focus="true"]',
   )).toBeVisible();
-  await expect(page.getByText("Partially created")).toBeVisible();
+  await expect(partialJobRow.getByText("Partially created", { exact: true })).toBeVisible();
   await expect.poll(() => api.instanceSockets.some((socket) => socket.closedAt !== null)).toBe(true);
   await expectCleanHarness(api);
 });
