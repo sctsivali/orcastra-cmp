@@ -85,15 +85,29 @@ def _read_project_disk_allocation(client: Any, project: str) -> Optional[int]:
     info = getattr(client, "host_info", None) or {}
     if "project_usage" not in (info.get("api_extensions") or []):
         return None
-    response = client.api.projects[safe_segment(project)].state.get()
+    response = client.api.projects[safe_segment(project)].state.get(
+        timeout=ALL_PROJECTS_READ_TIMEOUT
+    )
     metadata = response.json().get("metadata") or {}
     resources = metadata.get("resources") or {}
     resource = resources.get("limits.disk") or resources.get("disk")
     if not isinstance(resource, dict):
         return None
+    if "Usage" in resource:
+        raw_usage = resource["Usage"]
+    elif "usage" in resource:
+        raw_usage = resource["usage"]
+    else:
+        return None
+
+    # Incus returns the canonical project-state fields as ``Limit`` and ``Usage``.
+    # Older test doubles and daemon variants can use lowercase keys. Do not coerce
+    # booleans or floats into byte counts because an uncertain quota read must fail closed.
+    if isinstance(raw_usage, bool) or not isinstance(raw_usage, (int, str)):
+        return None
     try:
-        usage = int(resource.get("usage"))
-    except (TypeError, ValueError):
+        usage = int(raw_usage.strip()) if isinstance(raw_usage, str) else raw_usage
+    except ValueError:
         return None
     return usage if usage >= 0 else None
 

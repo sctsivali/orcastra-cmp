@@ -105,16 +105,17 @@ def test_a_partial_read_is_marked_incomplete(monkeypatch):
     assert got.used["cpu"] == 0
 
 
-def test_disk_usage_comes_from_authoritative_project_state(monkeypatch):
+def _read_disk_usage(monkeypatch, disk_resource, *, resource_name="disk"):
     from app.services.lxd import project_usage as mod
 
     class _State:
-        def get(self):
+        def get(self, *, timeout):
+            assert timeout == mod.ALL_PROJECTS_READ_TIMEOUT
             return SimpleNamespace(
                 json=lambda: {
                     "metadata": {
                         "resources": {
-                            "limits.disk": {"limit": 40 * GIB, "usage": 30 * GIB}
+                            resource_name: disk_resource
                         }
                     }
                 }
@@ -134,10 +135,47 @@ def test_disk_usage_comes_from_authoritative_project_state(monkeypatch):
     )
     monkeypatch.setattr(mod, "list_in_project", lambda *args, **kwargs: [])
 
-    got = read_project_usage(client, "web-tier")
+    return read_project_usage(client, "web-tier")
+
+
+def test_disk_usage_comes_from_authoritative_project_state(monkeypatch):
+    got = _read_disk_usage(
+        monkeypatch,
+        {"Limit": 40 * GIB, "Usage": 30 * GIB},
+    )
 
     assert got.used["disk_bytes"] == 30 * GIB
     assert got.is_complete("disk_bytes") is True
+
+
+def test_lowercase_project_state_disk_usage_remains_compatible(monkeypatch):
+    got = _read_disk_usage(
+        monkeypatch,
+        {"limit": 40 * GIB, "usage": 30 * GIB},
+        resource_name="limits.disk",
+    )
+
+    assert got.used["disk_bytes"] == 30 * GIB
+    assert got.is_complete("disk_bytes") is True
+
+
+@pytest.mark.parametrize(
+    "disk_resource",
+    [
+        {},
+        {"Usage": None},
+        {"Usage": "invalid"},
+        {"Usage": -1},
+        {"Usage": 1.5},
+        {"Usage": True},
+        {"Usage": "invalid", "usage": 30 * GIB},
+    ],
+)
+def test_invalid_project_state_disk_usage_fails_closed(monkeypatch, disk_resource):
+    got = _read_disk_usage(monkeypatch, disk_resource)
+
+    assert got.used["disk_bytes"] == 0
+    assert got.is_complete("disk_bytes") is False
 
 
 def test_configured_disk_quota_fails_closed_without_project_state(monkeypatch):
