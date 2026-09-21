@@ -61,6 +61,9 @@ services:
       - APP_VERSION=${APP_VERSION:-latest}
       - API_VERSION=${API_VERSION:-latest}
       - DEBUG=${DEBUG:-false}
+      # Keep migrations enabled for normal starts. A reviewed application-only rollback across
+      # an additive schema may set this false so an older image does not reject the newer stamp.
+      - RUN_MIGRATIONS=${RUN_MIGRATIONS:-true}
       - DATABASE_URL=${DATABASE_URL}
 
       # JWT validation
