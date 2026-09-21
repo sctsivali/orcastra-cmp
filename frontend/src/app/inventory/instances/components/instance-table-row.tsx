@@ -24,6 +24,7 @@ export interface InstanceTableRowProps {
   onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
   pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
+  writeDisabledReason?: string;
   /** Undefined when the caller may act; otherwise why not, including "still checking". */
   permissionReason: (
     host: string,
@@ -34,6 +35,7 @@ export interface InstanceTableRowProps {
   canDeleteInstance: boolean;
   /** True only for the row whose delete is in flight, so the other rows stay live. */
   deletePending: boolean;
+  onEditSpecification: (instance: VMInfo) => void;
   onCopy: (instance: VMInfo) => void;
   onRebuild: (instance: VMInfo) => void;
   onDelete: (instance: VMInfo) => void;
@@ -98,9 +100,11 @@ export function InstanceTableRow({
   onAction,
   pendingActions,
   isReadOnly,
+  writeDisabledReason,
   permissionReason,
   canDeleteInstance,
   deletePending,
+  onEditSpecification,
   onCopy,
   onRebuild,
   onDelete,
@@ -116,6 +120,7 @@ export function InstanceTableRow({
   const actions = instanceRowActions({
     instance,
     isReadOnly,
+    writeDisabledReason,
     canManage: canDeleteInstance,
     pendingActions,
     deletePending,
@@ -136,6 +141,7 @@ export function InstanceTableRow({
         host: instance.host,
         project,
       }),
+    onEditSpecification: () => onEditSpecification(instance),
     onCopy: () => onCopy(instance),
     onRebuild: () => onRebuild(instance),
     onDelete: () => onDelete(instance),

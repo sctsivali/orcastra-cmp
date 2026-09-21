@@ -20,16 +20,24 @@ function useSystemSettings() {
 }
 
 export function useReadOnlyMode() {
-  const { data, isLoading, isError } = useSystemSettings();
+  const { data, isLoading, isFetching, isError } = useSystemSettings();
 
-  // On transient API errors (network hiccup, server restart), do NOT default to
-  // read-only. Only enable read-only when the server explicitly returns it.
-  // Previous behavior (isError → read-only) caused false positives during
-  // brief connectivity drops, blocking admin/partner workflows unnecessarily.
+  // Keep the deployment mode exact. Mutation surfaces use writeAvailability separately so a
+  // missing settings verdict blocks writes without falsely claiming that read-only mode is on.
+  const isReadOnly = data?.read_only_mode ?? false;
+  const writeAvailability = isFetching
+    ? "checking"
+    : isError
+      ? "unavailable"
+      : isReadOnly
+        ? "read_only"
+        : "available";
   return {
-    isReadOnly: data?.read_only_mode ?? false,
+    isReadOnly,
     isLoading,
+    isFetching,
     isError,
+    writeAvailability,
     apiVersion: data?.api_version,
   };
 }

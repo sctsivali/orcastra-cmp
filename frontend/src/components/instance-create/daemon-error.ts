@@ -1,6 +1,15 @@
-import { APIError } from "@/types/api";
+import { APIError, type InstanceCreateIssue } from "@/types/api";
 
-export type CreateErrorField = "cpu" | "memory" | "instances";
+export type CreateErrorField =
+  | "name"
+  | "image"
+  | "profiles"
+  | "storage"
+  | "network"
+  | "devices"
+  | "cpu"
+  | "memory"
+  | "instances";
 
 export interface CreateError {
   /** What the banner shows: the API's sentence, or a generic one. */
@@ -19,6 +28,49 @@ const FIELD_BY_LIMIT: Record<string, CreateErrorField> = {
   "limits.containers": "instances",
   "limits.virtual-machines": "instances",
 };
+
+function mapBlockerField(
+  field: string | null | undefined,
+  code: string,
+): CreateErrorField | undefined {
+  const normalizedCode = code.toUpperCase();
+  if (normalizedCode.includes("INSTANCE_NAME") || normalizedCode.includes("DUPLICATE_NAME")) {
+    return "name";
+  }
+  if (normalizedCode.includes("IMAGE") || normalizedCode.includes("SOURCE")) return "image";
+  if (normalizedCode.includes("PROFILE")) return "profiles";
+  if (normalizedCode.includes("NETWORK") || normalizedCode.includes("NIC")) return "network";
+  if (
+    normalizedCode.includes("STORAGE") ||
+    normalizedCode.includes("ROOT") ||
+    normalizedCode.includes("DISK") ||
+    normalizedCode.includes("POOL")
+  ) return "storage";
+  if (!field) return undefined;
+  const normalized = field.toLowerCase();
+  if (normalized === "name" || normalized === "instance_name") return "name";
+  if (normalized.includes("image") || normalized.includes("source")) return "image";
+  if (normalized.includes("profile")) return "profiles";
+  if (normalized === "cpu_count" || normalized === "cpu" || normalized === "limits.cpu") {
+    return "cpu";
+  }
+  if (
+    normalized === "memory_bytes" ||
+    normalized === "memory" ||
+    normalized === "limits.memory"
+  ) return "memory";
+  if (normalized === "instances") return "instances";
+  if (FIELD_BY_LIMIT[normalized]) return FIELD_BY_LIMIT[normalized];
+  if (normalized.includes("network") || normalized.includes("nic")) return "network";
+  if (
+    normalized.includes("root") ||
+    normalized.includes("storage") ||
+    normalized.includes("pool") ||
+    normalized.includes("disk")
+  ) return "storage";
+  if (normalized.includes("device")) return "devices";
+  return undefined;
+}
 
 const AGGREGATE = /Reached maximum aggregate value "([^"]+)" for "(limits\.[a-z-]+)" in project "([^"]+)"/;
 const COUNT = /Reached maximum number of instances(?: of type "([^"]+)")? in project "([^"]+)"/;
@@ -55,8 +107,23 @@ export function mapCreateError(error: unknown): CreateError {
   return { message };
 }
 
+/** Turn structured preflight blockers into the same inline errors as a daemon refusal. */
+export function mapCreatePreflightBlockers(
+  blockers: InstanceCreateIssue[],
+): CreateError {
+  const message = blockers.map((blocker) => blocker.message).join(" ") ||
+    "The create request did not pass preflight checks.";
+  const field = blockers
+    .map((blocker) => mapBlockerField(blocker.field, blocker.code))
+    .find((candidate) => candidate !== undefined);
+  return { message, field };
+}
+
 /** The sentence under the field the cluster refused. */
 export function fieldRefusalText(err: CreateError): string {
+  if (!err.limit || !["cpu", "memory", "instances"].includes(err.field ?? "")) {
+    return err.message;
+  }
   const project = err.project ? `${err.project} allows` : "The project allows";
   if (err.field === "cpu") return `The cluster refused this value: ${project} ${err.max ?? "this many"} vCPU in total across its instances.`;
   if (err.field === "memory") return `The cluster refused this value: ${project} ${err.max ?? "this much"} memory in total across its instances.`;

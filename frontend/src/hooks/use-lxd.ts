@@ -17,7 +17,20 @@ import {
   healthCheck,
   api 
 } from "@/lib/api";
-import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse, SnapshotCreateRequest, SnapshotRestoreRequest, MoveRequest, ProfileCreateRequest, ProfileUpdateRequest } from "@/types";
+import {
+  VMCreateRequest,
+  InstanceCreateRequest,
+  InstanceSpecificationPreflightRequest,
+  InstanceSpecificationUpdateRequest,
+  VMActionRequest,
+  ProjectCreateRequest,
+  VMListResponse,
+  SnapshotCreateRequest,
+  SnapshotRestoreRequest,
+  MoveRequest,
+  ProfileCreateRequest,
+  ProfileUpdateRequest,
+} from "@/types";
 import {
   ATTENDED_DATA_CONFIG,
   DYNAMIC_DATA_CONFIG,
@@ -55,6 +68,17 @@ export const queryKeys = {
     project: string,
     name: string,
   ) => ["instance", actorScope, host, project, name] as const,
+  instanceSpecification: (
+    actorScope: string,
+    host: string,
+    project: string,
+    name: string,
+    nonce: number,
+  ) => ["instanceSpecification", actorScope, host, project, name, nonce] as const,
+  instanceOperation: (actorScope: string, jobId: string) =>
+    ["instanceOperation", actorScope, jobId] as const,
+  instanceWritePolicy: (actorScope: string, host: string) =>
+    ["instanceWritePolicy", actorScope, host] as const,
   instanceSnapshots: (
     actorScope: string,
     host: string,
@@ -1552,10 +1576,126 @@ export function useCreateInstance() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: InstanceCreateRequest) => api.instances.create(data),
+    mutationFn: ({
+      data,
+      idempotencyKey,
+    }: {
+      data: InstanceCreateRequest;
+      idempotencyKey: string;
+    }) => api.instances.create(data, idempotencyKey),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
+  });
+}
+
+export function usePreflightInstanceCreate() {
+  return useMutation({
+    mutationFn: (data: InstanceCreateRequest) =>
+      api.instances.preflightCreate(data),
+  });
+}
+
+/** Server-resolved shared/exclusive write policy. Advanced controls fail closed without it. */
+export function useInstanceWritePolicy(host: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+  return useQuery({
+    queryKey: queryKeys.instanceWritePolicy(scopeKey, host),
+    queryFn: () => api.instances.getWritePolicy(host),
+    enabled: isAuthenticated && !!host,
+    staleTime: 0,
+    retry: 1,
+    refetchOnMount: "always",
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** Fresh, uncached specification read used to seed the edit dialog. */
+export function useInstanceSpecificationForEdit(
+  name: string,
+  host: string,
+  project: string,
+  nonce: number,
+  enabled: boolean,
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+  return useQuery({
+    queryKey: queryKeys.instanceSpecification(
+      scopeKey,
+      host,
+      project,
+      name,
+      nonce,
+    ),
+    queryFn: () => api.instances.getSpecification(name, host, project),
+    enabled: isAuthenticated && enabled && !!name && !!host,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function usePreflightInstanceSpecification() {
+  return useMutation({
+    mutationFn: ({
+      name,
+      data,
+    }: {
+      name: string;
+      data: InstanceSpecificationPreflightRequest;
+    }) => api.instances.preflightSpecification(name, data),
+  });
+}
+
+export function useUpdateInstanceSpecification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      name,
+      data,
+      etag,
+      idempotencyKey,
+    }: {
+      name: string;
+      data: InstanceSpecificationUpdateRequest;
+      etag: string;
+      idempotencyKey: string;
+    }) => api.instances.updateSpecification(name, data, etag, idempotencyKey),
+    onSuccess: () => {
+      refreshInstanceQueries(queryClient);
+    },
+  });
+}
+
+const TERMINAL_INSTANCE_OPERATION = new Set([
+  "success",
+  "failure",
+  "partial",
+]);
+
+export function useInstanceOperationJob(jobId: string | null, enabled = true) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+  return useQuery({
+    queryKey: queryKeys.instanceOperation(scopeKey, jobId ?? ""),
+    queryFn: () => api.instances.getOperation(jobId!),
+    enabled: isAuthenticated && enabled && !!jobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status && TERMINAL_INSTANCE_OPERATION.has(status)) return false;
+      return status === "unknown" ? 10_000 : 2_000;
+    },
+    refetchIntervalInBackground: false,
+    retry: (failureCount, error) => {
+      if (error instanceof APIError && (error.status === 401 || error.status === 403)) {
+        return false;
+      }
+      return failureCount < 2;
+    },
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: true,
   });
 }
 

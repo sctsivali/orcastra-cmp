@@ -90,9 +90,11 @@ interface InstancesTableProps {
   onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
   pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
+  writeDisabledReason?: string;
   permissionReason: Parameters<typeof InstanceTableRow>[0]["permissionReason"];
   canDeleteInstance: boolean;
   deletePending: (instance: VMInfo) => boolean;
+  onEditSpecification: (instance: VMInfo) => void;
   onCopy: (instance: VMInfo) => void;
   onRebuild: (instance: VMInfo) => void;
   onDelete: (instance: VMInfo) => void;
@@ -155,6 +157,8 @@ export function InstancesTable(props: InstancesTableProps) {
                   <Button
                     size="sm"
                     onClick={onCreate}
+                    disabled={!!props.writeDisabledReason}
+                    title={props.writeDisabledReason ?? "Create a new instance"}
                   >
                     Create Instance
                   </Button>
@@ -172,9 +176,11 @@ export function InstancesTable(props: InstancesTableProps) {
             onAction={props.onAction}
             pendingActions={props.pendingActions}
             isReadOnly={props.isReadOnly}
+            writeDisabledReason={props.writeDisabledReason}
             permissionReason={props.permissionReason}
             canDeleteInstance={props.canDeleteInstance}
             deletePending={props.deletePending(instance)}
+            onEditSpecification={props.onEditSpecification}
             onCopy={props.onCopy}
             onRebuild={props.onRebuild}
             onDelete={props.onDelete}

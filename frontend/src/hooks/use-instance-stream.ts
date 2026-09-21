@@ -1,27 +1,6 @@
 "use client";
 
-/**
- * useInstanceStream
- *
- * Keeps the instances list current from the LXD events stream instead of
- * polling. The page fetches the initial snapshot once (useInstances with
- * `realtime: true`), then this hook opens one WebSocket per relevant host
- * (`/api/v1/events/ws?host=…`; the backend shares a single upstream LXD events
- * connection per node) and applies changes directly to the React Query cache:
- *
- *   - lifecycle `instance-deleted`            → remove the row from the cache
- *   - lifecycle `instance-renamed`            → refetch (rare; name changed)
- *   - lifecycle `instance-*` (created/started/stopped/restarted/updated/…)
- *                                             → fetch that one instance + upsert
- *   - operation events                        → drive the "Creating…" placeholder
- *                                               (progress / error); on success the
- *                                               instance-created lifecycle event
- *                                               upserts the real row, so the swap
- *                                               is atomic (no disappear/reappear).
- *
- * Watches the union of the hosts that currently have instances plus the hosts of
- * any pending creates. Returns the live pending-create list for rendering.
- */
+/** Keeps the inventory current from daemon events while exact durable jobs own create verdicts. */
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -38,8 +17,9 @@ import {
   subscribePending,
   updatePendingCreate,
 } from "@/lib/pending-creates";
+import { APIError } from "@/types/api";
+import { matchesCreateOperation } from "@/lib/instance-operation-identity";
 
-// LXD operation status codes: 200 = Success, 400 = Failure, 401 = Cancelled.
 const STATUS_SUCCESS = 200;
 
 interface Conn {
@@ -68,6 +48,119 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     getSnapshot,
   );
   const queryClient = useQueryClient();
+
+  const pendingJobsKey = pending
+    .filter(
+      (entry) =>
+        entry.jobId &&
+        !entry.pollingHalted &&
+        entry.jobStatus !== "success" &&
+        entry.jobStatus !== "failure" &&
+        entry.jobStatus !== "partial",
+    )
+    .map((entry) => `${entry.id}:${entry.jobId}`)
+    .sort()
+    .join(",");
+
+  // The daemon event stream is still the fastest path, but it is not the source of truth for
+  // a submitted create. Poll the exact durable job so a WebSocket drop, a missing project on
+  // an event frame, or a page reload cannot leave the row claiming "Creating" indefinitely.
+  useEffect(() => {
+    if (!pendingJobsKey) return;
+    let active = true;
+    let polling = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const trackedJobs = new Set(pendingJobsKey.split(","));
+
+    const poll = async () => {
+      if (!active || polling) return;
+      polling = true;
+      let nextDelay = 2_500;
+      const entries = getPendingSnapshot(scopeKey).filter(
+        (entry) => entry.jobId && trackedJobs.has(`${entry.id}:${entry.jobId}`),
+      );
+      await Promise.all(
+        entries.map(async (entry) => {
+          try {
+            const job = await api.instances.getOperation(entry.jobId!);
+            if (!active) return;
+            if (!matchesCreateOperation(entry, job)) {
+              updatePendingCreate(scopeKey, entry.id, {
+                status: "Error",
+                jobStatus: "unknown",
+                pollingHalted: true,
+                error: "The operation identity did not match this pending instance. Polling stopped.",
+              });
+              return;
+            }
+            const alreadyFailed =
+              entry.jobStatus === "failure" ||
+              entry.jobStatus === "partial" ||
+              entry.jobStatus === "unknown";
+            const patch: Partial<PendingCreate> = {
+              jobStatus: job.status,
+              phase: job.phase,
+              operationId: job.operation_id || entry.operationId,
+              lastSignalAt: Date.now(),
+            };
+            if (job.status === "success") {
+              patch.status = "Success";
+              patch.error = undefined;
+              patch.description = "Refreshing instance inventory";
+              void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
+            } else if (job.status === "failure") {
+              patch.status = "Error";
+              patch.error = job.error || "Creation failed";
+            } else if (job.status === "partial") {
+              patch.status = "Partial";
+              patch.error = job.error || "Creation completed only partially";
+              void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
+            } else if (job.status === "unknown") {
+              nextDelay = Math.max(nextDelay, 10_000);
+              patch.status = "Unknown";
+              patch.error = job.error || "The cluster could not confirm the final create state";
+            } else {
+              patch.status = job.status === "pending" ? "Pending" : "Running";
+              patch.error = undefined;
+            }
+            updatePendingCreate(scopeKey, entry.id, patch);
+            if (
+              !alreadyFailed &&
+              (job.status === "failure" || job.status === "partial" || job.status === "unknown")
+            ) {
+              toast({
+                variant: "destructive",
+                title: `Could not finish creating ${entry.name}`,
+                description: patch.error,
+              });
+            }
+          } catch (error) {
+            if (!active) return;
+            nextDelay = Math.max(nextDelay, 5_000);
+            if (error instanceof APIError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+              updatePendingCreate(scopeKey, entry.id, {
+                status: "Error",
+                jobStatus: "unknown",
+                pollingHalted: true,
+                error:
+                  error.status === 404
+                    ? "The create operation is no longer available. Refresh inventory before retrying."
+                    : "You no longer have permission to view this create operation.",
+              });
+            }
+          }
+        }),
+      );
+      polling = false;
+      if (active) timer = setTimeout(() => void poll(), nextDelay);
+    };
+
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pendingJobsKey, queryClient, scopeKey]);
 
   const hosts = Array.from(
     new Set([...instanceHosts, ...pending.map((p) => p.host)]),
@@ -178,8 +271,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       }
     };
 
-    // The placeholder a frame is about. A frame that names its project matches on it too; a
-    // frame without one (older daemons) matches on host and name as before.
+    // Match project when the daemon provides it. Older frames only carry host and name.
     const findPending = (host: string, name: string, project?: string | null) =>
       getPendingSnapshot(scopeKey).find(
         (x) =>
@@ -190,16 +282,24 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
 
     const dropPending = (host: string, name: string, project?: string | null) => {
       const p = findPending(host, name, project);
-      if (p) removePendingCreate(scopeKey, p.id);
+      if (!p) return;
+      if (p.jobId && p.jobStatus !== "success") {
+        updatePendingCreate(scopeKey, p.id, { lastSignalAt: Date.now() });
+        return;
+      }
+      removePendingCreate(scopeKey, p.id);
     };
 
-    // A placeholder retires only once the real row is in the cache. It used to be dropped in a
-    // `finally`, so a GET that failed removed the row and upserted nothing, on a page that does
-    // not poll: the create had succeeded and the list showed neither.
+    // Retire only after the real row is cached. Exact jobs also require a success verdict.
     const settle = (host: string, name: string, project: string | null | undefined, ok: boolean) => {
       if (!ok) return;
       const p = findPending(host, name, project);
-      if (p) resolvePendingCreate(scopeKey, p.id);
+      if (!p) return;
+      if (p.jobId && p.jobStatus !== "success") {
+        updatePendingCreate(scopeKey, p.id, { lastSignalAt: Date.now() });
+        return;
+      }
+      resolvePendingCreate(scopeKey, p.id);
     };
 
     const handleOperation = (host: string, msg: any) => {
@@ -214,6 +314,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       for (const p of getPendingSnapshot(scopeKey)) {
         if (p.host !== host || !names.includes(p.name)) continue;
         if (project && (p.project || "default") !== project) continue;
+        updatePendingCreate(scopeKey, p.id, { lastSignalAt: Date.now() });
         const code: number | undefined =
           typeof msg.status_code === "number" ? msg.status_code : undefined;
         if (code !== undefined && code >= STATUS_SUCCESS) {
@@ -224,6 +325,16 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
             );
           } else {
             const reason = msg.err || "Creation failed";
+            if (p.jobId) {
+              // A daemon frame covers one leg. The exact job owns the durable verdict.
+              updatePendingCreate(scopeKey, p.id, {
+                lastSignalAt: Date.now(),
+                statusCode: code,
+                description: msg.description || "Waiting for exact create job status",
+                operationId: msg.operation_id || p.operationId,
+              });
+              continue;
+            }
             // LXD can emit more than one frame for the same failed operation, so only the
             // transition into Error raises a toast. Without this the operator gets the same
             // destructive toast several times for one create.
@@ -253,6 +364,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
           }
         } else {
           updatePendingCreate(scopeKey, p.id, {
+            lastSignalAt: Date.now(),
             status: msg.status || "Running",
             statusCode: code,
             progress: msg.progress || undefined,
@@ -288,8 +400,16 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       // created / started / stopped / restarted / updated / paused / resumed …
       const project: string | undefined = msg.project || undefined;
       if (!project) {
+        const pendingEntry = findPending(host, name);
+        if (pendingEntry) {
+          updatePendingCreate(scopeKey, pendingEntry.id, { lastSignalAt: Date.now() });
+        }
         void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
         return;
+      }
+      const pendingEntry = findPending(host, name, project);
+      if (pendingEntry) {
+        updatePendingCreate(scopeKey, pendingEntry.id, { lastSignalAt: Date.now() });
       }
       void fetchAndUpsert(host, name, project).then((ok) =>
         settle(host, name, project, ok),

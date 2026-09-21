@@ -34,7 +34,14 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   const restartInstance = useRestartInstance();
   const deleteInstance = useDeleteInstance();
   const { toast } = useToast();
-  const { isReadOnly } = useReadOnlyMode();
+  const { isReadOnly, writeAvailability } = useReadOnlyMode();
+  const writeDisabledReason = writeAvailability === "checking"
+    ? "Checking system write availability"
+    : writeAvailability === "unavailable"
+      ? "System write availability could not be verified"
+      : writeAvailability === "read_only"
+        ? "Disabled in read-only mode"
+        : undefined;
   const activeActorScopeRef = useRef(scopeKey);
   activeActorScopeRef.current = scopeKey;
   const previousActorScopeRef = useRef(scopeKey);
@@ -123,10 +130,10 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
     action: "start" | "stop" | "restart"
   ) => {
     if (activeActorScopeRef.current !== scopeKey) return;
-    if (isReadOnly) {
+    if (writeDisabledReason) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Instance actions are disabled in read-only mode",
+        title: "Instance action unavailable",
+        description: writeDisabledReason,
         variant: "destructive",
       });
       return;
@@ -265,6 +272,8 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
 
   return {
     isReadOnly,
+    writeAvailability,
+    writeDisabledReason,
     pendingActions: actionUiIsCurrent ? pendingActions : NO_PENDING_ACTIONS,
     deleteTarget: actionUiIsCurrent ? deleteTarget : null,
     setDeleteTarget: (target: VMInfo | null) => {

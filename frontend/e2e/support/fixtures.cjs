@@ -122,7 +122,7 @@ async function installApiFixtures(page, role, options = {}) {
       url.protocol === (baseUrl.protocol === "https:" ? "wss:" : "ws:");
     const isExpectedInstanceSocket =
       options.snapshotInstancePage === true &&
-      ["admin", "partner"].includes(role) &&
+      ["admin", "partner", "tenant"].includes(role) &&
       url.pathname === "/api/v1/events/ws" &&
       url.searchParams.get("host") === configuredSnapshotTarget.host &&
       url.hostname === baseUrl.hostname &&
@@ -153,6 +153,9 @@ async function installApiFixtures(page, role, options = {}) {
         // The browser may finish tearing down the page before the mock sends its close frame.
       }
     });
+    if (isExpectedInstanceSocket && options.instanceWebSocketDisconnect === true) {
+      await webSocket.close({ code: 1012, reason: "Simulated event stream loss" });
+    }
   });
 
   await page.route(
@@ -253,6 +256,64 @@ async function installApiFixtures(page, role, options = {}) {
         snapshot_schedules_enabled: true,
         task_journal_enabled: false,
       };
+    } else if (path === "/instances/write-policy") {
+      const host = url.searchParams.get("host");
+      if (host !== configuredSnapshotTarget.host) {
+        state.unexpected.push(entry);
+        status = 599;
+        body = { detail: `Unexpected write-policy host: ${host}` };
+      } else {
+        const mode = options.instanceWritePolicyMode ??
+          (role === "admin" ? "full" : role === "partner" ? "safe" : "view_only");
+        body = {
+          host,
+          mode,
+          can_edit_specifications: mode !== "view_only",
+          can_use_advanced_create: mode === "full",
+        };
+      }
+    } else if (options.instanceCreatePage === true && path === "/storage/pools") {
+      body = {
+        total: 1,
+        pools: [{
+          name: "default",
+          description: "",
+          driver: "dir",
+          config: {},
+          used_by: [],
+          status: "Created",
+          node: configuredSnapshotTarget.host,
+        }],
+        nodes: [configuredSnapshotTarget.host],
+        unreachable_nodes: [],
+      };
+    } else if (options.instanceCreatePage === true && path === "/storage/volumes") {
+      body = { total: 0, volumes: [], nodes: [configuredSnapshotTarget.host], unreachable_nodes: [] };
+    } else if (options.instanceCreatePage === true && path === "/networks") {
+      body = { total: 0, networks: [], nodes: [configuredSnapshotTarget.host], unreachable_nodes: [] };
+    } else if (options.instanceCreatePage === true && path === "/profiles/default") {
+      body = {
+        name: "default",
+        description: "",
+        config: {},
+        devices: { root: { type: "disk", path: "/", pool: "default" } },
+        used_by: [],
+        node: configuredSnapshotTarget.host,
+        project: configuredSnapshotTarget.project,
+        etag: '"profile-v1"',
+      };
+    } else if (options.instanceCreatePage === true && path === `/nodes/${configuredSnapshotTarget.host}/gpus`) {
+      body = { host: configuredSnapshotTarget.host, gpus: [], total: 0, compute_total: 0 };
+    } else if (options.instanceCreatePage === true && path === `/images/${configuredSnapshotTarget.host}`) {
+      const images = options.instanceCreateImage ? [options.instanceCreateImage] : [];
+      body = {
+        host: configuredSnapshotTarget.host,
+        project: configuredSnapshotTarget.project,
+        total: images.length,
+        images,
+      };
+    } else if (options.instanceCreatePage === true && path === "/images/remote") {
+      body = { images: [], total: 0 };
     } else if (path === "/nodes") {
       if (state.nodeError) {
         status = 503;
@@ -262,6 +323,19 @@ async function installApiFixtures(page, role, options = {}) {
       }
     } else if (path === "/instances/specifications") {
       body = tenantSpecifications({ empty: state.tenantEmpty });
+    } else if (path === "/tenant-access/my-access") {
+      body = {
+        access: [
+          {
+            cluster_id: "cluster-a",
+            project_name: "tenant-a",
+            instance_name: "tenant-owned-vm",
+            permissions: ["view", "operate", "console"],
+          },
+        ],
+        total_clusters: 1,
+        total_rules: 1,
+      };
     } else if (path === "/monitoring/dashboard") {
       body = monitoringDashboard();
     } else if (path === "/monitoring/history") {

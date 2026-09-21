@@ -15,6 +15,13 @@ import {
   VMInfo,
   VMCreateRequest,
   InstanceCreateRequest,
+  InstanceCreatePreflightResponse,
+  InstanceWritePolicy,
+  InstanceOperationJob,
+  InstanceSpecificationDetail,
+  InstanceSpecificationPreflightRequest,
+  InstanceSpecificationPreflightResponse,
+  InstanceSpecificationUpdateRequest,
   VMCreateResponse,
   VMActionRequest,
   VMActionResponse,
@@ -1179,11 +1186,86 @@ export interface RebuildPreflight {
 }
 
 export const instanceAPI = {
-  create: async (data: InstanceCreateRequest): Promise<VMCreateResponse> => {
-    return fetchAPI<VMCreateResponse>("/instances", {
+  getWritePolicy: async (host: string): Promise<InstanceWritePolicy> => {
+    return fetchUncachedRead<InstanceWritePolicy>(
+      withQuery("/instances/write-policy", { host }),
+      { fresh: true },
+    );
+  },
+
+  preflightCreate: async (
+    data: InstanceCreateRequest,
+  ): Promise<InstanceCreatePreflightResponse> => {
+    return fetchAPI<InstanceCreatePreflightResponse>("/instances/preflight", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  },
+
+  create: async (
+    data: InstanceCreateRequest,
+    idempotencyKey?: string,
+  ): Promise<VMCreateResponse> => {
+    return fetchAPI<VMCreateResponse>("/instances", {
+      method: "POST",
+      body: JSON.stringify(data),
+      ...(idempotencyKey
+        ? { headers: { "Idempotency-Key": idempotencyKey } }
+        : {}),
+    });
+  },
+
+  getOperation: async (jobId: string): Promise<InstanceOperationJob> => {
+    return fetchUncachedRead<InstanceOperationJob>(
+      `/instances/operations/${encodeURIComponent(jobId)}`,
+      { fresh: true },
+    );
+  },
+
+  getSpecification: async (
+    name: string,
+    host: string,
+    project = "default",
+  ): Promise<InstanceSpecificationDetail> => {
+    return fetchAPI<InstanceSpecificationDetail>(
+      withQuery(`/instances/${encodeURIComponent(name)}/specification`, {
+        host,
+        project,
+      }),
+      {},
+      undefined,
+      false,
+      { force: true },
+    );
+  },
+
+  preflightSpecification: async (
+    name: string,
+    data: InstanceSpecificationPreflightRequest,
+  ): Promise<InstanceSpecificationPreflightResponse> => {
+    return fetchAPI<InstanceSpecificationPreflightResponse>(
+      `/instances/${encodeURIComponent(name)}/specification/preflight`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+  },
+
+  updateSpecification: async (
+    name: string,
+    data: InstanceSpecificationUpdateRequest,
+    etag: string,
+    idempotencyKey: string,
+  ): Promise<InstanceOperationJob> => {
+    return fetchAPI<InstanceOperationJob>(
+      `/instances/${encodeURIComponent(name)}/specification`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+        headers: {
+          "If-Match": etag,
+          "Idempotency-Key": idempotencyKey,
+        },
+      },
+    );
   },
 
   specifications: async (

@@ -179,6 +179,41 @@ export interface VMCreateRequest {
 export interface InstanceCreateRequest extends Omit<VMCreateRequest, "image"> {
   image?: string;
   source_type?: "image" | "none";
+  /** Version of the server-side preflight plan this request was reviewed against. */
+  plan_revision?: string | null;
+  /** Explicit warnings the operator accepted. Currently only `networkless`. */
+  acknowledgements?: string[];
+}
+
+export interface InstanceCreateIssue {
+  code: string;
+  field?: string | null;
+  message: string;
+}
+
+export interface InstanceCreateWarning extends InstanceCreateIssue {
+  acknowledgement_required: boolean;
+}
+
+export interface InstanceCreatePreflightResponse {
+  ready: boolean;
+  plan_revision: string;
+  blockers: InstanceCreateIssue[];
+  warnings: InstanceCreateWarning[];
+  required_acknowledgements: string[];
+  effective: {
+    profiles: string[];
+    nic_names: string[];
+    root_device: string | null;
+  };
+}
+
+/** Actor-scoped write surface resolved by the server for one cluster. */
+export interface InstanceWritePolicy {
+  host: string;
+  mode: "full" | "safe" | "view_only";
+  can_edit_specifications: boolean;
+  can_use_advanced_create: boolean;
 }
 
 export interface GpuCardListResponse {
@@ -216,6 +251,127 @@ export interface VMCreateResponse {
   message: string;
   vm: VMInfo | null;
   operation_id: string | null;
+  /** Durable job identity. Optional while talking to an older backend. */
+  job_id?: string | null;
+  /** `unknown` still has a durable job and must be reconciled instead of resubmitted. */
+  status?: "accepted" | "unknown";
+}
+
+export type InstanceOperationPhase =
+  | "pending"
+  | "preflighting"
+  | "submitting"
+  | "stopping"
+  | "applying"
+  | "starting"
+  | "verifying";
+
+export type InstanceOperationStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failure"
+  | "partial"
+  | "unknown";
+
+export interface InstanceOperationJob {
+  job_id: string;
+  kind: "create" | "specification";
+  instance_name: string;
+  host: string;
+  project: string;
+  phase: InstanceOperationPhase | string;
+  status: InstanceOperationStatus;
+  operation_id: string | null;
+  /** All daemon operations involved, such as create then start. */
+  operation_ids?: string[];
+  error: string | null;
+  outcome?: "success" | "failure" | "partial" | null;
+  result: Record<string, unknown> | null;
+  verified_readback?: Record<string, unknown> | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export type EditableSpecificationSource = "instance" | "profile" | "default";
+
+export interface EditableResourceSpecification {
+  value: number | null;
+  source: EditableSpecificationSource;
+}
+
+export interface EditableMemorySpecification {
+  value_bytes: number | null;
+  source: EditableSpecificationSource;
+}
+
+export interface EditableRootDiskSpecification extends EditableMemorySpecification {
+  pool: string | null;
+  editable: boolean;
+  reason: string | null;
+}
+
+export interface InstanceSpecificationDetail {
+  instance_name: string;
+  host: string;
+  project: string;
+  type: string;
+  status: VMStatus;
+  cpu: EditableResourceSpecification;
+  memory: EditableMemorySpecification;
+  root_disk: EditableRootDiskSpecification;
+  capabilities: {
+    live_update: boolean;
+    restart_supported: boolean;
+  };
+  etag: string | null;
+}
+
+export interface InstanceSpecificationChange {
+  field: "cpu_count" | "memory_bytes" | "root_disk_bytes" | string;
+  before: number | null;
+  after: number | null;
+  source: EditableSpecificationSource | string;
+}
+
+export interface InstanceSpecificationNotice {
+  code: string;
+  message: string;
+  field?: string | null;
+}
+
+export interface InstanceSpecificationWarning extends InstanceSpecificationNotice {
+  requires_acknowledgement: boolean;
+}
+
+export interface InstanceSpecificationPreflightRequest {
+  host: string;
+  project?: string;
+  cpu_count?: number;
+  memory_bytes?: number;
+  root_disk_bytes?: number;
+}
+
+export interface InstanceSpecificationPreflightResponse {
+  instance_name: string;
+  host: string;
+  project: string;
+  status: VMStatus;
+  type: string;
+  etag: string | null;
+  plan_revision: string;
+  execution: "live" | "restart_required" | "stopped";
+  changes: InstanceSpecificationChange[];
+  warnings: InstanceSpecificationWarning[];
+  blockers: InstanceSpecificationNotice[];
+  required_acknowledgements: string[];
+}
+
+export interface InstanceSpecificationUpdateRequest
+  extends InstanceSpecificationPreflightRequest {
+  plan_revision: string;
+  apply_mode: "live_only" | "graceful_restart";
+  acknowledgements?: string[];
 }
 
 // VM Action Request

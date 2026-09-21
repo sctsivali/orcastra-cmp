@@ -27,6 +27,7 @@ interface DiskRowProps {
   isBlock: boolean;
   /** The notice under the disks header that explains a failed volume read. */
   volumeNoticeId?: string;
+  allowHostPath: boolean;
   onUpdate: (patch: Partial<DiskDevice>) => void;
   onRemove: () => void;
 }
@@ -41,6 +42,7 @@ export function DiskRow({
   volumeState,
   isBlock,
   volumeNoticeId,
+  allowHostPath,
   onUpdate,
   onRemove,
 }: DiskRowProps) {
@@ -56,7 +58,9 @@ export function DiskRow({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="volume">Custom volume</SelectItem>
-            {instanceType === "container" && <SelectItem value="host">Host path</SelectItem>}
+            {instanceType === "container" && allowHostPath && (
+              <SelectItem value="host">Host path</SelectItem>
+            )}
           </SelectContent>
         </Select>
         <div className="flex-1" />

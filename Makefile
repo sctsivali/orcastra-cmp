@@ -10,10 +10,21 @@ ifeq ($(DOCKER_COMPOSE),)
 	DOCKER_COMPOSE := docker compose
 endif
 
-# Load version from .env if exists, otherwise use default
+# Test and lint gates are hermetic and must not need deployment secrets just to let
+# GNU make parse their recipes. Load the local deployment environment only when at
+# least one requested goal can actually consume it.
+ENV_INDEPENDENT_GOALS := test-backend test-frontend lint-backend lint-frontend
+LOAD_LOCAL_ENV := 1
+ifneq ($(strip $(MAKECMDGOALS)),)
+ifeq ($(strip $(filter-out $(ENV_INDEPENDENT_GOALS),$(MAKECMDGOALS))),)
+    LOAD_LOCAL_ENV :=
+endif
+endif
+ifeq ($(LOAD_LOCAL_ENV),1)
 ifneq (,$(wildcard .env))
     include .env
     export
+endif
 endif
 APP_VERSION ?= unknown
 CONTAINER_PREFIX ?= dev-orcastra-dashboard
@@ -235,8 +246,9 @@ PYTEST ?= python3 -m pytest
 #
 # Unsetting the names rather than fixing the one that bit: any other quoted value is the same
 # defect waiting, and a test suite that reads the developer's deployment settings is not a test
-# suite. Names only; the values never leave .env.
-ENV_NAMES := $(shell sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\1/p' .env 2>/dev/null | sort -u)
+# suite. The public template is the source of variable names, so lint and test goals never need
+# to open the secret-bearing local file. Values are never read from either file.
+ENV_NAMES := $(shell sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\1/p' .env.example 2>/dev/null | sort -u)
 ENV_SCRUB := $(if $(ENV_NAMES),env $(foreach v,$(ENV_NAMES),-u $(v)),)
 
 test-backend: ## Run backend tests (host, in a scrubbed environment)
@@ -264,6 +276,8 @@ test-backend-docker: ## Run backend tests against the deployed image's dependenc
 test-frontend: ## Run the frontend checks that exist (typecheck + structural guards)
 	@echo "$(COLOR_GREEN)Typechecking frontend...$(COLOR_RESET)"
 	@cd frontend && npx tsc --noEmit
+	@echo "$(COLOR_GREEN)Checking instance specification and create workflows...$(COLOR_RESET)"
+	@node scripts/checks/check-instance-specification-workflow.mjs
 	@echo "$(COLOR_GREEN)Checking submit guards...$(COLOR_RESET)"
 	@node scripts/checks/check-submit-guards.mjs
 	@echo "$(COLOR_GREEN)Checking table scroll containers...$(COLOR_RESET)"

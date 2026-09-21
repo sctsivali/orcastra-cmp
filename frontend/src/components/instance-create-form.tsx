@@ -38,8 +38,10 @@ import { ProjectQuotaLine, quotaCheck } from "@/components/instance-create/quota
 import {
   fieldRefusalText,
   mapCreateError,
+  mapCreatePreflightBlockers,
   type CreateError,
 } from "@/components/instance-create/daemon-error";
+import { CreatePreflightDialog } from "@/components/instance-create/create-preflight-dialog";
 import {
   ProjectChangeNotice,
   projectChangeNotice,
@@ -93,6 +95,7 @@ import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import {
   useCreateInstance,
+  usePreflightInstanceCreate,
   useImagesByHost,
   useStoragePoolList,
   useProjects,
@@ -102,7 +105,9 @@ import {
   useNetworks,
   useProfile,
   useNodeGpus,
+  useInstanceWritePolicy,
 } from "@/hooks/use-lxd";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
@@ -110,8 +115,10 @@ import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
 import { safeRandomUUID } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { APIError } from "@/types/api";
 import type {
   InstanceCreateRequest,
+  InstanceCreatePreflightResponse,
   ImageInfo,
   StoragePoolInfo,
   StoragePoolListResponse,
@@ -125,6 +132,21 @@ import type {
   GPUCardInfo,
   RemoteImageInfo,
 } from "@/types/api";
+
+interface PendingCreateSubmission {
+  payload: InstanceCreateRequest;
+  /** Normalized tag intent paired with this exact payload, never read back from mutable form state. */
+  tags: string[];
+  /** Stable representation of the operator's form before plan fields are added. */
+  fingerprint: string;
+  idempotencyKey: string;
+  preflight: InstanceCreatePreflightResponse;
+}
+
+function isAmbiguousCreateError(error: unknown): boolean {
+  if (!(error instanceof APIError)) return true;
+  return error.status === 0 || error.status === 408 || error.status >= 500;
+}
 
 // A physical GPU passed through to the instance, identified by PCI address or id.
 type GpuDevice = {
@@ -222,8 +244,17 @@ function InstanceCreateFormContent() {
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const { scopeKey } = useActorQueryScope();
+  const { writeAvailability } = useReadOnlyMode();
+  const createDisabledReason = writeAvailability === "checking"
+    ? "Creating instances is disabled while system write availability is being checked."
+    : writeAvailability === "unavailable"
+      ? "Creating instances is unavailable because system settings could not be verified."
+      : writeAvailability === "read_only"
+        ? "Creating instances is disabled while the system is in read-only mode."
+        : undefined;
   const createInstance = useCreateInstance();
-  const isSubmitting = createInstance.isPending;
+  const preflightCreate = usePreflightInstanceCreate();
+  const isSubmitting = createInstance.isPending || preflightCreate.isPending;
   // important: `isSubmitting` is derived from the mutation's isPending, which only flips
   // after React re-renders. Two clicks landing in the same tick therefore both pass the
   // disabled check and each fire a create, provisioning two instances. This ref is the
@@ -242,11 +273,52 @@ function InstanceCreateFormContent() {
   const [form, setForm] = useState<FormState>(() => ({ ...DEFAULT_FORM, ...seedRef.current }));
   const [seedDropped, setSeedDropped] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const imageButtonRef = useRef<HTMLButtonElement>(null);
+  const configurationSectionRef = useRef<HTMLDivElement>(null);
+  const resourcesSectionRef = useRef<HTMLDivElement>(null);
+  const devicesErrorRef = useRef<HTMLDivElement>(null);
+  const storageSectionRef = useRef<HTMLDivElement>(null);
+  const storageInputRef = useRef<HTMLInputElement>(null);
+  const networkSectionRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   // A refusal the cluster tied to a field (a project limit), cleared when that field changes.
   const [fieldError, setFieldError] = useState<CreateError | null>(null);
   const [changeNotice, setChangeNotice] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
+  const [pendingSubmission, setPendingSubmission] =
+    useState<PendingCreateSubmission | null>(null);
+  const idempotencyRef = useRef<{ payload: string; key: string } | null>(null);
+  const ambiguousSubmissionRef = useRef<PendingCreateSubmission | null>(null);
+  const [hasAmbiguousSubmission, setHasAmbiguousSubmission] = useState(false);
+
+  const clearMatchingFieldError = (...fields: CreateError["field"][]) => {
+    setFieldError((current) => current?.field && fields.includes(current.field) ? null : current);
+  };
+
+  const focusCreateError = (mapped: CreateError) => {
+    if (!mapped.field) return;
+    window.requestAnimationFrame(() => {
+      const focusTarget = mapped.field === "name"
+        ? nameInputRef.current
+        : mapped.field === "image"
+          ? imageButtonRef.current
+          : mapped.field === "profiles"
+            ? configurationSectionRef.current
+            : mapped.field === "storage"
+              ? storageInputRef.current
+              : mapped.field === "network"
+                ? networkSectionRef.current
+                : mapped.field === "devices"
+                  ? devicesErrorRef.current
+                  : mapped.field === "instances"
+                    ? resourcesSectionRef.current
+                    : document.getElementById(`create-${mapped.field}`);
+      focusTarget?.focus({ preventScroll: true });
+      const reduceMotion = typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      focusTarget?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+    });
+  };
 
   // Inline tag editor helpers (write straight to form.tags).
   const addTag = (raw: string) => {
@@ -264,6 +336,34 @@ function InstanceCreateFormContent() {
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
   const nodeLabel = form.selectedNode ? nodePicker.labelOf(form.selectedNode) : undefined;
+  const writePolicy = useInstanceWritePolicy(form.selectedNode);
+  const canUseAdvancedCreate =
+    !writePolicy.isFetching &&
+    !writePolicy.isError &&
+    writePolicy.data?.host === form.selectedNode &&
+    writePolicy.data.mode === "full" &&
+    writePolicy.data.can_use_advanced_create === true;
+  const hadFullAdvancedPolicy =
+    writePolicy.data?.host === form.selectedNode &&
+    writePolicy.data.mode === "full" &&
+    writePolicy.data.can_use_advanced_create === true;
+  const policyMutationDisabledReason = hadFullAdvancedPolicy && writePolicy.isFetching
+    ? "Create is paused while the server rechecks the advanced write policy."
+    : hadFullAdvancedPolicy && writePolicy.isError
+      ? "Create is paused because the previously granted advanced write policy could not be verified. Reload or select the node again."
+      : undefined;
+  const submissionDisabledReason = createDisabledReason ?? policyMutationDisabledReason;
+  const submissionDisabledReasonRef = useRef(submissionDisabledReason);
+  submissionDisabledReasonRef.current = submissionDisabledReason;
+  const advancedPolicyMessage = !form.selectedNode
+    ? "Select a node to check which advanced controls are available."
+    : writePolicy.isFetching
+      ? "Checking the server policy. Safe typed controls remain available."
+      : writePolicy.isError
+        ? "Advanced controls are unavailable because the server policy could not be verified."
+        : canUseAdvancedCreate
+          ? null
+          : "Advanced host controls are unavailable for this cluster. Safe resource, network, volume, metadata, and cloud-init fields remain available.";
   // note: "No nodes found." is reserved for a read that answered with nothing. A read that
   // failed (a lost registry, a 429, a timeout) disables the picker and says why underneath,
   // because an empty list here used to be the only thing the operator saw.
@@ -431,20 +531,28 @@ function InstanceCreateFormContent() {
     label: `${v.name} (${v.pool})`,
   }));
 
-  const addDisk = () =>
+  const addDisk = () => {
+    clearMatchingFieldError("storage", "devices");
     setDisks((d) => [
       ...d,
       { id: safeRandomUUID(), kind: "volume", pool: defaultPool, source: "", path: "" },
     ]);
-  const updateDisk = (id: string, patch: Partial<DiskDevice>) =>
+  };
+  const updateDisk = (id: string, patch: Partial<DiskDevice>) => {
+    clearMatchingFieldError("storage", "devices");
     setDisks((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  const removeDisk = (id: string) =>
+  };
+  const removeDisk = (id: string) => {
+    clearMatchingFieldError("storage", "devices");
     setDisks((d) => d.filter((x) => x.id !== id));
+  };
 
   // A disk row is complete (host: source+path; volume: pool+volume, plus a path
   // unless it's a block volume which attaches as a raw device).
   const diskComplete = (d: DiskDevice) => {
-    if (d.kind === "host") return !!d.source.trim() && !!d.path.trim();
+    if (d.kind === "host") {
+      return canUseAdvancedCreate && !!d.source.trim() && !!d.path.trim();
+    }
     if (!d.pool || !d.source) return false;
     return volumeContentType(d.pool, d.source) === "block" ? true : !!d.path.trim();
   };
@@ -507,7 +615,8 @@ function InstanceCreateFormContent() {
 
   // Attach: pre-fill the first not-yet-overridden inherited NIC (so the common
   // action overrides eth0), else a fresh interface name.
-  const addNic = () =>
+  const addNic = () => {
+    clearMatchingFieldError("network", "devices");
     setNics((prev) => {
       const used = new Set(prev.map((x) => x.name.trim()));
       const inh = inheritedNics.find((i) => !used.has(i.name));
@@ -520,20 +629,27 @@ function InstanceCreateFormContent() {
         },
       ];
     });
+  };
   // Override a specific inherited NIC (adds an editable row pre-filled with it).
-  const overrideNic = (inh: { name: string; network: string }) =>
+  const overrideNic = (inh: { name: string; network: string }) => {
+    clearMatchingFieldError("network", "devices");
     setNics((prev) =>
       prev.some((x) => x.name.trim() === inh.name)
         ? prev
         : [
             ...prev,
             { id: safeRandomUUID(), network: inh.network, name: inh.name },
-          ],
+      ],
     );
-  const updateNic = (id: string, patch: Partial<NicDevice>) =>
+  };
+  const updateNic = (id: string, patch: Partial<NicDevice>) => {
+    clearMatchingFieldError("network", "devices");
     setNics((n) => n.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  const removeNic = (id: string) =>
+  };
+  const removeNic = (id: string) => {
+    clearMatchingFieldError("network", "devices");
     setNics((n) => n.filter((x) => x.id !== id));
+  };
 
   // Each NIC needs a network + interface name, and names must be unique.
   const nicNames = nics.map((n) => n.name.trim());
@@ -556,11 +672,12 @@ function InstanceCreateFormContent() {
     isLoading: loadingGpus,
     isError: gpusFailed,
     refetch: refetchGpus,
-  } = useNodeGpus(form.selectedNode);
+  } = useNodeGpus(canUseAdvancedCreate ? form.selectedNode : "");
   const availableGpus = gpusResp?.gpus ?? [];
   // Add a GPU from the node's detected list. The label and class travel with it so a wrong
   // pick is visible on the form before submit, without reopening the picker.
   const addGpuFromCard = (card: GPUCardInfo) => {
+    clearMatchingFieldError("devices");
     const identifier = gpuIdentifier(card);
     setGpus((g) => [
       ...g,
@@ -576,7 +693,8 @@ function InstanceCreateFormContent() {
     ]);
     setGpuPickerOpen(false);
   };
-  const addGpu = () =>
+  const addGpu = () => {
+    clearMatchingFieldError("devices");
     setGpus((g) => [
       ...g,
       {
@@ -587,18 +705,24 @@ function InstanceCreateFormContent() {
         gid: "",
       },
     ]);
-  const updateGpu = (id: string, patch: Partial<GpuDevice>) =>
+  };
+  const updateGpu = (id: string, patch: Partial<GpuDevice>) => {
+    clearMatchingFieldError("devices");
     setGpus((g) => g.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  const removeGpu = (id: string) =>
+  };
+  const removeGpu = (id: string) => {
+    clearMatchingFieldError("devices");
     setGpus((g) => g.filter((x) => x.id !== id));
+  };
 
   const gpuNames = gpus.map((g) => g.name.trim());
-  const gpusValid =
-    gpus.every(
+  const gpusValid = canUseAdvancedCreate
+    ? gpus.every(
       (g) =>
         !!g.name.trim() &&
         (g.identifyBy === "pci" ? !!g.pci.trim() : !!g.gid.trim()),
-    ) && new Set(gpuNames).size === gpuNames.length;
+    ) && new Set(gpuNames).size === gpuNames.length
+    : gpus.length === 0;
 
   // --- Advanced options (collapsible: security/snapshots/migration/boot/cloud-init)
   const ADV_DEFAULT = {
@@ -901,6 +1025,7 @@ function InstanceCreateFormContent() {
     setImageDialogOpen(true);
   };
   const selectImage = (row: ImageRow) => {
+    clearMatchingFieldError("image");
     setChangeNotice(null);
     setForm((prev) => ({
       ...prev,
@@ -930,7 +1055,7 @@ function InstanceCreateFormContent() {
   // A blank VM has no base image to pick, so it must not gate submit on one.
   // sourceType "none" now means "boot from ISO": an empty root disk plus a
   // required ISO (no bare blank VM). Kept named `bootFromIso` for clarity.
-  const bootFromIso = form.sourceType === "none";
+  const bootFromIso = form.sourceType === "none" && canUseAdvancedCreate;
   const requestedCpu = cpuValid ? parseInt(form.cpu.trim(), 10) : null;
   const requestedMemoryBytes = memoryValid
     ? parseLxdSize(`${form.memoryValue.trim()}${form.memoryUnit}`)
@@ -953,26 +1078,35 @@ function InstanceCreateFormContent() {
     cpuWithinLimit: !quota.cpuExceeds,
     memoryWithinLimit: !quota.memoryExceeds,
   });
-  const canSubmit = !isSubmitting && blockers.length === 0;
+  const canSubmit = !submissionDisabledReason && !isSubmitting && blockers.length === 0;
 
   // --- Field updates ----------------------------------------------------------
-  const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) =>
+  const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) => {
+    if (field === "selectedPool" || field === "storageValue" || field === "storageUnit") {
+      clearMatchingFieldError("storage");
+    } else if (field === "sourceType") {
+      clearMatchingFieldError("image");
+    }
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
 
   // Node changes which images/pools/projects are valid; type changes valid images.
   const selectNode = (node: string) =>
-    setForm((prev) => ({
-      ...prev,
-      selectedNode: node,
-      selectedImage: "",
-      imageServer: "",
-      imageLabel: "",
-      selectedIso: "",
-      selectedIsoPool: "",
-      selectedIsoLabel: "",
-      selectedPool: "",
-      selectedProject: "default",
-    }));
+    {
+      setFieldError(null);
+      setForm((prev) => ({
+        ...prev,
+        selectedNode: node,
+        selectedImage: "",
+        imageServer: "",
+        imageLabel: "",
+        selectedIso: "",
+        selectedIsoPool: "",
+        selectedIsoLabel: "",
+        selectedPool: "",
+        selectedProject: "default",
+      }));
+    };
   // Switching node invalidates volume/pool selections in attached disks.
   const selectNodeWithDisks = (node: string) => {
     selectNode(node);
@@ -982,6 +1116,7 @@ function InstanceCreateFormContent() {
   };
   // Host-path disks are container-only, so clear disks when the type changes.
   const selectType = (type: InstanceType) => {
+    setFieldError(null);
     setForm((prev) => ({
       ...prev,
       type,
@@ -1040,13 +1175,147 @@ function InstanceCreateFormContent() {
   }, [form.selectedProject, form.selectedImage, form.imageServer, loadingImages, imagesResp, imagesFailed, localFingerprints]);
 
   // --- Submit -----------------------------------------------------------------
+  const createAccepted = async (submission: PendingCreateSubmission) => {
+    const submittedName = submission.payload.name;
+    const submittedHost = submission.payload.host;
+    const submittedProject = submission.payload.project || "default";
+    const submittedType = submission.payload.instance_type === "virtual-machine"
+      ? "virtual-machine"
+      : "container";
+    const result = await createInstance.mutateAsync({
+      data: submission.payload,
+      idempotencyKey: submission.idempotencyKey,
+    });
+    if ((result.status === "accepted" || result.status === "unknown") && !result.job_id) {
+      throw new Error("The server accepted the create without a readable job identity.");
+    }
+    // The durable handoff comes first. Auxiliary tag sync must never strand an accepted job
+    // on the create form, and it must use the same immutable target snapshot as the POST.
+    addPendingCreate(scopeKey, {
+      name: submittedName,
+      host: submittedHost,
+      project: submittedProject,
+      type: submittedType,
+      jobId: result.job_id || undefined,
+      jobStatus: result.status === "unknown"
+        ? "unknown"
+        : result.job_id ? "pending" : undefined,
+      phase: result.status === "unknown"
+        ? "unknown"
+        : result.job_id ? "pending" : undefined,
+      status: result.status === "unknown" ? "Unknown" : "Pending",
+      error: result.status === "unknown"
+        ? "The cluster accepted the request, but its final state is still being reconciled."
+        : undefined,
+      operationId: result.operation_id || undefined,
+      description: "Creating instance",
+    });
+    idempotencyRef.current = null;
+    ambiguousSubmissionRef.current = null;
+    setHasAmbiguousSubmission(false);
+    setPendingSubmission(null);
+    toast({
+      title: result.status === "unknown" ? "Create outcome pending verification" : "Creating instance",
+      description:
+        result.message ||
+        `Creating ${submittedType === "virtual-machine" ? "VM" : "container"} "${submittedName}" on "${submittedHost}".`,
+    });
+    navigate("/inventory/instances");
+    if (submission.tags.length > 0) {
+      void api.tags.updateInstanceTags(
+        submittedHost,
+        submittedName,
+        [...submission.tags],
+        submittedProject,
+      ).catch((tagErr: unknown) => {
+        toast({
+          title: "Instance creating, but tags were not applied",
+          description: tagErr instanceof Error ? tagErr.message : "Failed to set tags",
+          variant: "destructive",
+        });
+      });
+    }
+  };
+
+  const confirmPreflight = async () => {
+    if (!pendingSubmission || submissionDisabledReasonRef.current || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    setError(null);
+    const submission: PendingCreateSubmission = {
+      ...pendingSubmission,
+      payload: {
+        ...pendingSubmission.payload,
+        acknowledgements: pendingSubmission.preflight.required_acknowledgements,
+      },
+    };
+    try {
+      await createAccepted({ ...submission });
+    } catch (err) {
+      if (isAmbiguousCreateError(err)) {
+        ambiguousSubmissionRef.current = submission;
+        setHasAmbiguousSubmission(true);
+        setError("The server response was interrupted. Retry this unchanged request to safely replay the same operation key.");
+        setFieldError(null);
+      } else {
+        idempotencyRef.current = null;
+        ambiguousSubmissionRef.current = null;
+        setHasAmbiguousSubmission(false);
+        const mapped = mapCreateError(err);
+        setError(mapped.message);
+        setFieldError(mapped.field ? mapped : null);
+        focusCreateError(mapped);
+      }
+      setPendingSubmission(null);
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  };
+
+  const retryAmbiguousCreate = async () => {
+    const submission = ambiguousSubmissionRef.current;
+    if (!submission || submissionDisabledReasonRef.current || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    setError(null);
+    try {
+      await createAccepted({ ...submission });
+    } catch (err) {
+      if (isAmbiguousCreateError(err)) {
+        setError("The server response was interrupted again. Retry still uses the original operation key.");
+      } else {
+        idempotencyRef.current = null;
+        ambiguousSubmissionRef.current = null;
+        setHasAmbiguousSubmission(false);
+        const mapped = mapCreateError(err);
+        setError(mapped.message);
+        setFieldError(mapped.field ? mapped : null);
+        focusCreateError(mapped);
+      }
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  };
+
   const submit = async (startAfterCreate: boolean) => {
     // Claim the slot before anything can await. A second click that arrives before the
     // first render carrying isSubmitting=true lands here and is dropped.
-    if (submitInFlightRef.current) return;
+    if (submissionDisabledReasonRef.current || submitInFlightRef.current) return;
     submitInFlightRef.current = true;
 
+    if (ambiguousSubmissionRef.current) {
+      setHasAmbiguousSubmission(true);
+      setError("This create may already be processing. Use Retry same request to preserve its exact operation key.");
+      submitInFlightRef.current = false;
+      return;
+    }
+
+    if (blockers.length > 0) {
+      setError("Review the required fields before creating this instance.");
+      submitInFlightRef.current = false;
+      return;
+    }
+
     setError(null);
+    setPendingSubmission(null);
 
     if (!resourcesValid) {
       setError("CPU, Memory and Storage must be positive whole numbers.");
@@ -1130,15 +1399,17 @@ function InstanceCreateFormContent() {
       devices[n.name.trim()] = device;
     });
     // GPU passthrough devices (physical), keyed by device name.
-    gpus.forEach((g) => {
-      devices[g.name.trim()] = {
-        type: "gpu",
-        gputype: "physical",
-        ...(g.identifyBy === "pci"
-          ? { pci: g.pci.trim() }
-          : { id: g.gid.trim() }),
-      };
-    });
+    if (canUseAdvancedCreate) {
+      gpus.forEach((g) => {
+        devices[g.name.trim()] = {
+          type: "gpu",
+          gputype: "physical",
+          ...(g.identifyBy === "pci"
+            ? { pci: g.pci.trim() }
+            : { id: g.gid.trim() }),
+        };
+      });
+    }
     // ISO boot media: attach the chosen ISO as a cdrom with a high boot.priority
     // so the VM boots the installer ahead of the empty root disk. (LXD: a higher
     // boot.priority wins; the root disk has none set.)
@@ -1157,25 +1428,27 @@ function InstanceCreateFormContent() {
     const setIf = (key: string, val: string) => {
       if (val && val.trim() !== "") advConfig[key] = val.trim();
     };
-    setIf("security.protection.delete", adv.secProtectDelete);
-    if (form.type === "container") {
-      setIf("security.privileged", adv.secPrivileged);
-      setIf("security.nesting", adv.secNesting);
-      setIf("security.protection.shift", adv.secProtectShift);
-      setIf("security.idmap.base", adv.secBaseHostId);
-      setIf("security.idmap.size", adv.secIdmapSize);
-      setIf("security.idmap.isolated", adv.secUniqueIdmap);
-    } else {
-      setIf("security.secureboot", adv.secSecureboot);
-      setIf("security.csm", adv.secCsm);
+    if (canUseAdvancedCreate) {
+      setIf("security.protection.delete", adv.secProtectDelete);
+      if (form.type === "container") {
+        setIf("security.privileged", adv.secPrivileged);
+        setIf("security.nesting", adv.secNesting);
+        setIf("security.protection.shift", adv.secProtectShift);
+        setIf("security.idmap.base", adv.secBaseHostId);
+        setIf("security.idmap.size", adv.secIdmapSize);
+        setIf("security.idmap.isolated", adv.secUniqueIdmap);
+      } else {
+        setIf("security.secureboot", adv.secSecureboot);
+        setIf("security.csm", adv.secCsm);
+      }
+      if (form.type === "vm") setIf("migration.stateful", adv.migStateful);
+      setIf("cluster.evacuate", adv.migEvacuate);
+      setIf("boot.autostart", adv.bootAutostart);
+      setIf("boot.autostart.delay", adv.bootAutostartDelay);
+      setIf("boot.autostart.priority", adv.bootAutostartPriority);
+      setIf("boot.host_shutdown_timeout", adv.bootHostShutdownTimeout);
+      setIf("boot.stop.priority", adv.bootStopPriority);
     }
-    if (form.type === "vm") setIf("migration.stateful", adv.migStateful);
-    setIf("cluster.evacuate", adv.migEvacuate);
-    setIf("boot.autostart", adv.bootAutostart);
-    setIf("boot.autostart.delay", adv.bootAutostartDelay);
-    setIf("boot.autostart.priority", adv.bootAutostartPriority);
-    setIf("boot.host_shutdown_timeout", adv.bootHostShutdownTimeout);
-    setIf("boot.stop.priority", adv.bootStopPriority);
     setIf("cloud-init.user-data", adv.ciUser);
     setIf("cloud-init.vendor-data", adv.ciVendor);
     setIf("cloud-init.network-config", adv.ciNetwork);
@@ -1195,7 +1468,7 @@ function InstanceCreateFormContent() {
         "limits.cpu": form.cpu.trim(),
         "limits.memory": `${form.memoryValue.trim()}${form.memoryUnit}`,
         // Memory swap and max processes are container-only in LXD.
-        ...(form.type === "container" && form.memorySwap
+        ...(form.type === "container" && canUseAdvancedCreate && form.memorySwap
           ? { "limits.memory.swap": form.memorySwap }
           : {}),
         ...(form.type === "container" && form.maxProcesses.trim()
@@ -1206,9 +1479,8 @@ function InstanceCreateFormContent() {
           : {}),
         // Set user.tags at creation so tags show immediately (the tag service's
         // LXD sync can't run while the instance is still provisioning). Both this
-        // and the updateInstanceTags call below consume form.tags, which is
-        // already normalized (lowercased/trimmed/deduped) in addTag, the single
-        // source of truth, so the two write paths can't drift.
+        // and the immutable post-accept tag snapshot come from this normalized
+        // (lowercased/trimmed/deduped) array, so the two write paths cannot drift.
         ...(form.tags.length ? { "user.tags": form.tags.join(",") } : {}),
         ...advConfig,
       },
@@ -1216,51 +1488,64 @@ function InstanceCreateFormContent() {
       start_on_create: startAfterCreate,
     };
 
+    const fingerprint = JSON.stringify(payload);
+    let attemptedSubmission: PendingCreateSubmission | null = null;
     try {
-      const result = await createInstance.mutateAsync(payload);
-      // Apply tags after the create is accepted. Tags live in the separate tag
-      // service keyed by (host, project, name), so they can be set before the
-      // instance finishes provisioning. Best-effort: a tag failure shouldn't
-      // block the create that already succeeded.
-      if (form.tags.length > 0) {
-        try {
-          await api.tags.updateInstanceTags(
-            form.selectedNode,
-            form.name,
-            form.tags,
-            form.selectedProject || "default",
-          );
-        } catch (tagErr) {
-          toast({
-            title: "Instance creating, but tags were not applied",
-            description:
-              tagErr instanceof Error ? tagErr.message : "Failed to set tags",
-            variant: "destructive",
-          });
-        }
+      const preview = await preflightCreate.mutateAsync(payload);
+      if (submissionDisabledReasonRef.current) {
+        setError(submissionDisabledReasonRef.current);
+        return;
       }
-      // Seed a pending-create entry so the instances list shows a live
-      // "Creating… <progress>" row driven by the operation-events stream.
-      addPendingCreate(scopeKey, {
-        name: form.name,
-        host: form.selectedNode,
-        project: form.selectedProject || "default",
-        type: wantedImageType,
-        operationId: (result as { operation_id?: string }).operation_id,
-        description: "Creating instance",
-      });
-      toast({
-        title: "Creating instance",
-        description:
-          result.message ||
-          `Creating ${form.type === "vm" ? "VM" : "container"} "${form.name}" on "${form.selectedNode}"` +
-            (startAfterCreate ? " (will start when ready)." : "."),
-      });
-      navigate("/inventory/instances");
+      if (preview.blockers.length > 0) {
+        const mapped = mapCreatePreflightBlockers(preview.blockers);
+        setError(mapped.message);
+        setFieldError(mapped.field ? mapped : null);
+        focusCreateError(mapped);
+        return;
+      }
+      if (!preview.ready && preview.required_acknowledgements.length === 0) {
+        setError("The create request is not ready. Review the selected image, storage, profiles, and devices.");
+        return;
+      }
+
+      if (!idempotencyRef.current || idempotencyRef.current.payload !== fingerprint) {
+        idempotencyRef.current = {
+          payload: fingerprint,
+          key: safeRandomUUID(),
+        };
+      }
+      const submission: PendingCreateSubmission = {
+        payload: {
+          ...payload,
+          plan_revision: preview.plan_revision,
+          acknowledgements: [],
+        },
+        tags: [...form.tags],
+        fingerprint,
+        idempotencyKey: idempotencyRef.current.key,
+        preflight: preview,
+      };
+      if (preview.warnings.length > 0 || preview.required_acknowledgements.length > 0) {
+        setPendingSubmission(submission);
+        return;
+      }
+      attemptedSubmission = submission;
+      await createAccepted(submission);
     } catch (err) {
-      const mapped = mapCreateError(err);
-      setError(mapped.message);
-      setFieldError(mapped.field ? mapped : null);
+      if (attemptedSubmission && isAmbiguousCreateError(err)) {
+        ambiguousSubmissionRef.current = attemptedSubmission;
+        setHasAmbiguousSubmission(true);
+        setError("The server response was interrupted. Retry this unchanged request to safely replay the same operation key.");
+        setFieldError(null);
+      } else {
+        idempotencyRef.current = null;
+        ambiguousSubmissionRef.current = null;
+        setHasAmbiguousSubmission(false);
+        const mapped = mapCreateError(err);
+        setError(mapped.message);
+        setFieldError(mapped.field ? mapped : null);
+        focusCreateError(mapped);
+      }
     } finally {
       // Released on the failure path so the operator can correct and retry. On success the
       // form has already navigated away, so this only tidies up the unmounting component.
@@ -1360,7 +1645,12 @@ function InstanceCreateFormContent() {
         )}
 
         {/* Main configuration */}
-        <Card>
+        <Card
+          ref={configurationSectionRef}
+          tabIndex={-1}
+          aria-invalid={fieldError?.field === "profiles" ? true : undefined}
+          aria-describedby={fieldError?.field === "profiles" ? "create-profiles-error" : undefined}
+        >
             <CardHeader>
               <CardTitle>Configuration</CardTitle>
             </CardHeader>
@@ -1418,12 +1708,22 @@ function InstanceCreateFormContent() {
                   id="name"
                   ref={nameInputRef}
                   value={form.name}
-                  onChange={(e) => updateField("name", e.target.value)}
+                  onChange={(e) => {
+                    if (fieldError?.field === "name") setFieldError(null);
+                    updateField("name", e.target.value);
+                  }}
                   placeholder="my-instance"
                   required
                   pattern="^[a-zA-Z][a-zA-Z0-9-]*$"
                   title="Must start with a letter and contain only letters, numbers, and hyphens"
+                  aria-invalid={fieldError?.field === "name" ? true : undefined}
+                  aria-describedby={fieldError?.field === "name" ? "create-name-error" : undefined}
                 />
+                {fieldError?.field === "name" && (
+                  <p id="create-name-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
+                  </p>
+                )}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="description">Description</Label>
@@ -1527,7 +1827,7 @@ function InstanceCreateFormContent() {
 
               {/* Operating system: install from an image, or create a blank VM
                   (empty disk) to install onto from an ISO later. VM-only. */}
-              {form.type === "vm" && (
+              {form.type === "vm" && canUseAdvancedCreate && (
                 <div className="grid gap-2">
                   <Label className="flex items-center gap-2">
                     <HardDriveDownload className="h-4 w-4" />
@@ -1638,11 +1938,14 @@ function InstanceCreateFormContent() {
                     Base image *
                   </Label>
                   <Button
+                    ref={imageButtonRef}
                     type="button"
                     variant="outline"
                     className="justify-start font-normal"
                     onClick={openImageDialog}
                     disabled={!form.selectedNode || imagesLoading}
+                    aria-invalid={fieldError?.field === "image" ? true : undefined}
+                    aria-describedby={fieldError?.field === "image" ? "create-image-error" : undefined}
                   >
                     {form.imageLabel ||
                       (!form.selectedNode
@@ -1655,22 +1958,40 @@ function InstanceCreateFormContent() {
                     Browse Local, Custom (images.lxd.canonical.com) and Ubuntu
                     images. Remote images are pulled on creation.
                   </p>
+                  {fieldError?.field === "image" && (
+                    <p id="create-image-error" className="text-xs text-destructive">
+                      {fieldRefusalText(fieldError)}
+                    </p>
+                  )}
                 </div>
+              )}
+              {fieldError?.field === "profiles" && (
+                <p id="create-profiles-error" className="text-xs text-destructive">
+                  {fieldRefusalText(fieldError)}
+                </p>
               )}
             </CardContent>
           </Card>
 
         {/* Resources */}
-        <Card>
+        <Card
+          ref={resourcesSectionRef}
+          tabIndex={-1}
+          aria-invalid={fieldError?.field === "instances" ? true : undefined}
+          aria-describedby={fieldError?.field === "instances" ? "create-instances-error" : undefined}
+        >
             <CardHeader>
               <CardTitle>Resources</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Label
+                  htmlFor="create-cpu"
+                  className="flex items-center gap-2 text-sm font-normal text-muted-foreground"
+                >
                   <Cpu className="h-4 w-4" />
                   CPU Cores
-                </div>
+                </Label>
                 <Input
                   id="create-cpu"
                   type="number"
@@ -1684,11 +2005,13 @@ function InstanceCreateFormContent() {
                   placeholder="e.g. 2"
                   aria-invalid={(!cpuValid && form.cpu.trim() !== "") || quota.cpuExceeds || fieldError?.field === "cpu"}
                   aria-describedby={
-                    quota.cpuExceeds || fieldError?.field === "cpu" ? "create-cpu-error" : undefined
+                    (!cpuValid && form.cpu.trim() !== "") || quota.cpuExceeds || fieldError?.field === "cpu"
+                      ? "create-cpu-error"
+                      : undefined
                   }
                 />
                 {!cpuValid && form.cpu.trim() !== "" ? (
-                  <p className="text-xs text-destructive">
+                  <p id="create-cpu-error" className="text-xs text-destructive">
                     Must be a positive whole number.
                   </p>
                 ) : fieldError?.field === "cpu" ? (
@@ -1703,10 +2026,13 @@ function InstanceCreateFormContent() {
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Label
+                  htmlFor="create-memory"
+                  className="flex items-center gap-2 text-sm font-normal text-muted-foreground"
+                >
                   <MemoryStick className="h-4 w-4" />
                   Memory
-                </div>
+                </Label>
                 <div className="flex gap-2">
                   <Input
                     id="create-memory"
@@ -1726,7 +2052,9 @@ function InstanceCreateFormContent() {
                       fieldError?.field === "memory"
                     }
                     aria-describedby={
-                      quota.memoryExceeds || fieldError?.field === "memory" ? "create-memory-error" : undefined
+                      (!memoryValid && form.memoryValue.trim() !== "") || quota.memoryExceeds || fieldError?.field === "memory"
+                        ? "create-memory-error"
+                        : undefined
                     }
                   />
                   <Select
@@ -1746,7 +2074,7 @@ function InstanceCreateFormContent() {
                   </Select>
                 </div>
                 {!memoryValid && form.memoryValue.trim() !== "" ? (
-                  <p className="text-xs text-destructive">
+                  <p id="create-memory-error" className="text-xs text-destructive">
                     Must be a positive whole number.
                   </p>
                 ) : fieldError?.field === "memory" ? (
@@ -1769,9 +2097,14 @@ function InstanceCreateFormContent() {
                   check={quota}
                 />
               )}
+              {fieldError?.field === "instances" && (
+                <p id="create-instances-error" className="text-xs text-destructive">
+                  {fieldRefusalText(fieldError)}
+                </p>
+              )}
 
               {/* Memory swap, containers only */}
-              {form.type === "container" && (
+              {form.type === "container" && canUseAdvancedCreate && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <MemoryStick className="h-4 w-4" />
@@ -1844,27 +2177,62 @@ function InstanceCreateFormContent() {
             </CardContent>
           </Card>
 
+        {fieldError?.field === "devices" && (
+          <div
+            ref={devicesErrorRef}
+            id="create-devices-error"
+            tabIndex={-1}
+            role="alert"
+            className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+          >
+            {fieldRefusalText(fieldError)} Review the attached storage, network, and GPU devices.
+          </div>
+        )}
+
         {/* Storage */}
-        <Card>
+        <Card
+          ref={storageSectionRef}
+          tabIndex={-1}
+          aria-invalid={fieldError?.field === "storage" ? true : undefined}
+          aria-describedby={fieldError?.field === "storage" ? "create-storage-error" : undefined}
+        >
             <CardHeader>
               <CardTitle>Storage</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Label
+                  htmlFor="create-storage"
+                  className="flex items-center gap-2 text-sm font-normal text-muted-foreground"
+                >
                   <HardDrive className="h-4 w-4" />
                   Storage
-                </div>
+                </Label>
                 <div className="flex gap-2">
                   <Input
+                    ref={storageInputRef}
+                    id="create-storage"
                     type="number"
                     min={1}
                     step={1}
                     value={form.storageValue}
-                    onChange={(e) => updateField("storageValue", e.target.value)}
+                    onChange={(e) => {
+                      if (fieldError?.field === "storage") {
+                        setFieldError(null);
+                      }
+                      updateField("storageValue", e.target.value);
+                    }}
                     placeholder="e.g. 20"
                     className="flex-1"
-                    aria-invalid={!storageValid && form.storageValue.trim() !== ""}
+                    aria-invalid={
+                      (!storageValid && form.storageValue.trim() !== "") ||
+                      fieldError?.field === "storage"
+                    }
+                    aria-describedby={
+                      (!storageValid && form.storageValue.trim() !== "") || fieldError?.field === "storage"
+                        ? "create-storage-error"
+                        : undefined
+                    }
                   />
                   <Select
                     value={form.storageUnit}
@@ -1883,8 +2251,13 @@ function InstanceCreateFormContent() {
                   </Select>
                 </div>
                 {!storageValid && form.storageValue.trim() !== "" && (
-                  <p className="text-xs text-destructive">
+                  <p id="create-storage-error" className="text-xs text-destructive">
                     Must be a positive whole number.
+                  </p>
+                )}
+                {fieldError?.field === "storage" && (
+                  <p id="create-storage-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
                   </p>
                 )}
               </div>
@@ -1935,7 +2308,7 @@ function InstanceCreateFormContent() {
                 {disks.length === 0 && (
                   <p className="text-xs text-muted-foreground">
                     Attach existing custom volumes
-                    {form.type === "container" ? " or host paths" : ""} as extra
+                    {form.type === "container" && canUseAdvancedCreate ? " or host paths" : ""} as extra
                     disks (optional).
                   </p>
                 )}
@@ -1964,6 +2337,7 @@ function InstanceCreateFormContent() {
                       volumeState={volumeStateFor(disk, poolVolumes)}
                       isBlock={volumeContentType(disk.pool, disk.source) === "block"}
                       volumeNoticeId="create-volumes-notice"
+                      allowHostPath={canUseAdvancedCreate}
                       onUpdate={(patch) => updateDisk(disk.id, patch)}
                       onRemove={() => removeDisk(disk.id)}
                     />
@@ -1974,7 +2348,12 @@ function InstanceCreateFormContent() {
           </Card>
 
         {/* Network */}
-        <Card>
+        <Card
+          ref={networkSectionRef}
+          tabIndex={-1}
+          aria-invalid={fieldError?.field === "network" ? true : undefined}
+          aria-describedby={fieldError?.field === "network" ? "create-network-error" : undefined}
+        >
             <CardHeader>
               <CardTitle>Network</CardTitle>
             </CardHeader>
@@ -2068,12 +2447,17 @@ function InstanceCreateFormContent() {
                     Each interface needs a network and a unique name.
                   </p>
                 )}
+                {fieldError?.field === "network" && (
+                  <p id="create-network-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
 
-        {/* GPU passthrough */}
-        <Card>
+        {/* Physical passthrough is exposed only when the server authorizes the full surface. */}
+        {canUseAdvancedCreate && <Card>
             <CardHeader>
               <CardTitle>GPU Passthrough</CardTitle>
             </CardHeader>
@@ -2190,14 +2574,14 @@ function InstanceCreateFormContent() {
                 )}
               </div>
             </CardContent>
-          </Card>
+          </Card>}
 
         {/* Advanced Options (collapsible) */}
         <Card>
           <Collapsible open={advOpen} onOpenChange={setAdvOpen}>
             <CollapsibleTrigger asChild>
               <CardHeader className="cursor-pointer flex-row items-center justify-between space-y-0">
-                <CardTitle>Advanced Options</CardTitle>
+                <CardTitle>{canUseAdvancedCreate ? "Advanced Options" : "Cloud-Init"}</CardTitle>
                 <ChevronDown
                   className={`h-5 w-5 transition-transform ${advOpen ? "rotate-180" : ""}`}
                 />
@@ -2205,6 +2589,13 @@ function InstanceCreateFormContent() {
             </CollapsibleTrigger>
             <CollapsibleContent>
               <CardContent className="space-y-8">
+                {advancedPolicyMessage && (
+                  <Alert>
+                    <AlertDescription>{advancedPolicyMessage}</AlertDescription>
+                  </Alert>
+                )}
+                {canUseAdvancedCreate && (
+                  <>
                 {/* Security policies */}
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Security Policies</h3>
@@ -2277,6 +2668,8 @@ function InstanceCreateFormContent() {
                     {advText("Stop priority", "bootStopPriority", "0", "number")}
                   </div>
                 </section>
+                  </>
+                )}
 
                 {/* Cloud init */}
                 <section className="space-y-3">
@@ -2296,8 +2689,28 @@ function InstanceCreateFormContent() {
 
         {error && (
           <Alert variant="destructive" role="alert">
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription className="space-y-2">
+              <p>{error}</p>
+              {hasAmbiguousSubmission && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void retryAmbiguousCreate()}
+                  disabled={isSubmitting || !!submissionDisabledReason}
+                >
+                  {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Retry same request
+                </Button>
+              )}
+            </AlertDescription>
           </Alert>
+        )}
+
+        {submissionDisabledReason && (
+          <p id="create-disabled-reason" className="text-sm text-muted-foreground" role="status">
+            {submissionDisabledReason}
+          </p>
         )}
 
         <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
@@ -2315,15 +2728,15 @@ function InstanceCreateFormContent() {
               type="button"
               variant="outline"
               onClick={() => submit(false)}
-              disabled={!canSubmit}
-              aria-describedby={blockers.length ? "create-blockers" : undefined}
+              disabled={!canSubmit || hasAmbiguousSubmission}
+              aria-describedby={submissionDisabledReason ? "create-disabled-reason" : blockers.length ? "create-blockers" : undefined}
             >
               Create
             </Button>
             <Button
               type="submit"
-              disabled={!canSubmit}
-              aria-describedby={blockers.length ? "create-blockers" : undefined}
+              disabled={!canSubmit || hasAmbiguousSubmission}
+              aria-describedby={submissionDisabledReason ? "create-disabled-reason" : blockers.length ? "create-blockers" : undefined}
             >
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create &amp; Start
@@ -2332,7 +2745,16 @@ function InstanceCreateFormContent() {
         </div>
       </form>
 
-      <GpuPickerDialog
+      <CreatePreflightDialog
+        open={!!pendingSubmission}
+        preflight={pendingSubmission?.preflight ?? null}
+        busy={createInstance.isPending}
+        disabledReason={submissionDisabledReason}
+        onCancel={() => setPendingSubmission(null)}
+        onConfirm={() => void confirmPreflight()}
+      />
+
+      {canUseAdvancedCreate && <GpuPickerDialog
         open={gpuPickerOpen}
         onOpenChange={setGpuPickerOpen}
         nodeName={form.selectedNode}
@@ -2345,7 +2767,7 @@ function InstanceCreateFormContent() {
           addGpu();
           setGpuPickerOpen(false);
         }}
-      />
+      />}
 
       {/* Select base image dialog: Local + Custom + Ubuntu catalogs */}
       <Dialog open={imageDialogOpen} onOpenChange={setImageDialogOpen}>

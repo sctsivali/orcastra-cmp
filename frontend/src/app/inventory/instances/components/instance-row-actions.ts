@@ -1,4 +1,4 @@
-import { Copy, Monitor, Play, RefreshCw, RotateCw, Square, Terminal, Trash2 } from "lucide-react";
+import { Copy, Monitor, Play, RefreshCw, RotateCw, SlidersHorizontal, Square, Terminal, Trash2 } from "lucide-react";
 import type { RowAction } from "@/components/ui/row-actions";
 import type { VMInfo } from "@/types/api";
 import { actionKey, type InstanceAction } from "./use-instance-actions";
@@ -18,6 +18,8 @@ const IN_PROGRESS: Record<InstanceAction | "delete", string> = {
 export interface InstanceRowActionsInput {
   instance: Pick<VMInfo, "name" | "host" | "project" | "status" | "type">;
   isReadOnly: boolean;
+  /** Fail-closed reason while global write availability is not established. */
+  writeDisabledReason?: string;
   /** Partner and above. The backend refuses copy, rebuild and delete below that. */
   canManage: boolean;
   /** Keys of the lifecycle actions in flight (actionKey), from useInstanceActions. */
@@ -30,6 +32,7 @@ export interface InstanceRowActionsInput {
   onRestart: () => void;
   onTerminal: () => void;
   onConsole: () => void;
+  onEditSpecification: () => void;
   onCopy: () => void;
   onRebuild: () => void;
   onDelete: () => void;
@@ -44,10 +47,10 @@ export interface InstanceRowActionsInput {
  * a greyed button: pending beats read-only, which beats the permission answer.
  */
 export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] {
-  const { instance, isReadOnly, canManage, pendingActions, deletePending, permissionReason } = input;
+  const { instance, isReadOnly, writeDisabledReason, canManage, pendingActions, deletePending, permissionReason } = input;
   const project = instance.project || "default";
   const running = instance.status === "Running";
-  const readOnly = isReadOnly ? READ_ONLY_REASON : undefined;
+  const readOnly = writeDisabledReason ?? (isReadOnly ? READ_ONLY_REASON : undefined);
 
   const lifecycle = (action: InstanceAction): Pick<RowAction, "pending" | "unavailableReason"> => {
     const pending = pendingActions.has(actionKey(instance.host, project, instance.name, action));
@@ -75,7 +78,15 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
 
   if (canManage) {
     actions.push(
-      { id: "copy", label: "Copy Instance", icon: Copy, onSelect: input.onCopy, separatorBefore: true, unavailableReason: manage },
+      {
+        id: "edit-specification",
+        label: "Edit Specifications",
+        icon: SlidersHorizontal,
+        onSelect: input.onEditSpecification,
+        separatorBefore: true,
+        unavailableReason: manage,
+      },
+      { id: "copy", label: "Copy Instance", icon: Copy, onSelect: input.onCopy, unavailableReason: manage },
       { id: "rebuild", label: "Rebuild Instance", icon: RefreshCw, onSelect: input.onRebuild, unavailableReason: manage },
       {
         id: "delete",

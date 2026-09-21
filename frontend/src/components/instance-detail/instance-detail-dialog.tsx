@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+import { SlidersHorizontal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { useInstance, useInstanceMetrics } from "@/hooks/use-lxd";
 import { InstanceOverviewTab } from "./instance-overview-tab";
@@ -23,6 +25,10 @@ export interface InstanceDetailDialogProps {
   hydrateDetail?: boolean;
   /** Lets a cell open straight to the panel it is about, ex; the root-disk cell to Devices. */
   defaultTab?: InstanceDetailTab;
+  /** Partner+ action. Authorization is still enforced by the backend. */
+  canEditSpecification?: boolean;
+  editSpecificationDisabledReason?: string;
+  onEditSpecification?: () => void;
 }
 
 // Replaces instance-monitoring-modal, which showed live metrics and nothing else while the row
@@ -35,6 +41,9 @@ export function InstanceDetailDialog({
   project = "default",
   hydrateDetail = false,
   defaultTab = "overview",
+  canEditSpecification = false,
+  editSpecificationDisabledReason,
+  onEditSpecification,
 }: InstanceDetailDialogProps) {
   const [tab, setTab] = React.useState<string>(defaultTab);
   const pageVisible = useDocumentVisible();
@@ -118,6 +127,25 @@ export function InstanceDetailDialog({
       defaultTab={defaultTab}
       isLoading={hydrateDetail && isLoadingDetail && !fetched}
       size="2xl"
+      footer={
+        canEditSpecification && onEditSpecification ? (
+          <div className="flex w-full flex-wrap items-center justify-end gap-2">
+            {editSpecificationDisabledReason && (
+              <span className="text-xs text-muted-foreground sm:mr-auto">
+                {editSpecificationDisabledReason}
+              </span>
+            )}
+            <Button
+              size="sm"
+              onClick={onEditSpecification}
+              disabled={!!editSpecificationDisabledReason}
+            >
+              <SlidersHorizontal className="mr-2 h-4 w-4" aria-hidden="true" />
+              Edit specifications
+            </Button>
+          </div>
+        ) : undefined
+      }
       tabs={[
         {
           value: "overview",

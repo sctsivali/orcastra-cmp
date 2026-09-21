@@ -112,7 +112,12 @@ export function readCreateSeed(params: URLSearchParams | null): Partial<SeededFi
 
   const rawType = params.get(CREATE_PARAM.type);
   const type: SeedInstanceType = rawType === "vm" ? "vm" : "container";
-  const seeded: Partial<SeededFields> = { selectedNode: node, type };
+  const project = (params.get(CREATE_PARAM.project) || "").trim();
+  const seeded: Partial<SeededFields> = {
+    selectedNode: node,
+    type,
+    ...(PROJECT_NAME.test(project) ? { selectedProject: project } : {}),
+  };
 
   const source = params.get(CREATE_PARAM.source);
 
@@ -135,7 +140,6 @@ export function readCreateSeed(params: URLSearchParams | null): Partial<SeededFi
   if (!FINGERPRINT.test(image)) return seeded;
   // The store the row came from. A malformed name is dropped rather than sent on, and the
   // form checks the project exists on the node before trusting the pick.
-  const project = (params.get(CREATE_PARAM.project) || "").trim();
   return {
     ...seeded,
     sourceType: "image",

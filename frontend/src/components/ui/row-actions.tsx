@@ -70,6 +70,7 @@ interface RowActionsProps {
  */
 export function RowActions({ actions, triggerLabel, className }: RowActionsProps) {
   const [open, setOpen] = React.useState(false);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
 
   if (actions.length === 0) return null;
 
@@ -77,6 +78,7 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button
+          ref={triggerRef}
           variant="ghost"
           size="sm"
           aria-label={triggerLabel}
@@ -110,6 +112,9 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
                   e.preventDefault();
                   if (unavailable) return;
                   setOpen(false);
+                  // A dialog opened from a menu needs a connected return target. The menu item
+                  // unmounts on select, while this row trigger remains stable.
+                  triggerRef.current?.focus({ preventScroll: true });
                   action.onSelect();
                 }}
               >

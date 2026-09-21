@@ -63,6 +63,7 @@ import { INSTANCES, InstancesTable } from "./components/instances-table";
 
 import { useInstanceActions } from "./components/use-instance-actions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { InstanceSpecificationDialog } from "@/components/instance-specification/instance-specification-dialog";
 
 function InstancesContent() {
   const { scopeKey } = useActorQueryScope();
@@ -99,7 +100,10 @@ function InstancesContent() {
     name: string;
     project?: string;
     createdAt: number;
+    jobId?: string;
+    jobStatus?: string;
   }) =>
+    (!p.jobId || p.jobStatus === "success") &&
     dataUpdatedAt > p.createdAt &&
     instances.some(
       (i: any) =>
@@ -128,7 +132,12 @@ function InstancesContent() {
   // One tick while a live placeholder is on screen, and nothing when the list is quiet.
   const [, forceStaleCheck] = useState(0);
   const hasLivePlaceholder = visiblePendingCreates.some(
-    (p) => p.status !== "Error" && !isStalePending(p),
+    (p) =>
+      p.status !== "Error" &&
+      p.jobStatus !== "failure" &&
+      p.jobStatus !== "partial" &&
+      p.jobStatus !== "unknown" &&
+      !isStalePending(p),
   );
   useEffect(() => {
     if (!hasLivePlaceholder) return;
@@ -145,6 +154,7 @@ function InstancesContent() {
   const actions = useInstanceActions({ refetch });
   const {
     isReadOnly,
+    writeDisabledReason,
     deleteTarget,
     setDeleteTarget,
     rebuildTarget,
@@ -160,6 +170,7 @@ function InstancesContent() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
+  const [specificationTarget, setSpecificationTarget] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
   const [selectionActorScope, setSelectionActorScope] = useState(scopeKey);
   const selectionIsCurrent = selectionActorScope === scopeKey;
@@ -177,6 +188,7 @@ function InstancesContent() {
   useEffect(() => {
     setSelectionActorScope(scopeKey);
     setSelectedInstance(null);
+    setSpecificationTarget(null);
     setIsMonitoringModalOpen(false);
   }, [scopeKey]);
 
@@ -305,8 +317,8 @@ function InstancesContent() {
             {canCreateInstance && (
               <Button
                 onClick={() => navigate("/inventory/instances/create")}
-                disabled={isReadOnly}
-                title={isReadOnly ? "Action disabled in read-only mode" : "Create a new instance"}
+                disabled={!!writeDisabledReason}
+                title={writeDisabledReason ?? "Create a new instance"}
               >
                 <Plus className="h-4 w-4 mr-2" />
                 New Instance
@@ -333,9 +345,15 @@ function InstancesContent() {
             onAction={actions.handleAction}
             pendingActions={actions.pendingActions}
             isReadOnly={isReadOnly}
+            writeDisabledReason={writeDisabledReason}
             permissionReason={permissionReason}
             canDeleteInstance={canDeleteInstance}
             deletePending={actions.deletePending}
+            onEditSpecification={(instance) => {
+              setIsMonitoringModalOpen(false);
+              setSelectedInstance(null);
+              setSpecificationTarget(instance);
+            }}
             onCopy={setCopyTarget}
             onRebuild={setRebuildTarget}
             onDelete={setDeleteTarget}
@@ -359,7 +377,36 @@ function InstancesContent() {
           setSelectedInstance(null);
         }}
         project={currentSelectedInstance?.project || "default"}
+        canEditSpecification={canDeleteInstance}
+        editSpecificationDisabledReason={
+          currentSelectedInstance
+            ? writeDisabledReason
+              ? writeDisabledReason
+              : permissionReason(
+                  currentSelectedInstance.host,
+                  currentSelectedInstance.project || "default",
+                  currentSelectedInstance.name,
+                  "operate",
+                )
+            : undefined
+        }
+        onEditSpecification={() => {
+          if (!currentSelectedInstance) return;
+          setSpecificationTarget(currentSelectedInstance);
+        }}
       />
+
+      {specificationTarget && (
+        <InstanceSpecificationDialog
+          instance={specificationTarget}
+          open={!!specificationTarget}
+          onOpenChange={(open) => {
+            if (!open) setSpecificationTarget(null);
+          }}
+          onDone={() => void refetch()}
+          writeDisabledReason={writeDisabledReason}
+        />
+      )}
 
       {/* Copy elsewhere (shared across rows, controlled by copyTarget) */}
       {copyTarget && (
