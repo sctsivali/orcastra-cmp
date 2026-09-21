@@ -27,6 +27,11 @@ PROJECT = "partner-owned"
 NAME = "project-vm"
 
 
+class _DB:
+    async def commit(self):
+        return None
+
+
 @pytest.fixture(autouse=True)
 def isolated_create_executor(monkeypatch):
     pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="test_lxd_create")
@@ -36,7 +41,34 @@ def isolated_create_executor(monkeypatch):
     async def exclusive_policy(user, host, db):
         return ClusterWritePolicy(host, Role.PARTNER, ClusterOwnership.EXCLUSIVE)
 
+    async def effective_payload(request, _service):
+        config = dict(request.config or {})
+        if request.cloud_init:
+            config["user.user-data"] = request.cloud_init
+        return SimpleNamespace(
+            effective_config=config,
+            effective_devices=request.devices or {},
+            target_project_config={},
+        )
+
+    async def target_organization(_db, *, cluster_id, project):
+        return SimpleNamespace(
+            organization_id=1,
+            organization_slug="partner",
+            resolution="exact",
+        )
+
+    async def create_job(**_kwargs):
+        return SimpleNamespace(job_id="legacy-create-job"), True
+
+    async def completed_job(_job_id):
+        return SimpleNamespace(status="success", error=None)
+
     monkeypatch.setattr(vms, "resolve_cluster_write_policy", exclusive_policy)
+    monkeypatch.setattr(vms, "_legacy_effective_payload", effective_payload)
+    monkeypatch.setattr(vms, "resolve_instance_job_organization", target_organization)
+    monkeypatch.setattr(vms, "create_operation_job", create_job)
+    monkeypatch.setattr(vms, "get_operation_job", completed_job)
     try:
         yield
     finally:
@@ -84,9 +116,16 @@ async def test_post_vms_forwards_the_authorized_project_and_audits_it(monkeypatc
         def get_node_names(self):
             return [HOST]
 
-        async def create_vm(self, **kwargs):
+        async def create_instance(self, **kwargs):
             seen.append(kwargs)
-            return _vm(kwargs["project"])
+            return "operation-1"
+
+        async def get_vm(self, name, host, project):
+            assert (name, host) == (NAME, HOST)
+            return _vm(project)
+
+        async def fail_create_job(self, *args, **kwargs):
+            pytest.fail("successful create must not fail its durable job")
 
     monkeypatch.setattr(vms, "activity_logger", activity)
 
@@ -99,7 +138,7 @@ async def test_post_vms_forwards_the_authorized_project_and_audits_it(monkeypatc
         ),
         lxd_service=Service(),
         _rbac=SimpleNamespace(email="partner@example.test"),
-        db=object(),
+        db=_DB(),
     )
 
     assert seen[0]["project"] == PROJECT
@@ -445,11 +484,14 @@ async def test_post_vms_maps_executor_pressure_to_503(monkeypatch, partner_proje
         def get_node_names(self):
             return [HOST]
 
-        async def create_vm(self, **kwargs):
+        async def create_instance(self, **kwargs):
             try:
                 raise blocking_error
             except (BlockingTimeout, BlockingPoolFull) as exc:
                 raise LXDOperationError("VM creation is temporarily unavailable") from exc
+
+        async def fail_create_job(self, *_args, **_kwargs):
+            return None
 
     monkeypatch.setattr(vms, "activity_logger", activity)
 
@@ -463,8 +505,9 @@ async def test_post_vms_maps_executor_pressure_to_503(monkeypatch, partner_proje
             ),
             lxd_service=Service(),
             _rbac=SimpleNamespace(email="partner@example.test"),
-            db=object(),
+            db=_DB(),
         )
 
     assert caught.value.status_code == 503
-    assert activity.entries[-1]["error_code"] == "LXD_CREATE_TEMPORARILY_UNAVAILABLE"
+    assert activity.entries[-1]["action"] == "instance.create"
+    assert activity.entries[-1]["result"] == "accepted"

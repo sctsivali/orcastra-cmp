@@ -4,13 +4,19 @@ Provides endpoints for listing, creating, and managing VMs across LXD nodes.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Any, Mapping, Optional
+from typing import Optional
+import asyncio
+import hashlib
+import json
 import logging
+import secrets
+from urllib.parse import urlparse
 
 from app.models.schemas import (
     VMListResponse,
     VMInfo,
     VMCreateRequest,
+    InstanceCreateRequest,
     VMCreateResponse,
     VMActionRequest,
     VMActionResponse,
@@ -27,6 +33,7 @@ from app.services.lxd_service import (
 )
 from app.core.single_flight import single_flight
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
+from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.database import get_db
 from app.core.org_scope import (
@@ -52,6 +59,18 @@ from app.services.instance_security_policy import (
     validate_instance_payload,
     validate_target_project_isolation,
 )
+from app.services.instance_job_identity import resolve_instance_job_organization
+from app.services.instance_specifications import (
+    SpecificationConflict,
+    create_operation_job,
+    get_operation_job,
+)
+from app.services.lxd.create_preflight import (
+    CreatePreflightEvaluation,
+    CreatePreflightUnavailable,
+    evaluate_instance_create,
+)
+from app.services.lxd.instance import CreateSubmissionUnknown
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,6 +82,11 @@ router = APIRouter(
     tags=["Virtual Machines"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+_LEGACY_CREATE_WAIT_SECONDS = 31 * 60
+_LEGACY_CREATE_INITIAL_POLL_SECONDS = 0.25
+_LEGACY_CREATE_MAX_POLL_SECONDS = 2.0
 
 
 def _policy_refusal(exc: InstanceSecurityPolicyViolation) -> HTTPException:
@@ -86,32 +110,134 @@ async def _cluster_write_policy(
         ) from exc
 
 
-async def _target_project_config(
-    lxd_service: LXDService,
-    host: str,
-    project: str,
-) -> Mapping[str, Any]:
-    """Read one already-authorized project without exposing neighboring project data."""
-    try:
-        projects = await lxd_service.list_projects(host)
-    except Exception as exc:
-        logger.error(
-            "Could not verify project isolation on cluster %s: %s",
-            host,
-            type(exc).__name__,
+def _legacy_create_request_hash(request: VMCreateRequest) -> str:
+    """Bind the durable job to this request without persisting cloud-init or raw config."""
+    encoded = json.dumps(
+        request.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _legacy_create_requester(user: AuthenticatedUser) -> str:
+    requester = str(getattr(user, "user_id", None) or "").strip()
+    if not requester:
+        requester = str(getattr(user, "email", None) or "").strip()
+    if not requester:
+        raise HTTPException(status_code=401, detail="Authenticated user identity is unavailable")
+    return requester
+
+
+def _validate_legacy_image_server(image_server: Optional[str]) -> None:
+    """Keep the durable legacy path from turning LXD's remote pull into SSRF."""
+    if not image_server:
+        return
+    from app.services.remote_image_catalog import REMOTE_IMAGE_SERVERS
+
+    allowed_hosts = {urlparse(row["server"]).hostname for row in REMOTE_IMAGE_SERVERS}
+    parsed = urlparse(image_server)
+    if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid image_server. Allowed remote image servers: "
+                + ", ".join(sorted(host for host in allowed_hosts if host))
+            ),
         )
+
+
+async def _legacy_effective_payload(
+    request: VMCreateRequest,
+    lxd_service: LXDService,
+) -> CreatePreflightEvaluation:
+    """Resolve profiles in daemon order and apply local overrides, including ``type:none``."""
+    try:
+        evaluation = await evaluate_instance_create(
+            lxd_service,
+            InstanceCreateRequest.model_validate(request.model_dump(mode="python")),
+        )
+    except (BlockingPoolFull, BlockingTimeout) as exc:
+        logger.warning("Legacy create profile resolution exhausted capacity: %s", exc)
         raise HTTPException(
             status_code=503,
-            detail="Project isolation could not be verified. No instance was created.",
+            detail="Effective profile configuration is busy or timed out. Try again shortly.",
         ) from exc
+    except (CreatePreflightUnavailable, LXDConnectionError) as exc:
+        safe_error = sanitize_error(str(exc), limit=500)
+        logger.warning("Legacy create profile resolution unavailable: %s", safe_error)
+        raise HTTPException(
+            status_code=503,
+            detail=(safe_error or "Effective profile configuration could not be verified."),
+        ) from exc
+    if evaluation.response.blockers:
+        codes = {issue.code for issue in evaluation.response.blockers}
+        raise HTTPException(
+            status_code=409 if "INSTANCE_ALREADY_EXISTS" in codes else 400,
+            detail={
+                "code": "CREATE_PREFLIGHT_FAILED",
+                "message": "The instance cannot be created until the blockers are resolved.",
+                "blockers": [
+                    issue.model_dump(mode="json")
+                    for issue in evaluation.response.blockers
+                ],
+                "plan_revision": evaluation.response.plan_revision,
+            },
+        )
+    # NETWORKLESS remains a warning on the synchronous compatibility endpoint. Its callers do
+    # not have an acknowledgement field, and isolated instances were already a supported use.
+    return evaluation
 
-    for row in projects:
-        name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
-        if name != project:
-            continue
-        config = row.get("config") if isinstance(row, dict) else getattr(row, "config", None)
-        return config if isinstance(config, Mapping) else {}
-    raise HTTPException(status_code=404, detail=f"Project '{project}' not found on {host}")
+
+async def _wait_for_legacy_create(
+    job_id: str,
+    request: VMCreateRequest,
+    lxd_service: LXDService,
+) -> VMInfo:
+    """Preserve the synchronous legacy response while the durable worker owns the outcome."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _LEGACY_CREATE_WAIT_SECONDS
+    poll_seconds = _LEGACY_CREATE_INITIAL_POLL_SECONDS
+    while True:
+        row = await get_operation_job(job_id)
+        if row is None:
+            raise LXDOperationError("The durable create result is unavailable.")
+        if row.status == "success":
+            vm = await lxd_service.get_vm(request.name, request.host, request.project)
+            if vm is None:
+                raise LXDOperationError(
+                    "The create succeeded, but the instance readback is unavailable."
+                )
+            return vm
+        if row.status in {"failure", "partial"}:
+            raise LXDOperationError(
+                sanitize_error(
+                    row.error
+                    or (
+                        "The instance was created only partially."
+                        if row.status == "partial"
+                        else "The daemon refused the instance create."
+                    ),
+                    limit=1000,
+                )
+            )
+        if row.status == "unknown":
+            timeout = BlockingTimeout("legacy create outcome", _LEGACY_CREATE_WAIT_SECONDS)
+            raise LXDOperationError(
+                "The create outcome is unknown; it may still complete, so check the "
+                "instance list before retrying."
+            ) from timeout
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            timeout = BlockingTimeout("legacy create outcome", _LEGACY_CREATE_WAIT_SECONDS)
+            raise LXDOperationError(
+                "VM creation timed out; it may still complete, so check the instance list "
+                "before retrying."
+            ) from timeout
+        await asyncio.sleep(min(poll_seconds, remaining))
+        poll_seconds = min(poll_seconds * 2, _LEGACY_CREATE_MAX_POLL_SECONDS)
 
 
 async def _create_vm_under_policy(
@@ -120,38 +246,117 @@ async def _create_vm_under_policy(
     user: AuthenticatedUser,
     db: AsyncSession,
 ) -> VMInfo:
-    """Hold the ownership lock through final admission and daemon submission."""
+    """Durably admit and submit a legacy create, then await its verified result."""
     async with serialize_cluster_configuration(db, request.host):
         policy = await _cluster_write_policy(user, request.host, db)
-        if policy.requires_safe_allowlist:
-            project_config = await _target_project_config(
-                lxd_service,
-                request.host,
-                request.project,
-            )
-            validate_target_project_isolation(policy, project_config)
-
-        effective_config: dict[str, Any] = dict(request.config or {})
-        if request.cloud_init:
-            effective_config["user.user-data"] = request.cloud_init
+        evaluation = await _legacy_effective_payload(request, lxd_service)
+        validate_target_project_isolation(policy, evaluation.target_project_config)
         validate_instance_payload(
             policy,
-            config=effective_config,
-            devices=request.devices or {},
+            config=evaluation.effective_config,
+            devices=evaluation.effective_devices,
         )
 
-        return await lxd_service.create_vm(
-            name=request.name,
-            host=request.host,
-            image=request.image,
-            instance_type=request.instance_type,
-            profiles=request.profiles,
-            config=request.config,
-            cloud_init=request.cloud_init,
-            devices=request.devices,
-            start_on_create=request.start_on_create,
+        requester = _legacy_create_requester(user)
+        target_organization = await resolve_instance_job_organization(
+            db,
+            cluster_id=request.host,
             project=request.project,
         )
+        try:
+            job, _created = await create_operation_job(
+                kind="create",
+                host=request.host,
+                project=request.project,
+                instance_name=request.name,
+                requester=requester,
+                target_organization_id=target_organization.organization_id,
+                target_organization_slug=target_organization.organization_slug,
+                target_organization_resolution=target_organization.resolution,
+                idempotency_key=f"legacy-vms:{secrets.token_hex(24)}",
+                payload_hash=_legacy_create_request_hash(request),
+                requested={
+                    "instance_type": request.instance_type,
+                    "start_on_create": bool(request.start_on_create),
+                    "profiles": list(request.profiles or ["default"]),
+                    "legacy_synchronous": True,
+                },
+                instance_type=request.instance_type,
+            )
+        except SpecificationConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
+        job_id = job.job_id
+
+        activity_logger.log_activity(
+            action="instance.create",
+            target_type="instance",
+            target_id=request.name,
+            target_host=request.host,
+            target_project=request.project,
+            result="accepted",
+            details={
+                "instance_type": request.instance_type,
+                "profiles": request.profiles or ["default"],
+                "project": request.project,
+                "start_on_create": request.start_on_create,
+                "job_id": job_id,
+                "legacy_api": True,
+            },
+            actor_user_id=requester,
+            target_organization_id=target_organization.organization_id,
+            target_organization_slug=target_organization.organization_slug,
+            target_organization_resolution=target_organization.resolution,
+        )
+
+        try:
+            await lxd_service.create_instance(
+                name=request.name,
+                host=request.host,
+                image=request.image,
+                instance_type=request.instance_type,
+                profiles=request.profiles,
+                config=request.config,
+                cloud_init=request.cloud_init,
+                devices=request.devices,
+                start_on_create=request.start_on_create,
+                project=request.project,
+                image_server=request.image_server,
+                image_protocol=request.image_protocol,
+                description=request.description,
+                source_type="image",
+                job_id=job_id,
+            )
+        except CreateSubmissionUnknown:
+            # The job is already ``unknown`` and remains a pre-share admission blocker until
+            # exact operation/readback reconciliation reaches a terminal verdict.
+            pass
+        except (LXDConnectionError, LXDOperationError) as exc:
+            await lxd_service.fail_create_job(
+                job_id,
+                error=sanitize_error(str(exc), limit=1000),
+                error_code=(
+                    "LXD_CONNECTION_ERROR"
+                    if isinstance(exc, LXDConnectionError)
+                    else "LXD_OPERATION_ERROR"
+                ),
+            )
+            raise
+        except Exception as exc:
+            await lxd_service.fail_create_job(
+                job_id,
+                error=sanitize_error(str(exc), limit=1000),
+                error_code="UNEXPECTED_ERROR",
+            )
+            raise
+
+        # PostgreSQL's ownership lock is transaction-scoped. End the read-only admission
+        # transaction after daemon submission so the synchronous compatibility wait does not
+        # hold one database connection and block unrelated ownership work for up to 31 minutes.
+        await db.commit()
+
+    # Do not hold the ownership transaction for a remote image pull. The durable active row is
+    # now the admission guard, and its background watcher survives client cancellation.
+    return await _wait_for_legacy_create(job_id, request, lxd_service)
 
 
 @router.get(
@@ -387,6 +592,7 @@ async def create_vm(
     """Create a new VM on the specified host."""
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
+    _validate_legacy_image_server(request.image_server)
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()
@@ -402,23 +608,7 @@ async def create_vm(
             _rbac,
             db,
         )
-        
-        # Log activity: VM creation success
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="success",
-            details={
-                "image": request.image,
-                "instance_type": request.instance_type,
-                "profiles": request.profiles,
-                "start_on_create": request.start_on_create
-            }
-        )
-        
+
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_instance_cache()
         return VMCreateResponse(
@@ -431,38 +621,11 @@ async def create_vm(
         temporarily_unavailable = isinstance(
             e.__cause__, (BlockingTimeout, BlockingPoolFull)
         )
-        # Log activity: VM creation failure
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="failure",
-            error_code=(
-                "LXD_CREATE_TEMPORARILY_UNAVAILABLE"
-                if temporarily_unavailable
-                else "LXD_OPERATION_ERROR"
-            ),
-            error_message=str(e),
-            details={"image": request.image, "instance_type": request.instance_type}
-        )
         raise HTTPException(
             status_code=503 if temporarily_unavailable else 400,
             detail=str(e),
         )
     except LXDConnectionError as e:
-        # Log activity: VM creation failure
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="failure",
-            error_code="LXD_CONNECTION_ERROR",
-            error_message=str(e)
-        )
         raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
@@ -474,17 +637,6 @@ async def create_vm(
         raise _policy_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error creating VM: {e}")
-        # Log activity: VM creation failure
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="failure",
-            error_code="UNEXPECTED_ERROR",
-            error_message=str(e)
-        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
