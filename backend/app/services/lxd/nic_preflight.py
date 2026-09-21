@@ -87,13 +87,37 @@ def collect_nics(
     A device in the request overrides a profile device of the same name, which is how the
     console replaces an inherited eth0 rather than adding a second one.
     """
+    merged = merge_effective_devices(devices, profile_devices)
+    return sorted(_nic_devices(merged))
+
+
+def merge_effective_devices(
+    devices: Optional[Dict[str, Any]],
+    profile_devices: Iterable[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Apply LXD profile order and instance overrides to the complete device map.
+
+    Device type matters only after merging. Filtering each profile to NICs first loses an
+    explicit ``type=none`` override, so an inherited ``eth0`` incorrectly survives and a
+    deliberately isolated instance is reported as networked. Later profiles replace earlier
+    profiles, then the instance wins. ``type=none`` removes the inherited device entirely.
+    """
     merged: Dict[str, Dict[str, Any]] = {}
-    for devs in profile_devices:
-        for dev_name, dev in _nic_devices(devs):
-            merged[dev_name] = dev
-    for dev_name, dev in _nic_devices(devices):
-        merged[dev_name] = dev
-    return sorted(merged.items())
+    for profile in profile_devices:
+        for dev_name, raw in (profile or {}).items():
+            if isinstance(raw, dict):
+                merged[str(dev_name)] = dict(raw)
+
+    for dev_name, raw in (devices or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        merged[str(dev_name)] = dict(raw)
+
+    return {
+        name: device
+        for name, device in merged.items()
+        if str(device.get("type") or "").strip().lower() != "none"
+    }
 
 
 def _subnet_of(network_row: Dict[str, Any]) -> Optional[ipaddress.IPv4Network]:
@@ -106,44 +130,13 @@ def _subnet_of(network_row: Dict[str, Any]) -> Optional[ipaddress.IPv4Network]:
         return None
 
 
-def check_nics(
-    client: Any,
-    project: Optional[str],
-    devices: Optional[Dict[str, Any]],
-    profiles: Optional[List[str]],
+def validate_nics(
+    project: str,
+    nics: Iterable[Tuple[str, Dict[str, Any]]],
+    network_rows: Iterable[Dict[str, Any]],
 ) -> None:
-    """Raise NicPreflightError when a NIC cannot work in `project`.
-
-    `client` must be the pooled client. pylxd overwrites an explicit `project` parameter with
-    the client's own whenever the client carries one, so a project-bound client here would
-    silently check the wrong project.
-    """
-    project = project or DEFAULT_PROJECT
-    configs = list_project_configs(client) if project != DEFAULT_PROJECT else {}
-
-    profile_owner = effective_project("profiles", project, configs)
-    profile_devices: List[Dict[str, Any]] = []
-    wanted = set(profiles or ["default"])
-    if wanted:
-        try:
-            for row in list_in_project(client, "profiles", profile_owner):
-                if row.get("name") in wanted:
-                    profile_devices.append(row.get("devices") or {})
-        except Exception as exc:  # noqa: BLE001 - a profile read failure is not a NIC fault
-            # Do not invent a refusal out of a failed read. Let LXD answer instead.
-            logger.warning("Could not read profiles in %s for pre-flight: %s", profile_owner, exc)
-            return
-
-    nics = collect_nics(devices, profile_devices)
-    if not nics:
-        return
-
-    network_owner = effective_project("networks", project, configs)
-    try:
-        rows = list_in_project(client, "networks", network_owner)
-    except Exception as exc:  # noqa: BLE001 - same reasoning as above
-        logger.warning("Could not read networks in %s for pre-flight: %s", network_owner, exc)
-        return
+    """Validate an already-resolved NIC set against one project's network records."""
+    rows = list(network_rows)
     by_name = {row.get("name"): row for row in rows if row.get("name")}
     usable = sorted(name for name, row in by_name.items() if row.get("managed"))
 
@@ -198,6 +191,53 @@ def check_nics(
                 f"{'network' if parsed == subnet.network_address else 'broadcast'} address of "
                 f"{subnet}."
             )
+
+
+def check_nics(
+    client: Any,
+    project: Optional[str],
+    devices: Optional[Dict[str, Any]],
+    profiles: Optional[List[str]],
+) -> None:
+    """Raise NicPreflightError when a NIC cannot work in `project`.
+
+    `client` must be the pooled client. pylxd overwrites an explicit `project` parameter with
+    the client's own whenever the client carries one, so a project-bound client here would
+    silently check the wrong project.
+    """
+    project = project or DEFAULT_PROJECT
+    configs = list_project_configs(client) if project != DEFAULT_PROJECT else {}
+
+    profile_owner = effective_project("profiles", project, configs)
+    profile_devices: List[Dict[str, Any]] = []
+    wanted = list(dict.fromkeys(profiles or ["default"]))
+    if wanted:
+        try:
+            rows = list_in_project(client, "profiles", profile_owner)
+            by_name = {row.get("name"): row for row in rows if row.get("name")}
+            # important: LXD applies profiles in request order, not daemon listing order.
+            # Later profiles can replace a device from an earlier profile.
+            profile_devices = [
+                (by_name[name].get("devices") or {})
+                for name in wanted
+                if name in by_name
+            ]
+        except Exception as exc:  # noqa: BLE001 - a profile read failure is not a NIC fault
+            # Do not invent a refusal out of a failed read. Let LXD answer instead.
+            logger.warning("Could not read profiles in %s for pre-flight: %s", profile_owner, exc)
+            return
+
+    nics = collect_nics(devices, profile_devices)
+    if not nics:
+        return
+
+    network_owner = effective_project("networks", project, configs)
+    try:
+        rows = list_in_project(client, "networks", network_owner)
+    except Exception as exc:  # noqa: BLE001 - same reasoning as above
+        logger.warning("Could not read networks in %s for pre-flight: %s", network_owner, exc)
+        return
+    validate_nics(project, nics, rows)
 
 
 def check_address_for_network(

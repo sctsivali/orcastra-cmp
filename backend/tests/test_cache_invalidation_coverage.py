@@ -30,6 +30,12 @@ EXEMPT = {
     # POST only because it takes a key id and secret in the body. It validates and returns,
     # it does not mutate anything.
     "validate_api_key_endpoint",
+    # Read-only validation uses POST because the full prospective create payload is its input.
+    "preflight_create_instance",
+    # Durable create invalidates only after daemon state changes or terminal readback. Invalidating
+    # on HTTP acceptance would let an older in-flight list repopulate stale state before create
+    # settles; the worker owns the generation-safe invalidation instead of this router handler.
+    "create_instance",
 }
 
 import ast

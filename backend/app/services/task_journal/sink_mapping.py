@@ -133,6 +133,7 @@ def actor_fields(record: Mapping[str, Any]) -> ActorFields:
         request_id=_text(record.get("request_id")),
         target_organization_id=int(org_id) if isinstance(org_id, int) else None,
         target_organization_slug=_text(target.get("organization_slug")),
+        target_organization_resolution=_text(target.get("organization_resolution")),
     )
 
 
@@ -189,6 +190,11 @@ def record_to_log_row(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "event_id": _text(record.get("event_id")),
         "task_id": None,
         "target_organization_id": actor.target_organization_id,
+        **(
+            {"_target_organization_resolution": actor.target_organization_resolution}
+            if actor.target_organization_resolution is not None
+            else {}
+        ),
         "details": bounded_json(scrub(details)) if details else None,
     }
 

@@ -47,6 +47,18 @@ class LXDOperationError(Exception):
     pass
 
 
+class LXDOperationUnknownError(LXDOperationError):
+    """A project write may have reached LXD but exact readback could not prove it."""
+
+    def __init__(self, operation: str, resource: str) -> None:
+        self.operation = operation
+        self.resource = resource
+        # Keep transport, endpoint, and daemon details out of API responses and audit logs.
+        super().__init__(
+            f"The {operation} outcome for project '{resource}' could not be confirmed"
+        )
+
+
 class LXDGracefulTimeoutError(LXDOperationError):
     """A graceful stop/restart timed out waiting for the guest to shut down.
 

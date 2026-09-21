@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # a profile PUT on LXD 6.9 is an operation; same budget as the network and ACL writes
 PROFILE_WRITE_WAIT_SECONDS = 60
+PROFILE_READ_TIMEOUT = (5, 25)
 
 
 class ProfileInUse(Exception):
@@ -57,7 +58,9 @@ def instance_names(used_by: List[str]) -> List[str]:
 
 def read_profile_sync(client: Any, name: str, owner: str) -> Tuple[Dict[str, Any], Optional[str]]:
     """The profile as the daemon holds it, and the ETag it holds it at."""
-    response = client.api["profiles"][safe_segment(name)].get(params=project_params(owner))
+    response = client.api["profiles"][safe_segment(name)].get(
+        params=project_params(owner), timeout=PROFILE_READ_TIMEOUT
+    )
     return (response.json().get("metadata") or {}), etag_of(response)
 
 

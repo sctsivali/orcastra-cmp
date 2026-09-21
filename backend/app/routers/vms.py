@@ -4,7 +4,7 @@ Provides endpoints for listing, creating, and managing VMs across LXD nodes.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional
+from typing import Any, Mapping, Optional
 import logging
 
 from app.models.schemas import (
@@ -28,6 +28,7 @@ from app.services.lxd_service import (
 from app.core.single_flight import single_flight
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.database import get_db
 from app.core.org_scope import (
     can_view_instance,
     org_scope_dependency,
@@ -44,6 +45,15 @@ from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
 from app.core.org_scope import project_is_visible
+from app.services.instance_security_policy import (
+    ClusterWritePolicy,
+    InstanceSecurityPolicyViolation,
+    resolve_cluster_write_policy,
+    validate_instance_payload,
+    validate_target_project_isolation,
+)
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -53,6 +63,95 @@ router = APIRouter(
     tags=["Virtual Machines"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+def _policy_refusal(exc: InstanceSecurityPolicyViolation) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.as_detail())
+
+
+async def _cluster_write_policy(
+    user: AuthenticatedUser,
+    host: str,
+    db: AsyncSession,
+) -> ClusterWritePolicy:
+    try:
+        return await resolve_cluster_write_policy(user, host, db)
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
+    except Exception as exc:
+        logger.error("Could not verify write policy for cluster %s: %s", host, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster ownership could not be verified. No change was sent.",
+        ) from exc
+
+
+async def _target_project_config(
+    lxd_service: LXDService,
+    host: str,
+    project: str,
+) -> Mapping[str, Any]:
+    """Read one already-authorized project without exposing neighboring project data."""
+    try:
+        projects = await lxd_service.list_projects(host)
+    except Exception as exc:
+        logger.error(
+            "Could not verify project isolation on cluster %s: %s",
+            host,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Project isolation could not be verified. No instance was created.",
+        ) from exc
+
+    for row in projects:
+        name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
+        if name != project:
+            continue
+        config = row.get("config") if isinstance(row, dict) else getattr(row, "config", None)
+        return config if isinstance(config, Mapping) else {}
+    raise HTTPException(status_code=404, detail=f"Project '{project}' not found on {host}")
+
+
+async def _create_vm_under_policy(
+    request: VMCreateRequest,
+    lxd_service: LXDService,
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> VMInfo:
+    """Hold the ownership lock through final admission and daemon submission."""
+    async with serialize_cluster_configuration(db, request.host):
+        policy = await _cluster_write_policy(user, request.host, db)
+        if policy.requires_safe_allowlist:
+            project_config = await _target_project_config(
+                lxd_service,
+                request.host,
+                request.project,
+            )
+            validate_target_project_isolation(policy, project_config)
+
+        effective_config: dict[str, Any] = dict(request.config or {})
+        if request.cloud_init:
+            effective_config["user.user-data"] = request.cloud_init
+        validate_instance_payload(
+            policy,
+            config=effective_config,
+            devices=request.devices or {},
+        )
+
+        return await lxd_service.create_vm(
+            name=request.name,
+            host=request.host,
+            image=request.image,
+            instance_type=request.instance_type,
+            profiles=request.profiles,
+            config=request.config,
+            cloud_init=request.cloud_init,
+            devices=request.devices,
+            start_on_create=request.start_on_create,
+            project=request.project,
+        )
 
 
 @router.get(
@@ -283,6 +382,7 @@ async def create_vm(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new VM on the specified host."""
     project = verify_project_access(request.host, request.project)
@@ -295,18 +395,12 @@ async def create_vm(
                 status_code=400,
                 detail=f"Invalid host. Valid hosts: {valid_nodes}"
             )
-        
-        vm = await lxd_service.create_vm(
-            name=request.name,
-            host=request.host,
-            image=request.image,
-            instance_type=request.instance_type,
-            profiles=request.profiles,
-            config=request.config,
-            cloud_init=request.cloud_init,
-            devices=request.devices,
-            start_on_create=request.start_on_create,
-            project=request.project,
+
+        vm = await _create_vm_under_policy(
+            request,
+            lxd_service,
+            _rbac,
+            db,
         )
         
         # Log activity: VM creation success
@@ -376,6 +470,8 @@ async def create_vm(
         # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
         # instead of 403.
         raise
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error creating VM: {e}")
         # Log activity: VM creation failure

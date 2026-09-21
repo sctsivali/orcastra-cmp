@@ -16,6 +16,7 @@ from app.services.lxd.profile_writes import (
     PreconditionFailed,
     ProfileInUse,
     create_profile_sync,
+    etags_match,
     delete_profile_sync,
     read_profile_sync,
     update_profile_sync,
@@ -27,11 +28,25 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.database import get_db
+from app.core.blocking import (
+    BlockingPoolFull,
+    BlockingTimeout,
+    in_flight_for_key,
+    run_blocking,
+)
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
     get_scope_cache_key,
     project_is_visible,
+)
+from app.services.instance_security_policy import (
+    ClusterWritePolicy,
+    InstanceSecurityPolicyViolation,
+    resolve_cluster_write_policy,
+    validate_profile_payload,
+    validate_target_project_isolation,
 )
 from app.services.lxd.project_scope import (
     DEFAULT_PROJECT,
@@ -41,6 +56,7 @@ from app.services.lxd.project_scope import (
     list_project_configs,
     resolve_owner,
 )
+from app.services.shared_cluster_audit import serialize_cluster_configuration
 from app.core.tenant_visibility import (
     filter_visible_lxd_references,
     tenant_acl_active,
@@ -48,7 +64,8 @@ from app.core.tenant_visibility import (
 )
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import LXD_NAME_RE, MAX_NAME_LENGTH
 
@@ -63,6 +80,10 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+_PROFILE_MAX_IN_FLIGHT = 5
+_PROFILE_MAX_IN_FLIGHT_PER_CLUSTER = 1
+_PROFILE_CONTEXT_WALL_SECONDS = 40.0
+_PROFILE_WRITE_WALL_SECONDS = 240.0
 
 
 # LXD refuses almost nothing in a profile name (empty, a slash, "." and ".."); the house rule
@@ -104,6 +125,8 @@ class ProfileDetail(ProfileInfo):
 
 class ProfileCreateRequest(BaseModel):
     """Request body for creating a profile."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, description="Profile name")
     description: str = Field("", description="Profile description")
     config: Dict[str, str] = Field(default_factory=dict, description="Profile configuration")
@@ -122,6 +145,8 @@ class ProfileCreateRequest(BaseModel):
 
 class ProfileUpdateRequest(BaseModel):
     """Request body for updating a profile. A map that is sent replaces LXD's whole map."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     description: Optional[str] = Field(None, description="Profile description")
     config: Optional[Dict[str, str]] = Field(None, description="Profile configuration")
     devices: Optional[Dict[str, Dict[str, str]]] = Field(None, description="Profile devices")
@@ -130,6 +155,123 @@ class ProfileUpdateRequest(BaseModel):
 def _check_path_name(profile_name: str) -> None:
     if profile_name in (".", "..") or not _PATH_NAME_RE.fullmatch(profile_name):
         raise HTTPException(status_code=400, detail="Not a profile name")
+
+
+def _policy_refusal(exc: InstanceSecurityPolicyViolation) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.as_detail())
+
+
+def _profile_blocking_refusal(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=(
+            "The profile operation is temporarily unavailable. The final daemon state was "
+            "not confirmed."
+        ),
+    )
+
+
+async def _cluster_write_policy(
+    user: AuthenticatedUser,
+    host: str,
+    db: AsyncSession,
+) -> ClusterWritePolicy:
+    """Resolve current ownership, refusing closed when the database cannot prove it."""
+    try:
+        return await resolve_cluster_write_policy(user, host, db)
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
+    except Exception as exc:
+        logger.error("Could not verify write policy for cluster %s: %s", host, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster ownership could not be verified. No change was sent.",
+        ) from exc
+
+
+async def _profile_write_target(
+    lxd_service: LXDService,
+    *,
+    host: str,
+    requested_project: Optional[str],
+    policy: ClusterWritePolicy,
+) -> tuple[Any, str]:
+    """Resolve and validate the exact project that will own a profile write."""
+
+    def load_client_and_projects() -> tuple[Any, Dict[str, Dict[str, str]]]:
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise LXDConnectionError(f"Could not connect to {host}")
+        return client, list_project_configs(client)
+
+    try:
+        client, project_configs = await _run_profile_blocking(
+            load_client_and_projects,
+            host=host,
+            label="scope",
+            timeout=_PROFILE_CONTEXT_WALL_SECONDS,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        logger.warning(
+            "Could not start or finish profile scope verification on %s: %s",
+            host,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Target project configuration could not be verified. No change was sent.",
+        ) from exc
+
+    owner = effective_project("profiles", requested_project, project_configs)
+    if not project_is_visible(host, owner):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
+    target_config = project_configs.get(owner)
+    if target_config is None:
+        if requested_project and requested_project != DEFAULT_PROJECT:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{requested_project}' not found on {host}",
+            )
+        raise HTTPException(
+            status_code=503,
+            detail="Target project configuration could not be verified. No change was sent.",
+        )
+    validate_target_project_isolation(policy, target_config)
+    return client, owner
+
+
+async def _run_profile_blocking(
+    function: Any,
+    *args: Any,
+    host: str,
+    label: str,
+    timeout: float,
+    **kwargs: Any,
+) -> Any:
+    try:
+        return await run_blocking(
+            function,
+            *args,
+            timeout=timeout,
+            label=f"profile.{label}[{host}]",
+            executor=_executor,
+            max_in_flight=_PROFILE_MAX_IN_FLIGHT,
+            concurrency_key=host,
+            max_in_flight_per_key=_PROFILE_MAX_IN_FLIGHT_PER_CLUSTER,
+            **kwargs,
+        )
+    except (BlockingTimeout, asyncio.CancelledError):
+        # important: timeout/cancellation cannot stop the worker thread. The caller holds the
+        # cluster-configuration lock, so retain it until this admitted worker can no longer
+        # submit a write under the policy decision that preceded it.
+        while in_flight_for_key(_executor, host):
+            try:
+                await asyncio.shield(asyncio.sleep(0.05))
+            except asyncio.CancelledError:
+                # A second cancellation must not reopen the ownership race. Socket timeouts on
+                # every daemon request provide the upper bound for this drain.
+                continue
+        raise
 
 
 def _detail_of(profile_name: str, data: Dict[str, Any], host: str,
@@ -408,29 +550,45 @@ async def create_profile(
     ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new profile."""
     verify_cluster_access(host)
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        # important: the owning project is resolved, not taken as given. A project that does
-        # not set features.profiles has no profiles of its own, and LXD stores the profile in
-        # default. Writing it as asked and reading it back as resolved would disagree.
-        owner = resolve_owner(client, "profiles", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this project")
-        created, etag = await asyncio.to_thread(
-            create_profile_sync, client, owner,
-            {
-                "name": request.name,
-                "config": request.config,
-                "devices": request.devices,
-                "description": request.description,
-            },
-        )
+        async with serialize_cluster_configuration(db, host):
+            policy = await _cluster_write_policy(user, host, db)
+            # Resolve the owner from the same fresh project snapshot whose isolation is
+            # admitted. The ownership lock prevents an exclusive decision from racing a new
+            # organization binding before the daemon accepts the write.
+            client, owner = await _profile_write_target(
+                lxd_service,
+                host=host,
+                requested_project=project,
+                policy=policy,
+            )
+            validate_profile_payload(
+                policy,
+                config=request.config,
+                devices=request.devices,
+            )
+            created, etag = await _run_profile_blocking(
+                create_profile_sync,
+                client,
+                owner,
+                {
+                    "name": request.name,
+                    "config": request.config,
+                    "devices": request.devices,
+                    "description": request.description,
+                },
+                host=host,
+                label="create",
+                timeout=_PROFILE_WRITE_WALL_SECONDS,
+            )
         
         # Log activity: profile creation success
         activity_logger.log_activity(
@@ -456,6 +614,10 @@ async def create_profile(
         # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
         # instead of 403.
         raise
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        raise _profile_blocking_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error creating profile: {e}")
         # Log activity: profile creation failure
@@ -493,24 +655,86 @@ async def update_profile(
     ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a profile."""
     verify_cluster_access(host)
     _check_path_name(profile_name)
     changed = [k for k in ("description", "config", "devices") if getattr(request, k) is not None]
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this profile")
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        owner = resolve_owner(client, "profiles", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this profile")
-        written, etag = await asyncio.to_thread(
-            update_profile_sync, client, profile_name, owner,
-            config=request.config, devices=request.devices, description=request.description,
-            if_match=if_match,
-        )
+        async with serialize_cluster_configuration(db, host):
+            policy = await _cluster_write_policy(user, host, db)
+            if policy.requires_safe_allowlist and not if_match:
+                raise HTTPException(
+                    status_code=428,
+                    detail={
+                        "code": "profile_precondition_required",
+                        "message": "Reload this profile and send its ETag before changing it.",
+                        "violations": [],
+                    },
+                )
+            client, owner = await _profile_write_target(
+                lxd_service,
+                host=host,
+                requested_project=project,
+                policy=policy,
+            )
+            if policy.requires_safe_allowlist:
+                current, current_etag = await _run_profile_blocking(
+                    read_profile_sync,
+                    client,
+                    profile_name,
+                    owner,
+                    host=host,
+                    label="read-before-update",
+                    timeout=_PROFILE_CONTEXT_WALL_SECONDS,
+                )
+                if not current_etag:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "profile_precondition_unavailable",
+                            "message": (
+                                "The cluster did not provide a profile ETag, so this "
+                                "shared-cluster change cannot be applied safely."
+                            ),
+                            "violations": [],
+                        },
+                    )
+                if if_match and not etags_match(if_match, current_etag):
+                    raise PreconditionFailed(profile_name)
+                final_config = (
+                    request.config
+                    if request.config is not None
+                    else current.get("config") or {}
+                )
+                final_devices = (
+                    request.devices
+                    if request.devices is not None
+                    else current.get("devices") or {}
+                )
+                validate_profile_payload(
+                    policy,
+                    config=final_config,
+                    devices=final_devices,
+                )
+            written, etag = await _run_profile_blocking(
+                update_profile_sync,
+                client,
+                profile_name,
+                owner,
+                config=request.config,
+                devices=request.devices,
+                description=request.description,
+                if_match=if_match,
+                host=host,
+                label="update",
+                timeout=_PROFILE_WRITE_WALL_SECONDS,
+            )
         
         # Log activity: profile update success
         activity_logger.log_activity(
@@ -536,6 +760,10 @@ async def update_profile(
         # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
         # instead of 403.
         raise
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        raise _profile_blocking_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error updating profile {profile_name}: {e}")
         # Log activity: profile update failure

@@ -8,7 +8,6 @@ nonsensical is the hardware total. The pre-flight now refuses a cap above the ha
 names both numbers, and the same rule holds for memory and storage, and for the update path.
 """
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -49,6 +48,8 @@ class _Service:
 
 
 def _client(service, monkeypatch):
+    from app.core.auth import AuthenticatedUser
+    from app.core.database import get_db
     from app.services.lxd_service import get_lxd_service
     from app.core.rbac import get_current_user
     from app.core.org_scope import org_scope_dependency
@@ -77,10 +78,16 @@ def _client(service, monkeypatch):
     app = FastAPI()
     app.include_router(projects_module.router)
     app.dependency_overrides[get_lxd_service] = lambda: service
-    app.dependency_overrides[get_current_user] = lambda: None
+    admin = AuthenticatedUser(
+        "quota-admin",
+        email="quota-admin@example.invalid",
+        groups=["role_admin"],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin
+    app.dependency_overrides[get_db] = lambda: object()
     app.dependency_overrides[org_scope_dependency] = lambda: None
     app.dependency_overrides[require_tenant()] = lambda: None
-    app.dependency_overrides[require_partner()] = lambda: None
+    app.dependency_overrides[require_partner()] = lambda: admin
     app.dependency_overrides[check_read_only_mode] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
 

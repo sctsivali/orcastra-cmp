@@ -6,7 +6,7 @@ Scoped by RBAC: Admin sees all, Partner sees own, Tenant sees assigned.
 """
 
 import logging
-from typing import Optional
+from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +19,12 @@ from app.core.dependencies import (
     require_tenant,
 )
 from app.core.rbac import resolve_roles, get_highest_role
-from app.core.org_scope import get_owned_clusters_ignoring_admin
+from app.core.org_scope import get_owned_clusters_ignoring_admin, verify_cluster_access
 from app.services.organization_service import OrganizationService
+from app.services.shared_cluster_audit import (
+    SharedClusterGuardError,
+    audit_shared_cluster,
+)
 from app.services.organization_preferences import (
     get_org_preferences_payload,
     get_user_org_preferences_payload,
@@ -104,6 +108,21 @@ class ClusterBindingResponse(BaseModel):
         from_attributes = True
 
 
+class ClusterShareFindingResponse(BaseModel):
+    scope: str
+    code: str
+    field: str
+    count: int
+
+
+class ClusterShareAuditResponse(BaseModel):
+    cluster_id: str
+    safe: bool
+    complete: bool
+    resources_checked: Dict[str, int]
+    findings: list[ClusterShareFindingResponse]
+
+
 class OrgPreferencesBody(BaseModel):
     """Full personalization settings (JSONB). Mirrors PersonalizationSettings on frontend."""
     settings: dict = Field(default_factory=dict)
@@ -170,6 +189,22 @@ async def list_organizations(
     role = _get_user_role(user)
     orgs = await svc.list_organizations(user_email=user.email, user_role=role)
     return [_org_to_response(org, user.email) for org in orgs]
+
+
+@router.get(
+    "/cluster-share-audit/{cluster_id}",
+    response_model=ClusterShareAuditResponse,
+)
+async def get_cluster_share_audit(
+    cluster_id: str,
+    _user: AuthenticatedUser = Depends(require_admin()),
+):
+    """Return an Admin-only, value-free pre-share safety verdict."""
+
+    verify_cluster_access(cluster_id)
+    return ClusterShareAuditResponse.model_validate(
+        (await audit_shared_cluster(cluster_id)).as_dict()
+    )
 
 
 @router.get("/my-preferences", response_model=OrgPreferencesResponse)
@@ -420,6 +455,8 @@ async def bind_cluster(
 
     try:
         binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=user.email)
+    except SharedClusterGuardError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 

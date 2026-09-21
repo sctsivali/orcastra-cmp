@@ -982,35 +982,60 @@ async def reconcile_personal_clusters(
     ``Organization.clusters`` so the delete-orphan cascade cannot fire.
     """
     from app.models.db_models import OrganizationCluster
+    from app.services.shared_cluster_audit import (
+        assert_cluster_safe_to_share,
+        serialize_cluster_share,
+    )
 
     org_ids = await _ordered_org_ids_for_email(user_email, db)
     if not org_ids:
         return 0
     primary = org_ids[0]
 
-    bound = set((await db.execute(
-        select(OrganizationCluster.cluster_id).where(
-            OrganizationCluster.organization_id == primary
-        )
-    )).scalars().all())
-
-    rows = (await db.execute(
-        select(OrganizationCluster).where(
-            OrganizationCluster.organization_id.is_(None),
-            OrganizationCluster.registered_by == user_email,
-        )
-    )).scalars().all()
+    # PostgreSQL transaction advisory locks live until the commit below. Acquire several
+    # cluster locks in one deterministic order so two concurrent reconciliations cannot form
+    # an A-then-B / B-then-A deadlock.
+    rows = sorted(
+        (
+            await db.execute(
+                select(OrganizationCluster).where(
+                    OrganizationCluster.organization_id.is_(None),
+                    OrganizationCluster.registered_by == user_email,
+                )
+            )
+        ).scalars().all(),
+        key=lambda row: (row.cluster_id, row.id or 0),
+    )
     if not rows:
         return 0
 
     rebound = 0
     for row in rows:
-        if row.cluster_id in bound:
-            await db.delete(row)  # already bound concretely - drop the duplicate unbound row
-        else:
-            row.organization_id = primary
-            bound.add(row.cluster_id)
-            rebound += 1
+        async with serialize_cluster_share(db, row.cluster_id):
+            already_bound = (
+                await db.execute(
+                    select(OrganizationCluster.id).where(
+                        OrganizationCluster.organization_id == primary,
+                        OrganizationCluster.cluster_id == row.cluster_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if already_bound is not None:
+                # No new identity is created. Drop the obsolete ambiguous row without daemon I/O.
+                await db.delete(row)
+            else:
+                await assert_cluster_safe_to_share(
+                    db,
+                    row.cluster_id,
+                    prospective_organization_id=primary,
+                    prospective_registered_by=user_email,
+                    force_audit=True,
+                )
+                row.organization_id = primary
+                rebound += 1
+            # Establish the DB write while the SQLite/test fallback lock is still held. On
+            # PostgreSQL the transaction advisory lock remains held through commit below.
+            await db.flush()
     await db.commit()
     if rebound:
         logger.info(

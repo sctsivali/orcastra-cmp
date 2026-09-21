@@ -46,6 +46,11 @@ from app.core.type_utils import (
 from app.services.activity_logger import get_activity_logger
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.shared_cluster_audit import (
+    SharedClusterGuardError,
+    assert_cluster_safe_to_share,
+    serialize_cluster_share,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -106,6 +111,67 @@ def get_cert_manager() -> LXDCertificateManager:
         )
 
 
+async def _guard_registration_binding(
+    db: AsyncSession,
+    cluster_id: str,
+    user: AuthenticatedUser,
+) -> list[int]:
+    """Audit a prospective additional owner before any Vault mutation.
+
+    The caller holds the cluster configuration lock until the later binding commit. Keeping the
+    write after Vault metadata means a failed remote preparation cannot silently add an
+    organization binding. A later database failure is reported as a partial registration.
+    """
+
+    from sqlalchemy import select as sa_select
+
+    from app.core.org_scope import get_user_org_ids
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+    from app.models.db_models import OrganizationCluster
+
+    org_ids = await get_user_org_ids(user, db)
+    prospective_org = org_ids[0] if org_ids else None
+
+    rows = (
+        await db.execute(
+            sa_select(
+                OrganizationCluster.organization_id,
+                OrganizationCluster.registered_by,
+            ).where(OrganizationCluster.cluster_id == cluster_id)
+        )
+    ).all()
+    if not rows:
+        return org_ids
+    owns_existing_identity = any(
+        (row[0] is not None and row[0] in org_ids)
+        or (row[0] is None and row[1] == user.email)
+        or row[1] == user.email
+        for row in rows
+    )
+    if (
+        get_highest_role(resolve_roles(user)) != Role.ADMIN
+        and not owns_existing_identity
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This cluster is already owned by another organization.",
+        )
+    if prospective_org is not None and any(row[0] == prospective_org for row in rows):
+        return org_ids
+    if prospective_org is None and any(row[0] is None for row in rows):
+        # The registration flow deliberately refuses a second unbound claimant below. It
+        # will not create an owner identity, so there is no share transition to audit.
+        return org_ids
+
+    await assert_cluster_safe_to_share(
+        db,
+        cluster_id,
+        prospective_organization_id=prospective_org,
+        prospective_registered_by=user.email,
+    )
+    return org_ids
+
+
 @router.post(
     "/register",
     response_model=ClusterRegisterResponse,
@@ -134,9 +200,25 @@ async def register_cluster(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new LXD cluster."""
+    share_serialization = None
     try:
         settings = get_settings()
         cluster_id = request.cluster_id
+
+        try:
+            pending_serialization = serialize_cluster_share(db, cluster_id)
+            await pending_serialization.__aenter__()
+            share_serialization = pending_serialization
+            org_ids = await _guard_registration_binding(
+                db,
+                cluster_id,
+                _rbac,
+            )
+        except SharedClusterGuardError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.as_detail(),
+            ) from exc
         
         # Step 1: Pre-auth type detection from /1.0 API endpoint
         # The /1.0 endpoint returns api_extensions even without auth, which is enough to tell
@@ -185,10 +267,6 @@ async def register_cluster(
         try:
             from sqlalchemy import select as sa_select
             from app.models.db_models import OrganizationCluster
-            from app.core.org_scope import get_user_org_ids
-
-            # orgs the user belongs to (owner/partner orgs first)
-            org_ids = await get_user_org_ids(_rbac, db)
 
             if org_ids:
                 # bind to the primary org - avoid duplicates
@@ -205,7 +283,6 @@ async def register_cluster(
                         cluster_id=cluster_id,
                         registered_by=_rbac.email,
                     ))
-                    await db.commit()
                     logger.info(
                         f"Auto-bound cluster {cluster_id} to org {primary_org_id} "
                         f"for user {_rbac.email}"
@@ -237,7 +314,6 @@ async def register_cluster(
                         cluster_id=cluster_id,
                         registered_by=_rbac.email,
                     ))
-                    await db.commit()
                     logger.info(
                         f"Recorded unbound ownership of cluster {cluster_id} "
                         f"for user {_rbac.email} (no organization yet)"
@@ -247,9 +323,25 @@ async def register_cluster(
                     "to an organization yet - complete the OrcaHub integration to assign "
                     "it to your organization."
                 )
-        except Exception as e:
-            logger.error(f"Failed to auto-bind cluster {cluster_id} to org: {e}")
-            # don't fail the registration - cluster is in Vault, just not bound
+            # Commit even when the binding already existed. PostgreSQL transaction advisory
+            # locks are released only at transaction end, and configuration writes must not
+            # remain blocked during certificate generation after ownership is settled.
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.error("Failed to persist cluster ownership for %s", cluster_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "Cluster metadata was saved, but its ownership binding could not be "
+                    "persisted. Retry registration before using this cluster."
+                ),
+            ) from exc
+
+        if share_serialization is not None:
+            closing_serialization = share_serialization
+            share_serialization = None
+            await closing_serialization.__aexit__(None, None, None)
         
         # Invalidate clusters list cache AFTER org binding so scoped users see the cluster
         from app.core.cache import get_cache_manager
@@ -348,6 +440,8 @@ async def register_cluster(
                 cluster_type=cluster_type
             )
         
+    except HTTPException:
+        raise
     except LXDCertManagerError as e:
         logger.error(f"Cluster registration failed: {e}")
         raise HTTPException(
@@ -360,6 +454,16 @@ async def register_cluster(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}"
         )
+    finally:
+        if share_serialization is not None:
+            # A pre-binding failure must end the transaction to release PostgreSQL's advisory
+            # lock. No ownership row has been committed on this path.
+            closing_serialization = share_serialization
+            share_serialization = None
+            try:
+                await db.rollback()
+            finally:
+                await closing_serialization.__aexit__(None, None, None)
 
 
 @router.post(

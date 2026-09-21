@@ -967,3 +967,107 @@ class RebuildJob(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+# ============================================
+# Instance Operation Jobs
+# ============================================
+
+class InstanceOperationJob(Base):
+    """Durable orchestration record for an instance create or specification change.
+
+    The row deliberately stores only the small, typed resource projection needed to resume and
+    verify an operation. Raw instance configuration and cloud-init never belong here. A worker
+    may disappear after stopping a guest or submitting an LXD operation; the phase, lease and
+    readback fields let another worker reconcile actual daemon state before doing anything else.
+    """
+
+    __tablename__ = "instance_operation_jobs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    job_id = Column(String(64), unique=True, nullable=False, index=True)
+    kind = Column(String(24), nullable=False)
+    cluster_id = Column(String(255), nullable=False)
+    project = Column(String(255), nullable=False, server_default="default")
+    instance_name = Column(String(255), nullable=False)
+    instance_type = Column(String(32), nullable=True)
+    requester = Column(String(255), nullable=False)
+    target_organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    target_organization_slug = Column(String(100), nullable=True)
+    target_organization_resolution = Column(
+        String(16), nullable=False, default="ambiguous", server_default="ambiguous"
+    )
+    idempotency_key = Column(String(128), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    plan_revision = Column(String(64), nullable=True)
+    apply_mode = Column(String(24), nullable=True)
+    requested = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    before_spec = Column(JSONB, nullable=True)
+    target_spec = Column(JSONB, nullable=True)
+    verified_spec = Column(JSONB, nullable=True)
+    phase = Column(String(24), nullable=False, server_default="pending")
+    status = Column(String(16), nullable=False, server_default="pending")
+    operation_id = Column(String(255), nullable=True)
+    operation_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    original_status = Column(String(32), nullable=True)
+    stopped_by_job = Column(Boolean, nullable=False, default=False, server_default="false")
+    result = Column(JSONB, nullable=True)
+    error = Column(Text, nullable=True)
+    locked_by = Column(String(64), nullable=True)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=text("now()"),
+        nullable=False,
+    )
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "requester", "idempotency_key", name="uq_instance_operation_request_key"
+        ),
+        CheckConstraint(
+            "kind IN ('create', 'specification')", name="ck_instance_operation_kind"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'success', 'failure', 'partial', 'unknown')",
+            name="ck_instance_operation_status",
+        ),
+        CheckConstraint(
+            "apply_mode IS NULL OR apply_mode IN ('live_only', 'graceful_restart')",
+            name="ck_instance_operation_apply_mode",
+        ),
+        CheckConstraint(
+            "target_organization_resolution IN ('exact', 'ambiguous', 'unbound')",
+            name="ck_instance_operation_org_resolution",
+        ),
+        Index(
+            "ix_instance_operation_target_created",
+            "cluster_id",
+            "project",
+            "instance_name",
+            "created_at",
+        ),
+        Index(
+            "uq_instance_operation_active_target",
+            "cluster_id",
+            "project",
+            "instance_name",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running', 'unknown')"),
+        ),
+        Index("ix_instance_operation_status_updated", "status", "updated_at"),
+        Index("ix_instance_operation_lease", "locked_at"),
+    )

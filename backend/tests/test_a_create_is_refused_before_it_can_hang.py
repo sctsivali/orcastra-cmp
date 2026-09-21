@@ -11,34 +11,59 @@ the field reports: the NIC normally arrives from a profile rather than from the 
 and it can name its network with `parent` instead of `network`.
 """
 
-import pytest
+import asyncio
+from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+from app.models.schemas import InstanceCreateRequest
+from app.services.lxd.create_preflight import (
+    CreatePreflightEvaluation,
+    _inspect_create,
+)
 from app.services.lxd.nic_preflight import (
     check_address_for_network,
     NicPreflightError,
     check_nics,
     collect_nics,
+    merge_effective_devices,
 )
 
 DEFAULT_PROJECT = "default"
 
 
 class FakeNode:
-    def __init__(self, client, collection):
+    def __init__(self, client, collection, item=None):
         self._client = client
         self._collection = collection
+        self._item = item
+
+    def __getitem__(self, item):
+        return FakeNode(self._client, self._collection, str(item))
 
     def get(self, params=None, timeout=None):
         params = params or {}
         project = params.get("project", DEFAULT_PROJECT)
         if self._collection == "projects":
-            payload = [
-                {"name": n, "config": c} for n, c in self._client.projects.items()
-            ]
+            if self._item is not None:
+                payload = {
+                    "name": self._item,
+                    "config": self._client.projects[self._item],
+                }
+            else:
+                payload = [{"name": n, "config": c} for n, c in self._client.projects.items()]
         elif self._collection == "networks":
             payload = self._client.networks.get(project, [])
-        else:
+        elif self._collection == "profiles":
             payload = self._client.profiles.get(project, [])
+        elif self._collection == "images":
+            payload = self._client.images.get(project, [])
+        elif self._collection == "storage-pools" and self._item is not None:
+            payload = self._client.pools[self._item]
+        else:
+            payload = self._client.instances.get(project, [])
         self._client.reads.append((self._collection, project))
         return FakeResponse(payload)
 
@@ -62,12 +87,35 @@ class FakeApi:
     def projects(self):
         return FakeNode(self._client, "projects")
 
+    @property
+    def storage_pools(self):
+        return FakeNode(self._client, "storage-pools")
+
 
 class FakeClient:
-    def __init__(self, projects=None, networks=None, profiles=None):
+    def __init__(
+        self,
+        projects=None,
+        networks=None,
+        profiles=None,
+        instances=None,
+        images=None,
+        pools=None,
+    ):
         self.projects = projects or {DEFAULT_PROJECT: {}}
         self.networks = networks or {}
         self.profiles = profiles or {}
+        self.instances = instances or {}
+        self.images = images or {
+            DEFAULT_PROJECT: [
+                {
+                    "fingerprint": "a" * 64,
+                    "aliases": [{"name": "ubuntu/24.04"}],
+                    "type": "virtual-machine",
+                }
+            ]
+        }
+        self.pools = pools or {"local": {"name": "local", "driver": "dir", "status": "Created"}}
         self.reads = []
         self.project = None
         self.api = FakeApi(self)
@@ -115,9 +163,7 @@ class TestTheCasesTheAuditFiled:
     def test_the_refusal_names_what_the_project_can_actually_use(self):
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError) as exc:
-            check_nics(
-                client, "UAT-Hermes", {"eth0": {"type": "nic", "network": "lxdbr0"}}, ["default"]
-            )
+            check_nics(client, "UAT-Hermes", {"eth0": {"type": "nic", "network": "lxdbr0"}}, ["default"])
         assert "ovn-uat-hermes" in str(exc.value)
 
     def test_the_project_s_own_network_is_accepted(self):
@@ -162,9 +208,7 @@ class TestTheCasesTheAuditFiled:
                 ["default"],
             )
 
-    @pytest.mark.parametrize(
-        "nictype", ["macvlan", "physical", "sriov", "ipvlan", "routed", "bridged"]
-    )
+    @pytest.mark.parametrize("nictype", ["macvlan", "physical", "sriov", "ipvlan", "routed", "bridged"])
     def test_a_parent_that_names_a_host_interface_is_not_a_missing_network(self, nictype):
         """The regression this pins broke instance create on a stock LXD host.
 
@@ -230,6 +274,27 @@ class TestMergingRequestAndProfileDevices:
     def test_devices_that_are_not_nics_are_ignored(self):
         nics = collect_nics({"root": {"type": "disk", "pool": "local"}}, [])
         assert nics == []
+
+    def test_type_none_removes_an_inherited_nic(self):
+        nics = collect_nics(
+            {"eth0": {"type": "none"}},
+            [{"eth0": {"type": "nic", "network": "inherited"}}],
+        )
+        assert nics == []
+
+    def test_profiles_are_merged_in_the_requested_order_before_instance_overrides(self):
+        effective = merge_effective_devices(
+            {"data": {"type": "disk", "pool": "instance-pool"}},
+            [
+                {
+                    "eth0": {"type": "nic", "network": "first"},
+                    "data": {"type": "disk", "pool": "first-pool"},
+                },
+                {"eth0": {"type": "nic", "network": "second"}},
+            ],
+        )
+        assert effective["eth0"]["network"] == "second"
+        assert effective["data"]["pool"] == "instance-pool"
 
 
 class TestInheritedProjects:
@@ -303,9 +368,7 @@ class TestNotInventingRefusals:
             profiles={DEFAULT_PROJECT: [{"name": "default", "devices": {}}]},
         )
         with pytest.raises(NicPreflightError) as exc:
-            check_nics(
-                client, None, {"eth0": {"type": "nic", "network": "docker0"}}, ["default"]
-            )
+            check_nics(client, None, {"eth0": {"type": "nic", "network": "docker0"}}, ["default"])
         assert "does not manage" in str(exc.value)
 
     def test_the_single_address_check_refuses_an_unmanaged_network_the_same_way(self):
@@ -394,3 +457,263 @@ class TestTheRefusalReachesTheCallerAsAClientError:
     def test_every_refusal_is_a_400(self):
         for message in self._messages():
             assert self._status_for(message) == 400, message
+
+
+class _PreflightService:
+    def __init__(self, client):
+        self.client = client
+
+    def get_client_with_reconnect(self, _host):
+        return self.client
+
+
+def _preflight_client(profile_devices, *, instances=None, profile_rows=None):
+    return FakeClient(
+        projects={DEFAULT_PROJECT: {}},
+        networks={DEFAULT_PROJECT: [bridge("lxdbr0", "10.0.5.1/24")]},
+        profiles={DEFAULT_PROJECT: profile_rows or [{"name": "default", "devices": profile_devices}]},
+        instances={DEFAULT_PROJECT: instances or []},
+    )
+
+
+def _request(**changes):
+    body = {
+        "name": "web01",
+        "host": "nuc1",
+        "image": "ubuntu/24.04",
+        "project": DEFAULT_PROJECT,
+    }
+    body.update(changes)
+    return InstanceCreateRequest(**body)
+
+
+class TestCreatePreflight:
+    def run(self, client, **request_changes):
+        return _inspect_create(_PreflightService(client), _request(**request_changes)).response
+
+    def test_an_explicit_nic_is_reported_as_effective(self):
+        client = _preflight_client({"root": {"type": "disk", "path": "/", "pool": "local"}})
+        result = self.run(
+            client,
+            devices={"eth0": {"type": "nic", "network": "lxdbr0"}},
+        )
+        assert result.ready is True
+        assert result.effective.nic_names == ["eth0"]
+        assert result.required_acknowledgements == []
+
+    def test_an_inherited_nic_is_reported_as_effective(self):
+        client = _preflight_client(
+            {
+                "root": {"type": "disk", "path": "/", "pool": "local"},
+                "eth0": {"type": "nic", "network": "lxdbr0"},
+            }
+        )
+        result = self.run(client)
+        assert result.ready is True
+        assert result.effective.nic_names == ["eth0"]
+
+    def test_type_none_removes_the_inherited_nic_and_requires_acknowledgement(self):
+        client = _preflight_client(
+            {
+                "root": {"type": "disk", "path": "/", "pool": "local"},
+                "eth0": {"type": "nic", "network": "lxdbr0"},
+            }
+        )
+        result = self.run(client, devices={"eth0": {"type": "none"}})
+        assert result.ready is False
+        assert result.effective.nic_names == []
+        assert result.warnings[0].code == "NETWORKLESS"
+        assert result.required_acknowledgements == ["networkless"]
+
+        accepted = self.run(
+            client,
+            devices={"eth0": {"type": "none"}},
+            acknowledgements=["networkless"],
+        )
+        assert accepted.ready is True
+        # Acknowledging a warning must not change the plan it acknowledges.
+        assert accepted.plan_revision == result.plan_revision
+
+    def test_profile_order_is_request_order_not_daemon_list_order(self):
+        profiles = [
+            {
+                "name": "second",
+                "devices": {"eth0": {"type": "nic", "network": "lxdbr0"}},
+            },
+            {
+                "name": "first",
+                "devices": {
+                    "root": {"type": "disk", "path": "/", "pool": "local"},
+                    "eth0": {"type": "nic", "network": "missing"},
+                },
+            },
+        ]
+        client = _preflight_client({}, profile_rows=profiles)
+        result = self.run(client, profiles=["first", "second"])
+        assert result.ready is True
+        assert not result.blockers
+
+    def test_duplicate_and_invalid_network_are_structured_blockers(self):
+        client = _preflight_client(
+            {"root": {"type": "disk", "path": "/", "pool": "local"}},
+            instances=[{"name": "web01"}],
+        )
+        result = self.run(
+            client,
+            devices={"eth0": {"type": "nic", "network": "missing"}},
+        )
+        assert result.ready is False
+        assert {blocker.code for blocker in result.blockers} == {
+            "INSTANCE_ALREADY_EXISTS",
+            "NETWORK_INVALID",
+        }
+
+    def test_profile_state_changes_the_plan_revision(self):
+        client = _preflight_client({"root": {"type": "disk", "path": "/", "pool": "local"}})
+        before = self.run(client, acknowledgements=["networkless"])
+        client.profiles[DEFAULT_PROJECT][0]["devices"]["eth0"] = {
+            "type": "nic",
+            "network": "lxdbr0",
+        }
+        after = self.run(client)
+        assert before.plan_revision != after.plan_revision
+
+    def test_effective_maps_are_available_only_to_server_side_policy(self):
+        client = _preflight_client(
+            {},
+            profile_rows=[
+                {
+                    "name": "default",
+                    "config": {"limits.cpu": "2"},
+                    "devices": {
+                        "root": {"type": "disk", "path": "/", "pool": "local"},
+                        "eth0": {"type": "nic", "network": "lxdbr0"},
+                    },
+                }
+            ],
+        )
+        evaluation = _inspect_create(
+            _PreflightService(client),
+            _request(config={"limits.cpu": "4", "security.nesting": "true"}),
+        )
+        assert evaluation.effective_config == {
+            "limits.cpu": "4",
+            "security.nesting": "true",
+        }
+        assert evaluation.effective_devices["eth0"]["network"] == "lxdbr0"
+        public = evaluation.response.model_dump(mode="json")
+        assert "effective_config" not in public
+        assert "effective_devices" not in public
+
+    def test_unknown_top_level_fields_are_refused(self):
+        with pytest.raises(ValidationError):
+            _request(unknown_create_option=True)
+
+
+class TestCreateRoutePreflightGate:
+    def test_a_stale_plan_never_reaches_the_create_call(self, monkeypatch):
+        from app.routers import instances as instances_router
+        from app.models.schemas import (
+            InstanceCreateEffectiveSummary,
+            InstanceCreatePreflightResponse,
+        )
+
+        async def fresh(_request, _service):
+            return CreatePreflightEvaluation(
+                response=InstanceCreatePreflightResponse(
+                    ready=True,
+                    plan_revision="b" * 64,
+                    effective=InstanceCreateEffectiveSummary(
+                        profiles=["default"], nic_names=["eth0"], root_device="root"
+                    ),
+                ),
+                effective_config={},
+                effective_devices={},
+            )
+
+        class NeverCreate:
+            async def create_instance(self, **_kwargs):
+                pytest.fail("a stale plan reached the create call")
+
+        monkeypatch.setattr(instances_router, "verify_project_access", lambda _h, p: p)
+        monkeypatch.setattr(instances_router, "_run_create_preflight", fresh)
+        monkeypatch.setattr(
+            instances_router,
+            "get_operation_job_by_request",
+            lambda *_args: asyncio.sleep(0, result=None),
+        )
+        with pytest.raises(HTTPException) as caught:
+            asyncio.run(
+                instances_router.create_instance(
+                    request=_request(plan_revision="a" * 64),
+                    idempotency_key="stale-plan",
+                    lxd_service=NeverCreate(),
+                    db=SimpleNamespace(),
+                    _=None,
+                    _rbac=SimpleNamespace(user_id="partner", email="partner@example.test"),
+                )
+            )
+        assert caught.value.status_code == 409
+        assert caught.value.detail["code"] == "STALE_CREATE_PLAN"
+
+    def test_networkless_create_needs_the_named_acknowledgement(self, monkeypatch):
+        from app.routers import instances as instances_router
+        from app.models.schemas import (
+            InstanceCreateEffectiveSummary,
+            InstanceCreatePreflightIssue,
+            InstanceCreatePreflightResponse,
+        )
+
+        async def networkless(_request, _service):
+            return CreatePreflightEvaluation(
+                response=InstanceCreatePreflightResponse(
+                    ready=False,
+                    plan_revision="a" * 64,
+                    warnings=[
+                        InstanceCreatePreflightIssue(
+                            code="NETWORKLESS",
+                            field="devices",
+                            message="isolated",
+                            acknowledgement_required=True,
+                        )
+                    ],
+                    required_acknowledgements=["networkless"],
+                    effective=InstanceCreateEffectiveSummary(profiles=["default"], nic_names=[], root_device="root"),
+                ),
+                effective_config={},
+                effective_devices={},
+            )
+
+        class NeverCreate:
+            async def create_instance(self, **_kwargs):
+                pytest.fail("an unacknowledged warning reached the create call")
+
+        monkeypatch.setattr(instances_router, "verify_project_access", lambda _h, p: p)
+        monkeypatch.setattr(instances_router, "_run_create_preflight", networkless)
+        monkeypatch.setattr(
+            instances_router,
+            "get_operation_job_by_request",
+            lambda *_args: asyncio.sleep(0, result=None),
+        )
+        with pytest.raises(HTTPException) as caught:
+            asyncio.run(
+                instances_router.create_instance(
+                    request=_request(),
+                    idempotency_key="networkless",
+                    lxd_service=NeverCreate(),
+                    db=SimpleNamespace(),
+                    _=None,
+                    _rbac=SimpleNamespace(user_id="partner", email="partner@example.test"),
+                )
+            )
+        assert caught.value.status_code == 409
+        assert caught.value.detail["code"] == "ACKNOWLEDGEMENT_REQUIRED"
+        assert caught.value.detail["acknowledgements"] == ["networkless"]
+
+    def test_create_route_is_explicitly_async_accepted(self):
+        from app.routers import instances as instances_router
+
+        route = next(
+            route for route in instances_router.router.routes if route.path == "/instances" and "POST" in route.methods
+        )
+        assert route.status_code == 202

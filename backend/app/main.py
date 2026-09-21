@@ -70,12 +70,52 @@ setup_logging(
 )
 logger = logging.getLogger(__name__)
 
+
+async def _recover_durable_instance_jobs_once() -> tuple[int, int]:
+    """Run both durable instance-job reconcilers under their database leases."""
+    from app.services.instance_specifications import recover_instance_operation_jobs
+
+    specification_jobs = 0
+    create_jobs = 0
+    try:
+        specification_jobs = await recover_instance_operation_jobs()
+    except Exception as exc:  # noqa: BLE001 - create recovery must still get its turn
+        logger.warning(
+            "Could not recover instance specification jobs: %s",
+            sanitize_error(str(exc)),
+        )
+    try:
+        create_jobs = await get_lxd_service().recover_create_operation_jobs()
+    except Exception as exc:  # noqa: BLE001 - specification recovery already completed
+        logger.warning(
+            "Could not recover instance create jobs: %s",
+            sanitize_error(str(exc)),
+        )
+    return specification_jobs, create_jobs
+
+
+async def _durable_instance_job_recovery_loop() -> None:
+    # A process can die immediately after renewing a lease. Startup cannot safely steal that
+    # fresh lease from another API worker, so one shared loop revisits both job kinds after lease
+    # expiry instead of leaving either kind stranded until another deployment.
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await _recover_durable_instance_jobs_once()
+        except Exception as exc:  # noqa: BLE001 - a transient DB/cluster fault is retryable
+            logger.warning(
+                "Could not run durable instance-job recovery: %s",
+                sanitize_error(str(exc)),
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown."""
     # Startup
     logger.info("Starting Orcastra CMP API...")
     settings = get_settings()
+    instance_operation_recovery_task = None
 
     # important: the per-key budget only isolates integrations from each other while it is
     # strictly below the per-IP one. Buckets are evaluated together and the request is refused by
@@ -283,8 +323,29 @@ async def lifespan(app: FastAPI):
         stranded = await recover_stranded_rebuilds()
         if stranded:
             logger.warning("Marked %d stranded rebuild job(s) failed at startup", stranded)
+
+        # Specification changes are resumable rather than marked failed. Each row is claimed
+        # through a database lease, so every API worker may run this recovery pass safely.
+        resumed, create_resumed = await _recover_durable_instance_jobs_once()
+        if resumed:
+            logger.warning("Scheduled recovery for %d instance operation job(s)", resumed)
+
+        # Create jobs use the same durable table but reconcile through the LXD instance
+        # manager. Recovery always reads the exact project/name and any recorded operation
+        # before acting; it never submits a second create.
+        if create_resumed:
+            logger.warning(
+                "Scheduled recovery for %d durable instance create job(s)",
+                create_resumed,
+            )
     except Exception as recovery_err:
         logger.warning(f"Could not start import recovery loop: {recovery_err}")
+
+    # The atomic leases make this safe in every API worker. It covers jobs whose lease belonged
+    # to a process that died moments before startup and therefore was not stale in the first pass.
+    instance_operation_recovery_task = asyncio.create_task(
+        _durable_instance_job_recovery_loop()
+    )
 
     # Same recovery guarantee for stranded custom-ISO imports (see iso_uploads.py).
     try:
@@ -456,6 +517,10 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Orcastra CMP API...")
+
+    if instance_operation_recovery_task is not None:
+        instance_operation_recovery_task.cancel()
+        await asyncio.gather(instance_operation_recovery_task, return_exceptions=True)
 
     # Stop the task journal writers first: the follower releases its lock so another worker can
     # take over, and the sink drains before the database engine below is disposed.
@@ -633,6 +698,8 @@ Ensure your client certificates are properly configured.
     
     # LXD Feature Routers
     app.include_router(instances_router, prefix=settings.api_prefix)
+    from app.routers.instance_specifications import router as instance_specifications_router
+    app.include_router(instance_specifications_router, prefix=settings.api_prefix)
     app.include_router(profiles_router, prefix=settings.api_prefix)
     app.include_router(networks_router, prefix=settings.api_prefix)
     app.include_router(network_acls_router, prefix=settings.api_prefix)

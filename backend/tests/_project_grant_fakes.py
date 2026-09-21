@@ -1,11 +1,14 @@
 """Fakes for the project grant tests: a session that answers by table and records writes."""
 
+from contextlib import asynccontextmanager
 from typing import Any, List, Optional
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser
+from app.core.rbac import get_highest_role, resolve_roles
+from app.services.instance_security_policy import ClusterOwnership, ClusterWritePolicy
 
 
 class _Rows:
@@ -142,6 +145,21 @@ def projects_client(service, monkeypatch, session, user=None) -> TestClient:
     monkeypatch.setattr(projects_module, "verify_cluster_access", lambda host: None)
     monkeypatch.setattr(projects_module, "get_cache_manager", lambda: NoCache())
     monkeypatch.setattr(projects_module.activity_logger, "log_activity", lambda **k: None, raising=False)
+
+    async def _write_policy(actor, host, db):
+        role = get_highest_role(resolve_roles(actor))
+        return ClusterWritePolicy(host, role, ClusterOwnership.EXCLUSIVE)
+
+    @asynccontextmanager
+    async def _configuration_lock(*args, **kwargs):
+        yield
+
+    monkeypatch.setattr(projects_module, "resolve_cluster_write_policy", _write_policy)
+    monkeypatch.setattr(
+        projects_module,
+        "serialize_cluster_configuration",
+        _configuration_lock,
+    )
 
     async def _db():
         yield session

@@ -53,6 +53,7 @@ class BlockingPoolFull(Exception):
 
 _counter_lock = threading.Lock()
 _in_flight: Dict[int, int] = {}
+_in_flight_by_key: Dict[tuple[int, str], int] = {}
 
 
 def in_flight(executor: ThreadPoolExecutor) -> int:
@@ -61,29 +62,62 @@ def in_flight(executor: ThreadPoolExecutor) -> int:
         return _in_flight.get(id(executor), 0)
 
 
-def _acquire(executor: ThreadPoolExecutor, max_in_flight: Optional[int], label: str) -> bool:
-    if max_in_flight is None:
-        return False
-    key = id(executor)
+def in_flight_for_key(executor: ThreadPoolExecutor, concurrency_key: str) -> int:
+    """Tracked in-flight count for one bounded peer such as an LXD cluster."""
     with _counter_lock:
-        current = _in_flight.get(key, 0)
-        if current >= max_in_flight:
+        return _in_flight_by_key.get((id(executor), concurrency_key), 0)
+
+
+def _acquire(
+    executor: ThreadPoolExecutor,
+    max_in_flight: Optional[int],
+    label: str,
+    concurrency_key: Optional[str],
+    max_in_flight_per_key: Optional[int],
+) -> bool:
+    if max_in_flight_per_key is not None and not concurrency_key:
+        raise ValueError("concurrency_key is required with max_in_flight_per_key")
+    if max_in_flight is None and max_in_flight_per_key is None:
+        return False
+    executor_key = id(executor)
+    peer_key = (
+        (executor_key, concurrency_key)
+        if concurrency_key is not None and max_in_flight_per_key is not None
+        else None
+    )
+    with _counter_lock:
+        current = _in_flight.get(executor_key, 0)
+        if max_in_flight is not None and current >= max_in_flight:
             raise BlockingPoolFull(label, current)
-        _in_flight[key] = current + 1
+        peer_current = _in_flight_by_key.get(peer_key, 0) if peer_key is not None else 0
+        if max_in_flight_per_key is not None and peer_current >= max_in_flight_per_key:
+            raise BlockingPoolFull(label, peer_current)
+        _in_flight[executor_key] = current + 1
+        if peer_key is not None:
+            _in_flight_by_key[peer_key] = peer_current + 1
     return True
 
 
-def _release(executor: ThreadPoolExecutor) -> None:
-    key = id(executor)
+def _release(executor: ThreadPoolExecutor, concurrency_key: Optional[str]) -> None:
+    executor_key = id(executor)
     with _counter_lock:
-        current = _in_flight.get(key, 0)
+        current = _in_flight.get(executor_key, 0)
         if current <= 1:
-            _in_flight.pop(key, None)
+            _in_flight.pop(executor_key, None)
         else:
-            _in_flight[key] = current - 1
+            _in_flight[executor_key] = current - 1
+        if concurrency_key is not None:
+            peer_key = (executor_key, concurrency_key)
+            peer_current = _in_flight_by_key.get(peer_key, 0)
+            if peer_current <= 1:
+                _in_flight_by_key.pop(peer_key, None)
+            else:
+                _in_flight_by_key[peer_key] = peer_current - 1
 
 
-def _on_done(executor: ThreadPoolExecutor, future: Any) -> None:
+def _on_done(
+    executor: ThreadPoolExecutor, concurrency_key: Optional[str], future: Any
+) -> None:
     # note: retrieve the exception so a call that failed after its wall-clock cap expired
     # does not surface later as "Future exception was never retrieved".
     try:
@@ -91,7 +125,7 @@ def _on_done(executor: ThreadPoolExecutor, future: Any) -> None:
             future.exception()
     except Exception:
         pass
-    _release(executor)
+    _release(executor, concurrency_key)
 
 
 async def run_blocking(
@@ -101,6 +135,8 @@ async def run_blocking(
     label: str,
     executor: ThreadPoolExecutor,
     max_in_flight: Optional[int] = None,
+    concurrency_key: Optional[str] = None,
+    max_in_flight_per_key: Optional[int] = None,
     **kwargs: Any,
 ) -> T:
     """Run ``fn(*args, **kwargs)`` on ``executor`` and stop waiting after ``timeout`` seconds.
@@ -109,10 +145,19 @@ async def run_blocking(
     Callers MUST give ``fn`` a per-attempt socket timeout, otherwise the thread is lost for
     good and this helper only hides the leak behind a prompt error.
 
-    Raises BlockingTimeout on expiry and BlockingPoolFull when the pool is saturated. Any
-    exception raised by ``fn`` propagates unchanged.
+    ``concurrency_key`` and ``max_in_flight_per_key`` add a second bound for one upstream
+    peer. This prevents a single unavailable cluster from consuming the entire shared pool.
+
+    Raises BlockingTimeout on expiry and BlockingPoolFull when either bound is saturated.
+    Any exception raised by ``fn`` propagates unchanged.
     """
-    tracked = _acquire(executor, max_in_flight, label)
+    tracked = _acquire(
+        executor,
+        max_in_flight,
+        label,
+        concurrency_key,
+        max_in_flight_per_key,
+    )
     loop = asyncio.get_running_loop()
     started = time.monotonic()
 
@@ -142,13 +187,18 @@ async def run_blocking(
         if kwargs
         else partial(ctx.run, fn, *args)
     )
-    future = loop.run_in_executor(executor, call)
+    try:
+        future = loop.run_in_executor(executor, call)
+    except Exception:
+        if tracked:
+            _release(executor, concurrency_key)
+        raise
 
     if tracked:
         # note: shield below keeps `future` pending until the thread really finishes, so this
         # callback fires then and not at cancellation time. That is what keeps the in-flight
         # count honest about how much of the pool a dead peer is holding.
-        future.add_done_callback(lambda f: _on_done(executor, f))
+        future.add_done_callback(lambda f: _on_done(executor, concurrency_key, f))
 
     try:
         return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)

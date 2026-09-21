@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.db_models import Organization, OrganizationMember, OrganizationCluster
+from app.services.shared_cluster_audit import (
+    assert_cluster_safe_to_share,
+    serialize_cluster_share,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -233,22 +237,29 @@ class OrganizationService:
         self, org_id: int, cluster_id: str, registered_by: str
     ) -> OrganizationCluster:
         """Bind a Vault cluster to an organization."""
-        existing = await self.db.execute(
-            select(OrganizationCluster).where(
-                OrganizationCluster.organization_id == org_id,
-                OrganizationCluster.cluster_id == cluster_id,
+        async with serialize_cluster_share(self.db, cluster_id):
+            await assert_cluster_safe_to_share(
+                self.db,
+                cluster_id,
+                prospective_organization_id=org_id,
+                prospective_registered_by=registered_by,
             )
-        )
-        if existing.scalar_one_or_none():
-            raise ValueError(f"Cluster {cluster_id} is already bound to this organization")
+            existing = await self.db.execute(
+                select(OrganizationCluster).where(
+                    OrganizationCluster.organization_id == org_id,
+                    OrganizationCluster.cluster_id == cluster_id,
+                )
+            )
+            if existing.scalar_one_or_none():
+                raise ValueError(f"Cluster {cluster_id} is already bound to this organization")
 
-        binding = OrganizationCluster(
-            organization_id=org_id,
-            cluster_id=cluster_id,
-            registered_by=registered_by,
-        )
-        self.db.add(binding)
-        await self.db.commit()
+            binding = OrganizationCluster(
+                organization_id=org_id,
+                cluster_id=cluster_id,
+                registered_by=registered_by,
+            )
+            self.db.add(binding)
+            await self.db.commit()
         await self.db.refresh(binding)
         return binding
 

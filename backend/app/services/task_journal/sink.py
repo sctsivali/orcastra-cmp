@@ -189,7 +189,10 @@ class JournalSink:
 
     async def _apply_task(self, db: Any, task: TaskWrite) -> Optional[str]:
         actor = task.actor
-        if actor.target_organization_id is None:
+        if (
+            actor.target_organization_id is None
+            and actor.target_organization_resolution is None
+        ):
             org_id, slug = await self._org_for(db, task.key.cluster_id)
             if org_id is not None:
                 actor = dataclasses.replace(
@@ -235,7 +238,12 @@ class JournalSink:
         )
 
     async def _backfill_org(self, db: Any, log_row: Dict[str, Any]) -> None:
-        if log_row.get("target_organization_id") is not None or not log_row.get("cluster_id"):
+        explicit_resolution = log_row.pop("_target_organization_resolution", None)
+        if (
+            explicit_resolution is not None
+            or log_row.get("target_organization_id") is not None
+            or not log_row.get("cluster_id")
+        ):
             return
         org_id, _slug = await self._org_for(db, str(log_row["cluster_id"]))
         if org_id is not None:

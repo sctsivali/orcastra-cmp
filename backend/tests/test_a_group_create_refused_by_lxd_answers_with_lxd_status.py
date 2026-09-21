@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from pylxd.exceptions import LXDAPIException
 
 from app.core.dependencies import check_read_only_mode
@@ -38,35 +38,62 @@ class _Groups:
         raise self._exc
 
 
-def _client(exc: Exception, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def _app(exc: Exception, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     fake_lxd = SimpleNamespace(api=SimpleNamespace(auth=SimpleNamespace(groups=_Groups(exc))))
     monkeypatch.setattr(permissions_module, "verify_cluster_access", lambda host: None)
     monkeypatch.setattr(permissions_module, "client_for", AsyncMock(return_value=fake_lxd))
     monkeypatch.setattr(permissions_module, "require_client", lambda client, host: client)
+
+    async def _service():
+        return SimpleNamespace()
+
+    async def _admin():
+        return admin()
+
+    async def _none():
+        return None
+
     app = FastAPI()
     app.include_router(permissions_module.groups_router, prefix="/api/v1")
-    app.dependency_overrides[get_lxd_service] = lambda: SimpleNamespace()
-    app.dependency_overrides[get_current_user] = lambda: admin()
-    app.dependency_overrides[org_scope_dependency] = lambda: None
-    app.dependency_overrides[check_read_only_mode] = lambda: None
-    return TestClient(app)
+    # Keep this fixture wholly async. Sync dependency overrides are dispatched through
+    # AnyIO's global worker limiter, so a saturated suite can make an otherwise immediate
+    # route assertion wait for an unrelated worker slot.
+    app.dependency_overrides[get_lxd_service] = _service
+    app.dependency_overrides[get_current_user] = _admin
+    app.dependency_overrides[org_scope_dependency] = _none
+    app.dependency_overrides[check_read_only_mode] = _none
+    return app
 
 
-def test_lxd_400_reaches_the_caller_as_400_with_lxd_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_lxd_400_reaches_the_caller_as_400_with_lxd_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     message = 'Entitlement "can_view" on entity type "image" references project "p", but the project cannot be viewed by the group'
-    client = _client(LXDAPIException(_Response(400, message)), monkeypatch)
-    r = client.post("/api/v1/groups?host=nuc2", json={"name": "g", "description": "", "permissions": []})
+    app = _app(LXDAPIException(_Response(400, message)), monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(
+            "/api/v1/groups?host=nuc2",
+            json={"name": "g", "description": "", "permissions": []},
+        )
     assert r.status_code == 400
     assert "cannot be viewed by the group" in r.json()["detail"]
 
 
-def test_an_lxd_status_outside_4xx_is_a_502(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(LXDAPIException(_Response(500, "boom")), monkeypatch)
-    r = client.post("/api/v1/groups?host=nuc2", json={"name": "g", "description": "", "permissions": []})
+async def test_an_lxd_status_outside_4xx_is_a_502(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(LXDAPIException(_Response(500, "boom")), monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(
+            "/api/v1/groups?host=nuc2",
+            json={"name": "g", "description": "", "permissions": []},
+        )
     assert r.status_code == 502
 
 
-def test_any_other_failure_stays_a_500(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(RuntimeError("socket closed"), monkeypatch)
-    r = client.post("/api/v1/groups?host=nuc2", json={"name": "g", "description": "", "permissions": []})
+async def test_any_other_failure_stays_a_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(RuntimeError("socket closed"), monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.post(
+            "/api/v1/groups?host=nuc2",
+            json={"name": "g", "description": "", "permissions": []},
+        )
     assert r.status_code == 500

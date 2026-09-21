@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from app.core import org_scope
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
+from app.core.rbac import Role
 from app.models.schemas import VMCreateRequest, VMInfo, VMStatus
 from app.routers import vms
 from app.services.lxd import instance as instance_module
@@ -18,6 +19,7 @@ from app.services.lxd import audit as audit_module
 from app.services.lxd.exceptions import LXDOperationError
 from app.services.lxd.instance import InstanceManager
 from app.services.lxd.lxd_service import LXDService
+from app.services.instance_security_policy import ClusterOwnership, ClusterWritePolicy
 
 
 HOST = "shared-cluster"
@@ -30,6 +32,11 @@ def isolated_create_executor(monkeypatch):
     pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="test_lxd_create")
     monkeypatch.setattr(instance_module, "_create_executor", pool)
     monkeypatch.setattr(instance_module, "_CREATE_MAX_IN_FLIGHT", 2)
+
+    async def exclusive_policy(user, host, db):
+        return ClusterWritePolicy(host, Role.PARTNER, ClusterOwnership.EXCLUSIVE)
+
+    monkeypatch.setattr(vms, "resolve_cluster_write_policy", exclusive_policy)
     try:
         yield
     finally:
@@ -92,6 +99,7 @@ async def test_post_vms_forwards_the_authorized_project_and_audits_it(monkeypatc
         ),
         lxd_service=Service(),
         _rbac=SimpleNamespace(email="partner@example.test"),
+        db=object(),
     )
 
     assert seen[0]["project"] == PROJECT
@@ -455,6 +463,7 @@ async def test_post_vms_maps_executor_pressure_to_503(monkeypatch, partner_proje
             ),
             lxd_service=Service(),
             _rbac=SimpleNamespace(email="partner@example.test"),
+            db=object(),
         )
 
     assert caught.value.status_code == 503

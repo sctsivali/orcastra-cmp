@@ -150,12 +150,24 @@ async def test_project_list_is_one_bounded_recursive_request(monkeypatch):
     )
     manager = ProjectManager(connection_manager, cert_manager)
 
-    async def _bounded(fn, *args, timeout, label, executor, max_in_flight=None, **kwargs):
+    async def _bounded(
+        fn,
+        *args,
+        timeout,
+        label,
+        executor,
+        max_in_flight=None,
+        concurrency_key=None,
+        max_in_flight_per_key=None,
+        **kwargs,
+    ):
         bounded.update(
             timeout=timeout,
             label=label,
             executor=executor,
             max_in_flight=max_in_flight,
+            concurrency_key=concurrency_key,
+            max_in_flight_per_key=max_in_flight_per_key,
         )
         return fn(*args, **kwargs)
 
@@ -170,6 +182,10 @@ async def test_project_list_is_one_bounded_recursive_request(monkeypatch):
         "label": f"project.list[{HOST}]",
         "executor": projects_module._projects_executor,
         "max_in_flight": projects_module._PROJECT_LIST_WORKERS,
+        "concurrency_key": HOST,
+        "max_in_flight_per_key": (
+            projects_module._PROJECT_WRITE_MAX_IN_FLIGHT_PER_CLUSTER
+        ),
     }
     assert rows == [
         {

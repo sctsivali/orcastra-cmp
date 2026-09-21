@@ -26,7 +26,6 @@ though that change is what fixed the defect. A guard that pins a spelling fails 
 refactor that improves the thing it is guarding.
 """
 
-import asyncio
 import inspect
 
 import pytest
@@ -84,6 +83,21 @@ class _Client:
 def audit(monkeypatch):
     records = []
 
+    async def _ignore_extension_event(*_args, **_kwargs):
+        return 0
+
+    async def _run_inline(fn, *args, **kwargs):
+        for key in (
+            "timeout",
+            "label",
+            "executor",
+            "max_in_flight",
+            "concurrency_key",
+            "max_in_flight_per_key",
+        ):
+            kwargs.pop(key, None)
+        return fn(*args, **kwargs)
+
     class _Logger:
         def log_activity(self, **kwargs):
             records.append(kwargs)
@@ -91,6 +105,22 @@ def audit(monkeypatch):
     monkeypatch.setattr(
         "app.services.activity_logger.get_activity_logger", lambda: _Logger()
     )
+    # This unit test owns the create verdict only. Both notification systems open their own
+    # database sessions, so leaving them live turns the happy-path assertion into an integration
+    # test that waits for the developer database rather than testing the watcher.
+    monkeypatch.setattr(
+        "app.services.webhooks.emitter.emit_resource_event",
+        _ignore_extension_event,
+    )
+    monkeypatch.setattr(
+        "app.services.lxd.instance._announce_instance_created",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.lxd.instance._emit_instance_created",
+        _ignore_extension_event,
+    )
+    monkeypatch.setattr("app.services.lxd.instance.run_blocking", _run_inline)
     return records
 
 
@@ -234,7 +264,10 @@ def test_the_router_records_acceptance_not_success() -> None:
 def test_the_watcher_task_is_strongly_referenced() -> None:
     """A bare create_task can be collected mid-run, which would make the watch unreliable."""
     src = inspect.getsource(InstanceManager.create_instance)
-    watch_block = src.split("_watch_create_operation(create_client")[1].split("return operation_id")[0]
+    watch_block = src.split("watch = asyncio.create_task(", 1)[1].split(
+        "return operation_id", 1
+    )[0]
+    assert "_watch_create_operation(" in watch_block
     assert "_bg_tasks.add" in watch_block, (
         "hold a strong reference like the auto-start branch does, or the loop may collect the "
         "task before the operation finishes"

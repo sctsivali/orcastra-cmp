@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from app.services.lxd.project_usage import ProjectUsage, parse_lxd_size, read_project_usage
 
@@ -105,6 +105,58 @@ def test_a_partial_read_is_marked_incomplete(monkeypatch):
     assert got.used["cpu"] == 0
 
 
+def test_disk_usage_comes_from_authoritative_project_state(monkeypatch):
+    from app.services.lxd import project_usage as mod
+
+    class _State:
+        def get(self):
+            return SimpleNamespace(
+                json=lambda: {
+                    "metadata": {
+                        "resources": {
+                            "limits.disk": {"limit": 40 * GIB, "usage": 30 * GIB}
+                        }
+                    }
+                }
+            )
+
+    class _Project:
+        state = _State()
+
+    client = SimpleNamespace(
+        has_extension=lambda extension: extension == "project_usage",
+        api=SimpleNamespace(projects={"web-tier": _Project()}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_read_project_config",
+        lambda client, project: {"limits.disk": "40GiB"},
+    )
+    monkeypatch.setattr(mod, "list_in_project", lambda *args, **kwargs: [])
+
+    got = read_project_usage(client, "web-tier")
+
+    assert got.used["disk_bytes"] == 30 * GIB
+    assert got.is_complete("disk_bytes") is True
+
+
+def test_configured_disk_quota_fails_closed_without_project_state(monkeypatch):
+    from app.services.lxd import project_usage as mod
+
+    client = SimpleNamespace(has_extension=lambda extension: False)
+    monkeypatch.setattr(
+        mod,
+        "_read_project_config",
+        lambda client, project: {"limits.disk": "40GiB"},
+    )
+    monkeypatch.setattr(mod, "list_in_project", lambda *args, **kwargs: [])
+
+    got = read_project_usage(client, "web-tier")
+
+    assert got.is_complete("disk_bytes") is False
+    assert got.is_complete("cpu") is True
+
+
 class _Service:
     def __init__(self, usage=None, error=None):
         self._usage = usage
@@ -132,7 +184,7 @@ class _Cache:
         return lambda *a, **k: None
 
 
-def _client(service, monkeypatch, cache=None, visible=True):
+def _app(service, monkeypatch, cache=None, visible=True):
     from app.routers import projects as projects_module
     from app.services.lxd_service import get_lxd_service
     from app.core.rbac import get_current_user
@@ -143,13 +195,22 @@ def _client(service, monkeypatch, cache=None, visible=True):
     monkeypatch.setattr(projects_module, "project_is_visible", lambda host, project: visible)
     monkeypatch.setattr(projects_module, "filter_projects_by_acl", lambda host, names: names if visible else [])
     monkeypatch.setattr(projects_module, "get_cache_manager", lambda: cache or _Cache())
+
+    async def _service():
+        return service
+
+    async def _none():
+        return None
+
     app = FastAPI()
     app.include_router(projects_module.router)
-    app.dependency_overrides[get_lxd_service] = lambda: service
-    app.dependency_overrides[get_current_user] = lambda: None
-    app.dependency_overrides[org_scope_dependency] = lambda: None
-    app.dependency_overrides[require_tenant()] = lambda: None
-    return TestClient(app, raise_server_exceptions=False)
+    # Keep route tests async. Sync dependency overrides use AnyIO's shared worker pool and can
+    # deadlock behind unrelated blocking tests when the full suite is saturated.
+    app.dependency_overrides[get_lxd_service] = _service
+    app.dependency_overrides[get_current_user] = _none
+    app.dependency_overrides[org_scope_dependency] = _none
+    app.dependency_overrides[require_tenant()] = _none
+    return app
 
 
 def _sample():
@@ -160,8 +221,10 @@ def _sample():
     )
 
 
-def test_the_route_answers_the_shape_the_form_reads(monkeypatch):
-    r = _client(_Service(_sample()), monkeypatch).get("/projects/nuc1/web-tier/usage")
+async def test_the_route_answers_the_shape_the_form_reads(monkeypatch):
+    app = _app(_Service(_sample()), monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.get("/projects/nuc1/web-tier/usage")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["host"] == "nuc1" and body["project"] == "web-tier"
@@ -170,21 +233,24 @@ def test_the_route_answers_the_shape_the_form_reads(monkeypatch):
     assert "name" not in str(body["used"]), "aggregates only"
 
 
-def test_usage_is_404_outside_the_callers_project_scope(monkeypatch):
+async def test_usage_is_404_outside_the_callers_project_scope(monkeypatch):
     service = _Service(_sample())
-    r = _client(service, monkeypatch, visible=False).get("/projects/nuc1/web-tier/usage")
+    app = _app(service, monkeypatch, visible=False)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.get("/projects/nuc1/web-tier/usage")
     assert r.status_code == 404
     assert service.calls == [], "no cluster read for a project the caller may not see"
 
 
-def test_usage_is_cached_briefly_and_dropped_by_an_instance_change(monkeypatch):
+async def test_usage_is_cached_briefly_and_dropped_by_an_instance_change(monkeypatch):
     from app.core.cache import CacheManager, LRUCache
 
     cache = _Cache()
     service = _Service(_sample())
-    tc = _client(service, monkeypatch, cache=cache)
-    tc.get("/projects/nuc1/web-tier/usage")
-    tc.get("/projects/nuc1/web-tier/usage")
+    app = _app(service, monkeypatch, cache=cache)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.get("/projects/nuc1/web-tier/usage")
+        await client.get("/projects/nuc1/web-tier/usage")
     assert len(service.calls) == 1, "the second read is served from the 30 s cache"
     assert any(k[1].startswith("project_usage:host=nuc1:project=web-tier") for k in cache.store)
 
@@ -198,19 +264,23 @@ def test_usage_is_cached_briefly_and_dropped_by_an_instance_change(monkeypatch):
     assert real.get("api_responses", "project_usage:host=nuc1:project=web-tier:scope=all") is None
 
 
-def test_an_unreachable_cluster_is_503(monkeypatch):
+async def test_an_unreachable_cluster_is_503(monkeypatch):
     from app.services.lxd.exceptions import LXDConnectionError
 
-    r = _client(_Service(error=LXDConnectionError("Could not connect to nuc1")), monkeypatch).get("/projects/nuc1/p/usage")
+    app = _app(_Service(error=LXDConnectionError("Could not connect to nuc1")), monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.get("/projects/nuc1/p/usage")
     assert r.status_code == 503
 
 
-def test_a_project_the_daemon_no_longer_has_is_404_not_500(monkeypatch):
+async def test_a_project_the_daemon_no_longer_has_is_404_not_500(monkeypatch):
     # note: the visibility gate answers from the caller's policy, which can name a project that
     # was deleted a moment ago; the daemon's NotFound then has to be a 404 like the gate's own
     from app.services.lxd.exceptions import LXDProjectNotFoundError
 
-    r = _client(_Service(error=LXDProjectNotFoundError("gone")), monkeypatch).get("/projects/mc-lab/gone/usage")
+    app = _app(_Service(error=LXDProjectNotFoundError("gone")), monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r = await client.get("/projects/mc-lab/gone/usage")
     assert r.status_code == 404
     assert "gone" in r.json()["detail"]
 
@@ -230,4 +300,3 @@ def test_the_reader_names_a_missing_project(monkeypatch):
     with pytest.raises(LXDProjectNotFoundError) as excinfo:
         read_project_usage(client, "gone")
     assert excinfo.value.project == "gone"
-

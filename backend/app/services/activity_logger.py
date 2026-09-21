@@ -53,6 +53,8 @@ class ActivityLogger:
         after_state: Optional[Dict[str, Any]] = None,
         target_organization_id: Optional[int] = None,
         target_organization_slug: Optional[str] = None,
+        target_organization_resolution: Optional[str] = None,
+        actor_user_id: Optional[str] = None,
     ) -> str:
         """
         Log an activity/audit event.
@@ -71,6 +73,20 @@ class ActivityLogger:
             severity = EventSeverity.HIGH
         
         # Build audit log entry
+        actor = ctx.get_actor() if ctx else {
+            "user_id": None,
+            "user_type": None,
+            "role": None,
+            "groups": [],
+            "organizations": [],
+            "session_id": None,
+        }
+        # Background workers do not retain request context across process restarts. Durable
+        # jobs carry the authenticated requester explicitly so their terminal audit verdict is
+        # still attributable instead of looking like an anonymous system mutation.
+        if actor_user_id:
+            actor = {**actor, "user_id": actor_user_id, "user_type": actor.get("user_type") or "user"}
+
         audit_log = {
             "@timestamp": datetime.now(timezone.utc).isoformat(),
             "log_type": "audit",
@@ -81,14 +97,7 @@ class ActivityLogger:
             "action": action,
             "category": category.value,
             "severity": severity.value,
-            "actor": ctx.get_actor() if ctx else {
-                "user_id": None,
-                "user_type": None,
-                "role": None,
-                "groups": [],
-                "organizations": [],
-                "session_id": None,
-            },  # user_type == role (kept for backward compat)
+            "actor": actor,  # user_type == role (kept for backward compat)
             "target": {
                 "type": target_type,
                 "id": target_id,
@@ -97,6 +106,10 @@ class ActivityLogger:
                 # owning tenant org of the target resource (accountability: who was acted upon)
                 "organization_id": target_organization_id,
                 "organization_slug": target_organization_slug,
+                # Explicit ambiguity/unbound state prevents the async task journal from
+                # backfilling a shared cluster's first organization as though it owned the
+                # target project. Legacy callers omit this and retain the historical fallback.
+                "organization_resolution": target_organization_resolution,
             },
             "result": result,
             "error_code": error_code,

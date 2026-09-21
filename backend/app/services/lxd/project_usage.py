@@ -11,7 +11,7 @@ first signal. Aggregates only: nothing here carries an instance name.
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from pylxd.exceptions import NotFound
 
@@ -62,6 +62,37 @@ class ProjectUsage:
     used: Dict[str, int]
     # False when the instance read failed: the limits are real, the usage is a floor of zero.
     complete: bool
+    # Newer daemons expose authoritative aggregate allocation through project state. Keep
+    # per-resource completeness so a missing disk-capability check does not make a verified
+    # CPU-only change look unknowable. ``None`` preserves the legacy all-or-nothing contract
+    # for test doubles and callers that construct this type directly.
+    complete_fields: Optional[Set[str]] = None
+
+    def is_complete(self, field: str) -> bool:
+        return self.complete if self.complete_fields is None else field in self.complete_fields
+
+
+def _read_project_disk_allocation(client: Any, project: str) -> Optional[int]:
+    """Read the daemon's aggregate disk allocation when the project_usage API exists.
+
+    ``limits.disk`` includes instance volumes, custom volumes, and image volumes. Summing only
+    instance root devices would undercount and could approve a growth the daemon must reject,
+    so no local approximation is used.
+    """
+    has_extension = getattr(client, "has_extension", None)
+    if not callable(has_extension) or not has_extension("project_usage"):
+        return None
+    response = client.api.projects[safe_segment(project)].state.get()
+    metadata = response.json().get("metadata") or {}
+    resources = metadata.get("resources") or {}
+    resource = resources.get("limits.disk") or resources.get("disk")
+    if not isinstance(resource, dict):
+        return None
+    try:
+        usage = int(resource.get("usage"))
+    except (TypeError, ValueError):
+        return None
+    return usage if usage >= 0 else None
 
 
 def _read_project_config(client: Any, project: str) -> Dict[str, str]:
@@ -83,15 +114,24 @@ def read_project_usage(client: Any, project: str) -> ProjectUsage:
         "virtual_machines": _int_or_none(config.get("limits.virtual-machines")),
         "disk_bytes": parse_lxd_size(config.get("limits.disk")),
     }
-    used = {"cpu": 0, "memory_bytes": 0, "instances": 0, "containers": 0, "virtual_machines": 0}
+    used = {
+        "cpu": 0,
+        "memory_bytes": 0,
+        "instances": 0,
+        "containers": 0,
+        "virtual_machines": 0,
+        "disk_bytes": 0,
+    }
     complete = True
+    instance_usage_complete = True
+    complete_fields: Set[str] = set()
     try:
         rows = list_in_project(client, "instances", project, recursion=1)
     except Exception as e:
         # A limited project refuses creates it cannot account for, so a floor of zero has to
         # be labelled as one rather than shown as "0 of 4 used".
         logger.warning(f"Could not list instances of project {project} for usage: {e}")
-        rows, complete = [], False
+        rows, complete, instance_usage_complete = [], False, False
     for row in rows:
         expanded = row.get("expanded_config") or row.get("config") or {}
         # default=0: LXD refuses to create an instance without limits.cpu in a project that
@@ -103,4 +143,29 @@ def read_project_usage(client: Any, project: str) -> ProjectUsage:
             used["virtual_machines"] += 1
         else:
             used["containers"] += 1
-    return ProjectUsage(limits=limits, used=used, complete=complete)
+
+    if instance_usage_complete:
+        complete_fields.update(
+            {"cpu", "memory_bytes", "instances", "containers", "virtual_machines"}
+        )
+
+    if limits["disk_bytes"] is None:
+        complete_fields.add("disk_bytes")
+    else:
+        try:
+            disk_usage = _read_project_disk_allocation(client, project)
+        except Exception as exc:  # noqa: BLE001 - an unavailable aggregate must fail closed
+            logger.warning("Could not read disk allocation of project %s: %s", project, exc)
+            disk_usage = None
+        if disk_usage is not None:
+            used["disk_bytes"] = disk_usage
+            complete_fields.add("disk_bytes")
+        else:
+            complete = False
+
+    return ProjectUsage(
+        limits=limits,
+        used=used,
+        complete=complete,
+        complete_fields=complete_fields,
+    )

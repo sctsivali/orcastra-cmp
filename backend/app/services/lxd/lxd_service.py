@@ -537,6 +537,7 @@ class LXDService:
         image_protocol: Optional[str] = None,
         description: Optional[str] = None,
         source_type: str = "image",
+        job_id: Optional[str] = None,
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking); returns the operation id.
 
@@ -546,8 +547,24 @@ class LXDService:
         return await self.instance_manager.create_instance(
             name, host, image, instance_type, profiles, config,
             cloud_init, devices, start_on_create, project,
-            image_server, image_protocol, description, source_type,
+            image_server, image_protocol, description, source_type, job_id,
         )
+
+    async def fail_create_job(
+        self,
+        job_id: str,
+        *,
+        error: str,
+        error_code: str,
+    ) -> None:
+        await self.instance_manager.fail_create_job(
+            job_id,
+            error=error,
+            error_code=error_code,
+        )
+
+    async def recover_create_operation_jobs(self) -> int:
+        return await self.instance_manager.recover_create_operation_jobs()
 
     # Image operations
     async def list_images(self, host: str, project: Optional[str] = None) -> ImageStoreListing:

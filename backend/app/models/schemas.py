@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 # note: ClusterStatus lives in cluster_status.py beside derive_status, the one function
 # allowed to produce it. Re-exported here so existing imports from this module still work.
 from app.core.url_safety import normalize_endpoint
-from app.core.lxd_names import POLICY_CONFIG_KEYS
+from app.core.lxd_names import LXD_NAME_PATTERN, POLICY_CONFIG_KEYS
 from app.models.cluster_status import (  # noqa: F401
     AvailabilityReason,
     ClusterStatus,
@@ -235,7 +235,29 @@ class VMListResponse(BaseModel):
 
 class VMCreateRequest(BaseModel):
     """Request body for creating a new VM."""
-    name: str = Field(..., min_length=1, max_length=63, description="VM hostname")
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "example": {
+                "name": "my-vm",
+                "host": "node1",
+                "image": "ubuntu:22.04",
+                "instance_type": "virtual-machine",
+                "profiles": ["default"],
+                "cloud_init": "#cloud-config\npackage_update: true",
+                "start_on_create": True,
+            }
+        },
+    )
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=63,
+        pattern=LXD_NAME_PATTERN,
+        description="VM hostname",
+    )
     description: Optional[str] = Field(None, description="Instance description")
     host: str = Field(..., description="Target LXD host (node1 or node2)")
     image: str = Field(..., description="Image alias or fingerprint")
@@ -252,12 +274,12 @@ class VMCreateRequest(BaseModel):
         default="default",
         description="LXD project to create the instance in"
     )
-    instance_type: str = Field(
+    instance_type: Literal["virtual-machine", "container"] = Field(
         default="virtual-machine",
         description="Instance type: virtual-machine or container"
     )
     profiles: List[str] = Field(
-        default=["default"], 
+        default_factory=lambda: ["default"],
         description="Profiles to apply"
     )
     config: Optional[Dict[str, str]] = Field(
@@ -303,20 +325,6 @@ class VMCreateRequest(BaseModel):
             )
         return self
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "name": "my-vm",
-                "host": "node1",
-                "image": "ubuntu:22.04",
-                "instance_type": "virtual-machine",
-                "profiles": ["default"],
-                "cloud_init": "#cloud-config\npackage_update: true",
-                "start_on_create": True
-            }
-        }
-
-
 class InstanceCreateRequest(VMCreateRequest):
     """Request body for the dashboard's ``POST /instances``.
 
@@ -338,6 +346,22 @@ class InstanceCreateRequest(VMCreateRequest):
             "media and using the console (LXD: `lxc init <name> --empty --vm`)."
         ),
     )
+    plan_revision: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "Opaque revision returned by POST /instances/preflight. When supplied, create "
+            "is refused if the effective profiles, devices, or networks changed."
+        ),
+    )
+    acknowledgements: List[Literal["networkless"]] = Field(
+        default_factory=list,
+        description="Explicit acknowledgements for non-blocking create warnings.",
+    )
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     @model_validator(mode="after")
     def _check_source(self):
@@ -364,6 +388,42 @@ class VMCreateResponse(BaseModel):
     message: str
     vm: Optional[VMInfo] = None
     operation_id: Optional[str] = None
+    job_id: Optional[str] = None
+    status: Literal["accepted", "unknown"] = "accepted"
+
+
+class InstanceCreatePreflightIssue(BaseModel):
+    """A structured create blocker or warning that the form can place by a field."""
+
+    code: str
+    field: Optional[str] = None
+    message: str
+    acknowledgement_required: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class InstanceCreateEffectiveSummary(BaseModel):
+    """Safe effective state used to explain what the daemon will receive."""
+
+    profiles: List[str] = Field(default_factory=list)
+    nic_names: List[str] = Field(default_factory=list)
+    root_device: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class InstanceCreatePreflightResponse(BaseModel):
+    """Read-only verdict for a dashboard instance create."""
+
+    ready: bool
+    plan_revision: str
+    blockers: List[InstanceCreatePreflightIssue] = Field(default_factory=list)
+    warnings: List[InstanceCreatePreflightIssue] = Field(default_factory=list)
+    required_acknowledgements: List[Literal["networkless"]] = Field(default_factory=list)
+    effective: InstanceCreateEffectiveSummary
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class VMActionRequest(BaseModel):
@@ -1085,6 +1145,26 @@ class ProjectListResponse(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
     """Request body for creating a new project."""
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
+            "example": {
+                "name": "production",
+                "host": "node1",
+                "description": "Production environment",
+                "config": {
+                    "features.images": "true",
+                    "features.profiles": "true",
+                    "features.storage.volumes": "true",
+                },
+                "max_cpu": 2,
+                "max_ram": "1GiB",
+                "max_storage": "10GiB",
+            }
+        },
+    )
+
     name: str = Field(..., min_length=1, max_length=63, description="Project name")
     host: str = Field(..., description="Target LXD host")
     description: Optional[str] = Field(None, description="Project description")
@@ -1096,24 +1176,6 @@ class ProjectCreateRequest(BaseModel):
     max_ram: str = Field(..., min_length=1, description="Maximum RAM (ex;, '2GiB', '512MiB')")
     max_storage: str = Field(..., min_length=1, description="Maximum storage (ex;, '10GiB', '500MiB')")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "name": "production",
-                "host": "node1",
-                "description": "Production environment",
-                "config": {
-                    "features.images": "true",
-                    "features.profiles": "true",
-                    "features.storage.volumes": "true"
-                },
-                "max_cpu": 2,
-                "max_ram": "1GiB",
-                "max_storage": "10GiB"
-            }
-        }
-
-
 class ProjectCreateResponse(BaseModel):
     """Response after project creation."""
     success: bool
@@ -1123,21 +1185,23 @@ class ProjectCreateResponse(BaseModel):
 
 class ProjectUpdateRequest(BaseModel):
     """Request body for updating a project."""
-    description: Optional[str] = Field(None, description="Project description")
-    max_cpu: Optional[int] = Field(None, ge=0, description="Maximum CPU cores (0 = unlimited/clear limit)")
-    max_ram: Optional[str] = Field(None, description="Maximum RAM (ex;, '2GiB', '512MiB', '0' = unlimited)")
-    max_storage: Optional[str] = Field(None, description="Maximum storage (ex;, '10GiB', '500MiB', '0' = unlimited)")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        json_schema_extra={
             "example": {
                 "description": "Updated description",
                 "max_cpu": 4,
                 "max_ram": "2GiB",
-                "max_storage": "20GiB"
+                "max_storage": "20GiB",
             }
-        }
+        },
+    )
 
+    description: Optional[str] = Field(None, description="Project description")
+    max_cpu: Optional[int] = Field(None, ge=0, description="Maximum CPU cores (0 = unlimited/clear limit)")
+    max_ram: Optional[str] = Field(None, description="Maximum RAM (ex;, '2GiB', '512MiB', '0' = unlimited)")
+    max_storage: Optional[str] = Field(None, description="Maximum storage (ex;, '10GiB', '500MiB', '0' = unlimited)")
 
 class ProjectUpdateResponse(BaseModel):
     """Response after project update."""

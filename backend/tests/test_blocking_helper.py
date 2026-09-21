@@ -19,6 +19,7 @@ from app.core.blocking import (
     BlockingPoolFull,
     BlockingTimeout,
     in_flight,
+    in_flight_for_key,
     run_blocking,
 )
 
@@ -128,6 +129,70 @@ async def test_saturated_pool_sheds_load_instead_of_queueing(pool):
 
     released.set()
     await asyncio.gather(*held, return_exceptions=True)
+
+
+async def test_one_peer_is_bounded_without_shedding_another_peer(pool):
+    held = asyncio.create_task(
+        run_blocking(
+            time.sleep,
+            0.5,
+            timeout=5,
+            label="cluster-a held",
+            executor=pool,
+            max_in_flight=2,
+            concurrency_key="cluster-a",
+            max_in_flight_per_key=1,
+        )
+    )
+    await asyncio.sleep(0.1)
+
+    assert in_flight_for_key(pool, "cluster-a") == 1
+    with pytest.raises(BlockingPoolFull) as caught:
+        await run_blocking(
+            time.sleep,
+            0.1,
+            timeout=5,
+            label="cluster-a shed",
+            executor=pool,
+            max_in_flight=2,
+            concurrency_key="cluster-a",
+            max_in_flight_per_key=1,
+        )
+    assert caught.value.in_flight_count == 1
+
+    other = asyncio.create_task(
+        run_blocking(
+            lambda: "cluster-b accepted",
+            timeout=5,
+            label="cluster-b",
+            executor=pool,
+            max_in_flight=2,
+            concurrency_key="cluster-b",
+            max_in_flight_per_key=1,
+        )
+    )
+    await asyncio.sleep(0)
+    assert in_flight_for_key(pool, "cluster-b") == 1
+
+    assert await other == "cluster-b accepted"
+    for _ in range(50):
+        if in_flight_for_key(pool, "cluster-a") == 0:
+            break
+        # Some CI selectors only observe executor completion on their next scheduled wakeup.
+        await asyncio.sleep(0.02)
+    await held
+    assert in_flight_for_key(pool, "cluster-a") == 0
+
+
+async def test_per_peer_limit_requires_a_key(pool):
+    with pytest.raises(ValueError, match="concurrency_key"):
+        await run_blocking(
+            lambda: None,
+            timeout=5,
+            label="missing key",
+            executor=pool,
+            max_in_flight_per_key=1,
+        )
 
 
 async def test_exceptions_from_the_callable_propagate_unchanged(pool):

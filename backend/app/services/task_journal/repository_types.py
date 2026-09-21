@@ -54,6 +54,7 @@ class ActorFields:
     request_id: Optional[str]
     target_organization_id: Optional[int]
     target_organization_slug: Optional[str]
+    target_organization_resolution: Optional[str] = None
 
 
 @dataclass(frozen=True)

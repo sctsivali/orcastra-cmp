@@ -102,6 +102,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
+from app.services.shared_cluster_audit import (
+    SharedClusterGuardError,
+    assert_cluster_safe_to_share,
+    serialize_cluster_share,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -4878,6 +4883,46 @@ class ProvisionTenantAccessResponse(BaseModel):
     cluster_mapped: bool = False
 
 
+async def _ensure_provision_cluster_mapping(
+    db: AsyncSession,
+    *,
+    organization_id: int,
+    cluster_id: str,
+    registered_by: Optional[str],
+) -> bool:
+    """Add the provisioning binding under the shared ownership/configuration lock."""
+
+    from app.models.db_models import OrganizationCluster
+
+    async with serialize_cluster_share(db, cluster_id):
+        existing = (
+            await db.execute(
+                select(OrganizationCluster).where(
+                    and_(
+                        OrganizationCluster.organization_id == organization_id,
+                        OrganizationCluster.cluster_id == cluster_id,
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return False
+        await assert_cluster_safe_to_share(
+            db,
+            cluster_id,
+            prospective_organization_id=organization_id,
+            prospective_registered_by=registered_by,
+        )
+        db.add(
+            OrganizationCluster(
+                organization_id=organization_id,
+                cluster_id=cluster_id,
+            )
+        )
+        await db.flush()
+        return True
+
+
 @external_router.post(
     "/provision-tenant-access",
     response_model=ProvisionTenantAccessResponse,
@@ -5065,21 +5110,20 @@ async def provision_tenant_access(
         logger.warning(f"Failed to copy personalization (non-fatal): {e}")
 
     # Step 2: ensure cluster is mapped to this org
-    from app.models.db_models import OrganizationCluster
-    cluster_stmt = select(OrganizationCluster).where(
-        and_(
-            OrganizationCluster.organization_id == org.id,
-            OrganizationCluster.cluster_id == body.cluster_id,
-        )
-    )
-    cluster_result = await db.execute(cluster_stmt)
-    if not cluster_result.scalar_one_or_none():
-        db.add(OrganizationCluster(
+    try:
+        cluster_mapped = await _ensure_provision_cluster_mapping(
+            db,
             organization_id=org.id,
             cluster_id=body.cluster_id,
-        ))
-        await db.flush()
-        cluster_mapped = True
+            registered_by=api_key.get("created_by"),
+        )
+    except SharedClusterGuardError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.as_detail(),
+        ) from exc
+    if cluster_mapped:
         logger.info(f"Auto-mapped cluster {body.cluster_id} to org {org.slug}")
 
     # Step 3: ensure org members exist for all user_emails

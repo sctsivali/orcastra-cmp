@@ -877,7 +877,8 @@ def test_tenant_availability_is_a_copy_without_control_plane_metadata():
 
 
 def test_full_node_inventory_handlers_are_partner_gated():
-    tree = ast.parse(Path("app/routers/nodes.py").read_text(encoding="utf-8"))
+    source = Path(__file__).resolve().parents[1] / "app" / "routers" / "nodes.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
     expected = {"get_nodes_status", "get_node_names", "get_node_resources", "get_node_gpus"}
     guarded = set()
     for node in ast.walk(tree):

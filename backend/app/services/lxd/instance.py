@@ -5,15 +5,24 @@ Handles create, start, stop, restart, delete, and list operations for instances.
 
 import logging
 import asyncio
+import secrets
+import socket
 from typing import Callable, List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed, NotFound
 from requests import exceptions as requests_exc
+from sqlalchemy import and_, or_, select, update
 
 from app.models.schemas import VMInfo
+from app.models.db_models import InstanceOperationJob
 from app.services.lxd.nic_preflight import NicPreflightError, check_nics
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.cache import get_cache_manager
+from app.core.database import async_session_maker
+from app.core.error_sanitizer import sanitize_error
+from app.services.activity_logger import get_activity_logger
 from . import health
 from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
@@ -42,6 +51,7 @@ from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 _NO_CLIENT_OVERRIDE = object()
+_CREATE_EVENT_TIMEOUT_SECONDS = 2.0
 
 
 def _announce_instance_created(host: str, project: str, name: str) -> None:
@@ -59,6 +69,47 @@ def _announce_instance_created(host: str, project: str, name: str) -> None:
     from app.services.orcahub_webhook import schedule_orcahub_event
 
     schedule_orcahub_event("instance.created", host, project, name)
+
+
+async def _emit_instance_created(
+    host: str,
+    project: str,
+    name: str,
+    operation_id: Optional[str],
+) -> None:
+    """Bound optional notification work so it cannot strand a verified create."""
+    try:
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await asyncio.wait_for(
+            emit_resource_event(
+                event_type="orcastra.instance.created.v1",
+                cluster_id=host,
+                resource_type="instance",
+                resource_name=name,
+                project=project,
+                operation_id=operation_id,
+            ),
+            timeout=_CREATE_EVENT_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001 - notification cannot rewrite daemon truth
+        logger.warning(
+            "Could not enqueue the instance-created event for %s/%s/%s: %s",
+            host,
+            project,
+            name,
+            _create_error(exc),
+        )
+    try:
+        _announce_instance_created(host, project, name)
+    except Exception as exc:  # noqa: BLE001 - optional notification only
+        logger.warning(
+            "Could not schedule the OrcaHub create event for %s/%s/%s: %s",
+            host,
+            project,
+            name,
+            _create_error(exc),
+        )
 
 # The pooled client is built for fast failure detection (3s connect / 8s read).
 # That read timeout is shorter than the graceful-shutdown waits callers ask for,
@@ -105,6 +156,297 @@ _CREATE_WALL_TIMEOUT_SECONDS = (
 )
 _create_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lxd_create")
 _CREATE_MAX_IN_FLIGHT = 4
+_CREATE_MAX_IN_FLIGHT_PER_CLUSTER = 2
+_CREATE_CONNECT_TIMEOUT_SECONDS = 20.0
+_CREATE_SUBMIT_TIMEOUT_SECONDS = 45.0
+_CREATE_READBACK_TIMEOUT_SECONDS = 35.0
+# The heartbeat keeps the lease fresh during the longest bounded create wait. A crashed worker is
+# reclaimable within five minutes, while ownership checks immediately before start and at terminal
+# CAS prevent a delayed worker from double-starting or overwriting the recovery worker's verdict.
+_CREATE_LEASE_SECONDS = 5 * 60
+_CREATE_HEARTBEAT_SECONDS = 30
+_CREATE_RECOVERY_GRACE_SECONDS = 30
+_CREATE_ACTIVE_STATUSES = ("pending", "running", "unknown")
+_CREATE_TERMINAL_STATUSES = ("success", "failure", "partial")
+
+
+class CreateSubmissionUnknown(LXDOperationError):
+    """The create POST may have reached LXD, so a retry could duplicate the mutation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        job_id: Optional[str] = None,
+        operation_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.job_id = job_id
+        self.operation_id = operation_id
+
+
+def _create_worker_id() -> str:
+    return f"create-{secrets.token_hex(12)}"
+
+
+def _create_error(exc: BaseException) -> str:
+    return sanitize_error(str(exc), limit=1000) or type(exc).__name__
+
+
+def _ambiguous_create_error(exc: BaseException) -> bool:
+    return isinstance(
+        exc,
+        (
+            BlockingTimeout,
+            ClientConnectionFailed,
+            requests_exc.ConnectionError,
+            requests_exc.Timeout,
+            socket.timeout,
+            TimeoutError,
+        ),
+    )
+
+
+def _preserve_create_ambiguity(
+    row: InstanceOperationJob,
+    fallback: str,
+) -> Dict[str, Any]:
+    result = getattr(row, "result", None)
+    if isinstance(result, dict) and result.get("ambiguous_action") in {"create", "start"}:
+        return dict(result)
+    return {"ambiguous_action": fallback}
+
+
+async def _load_create_job(job_id: str) -> Optional[InstanceOperationJob]:
+    async with async_session_maker() as db:
+        return (
+            await db.execute(
+                select(InstanceOperationJob).where(
+                    InstanceOperationJob.job_id == job_id,
+                    InstanceOperationJob.kind == "create",
+                )
+            )
+        ).scalar_one_or_none()
+
+
+async def _claim_create_job(
+    job_id: str,
+    worker_id: str,
+    *,
+    include_unknown: bool = False,
+) -> bool:
+    """Claim one active create job without stealing a healthy worker's lease."""
+    now = datetime.now(timezone.utc)
+    stale = now - timedelta(seconds=_CREATE_LEASE_SECONDS)
+    statuses = _CREATE_ACTIVE_STATUSES if include_unknown else ("pending", "running")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            update(InstanceOperationJob)
+            .where(
+                InstanceOperationJob.job_id == job_id,
+                InstanceOperationJob.kind == "create",
+                InstanceOperationJob.status.in_(statuses),
+                or_(
+                    InstanceOperationJob.locked_at.is_(None),
+                    InstanceOperationJob.locked_at < stale,
+                ),
+            )
+            .values(locked_by=worker_id, locked_at=now, updated_at=now)
+        )
+        await db.commit()
+        return bool(result.rowcount)
+
+
+async def _set_create_job(
+    job_id: str,
+    *,
+    worker_id: Optional[str] = None,
+    **values: Any,
+) -> bool:
+    """Update bookkeeping only. Cache invalidation belongs to verified state changes."""
+    values["updated_at"] = datetime.now(timezone.utc)
+    predicates = (
+        InstanceOperationJob.job_id == job_id,
+        InstanceOperationJob.kind == "create",
+        InstanceOperationJob.status.in_(_CREATE_ACTIVE_STATUSES),
+    )
+    if worker_id is not None:
+        predicates = (*predicates, InstanceOperationJob.locked_by == worker_id)
+    async with async_session_maker() as db:
+        operation_id = values.get("operation_id")
+        if operation_id:
+            row = (
+                await db.execute(
+                    select(InstanceOperationJob)
+                    .where(*predicates)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return False
+            operation_ids = list(getattr(row, "operation_ids", None) or [])
+            if operation_id not in operation_ids:
+                operation_ids.append(operation_id)
+            values["operation_ids"] = operation_ids
+        result = await db.execute(
+            update(InstanceOperationJob).where(*predicates).values(**values)
+        )
+        await db.commit()
+        return bool(result.rowcount)
+
+
+async def _create_lease_heartbeat(job_id: str, worker_id: str) -> None:
+    """Keep a live worker's lease fresh while bounded daemon waits run in another thread."""
+    while True:
+        await asyncio.sleep(_CREATE_HEARTBEAT_SECONDS)
+        try:
+            renewed = await _set_create_job(
+                job_id,
+                worker_id=worker_id,
+                locked_at=datetime.now(timezone.utc),
+            )
+        except Exception as exc:  # noqa: BLE001 - fencing still protects later mutations
+            logger.warning(
+                "Could not renew durable create lease for %s: %s",
+                job_id,
+                _create_error(exc),
+            )
+            continue
+        if not renewed:
+            return
+
+
+async def _stop_create_heartbeat(task: Optional[asyncio.Task[Any]]) -> None:
+    if task is None:
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+async def _mark_create_unknown(
+    row: InstanceOperationJob,
+    *,
+    operation_id: Optional[str],
+    error: str,
+    result: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Release the lease for reconciliation; unknown is not a terminal audit verdict."""
+    return await _set_create_job(
+        row.job_id,
+        worker_id=getattr(row, "locked_by", None),
+        phase="unknown",
+        status="unknown",
+        operation_id=operation_id or row.operation_id,
+        result=result,
+        error=sanitize_error(error, limit=1000),
+        locked_by=None,
+        locked_at=None,
+        finished_at=None,
+    )
+
+
+async def _finish_create_job(
+    row: InstanceOperationJob,
+    status: str,
+    *,
+    operation_id: Optional[str],
+    result: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+    invalidate_cache: bool = False,
+    announce_created: bool = False,
+) -> bool:
+    """Write one terminal verdict and emit side effects only for the CAS winner."""
+    if status not in _CREATE_TERMINAL_STATUSES:
+        raise ValueError(f"Unsupported create terminal status: {status}")
+    now = datetime.now(timezone.utc)
+    safe_error = sanitize_error(error or "", limit=1000) or None
+    final_operation_id = operation_id or row.operation_id
+    async with async_session_maker() as db:
+        predicates = (
+            InstanceOperationJob.job_id == row.job_id,
+            InstanceOperationJob.kind == "create",
+            InstanceOperationJob.status.in_(_CREATE_ACTIVE_STATUSES),
+        )
+        if owner := getattr(row, "locked_by", None):
+            predicates = (*predicates, InstanceOperationJob.locked_by == owner)
+        persisted = (
+            await db.execute(
+                select(InstanceOperationJob)
+                .where(*predicates)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if persisted is None:
+            return False
+        operation_ids = list(getattr(persisted, "operation_ids", None) or [])
+        if final_operation_id and final_operation_id not in operation_ids:
+            operation_ids.append(final_operation_id)
+        update_result = await db.execute(
+            update(InstanceOperationJob).where(*predicates).values(
+                phase=status,
+                status=status,
+                operation_id=final_operation_id,
+                operation_ids=operation_ids,
+                result=result,
+                error=safe_error,
+                locked_by=None,
+                locked_at=None,
+                updated_at=now,
+                finished_at=now,
+            )
+        )
+        await db.commit()
+        transitioned = bool(update_result.rowcount)
+    if not transitioned:
+        return False
+
+    if invalidate_cache:
+        try:
+            get_cache_manager().invalidate_instance_cache()
+        except Exception as exc:  # noqa: BLE001 - cache failure cannot change the verdict
+            logger.warning(
+                "Could not invalidate instance cache after create job %s: %s",
+                row.job_id,
+                _create_error(exc),
+            )
+
+    try:
+        get_activity_logger().log_activity(
+            action="instance.create",
+            target_type="instance",
+            target_id=row.instance_name,
+            target_host=row.cluster_id,
+            target_project=row.project,
+            result="success" if status == "success" else "failure",
+            error_code=None if status == "success" else status.upper(),
+            error_message=safe_error,
+            details={
+                "job_id": row.job_id,
+                "operation_id": final_operation_id,
+                "operation_ids": operation_ids,
+                "project": row.project,
+                "status": status,
+                "requested": row.requested or {},
+            },
+            after_state=result,
+            actor_user_id=row.requester,
+            target_organization_id=getattr(row, "target_organization_id", None),
+            target_organization_slug=getattr(row, "target_organization_slug", None),
+            target_organization_resolution=getattr(
+                row, "target_organization_resolution", None
+            ),
+        )
+    except Exception:  # noqa: BLE001 - the database verdict remains authoritative
+        logger.exception("Could not write terminal audit for create job %s", row.job_id)
+
+    if announce_created:
+        await _emit_instance_created(
+            row.cluster_id,
+            row.project,
+            row.instance_name,
+            final_operation_id,
+        )
+    return True
 
 
 def _is_graceful_timeout(exc: Exception) -> bool:
@@ -1274,6 +1616,8 @@ class InstanceManager:
                 label=f"create-vm[{host}/{project}/{name}]",
                 executor=_create_executor,
                 max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
             )
         except BlockingTimeout as exc:
             raise LXDOperationError(
@@ -1375,16 +1719,8 @@ class InstanceManager:
             return vm_info
 
         except LXDAPIException as e:
-            raise LXDOperationError(f"Failed to create VM: {str(e)}")
+            raise LXDOperationError(f"Failed to create VM: {_create_error(e)}")
 
-    @audit_operation(
-        "lxd.instance.create", "instance",
-        extract_details=lambda args, kwargs, result: {
-            "image": kwargs.get("image"),
-            "instance_type": kwargs.get("instance_type", "virtual-machine"),
-            "profiles": kwargs.get("profiles"),
-        }
-    )
     async def create_instance(
         self,
         name: str,
@@ -1401,6 +1737,7 @@ class InstanceManager:
         image_protocol: Optional[str] = None,
         description: Optional[str] = None,
         source_type: str = "image",
+        job_id: Optional[str] = None,
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking).
 
@@ -1415,8 +1752,44 @@ class InstanceManager:
         This backs the dashboard's `POST /instances` flow. create_vm() is kept
         separate and unchanged for Orcahub's `POST /vms`.
         """
+        worker_id: Optional[str] = None
+        job_row: Optional[InstanceOperationJob] = None
+        heartbeat_task: Optional[asyncio.Task[Any]] = None
+        heartbeat_transferred = False
+        if job_id:
+            worker_id = _create_worker_id()
+            if not await _claim_create_job(job_id, worker_id):
+                existing = await _load_create_job(job_id)
+                if existing is not None and existing.status in _CREATE_TERMINAL_STATUSES:
+                    return existing.operation_id
+                raise LXDOperationError(
+                    "The durable create job is already owned by another worker."
+                )
+            await _set_create_job(
+                job_id,
+                worker_id=worker_id,
+                status="running",
+                phase="preflighting",
+                error=None,
+            )
+            job_row = await _load_create_job(job_id)
+            if job_row is None:
+                raise LXDOperationError("The durable create job could not be loaded.")
+            heartbeat_task = asyncio.create_task(
+                _create_lease_heartbeat(job_id, worker_id)
+            )
+
         try:
-            client = self._get_client_with_reconnect(host)
+            client = await run_blocking(
+                self._get_client_with_reconnect,
+                host,
+                timeout=_CREATE_CONNECT_TIMEOUT_SECONDS,
+                label=f"create connection[{host}/{project}/{name}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
             if client is None:
                 raise LXDConnectionError(f"Could not connect to {host}")
 
@@ -1426,9 +1799,15 @@ class InstanceManager:
             # can take a while when a remote image is being pulled.
             # pylxd's constructor does blocking network I/O (validates the
             # endpoint), so build it off the event loop like the create POST.
-            create_client = await asyncio.to_thread(
+            create_client = await run_blocking(
                 self.connection_manager.get_project_client,
                 host, project, (5, 1800),
+                timeout=_CREATE_CONNECT_TIMEOUT_SECONDS,
+                label=f"create project client[{host}/{project}/{name}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
             )
             if create_client is None:
                 if project != "default":
@@ -1440,8 +1819,15 @@ class InstanceManager:
             # non-blocking flow can't surface cleanly (the pre-existing instance is
             # already in the list, so the failing placeholder looks "resolved").
             # A synchronous check gives the user an immediate, clear error.
-            already_exists = await asyncio.to_thread(
-                create_client.instances.exists, name
+            already_exists = await run_blocking(
+                create_client.instances.exists,
+                name,
+                timeout=_CREATE_READBACK_TIMEOUT_SECONDS,
+                label=f"create duplicate read[{host}/{project}/{name}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
             )
             if already_exists:
                 raise LXDOperationError(
@@ -1457,8 +1843,18 @@ class InstanceManager:
             # parameter with the client's own, so a project-bound client would check the
             # wrong project.
             try:
-                await asyncio.to_thread(
-                    check_nics, client, project, devices, profiles
+                await run_blocking(
+                    check_nics,
+                    client,
+                    project,
+                    devices,
+                    profiles,
+                    timeout=_CREATE_READBACK_TIMEOUT_SECONDS,
+                    label=f"create NIC validation[{host}/{project}/{name}]",
+                    executor=_create_executor,
+                    max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                    concurrency_key=host,
+                    max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
                 )
             except NicPreflightError as nic_err:
                 raise LXDOperationError(str(nic_err)) from None
@@ -1504,9 +1900,46 @@ class InstanceManager:
             # Non-blocking create: POST kicks off a background LXD operation and
             # returns immediately. Synchronous validation errors (bad name, bad
             # pool, unknown image, etc.) still surface here as LXDAPIException.
-            response = await asyncio.to_thread(
-                lambda: create_client.api.instances.post(json=instance_def)
-            )
+            if job_id:
+                updated = await _set_create_job(
+                    job_id,
+                    worker_id=worker_id,
+                    status="running",
+                    phase="submitting",
+                )
+                if not updated:
+                    raise LXDOperationError(
+                        "The durable create job lease was lost before submission."
+                    )
+            try:
+                response = await run_blocking(
+                    lambda: create_client.api.instances.post(json=instance_def),
+                    timeout=_CREATE_SUBMIT_TIMEOUT_SECONDS,
+                    label=f"submit create[{host}/{project}/{name}]",
+                    executor=_create_executor,
+                    max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                    concurrency_key=host,
+                    max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+                )
+            except BlockingPoolFull:
+                # run_blocking refuses before scheduling the POST, so the daemon cannot have
+                # seen this request and the ordinary synchronous failure path is safe.
+                raise
+            except Exception as exc:
+                if job_row is not None and _ambiguous_create_error(exc):
+                    await _mark_create_unknown(
+                        job_row,
+                        operation_id=None,
+                        error=(
+                            "The connection was lost while submitting the create. The daemon "
+                            "may have accepted it; reconciliation will read actual state."
+                        ),
+                        result={"ambiguous_action": "create"},
+                    )
+                    raise CreateSubmissionUnknown(
+                        "The create submission outcome is unknown.", job_id=job_id
+                    ) from exc
+                raise
             operation_id = None
             try:
                 op_url = response.json().get("operation")
@@ -1514,6 +1947,32 @@ class InstanceManager:
                     operation_id = op_url.rstrip("/").rsplit("/", 1)[-1]
             except Exception:
                 pass
+
+            if job_id:
+                try:
+                    updated = await _set_create_job(
+                        job_id,
+                        worker_id=worker_id,
+                        status="running",
+                        phase="verifying",
+                        operation_id=operation_id,
+                        error=None,
+                    )
+                except Exception as exc:  # noqa: BLE001 - accepted mutation is ambiguous
+                    raise CreateSubmissionUnknown(
+                        "The create was accepted, but its operation could not be recorded.",
+                        job_id=job_id,
+                        operation_id=operation_id,
+                    ) from exc
+                if not updated:
+                    # The mutation is accepted. A missing bookkeeping write must never invite
+                    # the caller to submit it again; the persisted pending/running row remains
+                    # the recovery handle.
+                    raise CreateSubmissionUnknown(
+                        "The create was accepted, but its operation could not be recorded.",
+                        job_id=job_id,
+                        operation_id=operation_id,
+                    )
 
             logger.info(
                 f"Started creation of {instance_type} {name} on {host} "
@@ -1524,7 +1983,16 @@ class InstanceManager:
             # then start the instance, without blocking this request.
             if start_on_create:
                 task = asyncio.create_task(
-                    self._finalize_and_start(create_client, name, operation_id, host, project)
+                    self._finalize_and_start(
+                        create_client,
+                        name,
+                        operation_id,
+                        host,
+                        project,
+                        job_id=job_id,
+                        worker_id=worker_id,
+                        heartbeat_task=heartbeat_task,
+                    )
                 )
                 # Keep a strong ref until done so the loop can't GC it mid-run.
                 self._bg_tasks.add(task)
@@ -1535,24 +2003,43 @@ class InstanceManager:
                 # asynchronous failure was silent. Watch it too, holding the same strong
                 # reference the branch above does so the loop cannot collect it mid-run.
                 watch = asyncio.create_task(
-                    self._watch_create_operation(create_client, name, operation_id, host, project)
+                    self._watch_create_operation(
+                        create_client,
+                        name,
+                        operation_id,
+                        host,
+                        project,
+                        job_id=job_id,
+                        worker_id=worker_id,
+                        heartbeat_task=heartbeat_task,
+                    )
                 )
                 self._bg_tasks.add(watch)
                 watch.add_done_callback(self._bg_tasks.discard)
 
+            heartbeat_transferred = heartbeat_task is not None
             return operation_id
 
-        except ClientConnectionFailed as e:
+        except CreateSubmissionUnknown:
+            raise
+        except (ClientConnectionFailed, requests_exc.ConnectionError, requests_exc.Timeout) as e:
             # Cluster unreachable during exists()/POST. Surface as a connection
             # error so the router maps it to 503, not a blanket 500.
             raise LXDConnectionError(f"Failed to reach {host}: {e}")
+        except (BlockingPoolFull, BlockingTimeout) as e:
+            raise LXDConnectionError(
+                f"Create capacity is temporarily unavailable on {host}"
+            ) from e
         except LXDAPIException as e:
             # A project limit refusal is the one synchronous 4xx the form can act on: it names
             # a field. Everything else stays the free text it always was.
             hit = project_limit_from_lxd_error(str(e))
             if hit is not None:
-                raise LXDProjectLimitError(f"Failed to create VM: {str(e)}", hit)
-            raise LXDOperationError(f"Failed to create VM: {str(e)}")
+                raise LXDProjectLimitError(f"Failed to create VM: {_create_error(e)}", hit)
+            raise LXDOperationError(f"Failed to create VM: {_create_error(e)}")
+        finally:
+            if not heartbeat_transferred:
+                await _stop_create_heartbeat(heartbeat_task)
 
     @staticmethod
     def _invalidate_lists_after_background_change(name: str, host: str) -> None:
@@ -1562,6 +2049,653 @@ class InstanceManager:
             get_cache_manager().invalidate_instance_cache()
         except Exception as e:  # noqa: BLE001 - a cache miss is cheaper than a lost start
             logger.warning(f"Could not clear the instance list cache after {name} on {host} changed: {e}")
+
+    @staticmethod
+    def _create_instance_status(instance: Any) -> str:
+        return str(getattr(instance, "status", None) or "Unknown")
+
+    @staticmethod
+    def _create_result(row: InstanceOperationJob, instance: Any) -> Dict[str, Any]:
+        return {
+            "instance_name": row.instance_name,
+            "instance_status": InstanceManager._create_instance_status(instance),
+            "instance_type": row.instance_type,
+        }
+
+    async def _read_created_instance(
+        self,
+        client: Any,
+        row: InstanceOperationJob,
+    ) -> tuple[Optional[Any], bool, Optional[str]]:
+        """Read the exact target. ``complete`` distinguishes NotFound from no verdict."""
+        try:
+            instance = await run_blocking(
+                client.instances.get,
+                safe_segment(row.instance_name),
+                timeout=_CREATE_READBACK_TIMEOUT_SECONDS,
+                label=(
+                    f"create readback[{row.cluster_id}/{row.project}/{row.instance_name}]"
+                ),
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=row.cluster_id,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
+            return instance, True, None
+        except NotFound:
+            return None, True, None
+        except LXDAPIException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 404 or "not found" in str(exc).lower():
+                return None, True, None
+            return None, False, _create_error(exc)
+        except Exception as exc:  # noqa: BLE001 - unknown must be reconciled, never guessed
+            return None, False, _create_error(exc)
+
+    async def _wait_for_create_operation(
+        self,
+        client: Any,
+        row: InstanceOperationJob,
+        operation_id: str,
+    ) -> tuple[str, Optional[str]]:
+        try:
+            await run_blocking(
+                client.operations.wait_for_operation,
+                operation_id,
+                timeout=_CREATE_WALL_TIMEOUT_SECONDS,
+                label=(
+                    f"wait create[{row.cluster_id}/{row.project}/{row.instance_name}/"
+                    f"{operation_id}]"
+                ),
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=row.cluster_id,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
+            return "success", None
+        except NotFound as exc:
+            # Incus eventually expires operation records. Exact resource readback proves that
+            # something exists at the requested identity, but cannot reconstruct the missing
+            # terminal verdict, so reconciliation must never promote it to success or auto-start.
+            return "expired", _create_error(exc)
+        except LXDAPIException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 404:
+                return "expired", _create_error(exc)
+            return "failure", _create_error(exc)
+        except Exception as exc:  # noqa: BLE001 - readback below decides ambiguous outcomes
+            if _ambiguous_create_error(exc) or isinstance(exc, BlockingPoolFull):
+                return "unknown", _create_error(exc)
+            return "failure", _create_error(exc)
+
+    @staticmethod
+    def _submit_start_operation(client: Any, instance_name: str) -> Optional[str]:
+        response = client.api.instances[safe_segment(instance_name)].state.put(
+            json={"action": "start", "timeout": _START_WAIT_SECONDS, "force": False}
+        )
+        try:
+            operation_url = response.json().get("operation")
+        except Exception:  # noqa: BLE001 - accepted without correlation is still ambiguous
+            return None
+        return operation_url.rstrip("/").rsplit("/", 1)[-1] if operation_url else None
+
+    async def _verify_durable_start(
+        self,
+        client: Any,
+        row: InstanceOperationJob,
+        *,
+        create_operation_id: Optional[str],
+        start_operation_id: Optional[str],
+    ) -> None:
+        """Verify a submitted start. This path never submits or replays the action."""
+        state = {
+            "ambiguous_action": "start",
+            "create_operation_id": create_operation_id,
+            "start_operation_id": start_operation_id,
+        }
+        if not start_operation_id:
+            instance, read_complete, read_error = await self._read_created_instance(client, row)
+            if read_complete and instance is not None:
+                state.update(self._create_result(row, instance))
+            await _mark_create_unknown(
+                row,
+                operation_id=create_operation_id,
+                error=(
+                    "The start request may have reached the daemon, but no operation id was "
+                    "returned. Recovery will only read state and will not submit start again."
+                    + (
+                        f" Readback failed: {read_error or 'unknown error'}."
+                        if not read_complete
+                        else ""
+                    )
+                ),
+                result=state,
+            )
+            return
+
+        verdict, start_error = await self._wait_for_create_operation(
+            client, row, start_operation_id
+        )
+        verified, read_complete, read_error = await self._read_created_instance(client, row)
+        if not read_complete:
+            await _mark_create_unknown(
+                row,
+                operation_id=start_operation_id,
+                error=(
+                    "The start operation has no verified final state: "
+                    f"{read_error or start_error or 'unknown error'}"
+                ),
+                result=state,
+            )
+            return
+        if verified is None:
+            if verdict in {"unknown", "expired"}:
+                await _mark_create_unknown(
+                    row,
+                    operation_id=start_operation_id,
+                    error=(
+                        "The auto-start operation has no verifiable terminal outcome and exact "
+                        "readback does not currently show the instance. Recovery will not "
+                        "submit start again."
+                    ),
+                    result=state,
+                )
+                return
+            await _finish_create_job(
+                row,
+                "failure",
+                operation_id=start_operation_id,
+                error="The created instance disappeared before auto-start could be verified.",
+                invalidate_cache=True,
+            )
+            return
+
+        state.update(self._create_result(row, verified))
+        if verdict == "unknown":
+            await _mark_create_unknown(
+                row,
+                operation_id=start_operation_id,
+                error=(
+                    "The instance was created, but the submitted auto-start operation is "
+                    f"still ambiguous: {start_error or 'no terminal verdict'}"
+                ),
+                result=state,
+            )
+            return
+
+        terminal_state = dict(state)
+        terminal_state.pop("ambiguous_action", None)
+        if verdict == "failure":
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=start_operation_id,
+                result=terminal_state,
+                error=(
+                    "The instance exists, but the submitted auto-start operation reported "
+                    f"failure: {start_error or 'unknown daemon error'}"
+                ),
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+        if verdict == "expired":
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=start_operation_id,
+                result=terminal_state,
+                error=(
+                    "The instance exists, but the auto-start operation record expired before "
+                    "its terminal verdict could be verified. Orcastra did not submit start again."
+                ),
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+        if verdict != "success":
+            await _mark_create_unknown(
+                row,
+                operation_id=start_operation_id,
+                error="The auto-start operation returned an unrecognized verdict.",
+                result=state,
+            )
+            return
+        if self._create_instance_status(verified).lower() == "running":
+            await _finish_create_job(
+                row,
+                "success",
+                operation_id=start_operation_id,
+                result=terminal_state,
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+
+        await _finish_create_job(
+            row,
+            "partial",
+            operation_id=start_operation_id,
+            result=terminal_state,
+            error=(
+                "The auto-start operation reported success, but exact readback did not reach "
+                f"Running: {self._create_instance_status(verified)}"
+            ),
+            invalidate_cache=True,
+            announce_created=True,
+        )
+
+    async def _complete_durable_create(
+        self,
+        client: Any,
+        row: InstanceOperationJob,
+        instance: Any,
+        operation_id: Optional[str],
+        *,
+        operation_verdict: str = "success",
+        operation_error: Optional[str] = None,
+    ) -> None:
+        result = self._create_result(row, instance)
+        if operation_verdict == "failure":
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=operation_id,
+                result=result,
+                error=(
+                    "The create operation reported failure, but exact readback found an "
+                    f"instance: {operation_error or 'unknown daemon error'}"
+                ),
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+
+        if operation_verdict == "expired":
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=operation_id,
+                result=result,
+                error=(
+                    "The create operation record expired before its terminal verdict could be "
+                    "verified, but exact readback found an instance. Orcastra did not submit "
+                    "create or auto-start again."
+                ),
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+
+        if operation_verdict == "unknown":
+            await _mark_create_unknown(
+                row,
+                operation_id=operation_id,
+                error=(
+                    "The create operation has no terminal verdict. Exact readback found the "
+                    "instance, but reconciliation will not report success or submit auto-start."
+                ),
+                result={**result, "ambiguous_action": "create"},
+            )
+            return
+
+        start_requested = bool((row.requested or {}).get("start_on_create"))
+        current_status = self._create_instance_status(instance)
+        if not start_requested or current_status.lower() == "running":
+            await _finish_create_job(
+                row,
+                "success",
+                operation_id=operation_id,
+                result=result,
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+
+        # Fence immediately before the external mutation. Persisting the action marker first is
+        # what makes a crash between POST and operation-id storage recoverable without replay.
+        start_state = {
+            **result,
+            "ambiguous_action": "start",
+            "create_operation_id": operation_id,
+            "start_operation_id": None,
+        }
+        owner = getattr(row, "locked_by", None)
+        owns_job = await _set_create_job(
+            row.job_id,
+            worker_id=owner,
+            phase="starting",
+            status="running",
+            result=start_state,
+            locked_at=datetime.now(timezone.utc),
+        )
+        if not owns_job:
+            # A recovery worker owns the lease now. It alone may decide whether start is needed.
+            return
+
+        try:
+            start_operation_id = await run_blocking(
+                self._submit_start_operation,
+                client,
+                row.instance_name,
+                timeout=_CREATE_SUBMIT_TIMEOUT_SECONDS,
+                label=(
+                    f"submit auto-start[{row.cluster_id}/{row.project}/{row.instance_name}]"
+                ),
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=row.cluster_id,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
+        except BlockingPoolFull as exc:
+            # The action was not scheduled. This is a known partial result, not ambiguity.
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=operation_id,
+                result=result,
+                error=f"The instance was created but start capacity was unavailable: {_create_error(exc)}",
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - the pre-POST marker prevents replay
+            instance_after, complete, _ = await self._read_created_instance(client, row)
+            if _ambiguous_create_error(exc):
+                if complete and instance_after is not None:
+                    start_state.update(self._create_result(row, instance_after))
+                await _mark_create_unknown(
+                    row,
+                    operation_id=operation_id,
+                    error=(
+                        "The instance was created, but the auto-start submission outcome is "
+                        f"unknown: {_create_error(exc)}"
+                    ),
+                    result=start_state,
+                )
+                return
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=operation_id,
+                result=(
+                    self._create_result(row, instance_after)
+                    if instance_after is not None
+                    else result
+                ),
+                error=f"The instance was created but could not be started: {_create_error(exc)}",
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+
+        start_state["start_operation_id"] = start_operation_id
+        try:
+            persisted = await _set_create_job(
+                row.job_id,
+                worker_id=owner,
+                phase="starting",
+                status="running",
+                operation_id=start_operation_id or operation_id,
+                result=start_state,
+                locked_at=datetime.now(timezone.utc),
+            )
+        except Exception as exc:  # noqa: BLE001 - the start may already be accepted
+            await _mark_create_unknown(
+                row,
+                operation_id=start_operation_id or operation_id,
+                error=(
+                    "The auto-start was accepted, but its operation could not be recorded: "
+                    f"{_create_error(exc)}"
+                ),
+                result=start_state,
+            )
+            return
+        if not persisted:
+            # The pre-submit action marker remains durable. The lease winner will read state and
+            # must not issue another start even when this operation id could not be attached.
+            return
+        await self._verify_durable_start(
+            client,
+            row,
+            create_operation_id=operation_id,
+            start_operation_id=start_operation_id,
+        )
+
+    async def _reconcile_durable_create(
+        self,
+        client: Any,
+        job_id: str,
+        *,
+        worker_id: Optional[str],
+        recovery: bool,
+    ) -> None:
+        """Reconcile operation plus exact readback. This function never submits a create."""
+        row = await _load_create_job(job_id)
+        if row is None or row.status in _CREATE_TERMINAL_STATUSES:
+            return
+
+        stored_result = getattr(row, "result", None)
+        durable_result = stored_result if isinstance(stored_result, dict) else {}
+        if row.phase == "starting" or durable_result.get("ambiguous_action") == "start":
+            # Start may already have reached the daemon. Reconcile its operation and exact
+            # readback only; never call the start endpoint a second time.
+            create_operation_id = durable_result.get("create_operation_id")
+            start_operation_id = durable_result.get("start_operation_id")
+            if not start_operation_id and row.operation_id != create_operation_id:
+                start_operation_id = row.operation_id
+            await self._verify_durable_start(
+                client,
+                row,
+                create_operation_id=create_operation_id,
+                start_operation_id=start_operation_id,
+            )
+            return
+
+        operation_id = row.operation_id
+        # Recovery follows the same evidence order as the original worker. A resource can become
+        # readable while its create operation is still running, so readback cannot replace a known
+        # operation's terminal verdict. This path only observes state and never replays create.
+
+        if operation_id:
+            await _set_create_job(
+                row.job_id,
+                worker_id=worker_id,
+                phase="verifying",
+                status="running",
+            )
+            verdict, operation_error = await self._wait_for_create_operation(
+                client, row, operation_id
+            )
+        else:
+            verdict, operation_error = "unknown", "The create operation id is unavailable."
+
+        instance, read_complete, read_error = await self._read_created_instance(client, row)
+        if not read_complete:
+            await _mark_create_unknown(
+                row,
+                operation_id=operation_id,
+                error=(
+                    "Neither the operation nor exact instance readback established a final "
+                    f"create outcome: {read_error or operation_error or 'unknown error'}"
+                ),
+                result={"ambiguous_action": "create"},
+            )
+            return
+
+        if instance is None:
+            if verdict == "failure":
+                await _finish_create_job(
+                    row,
+                    "failure",
+                    operation_id=operation_id,
+                    error=operation_error or "The daemon refused the create operation.",
+                    invalidate_cache=True,
+                )
+                return
+            if not operation_id and row.phase in {"pending", "preflighting"}:
+                await _finish_create_job(
+                    row,
+                    "failure",
+                    operation_id=None,
+                    error="The backend stopped before submitting the create operation.",
+                    invalidate_cache=True,
+                )
+                return
+            await _mark_create_unknown(
+                row,
+                operation_id=operation_id,
+                error=(
+                    "The create operation has no terminal verdict and exact readback does not "
+                    "yet show an instance. Reconciliation will not resubmit the create."
+                ),
+                result={"ambiguous_action": "create"},
+            )
+            return
+
+        if not operation_id:
+            # The daemon may still be applying an accepted create whose operation id was absent
+            # or could not be persisted. Readback is useful evidence, but is not a terminal
+            # verdict and cannot safely authorize success, failure, or auto-start.
+            await _mark_create_unknown(
+                row,
+                operation_id=None,
+                result={
+                    **self._create_result(row, instance),
+                    "ambiguous_action": "create",
+                },
+                error=(
+                    "An instance with the requested identity exists, but the create operation "
+                    "has no correlated terminal verdict. Recovery will not submit create or "
+                    "auto-start again."
+                ),
+            )
+            return
+
+        await self._complete_durable_create(
+            client,
+            row,
+            instance,
+            operation_id,
+            operation_verdict=verdict,
+            operation_error=operation_error,
+        )
+
+    async def fail_create_job(
+        self,
+        job_id: str,
+        *,
+        error: str,
+        error_code: str,
+    ) -> None:
+        """Finish a known synchronous refusal. No daemon state changed, so cache stays warm."""
+        row = await _load_create_job(job_id)
+        if row is None:
+            return
+        await _finish_create_job(
+            row,
+            "failure",
+            operation_id=row.operation_id,
+            result={"error_code": error_code},
+            error=error,
+            invalidate_cache=False,
+        )
+
+    async def _recover_create_job(self, job_id: str) -> None:
+        worker_id = _create_worker_id()
+        if not await _claim_create_job(job_id, worker_id, include_unknown=True):
+            return
+        row = await _load_create_job(job_id)
+        if row is None:
+            return
+        heartbeat_task = asyncio.create_task(
+            _create_lease_heartbeat(job_id, worker_id)
+        )
+        try:
+            client = await run_blocking(
+                self.connection_manager.get_project_client,
+                row.cluster_id,
+                row.project,
+                (5, _CREATE_LXD_READ_TIMEOUT_SECONDS),
+                timeout=_CREATE_CONNECT_TIMEOUT_SECONDS,
+                label=(
+                    f"recover create client[{row.cluster_id}/{row.project}/{row.instance_name}]"
+                ),
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=row.cluster_id,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
+            if client is None and row.project == "default":
+                client = await run_blocking(
+                    self._get_client_with_reconnect,
+                    row.cluster_id,
+                    timeout=_CREATE_CONNECT_TIMEOUT_SECONDS,
+                    label=f"recover create connection[{row.cluster_id}]",
+                    executor=_create_executor,
+                    max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                    concurrency_key=row.cluster_id,
+                    max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+                )
+            if client is None:
+                await _mark_create_unknown(
+                    row,
+                    operation_id=row.operation_id,
+                    error=(
+                        f"Could not open project '{row.project}' on {row.cluster_id}. "
+                        "Recovery will retry without submitting another create."
+                    ),
+                    result=_preserve_create_ambiguity(row, "recovery"),
+                )
+            else:
+                await self._reconcile_durable_create(
+                    client,
+                    job_id,
+                    worker_id=worker_id,
+                    recovery=True,
+                )
+        except Exception as exc:  # noqa: BLE001 - recovery must leave an inspectable job
+            await _mark_create_unknown(
+                row,
+                operation_id=row.operation_id,
+                error=(
+                    "Create recovery could not read the cluster state: "
+                    f"{_create_error(exc)}"
+                ),
+                result=_preserve_create_ambiguity(row, "recovery"),
+            )
+        finally:
+            await _stop_create_heartbeat(heartbeat_task)
+
+    async def _schedule_create_recovery_pass(self) -> int:
+        now = datetime.now(timezone.utc)
+        stale = now - timedelta(seconds=_CREATE_LEASE_SECONDS)
+        unclaimed_before = now - timedelta(seconds=_CREATE_RECOVERY_GRACE_SECONDS)
+        async with async_session_maker() as db:
+            rows = (
+                await db.execute(
+                    select(InstanceOperationJob.job_id).where(
+                        InstanceOperationJob.kind == "create",
+                        InstanceOperationJob.status.in_(_CREATE_ACTIVE_STATUSES),
+                        or_(
+                            and_(
+                                InstanceOperationJob.locked_at.is_(None),
+                                InstanceOperationJob.updated_at < unclaimed_before,
+                            ),
+                            InstanceOperationJob.locked_at < stale,
+                        ),
+                    )
+                )
+            ).scalars().all()
+        for job_id in rows:
+            task = asyncio.create_task(self._recover_create_job(job_id))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
+        return len(rows)
+
+    async def recover_create_operation_jobs(self) -> int:
+        """Schedule one pass; main owns the single periodic loop for create and spec jobs."""
+        return await self._schedule_create_recovery_pass()
 
     async def _judge_create_operation(self, client, name: str, operation_id: Optional[str],
                                       host: str, project: str) -> bool:
@@ -1584,10 +2718,24 @@ class InstanceManager:
         from app.services.activity_logger import get_activity_logger
 
         try:
-            await asyncio.to_thread(client.operations.wait_for_operation, operation_id)
+            await run_blocking(
+                client.operations.wait_for_operation,
+                operation_id,
+                timeout=_CREATE_WALL_TIMEOUT_SECONDS,
+                label=f"legacy create wait[{host}/{project}/{name}/{operation_id}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
         except Exception as e:
+            safe_error = _create_error(e)
             logger.error(
-                f"Create operation failed for {name} on {host} (project={project}): {e}"
+                "Create operation failed for %s on %s (project=%s): %s",
+                name,
+                host,
+                project,
+                safe_error,
             )
             try:
                 get_activity_logger().log_activity(
@@ -1597,7 +2745,7 @@ class InstanceManager:
                     target_host=host,
                     result="failure",
                     error_code="LXD_OPERATION_FAILED",
-                    error_message=str(e),
+                    error_message=safe_error,
                     details={"project": project, "operation_id": operation_id},
                 )
             except Exception:  # noqa: BLE001 - never let bookkeeping break the sweep
@@ -1622,30 +2770,60 @@ class InstanceManager:
         # create queued, so announcing it there would tell every subscriber an instance exists
         # moments before LXD refuses it, with no correction to follow. This is the single place a
         # create is judged, so it is the only honest place to say it happened.
-        from app.services.webhooks.emitter import emit_resource_event
-
-        await emit_resource_event(
-            event_type="orcastra.instance.created.v1",
-            cluster_id=host,
-            resource_type="instance",
-            resource_name=name,
-            project=project,
-            operation_id=operation_id,
-        )
-        _announce_instance_created(host, project, name)
+        await _emit_instance_created(host, project, name, operation_id)
         return True
 
-    async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],
-                                      host: str, project: str) -> None:
+    async def _watch_create_operation(
+        self,
+        client,
+        name: str,
+        operation_id: Optional[str],
+        host: str,
+        project: str,
+        *,
+        job_id: Optional[str] = None,
+        worker_id: Optional[str] = None,
+        heartbeat_task: Optional[asyncio.Task[Any]] = None,
+    ) -> None:
         """Background: record whether the create operation LXD queued actually succeeded.
 
         The no-autostart branch. Judging is shared with the autostart branch so the two cannot
         drift again; see _judge_create_operation.
         """
+        if job_id:
+            try:
+                await self._reconcile_durable_create(
+                    client,
+                    job_id,
+                    worker_id=worker_id,
+                    recovery=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - background errors stay visible in the job
+                row = await _load_create_job(job_id)
+                if row is not None:
+                    await _mark_create_unknown(
+                        row,
+                        operation_id=operation_id,
+                        error=f"Create verification could not finish: {_create_error(exc)}",
+                        result=_preserve_create_ambiguity(row, "verification"),
+                    )
+            finally:
+                await _stop_create_heartbeat(heartbeat_task)
+            return
         await self._judge_create_operation(client, name, operation_id, host, project)
 
-    async def _finalize_and_start(self, client, name: str, operation_id: Optional[str],
-                                  host: str, project: str) -> None:
+    async def _finalize_and_start(
+        self,
+        client,
+        name: str,
+        operation_id: Optional[str],
+        host: str,
+        project: str,
+        *,
+        job_id: Optional[str] = None,
+        worker_id: Optional[str] = None,
+        heartbeat_task: Optional[asyncio.Task[Any]] = None,
+    ) -> None:
         """Background: wait for the create operation to finish, then start the instance.
 
         important: the create is judged BEFORE the start is attempted, and the two failures are
@@ -1656,6 +2834,27 @@ class InstanceManager:
         operator took: `_watch_create_operation`, written specifically to catch a rejected
         create, only ran on the other branch.
         """
+        if job_id:
+            try:
+                await self._reconcile_durable_create(
+                    client,
+                    job_id,
+                    worker_id=worker_id,
+                    recovery=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - background errors stay visible in the job
+                row = await _load_create_job(job_id)
+                if row is not None:
+                    await _mark_create_unknown(
+                        row,
+                        operation_id=operation_id,
+                        error=f"Create/start verification could not finish: {_create_error(exc)}",
+                        result=_preserve_create_ambiguity(row, "verification"),
+                    )
+            finally:
+                await _stop_create_heartbeat(heartbeat_task)
+            return
+
         # Phase 1: did the instance actually get created?
         if not await self._judge_create_operation(client, name, operation_id, host, project):
             # The instance does not exist, so there is nothing to start and no second failure
@@ -1664,8 +2863,28 @@ class InstanceManager:
 
         # Phase 2: it exists. A failure from here is genuinely about starting it.
         try:
-            instance = await asyncio.to_thread(client.instances.get, name)
-            await asyncio.to_thread(self._start_and_wait, instance, host, project)
+            instance = await run_blocking(
+                client.instances.get,
+                name,
+                timeout=_CREATE_READBACK_TIMEOUT_SECONDS,
+                label=f"legacy create readback[{host}/{project}/{name}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
+            await run_blocking(
+                self._start_and_wait,
+                instance,
+                host,
+                project,
+                timeout=_START_WAIT_SECONDS + _GRACEFUL_READ_MARGIN_SECONDS,
+                label=f"legacy create auto-start[{host}/{project}/{name}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+                concurrency_key=host,
+                max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+            )
             logger.info(f"Auto-started {name} on {host} (project={project})")
             # important: the list cache was cleared when the create was accepted, and the
             # console re-read it while the instance was still Stopped. Without clearing it

@@ -3,20 +3,25 @@ API Router for Instance operations.
 Provides endpoints for managing LXD instances (containers and VMs).
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, Header, Query
+from typing import Literal, Optional
 from urllib.parse import urlparse
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import (
     VMListResponse,
     VMInfo,
     InstanceCreateRequest,
+    InstanceCreatePreflightIssue,
+    InstanceCreatePreflightResponse,
     VMCreateResponse,
     VMActionRequest,
     VMActionResponse,
@@ -37,6 +42,8 @@ from app.services.lxd_service import (
 from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
+from app.core.database import get_db
+from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.api_key_capabilities import is_valid_project_name
 from app.core.org_scope import (
@@ -64,6 +71,25 @@ from app.services.lxd.instance_devices import (
     set_nic_address_sync,
 )
 from app.services.lxd.nic_preflight import NicPreflightError, check_address_for_network
+from app.services.lxd.create_preflight import (
+    CreatePreflightEvaluation,
+    CreatePreflightUnavailable,
+    evaluate_instance_create,
+)
+from app.services.lxd.instance import CreateSubmissionUnknown
+from app.services.instance_security_policy import (
+    InstanceSecurityPolicyViolation,
+    resolve_cluster_write_policy,
+    validate_instance_payload,
+    validate_target_project_isolation,
+)
+from app.services.instance_job_identity import resolve_instance_job_organization
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.instance_specifications import (
+    SpecificationConflict,
+    create_operation_job,
+    get_operation_job_by_request,
+)
 from app.routers.tags import get_tag_service_dep
 from app.core.lxd_path import safe_segment
 import requests
@@ -76,6 +102,17 @@ router = APIRouter(
     tags=["Instances"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+class InstanceWritePolicyResponse(BaseModel):
+    """The safe UI projection of the actor's instance-write surface on one cluster."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    host: str
+    mode: Literal["full", "safe", "view_only"]
+    can_edit_specifications: bool
+    can_use_advanced_create: bool
 
 
 def _limit_specification(
@@ -181,6 +218,33 @@ def _validate_image_server(image_server: Optional[str]) -> None:
                 + ", ".join(sorted(h for h in allowed_hosts if h))
             ),
         )
+
+
+@router.get(
+    "/write-policy",
+    response_model=InstanceWritePolicyResponse,
+    summary="Get instance write capabilities for one cluster",
+)
+async def get_instance_write_policy(
+    host: str = Query(..., min_length=1, max_length=255),
+    user: AuthenticatedUser = Depends(require_tenant()),
+    db: AsyncSession = Depends(get_db),
+) -> InstanceWritePolicyResponse:
+    """Project the central server policy without exposing organization membership details."""
+    verify_cluster_access(host)
+    policy = await resolve_cluster_write_policy(user, host, db)
+    if policy.has_full_access:
+        mode: Literal["full", "safe", "view_only"] = "full"
+    elif policy.requires_safe_allowlist:
+        mode = "safe"
+    else:
+        mode = "view_only"
+    return InstanceWritePolicyResponse(
+        host=host,
+        mode=mode,
+        can_edit_specifications=mode in {"full", "safe"},
+        can_use_advanced_create=mode == "full",
+    )
 
 
 @router.get(
@@ -473,15 +537,185 @@ async def get_instance(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _run_create_preflight(
+    request: InstanceCreateRequest,
+    lxd_service: LXDService,
+) -> CreatePreflightEvaluation:
+    try:
+        return await evaluate_instance_create(lxd_service, request)
+    except (BlockingPoolFull, BlockingTimeout) as exc:
+        logger.warning("Create preflight capacity exhausted: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "CREATE_PREFLIGHT_UNAVAILABLE",
+                "message": "Instance preflight is busy or timed out. Try again shortly.",
+            },
+        ) from exc
+    except (CreatePreflightUnavailable, LXDConnectionError) as exc:
+        safe_error = sanitize_error(str(exc), limit=500)
+        logger.warning("Create preflight unavailable: %s", safe_error)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "CREATE_PREFLIGHT_UNAVAILABLE",
+                "message": safe_error,
+            },
+        ) from exc
+
+
+def _create_idempotency_key(value: str) -> str:
+    key = value.strip()
+    if (
+        not key
+        or len(key) > 128
+        or any(ord(character) < 33 or ord(character) > 126 for character in key)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency-Key must contain between 1 and 128 characters.",
+        )
+    return key
+
+
+def _create_request_hash(request: InstanceCreateRequest) -> str:
+    """Hash the complete request without persisting its secret-bearing fields."""
+    material = request.model_dump(mode="json")
+    material["acknowledgements"] = sorted(set(material.get("acknowledgements") or []))
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _create_requester(user: AuthenticatedUser) -> str:
+    requester = str(user.user_id or "").strip()
+    if requester:
+        return requester
+    requester = str(user.email or "").strip()
+    if requester:
+        return requester
+    raise HTTPException(status_code=401, detail="Authenticated user identity is unavailable")
+
+
+def _safe_create_job_request(request: InstanceCreateRequest) -> dict:
+    """The minimum non-sensitive create intent needed by recovery."""
+    return {
+        "instance_type": request.instance_type,
+        "source_type": request.source_type,
+        "start_on_create": bool(request.start_on_create),
+        "profiles": list(request.profiles or ["default"]),
+        "networkless_acknowledged": "networkless" in request.acknowledgements,
+    }
+
+
+@router.post(
+    "/preflight",
+    response_model=InstanceCreatePreflightResponse,
+    summary="Preflight an instance create",
+    description="Validate effective profiles, devices, and networks without changing LXD.",
+)
+async def preflight_create_instance(
+    request: InstanceCreateRequest,
+    lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Return blockers and warnings after project authorization and authoritative reads."""
+    project = verify_project_access(request.host, request.project)
+    request = request.model_copy(update={"project": project})
+    _validate_image_server(request.image_server)
+    async with serialize_cluster_configuration(db, request.host):
+        evaluation = await _run_create_preflight(request, lxd_service)
+        response = evaluation.response
+        try:
+            policy = await resolve_cluster_write_policy(_rbac, request.host, db)
+            validate_target_project_isolation(policy, evaluation.target_project_config)
+            validate_instance_payload(
+                policy,
+                config=evaluation.effective_config,
+                devices=evaluation.effective_devices,
+            )
+        except InstanceSecurityPolicyViolation as exc:
+            detail = exc.as_detail()
+            violations = detail.get("violations") or []
+            response = response.model_copy(
+                update={
+                    "ready": False,
+                    "blockers": [
+                        *response.blockers,
+                        InstanceCreatePreflightIssue(
+                            code=str(detail.get("code") or "SECURITY_POLICY_VIOLATION"),
+                            field=(
+                                str(violations[0].get("field"))
+                                if violations and violations[0].get("field")
+                                else None
+                            ),
+                            message=str(
+                                detail.get("message")
+                                or "This configuration is not permitted by cluster policy."
+                            ),
+                        ),
+                    ],
+                }
+            )
+    return response
+
+
+def _enforce_create_preflight(
+    request: InstanceCreateRequest,
+    preflight: InstanceCreatePreflightResponse,
+) -> None:
+    if request.plan_revision is not None and request.plan_revision != preflight.plan_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "STALE_CREATE_PLAN",
+                "message": (
+                    "Profiles, devices, networks, quotas, or instance availability changed "
+                    "after preflight. Review the updated plan before creating."
+                ),
+                "plan_revision": preflight.plan_revision,
+            },
+        )
+    if preflight.blockers:
+        codes = {issue.code for issue in preflight.blockers}
+        status_code = 409 if "INSTANCE_ALREADY_EXISTS" in codes else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "code": "CREATE_PREFLIGHT_FAILED",
+                "message": "The instance cannot be created until the blockers are resolved.",
+                "blockers": [issue.model_dump(mode="json") for issue in preflight.blockers],
+                "plan_revision": preflight.plan_revision,
+            },
+        )
+    missing_acknowledgements = sorted(
+        set(preflight.required_acknowledgements) - set(request.acknowledgements)
+    )
+    if missing_acknowledgements:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ACKNOWLEDGEMENT_REQUIRED",
+                "message": "Review and acknowledge the create warnings before continuing.",
+                "acknowledgements": missing_acknowledgements,
+                "warnings": [issue.model_dump(mode="json") for issue in preflight.warnings],
+                "plan_revision": preflight.plan_revision,
+            },
+        )
+
+
 @router.post(
     "",
     response_model=VMCreateResponse,
+    status_code=202,
     summary="Create new instance",
     description="Create a new instance (container or VM).",
 )
 async def create_instance(
     request: InstanceCreateRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
@@ -492,30 +726,92 @@ async def create_instance(
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
     _validate_image_server(request.image_server)
-    try:
-        result = await lxd_service.create_instance(
-            name=request.name,
-            host=request.host,
-            image=request.image,
-            instance_type=request.instance_type,
-            profiles=request.profiles,
-            config=request.config,
-            cloud_init=request.cloud_init,
-            devices=request.devices,
-            start_on_create=request.start_on_create,
-            project=request.project,
-            image_server=request.image_server,
-            image_protocol=request.image_protocol,
-            description=request.description,
-            source_type=request.source_type,
+    key = _create_idempotency_key(idempotency_key)
+    requester = _create_requester(_rbac)
+    digest = _create_request_hash(request)
+
+    # Retry lookup precedes daemon reads. The caller is re-authorized for the recorded scope,
+    # then receives the durable result without risking a second create while the cluster is
+    # offline or the first operation is still settling.
+    replay = await get_operation_job_by_request(requester, key)
+    if replay is not None:
+        if (
+            replay.kind != "create"
+            or replay.cluster_id != request.host
+            or replay.project != request.project
+            or replay.instance_name != request.name
+            or replay.payload_hash != digest
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This Idempotency-Key was already used for a different request.",
+            )
+        return VMCreateResponse(
+            success=True,
+            message=f"Instance create job '{replay.job_id}' already exists",
+            vm=None,
+            operation_id=replay.operation_id,
+            job_id=replay.job_id,
+            status="unknown" if replay.status == "unknown" else "accepted",
         )
 
-        # important: "accepted", not "success". LXD takes the create as a background operation
-        # and only synchronous validation has run by the time we get here, so the instance may
-        # still be refused seconds later. Recording success at this point produced two
-        # contradictory audit records for one create, the optimistic one here and the real
-        # verdict from the watcher, with nothing to say which was final. The terminal record is
-        # written by _watch_create_operation / _finalize_and_start once the operation settles.
+    # The ownership lock closes the race between an exclusive Partner write and another
+    # request sharing the same cluster. Authoritative preflight, project-isolation admission,
+    # durable job commit, and daemon submission all happen while the same lock is held.
+    async with serialize_cluster_configuration(db, request.host):
+        evaluation = await _run_create_preflight(request, lxd_service)
+        preflight = evaluation.response
+        _enforce_create_preflight(request, preflight)
+
+        try:
+            policy = await resolve_cluster_write_policy(_rbac, request.host, db)
+            validate_target_project_isolation(
+                policy, evaluation.target_project_config
+            )
+            validate_instance_payload(
+                policy,
+                config=evaluation.effective_config,
+                devices=evaluation.effective_devices,
+            )
+        except InstanceSecurityPolicyViolation as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
+
+        job_organization = await resolve_instance_job_organization(
+            db,
+            cluster_id=request.host,
+            project=request.project,
+        )
+
+        try:
+            job, created = await create_operation_job(
+                kind="create",
+                host=request.host,
+                project=request.project,
+                instance_name=request.name,
+                requester=requester,
+                target_organization_id=job_organization.organization_id,
+                target_organization_slug=job_organization.organization_slug,
+                target_organization_resolution=job_organization.resolution,
+                idempotency_key=key,
+                payload_hash=digest,
+                requested=_safe_create_job_request(request),
+                plan_revision=preflight.plan_revision,
+                instance_type=request.instance_type,
+            )
+        except SpecificationConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
+        if not created:
+            return VMCreateResponse(
+                success=True,
+                message=f"Instance create job '{job.job_id}' already exists",
+                vm=None,
+                operation_id=job.operation_id,
+                job_id=job.job_id,
+                status="unknown" if job.status == "unknown" else "accepted",
+            )
+
+        # This accepts the durable request, not the eventual daemon result. The idempotent row
+        # makes it exactly-once even when the network drops during submission.
         activity_logger.log_activity(
             action="instance.create",
             target_type="instance",
@@ -524,101 +820,131 @@ async def create_instance(
             target_project=request.project,
             result="accepted",
             details={
-                "image": request.image,
                 "instance_type": request.instance_type,
-                "profiles": request.profiles,
+                "profiles": request.profiles or ["default"],
                 "project": request.project,
                 "start_on_create": request.start_on_create,
-                "operation_id": result,
-            }
+                "job_id": job.job_id,
+            },
+            actor_user_id=requester,
+            target_organization_id=job_organization.organization_id,
+            target_organization_slug=job_organization.organization_slug,
+            target_organization_resolution=job_organization.resolution,
         )
-        
-        # note: instance.created is NOT announced here. The create is still queued at this
-        # point, so announcing it would tell OrcaHub an instance exists moments before LXD may
-        # refuse it, with no correction to follow. It is emitted from _judge_create_operation
-        # instead, beside the add-on event that already moved there for the same reason.
-        # Non-blocking: create_vm returns the operation id; the instance pulls/
-        # creates in the background and appears via the polling instance list.
-        # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_instance_cache()
+
+        try:
+            operation_id = await lxd_service.create_instance(
+                name=request.name,
+                host=request.host,
+                image=request.image,
+                instance_type=request.instance_type,
+                profiles=request.profiles,
+                config=request.config,
+                cloud_init=request.cloud_init,
+                devices=request.devices,
+                start_on_create=request.start_on_create,
+                project=request.project,
+                image_server=request.image_server,
+                image_protocol=request.image_protocol,
+                description=request.description,
+                source_type=request.source_type,
+                job_id=job.job_id,
+            )
+        except CreateSubmissionUnknown as exc:
+            logger.warning(
+                "Create submission outcome is unknown for %s/%s/%s (job=%s): %s",
+                request.host,
+                request.project,
+                request.name,
+                job.job_id,
+                sanitize_error(str(exc)),
+            )
+            return VMCreateResponse(
+                success=True,
+                message=(
+                    "The cluster may have accepted the create. The durable job will reconcile "
+                    "actual state; do not submit it again."
+                ),
+                vm=None,
+                operation_id=exc.operation_id,
+                job_id=job.job_id,
+                status="unknown",
+            )
+        except LXDOperationError as exc:
+            safe_error = sanitize_error(str(exc), limit=1000)
+            logger.error("LXD operation error creating %s: %s", request.name, safe_error)
+            await lxd_service.fail_create_job(
+                job.job_id,
+                error=safe_error,
+                error_code="LXD_OPERATION_ERROR",
+            )
+            if isinstance(exc, LXDProjectLimitError):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "PROJECT_LIMIT_REACHED",
+                        "message": safe_error,
+                        "limit": exc.hit.limit,
+                        "project": exc.hit.project,
+                        "max": exc.hit.maximum,
+                    },
+                )
+            low = safe_error.lower()
+            if "already exists" in low:
+                status_code = 409
+            elif "not found" in low:
+                status_code = 404
+            elif (
+                "connect" in low
+                or "not available" in low
+                or "could not open project" in low
+            ):
+                status_code = 503
+            else:
+                status_code = 400
+            raise HTTPException(status_code=status_code, detail=safe_error)
+        except LXDConnectionError as exc:
+            safe_error = sanitize_error(str(exc), limit=1000)
+            logger.warning("LXD connection error creating %s: %s", request.name, safe_error)
+            await lxd_service.fail_create_job(
+                job.job_id,
+                error=safe_error,
+                error_code="LXD_CONNECTION_ERROR",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "LXD_UNAVAILABLE",
+                    "message": "The target cluster is unavailable. The create was not submitted.",
+                    "job_id": job.job_id,
+                },
+            )
+        except Exception as exc:
+            safe_error = sanitize_error(str(exc), limit=1000)
+            logger.error("Error creating instance %s: %s", request.name, safe_error)
+            await lxd_service.fail_create_job(
+                job.job_id,
+                error=safe_error,
+                error_code="UNEXPECTED_ERROR",
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "CREATE_FAILED",
+                    "message": "The instance create could not be submitted.",
+                    "job_id": job.job_id,
+                },
+            )
+
+        # The exact job watcher, not this accepted response, publishes instance.created and
+        # invalidates cached inventory after operation terminal plus readback.
         return VMCreateResponse(
             success=True,
             message=f"Creating instance '{request.name}' on {request.host}",
             vm=None,
-            operation_id=result,
+            operation_id=operation_id,
+            job_id=job.job_id,
         )
-    except LXDOperationError as e:
-        logger.error(f"LXD operation error: {e}")
-
-        # Log activity: instance creation failure
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="failure",
-            error_code="LXD_OPERATION_ERROR",
-            error_message=str(e),
-            details={"image": request.image, "instance_type": request.instance_type}
-        )
-
-        # A project limit refusal names a field the form can mark; precedent for a dict
-        # detail is the rebuild route's snapshot refusal.
-        if isinstance(e, LXDProjectLimitError):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "PROJECT_LIMIT_REACHED",
-                    "message": str(e),
-                    "limit": e.hit.limit,
-                    "project": e.hit.project,
-                    "max": e.hit.maximum,
-                },
-            )
-
-        # Map to a meaningful status instead of a blanket 500.
-        low = str(e).lower()
-        if "already exists" in low:
-            status = 409
-        elif "not found" in low:
-            status = 404
-        elif "connect" in low or "not available" in low or "could not open project" in low:
-            status = 503
-        else:
-            status = 400
-        raise HTTPException(status_code=status, detail=str(e))
-    except LXDConnectionError as e:
-        # Cluster unreachable (e.g. during the duplicate-name exists() check or
-        # the create POST). 503, matching the other instance endpoints.
-        logger.warning(f"LXD connection error creating instance: {e}")
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="failure",
-            error_code="LXD_CONNECTION_ERROR",
-            error_message=str(e),
-        )
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating instance: {e}")
-
-        # Log activity: instance creation failure
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            target_project=request.project,
-            result="failure",
-            error_code="UNEXPECTED_ERROR",
-            error_message=str(e)
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(

@@ -1,15 +1,18 @@
 """A fake daemon and app for the profile router tests, shared by the three test files."""
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode
 from app.core.org_scope import org_scope_dependency
-from app.core.rbac import get_current_user
+from app.core.rbac import Role, get_current_user
 from app.routers import profiles as profiles_module
+from app.services.instance_security_policy import ClusterOwnership, ClusterWritePolicy
 from app.services.lxd_service import get_lxd_service
 
 
@@ -136,10 +139,53 @@ def app(monkeypatch, daemon: Daemon):
     client = SimpleNamespace(api=_Api())
     svc = SimpleNamespace(get_client_with_reconnect=lambda host: client)
     monkeypatch.setattr(profiles_module, "resolve_owner", lambda c, kind, project: "default")
+    monkeypatch.setattr(
+        profiles_module,
+        "list_project_configs",
+        lambda client: {
+            "default": {
+                "restricted": "true",
+                "features.images": "true",
+                "features.networks": "true",
+                "features.profiles": "true",
+                "features.storage.volumes": "true",
+            }
+        },
+    )
     monkeypatch.setattr(profiles_module, "project_is_visible", lambda host, project: True)
     monkeypatch.setattr(profiles_module, "verify_cluster_access", lambda host: None, raising=False)
     monkeypatch.setattr(profiles_module, "filter_visible_lxd_references", lambda host, refs: refs)
     monkeypatch.setattr(profiles_module, "tenant_acl_active", lambda: False)
+
+    async def _policy(*args, **kwargs):
+        return ClusterWritePolicy("nuc1", Role.ADMIN, ClusterOwnership.EXCLUSIVE)
+
+    @asynccontextmanager
+    async def _configuration_lock(*args, **kwargs):
+        yield
+
+    async def _bounded_inline(function, *args, **kwargs):
+        for option in (
+            "timeout",
+            "label",
+            "executor",
+            "max_in_flight",
+            "concurrency_key",
+            "max_in_flight_per_key",
+        ):
+            kwargs.pop(option, None)
+        return function(*args, **kwargs)
+
+    async def _db():
+        yield object()
+
+    monkeypatch.setattr(profiles_module, "resolve_cluster_write_policy", _policy)
+    monkeypatch.setattr(
+        profiles_module,
+        "serialize_cluster_configuration",
+        _configuration_lock,
+    )
+    monkeypatch.setattr(profiles_module, "run_blocking", _bounded_inline)
     monkeypatch.setattr(profiles_module.activity_logger, "log_activity",
                         lambda **kw: calls["activity"].append(kw))
     monkeypatch.setattr(
@@ -151,6 +197,7 @@ def app(monkeypatch, daemon: Daemon):
     fastapi_app.include_router(profiles_module.router)
     fastapi_app.dependency_overrides[get_lxd_service] = lambda: svc
     fastapi_app.dependency_overrides[get_current_user] = lambda: None
+    fastapi_app.dependency_overrides[get_db] = _db
     fastapi_app.dependency_overrides[org_scope_dependency] = lambda: None
     fastapi_app.dependency_overrides[check_read_only_mode] = lambda: None
     return TestClient(fastapi_app, raise_server_exceptions=False), calls

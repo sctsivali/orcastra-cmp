@@ -28,8 +28,22 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
-from app.services.lxd.exceptions import LXDLocalUnavailableError, LXDProjectNotFoundError
+from app.services.lxd.exceptions import (
+    LXDLocalUnavailableError,
+    LXDOperationUnknownError,
+    LXDProjectNotFoundError,
+)
+from app.services.instance_security_policy import (
+    ClusterWritePolicy,
+    InstanceSecurityPolicyViolation,
+    prepare_project_create_config,
+    resolve_cluster_write_policy,
+    validate_target_project_isolation,
+    validate_project_update,
+)
+from app.services.shared_cluster_audit import serialize_cluster_configuration
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.api_key_capabilities import is_valid_project_name
 from app.core.database import get_db
 from app.core.rbac import Role, get_highest_role, resolve_roles
@@ -68,6 +82,42 @@ _projects_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="proj
 # that ceiling so one cold fleet request cannot reject its own later clusters and so the
 # selected-cluster picker retains capacity while the fleet cache is rebuilding.
 _PROJECT_FLEET_BATCH_SIZE = 8
+_PROJECT_RESOURCE_WALL_SECONDS = 90.0
+_PROJECT_RESOURCE_MAX_IN_FLIGHT = 10
+_PROJECT_RESOURCE_MAX_IN_FLIGHT_PER_CLUSTER = 1
+
+
+async def _bounded_node_resources(lxd_service: LXDService, host: str) -> Dict[str, Any]:
+    """Read capacity off-loop with global, per-cluster, wall, and socket bounds."""
+    # The pooled LXD session applies its default connect/read socket timeout to every nested
+    # call made by get_node_resources. This outer bound controls request latency and admission.
+    return await run_blocking(
+        lxd_service.get_node_resources,
+        host,
+        timeout=_PROJECT_RESOURCE_WALL_SECONDS,
+        label=f"project.capacity[{host}]",
+        executor=_projects_executor,
+        max_in_flight=_PROJECT_RESOURCE_MAX_IN_FLIGHT,
+        concurrency_key=host,
+        max_in_flight_per_key=_PROJECT_RESOURCE_MAX_IN_FLIGHT_PER_CLUSTER,
+    )
+
+
+async def _finish_critical_write(awaitable: Awaitable[Any]) -> tuple[Any, bool]:
+    """Finish an admitted daemon write even if its HTTP requester disconnects.
+
+    The caller keeps the ownership lock around this helper. Returning the cancellation marker
+    lets it persist any matching organization grant before propagating cancellation.
+    """
+    task = asyncio.create_task(awaitable)
+    cancelled = False
+    while True:
+        try:
+            return await asyncio.shield(task), cancelled
+        except asyncio.CancelledError:
+            cancelled = True
+            if task.done():
+                return task.result(), cancelled
 
 
 async def _gather_project_reads(
@@ -374,6 +424,28 @@ def _refuse_a_project_outside_the_bound(host: str, project_name: str) -> None:
         raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
 
 
+def _policy_refusal(exc: InstanceSecurityPolicyViolation) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.as_detail())
+
+
+async def _cluster_write_policy(
+    user: AuthenticatedUser,
+    host: str,
+    db: AsyncSession,
+) -> ClusterWritePolicy:
+    """Resolve current ownership, refusing closed when the database cannot prove it."""
+    try:
+        return await resolve_cluster_write_policy(user, host, db)
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
+    except Exception as exc:
+        logger.error("Could not verify write policy for cluster %s: %s", host, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster ownership could not be verified. No change was sent.",
+        ) from exc
+
+
 @router.post(
     "",
     response_model=ProjectCreateResponse,
@@ -405,25 +477,13 @@ async def create_project(
     if not is_valid_project_name(request.name):
         raise HTTPException(status_code=422, detail="Invalid project name")
     grant_org: Optional[int] = None
-    if get_highest_role(resolve_roles(user)) == Role.PARTNER:
-        grant_org = await org_to_hold_project_grant(user.email, request.host, db)
-        if grant_org is None and visible_projects_for(request.host) is not None:
-            # Refused before LXD is touched: created first, the project would be one its
-            # creator can neither see nor delete.
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Your account is not a member of an organization bound to cluster "
-                    f"'{request.host}', so a project created there could not be shown to you"
-                ),
-            )
     try:
         # important: a project limit is a cap, not a reservation. LXD allows any limit and any
         # over-commit, so the only figure that makes a cap nonsensical is the hardware total.
         # Comparing against cpu_available (threads minus allocation) refused every project on
         # an over-committed cluster with "exceeds available CPU (-227)".
         try:
-            node_resources = lxd_service.get_node_resources(request.host)
+            node_resources = await _bounded_node_resources(lxd_service, request.host)
             _refuse_cap_above_hardware(
                 node_resources,
                 max_cpu=request.max_cpu,
@@ -431,27 +491,65 @@ async def create_project(
                 storage_bytes=_parse_size_to_bytes(request.max_storage),
                 labels=(str(request.max_cpu), request.max_ram, request.max_storage),
             )
-        except LXDOperationError:
+        except (
+            BlockingPoolFull,
+            BlockingTimeout,
+            LXDConnectionError,
+            LXDOperationError,
+        ):
             # if we can't get resources, just log and continue
             logger.warning(f"Could not validate resources for {request.host}, proceeding anyway")
-        
-        project_data = await lxd_service.create_project(
-            host=request.host,
-            name=request.name,
-            description=request.description,
-            config=request.config,
-            max_cpu=request.max_cpu,
-            max_ram=request.max_ram,
-            max_storage=request.max_storage,
-        )
-        
-        project = ProjectInfo(**project_data)
-        message = f"Project '{request.name}' created successfully on {request.host}"
 
-        if grant_org is not None:
-            message += await project_grants.record_created_project(
-                db, organization_id=grant_org, cluster_id=request.host, project_name=request.name, created_by=user.email,
+        async with serialize_cluster_configuration(db, request.host):
+            policy = await _cluster_write_policy(user, request.host, db)
+            project_config = prepare_project_create_config(policy, request.config or {})
+            validate_target_project_isolation(policy, project_config)
+
+            if get_highest_role(resolve_roles(user)) == Role.PARTNER:
+                grant_org = await org_to_hold_project_grant(user.email, request.host, db)
+                if grant_org is None and visible_projects_for(request.host) is not None:
+                    # Refused before LXD is touched: created first, the project would be one
+                    # its creator can neither see nor delete.
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            "Your account is not a member of an organization bound to cluster "
+                            f"'{request.host}', so a project created there could not be shown "
+                            "to you"
+                        ),
+                    )
+
+            async def submit_and_record_grant() -> tuple[Dict[str, Any], str]:
+                project_data = await lxd_service.create_project(
+                    host=request.host,
+                    name=request.name,
+                    description=request.description,
+                    config=project_config,
+                    max_cpu=request.max_cpu,
+                    max_ram=request.max_ram,
+                    max_storage=request.max_storage,
+                )
+                message = f"Project '{request.name}' created successfully on {request.host}"
+                if grant_org is not None:
+                    message += await project_grants.record_created_project(
+                        db,
+                        organization_id=grant_org,
+                        cluster_id=request.host,
+                        project_name=request.name,
+                        created_by=user.email,
+                    )
+                return project_data, message
+
+            critical_result, request_cancelled = await _finish_critical_write(
+                submit_and_record_grant()
             )
+            project_data, message = critical_result
+            if request_cancelled:
+                # The daemon result and matching grant are now consistent. Preserve normal
+                # cancellation semantics only after the security-critical pair is complete.
+                raise asyncio.CancelledError
+
+        project = ProjectInfo(**project_data)
 
         # Invalidate project list caches so subsequent API calls return fresh data
         cache = get_cache_manager()
@@ -508,6 +606,31 @@ async def create_project(
             error_message=str(e),
         )
         raise HTTPException(status_code=503, detail=str(e))
+    except LXDOperationUnknownError as e:
+        logger.warning(
+            "Project create outcome is unknown for %s on %s",
+            request.name,
+            request.host,
+        )
+        activity_logger.log_activity(
+            action="project.create",
+            target_type="project",
+            target_id=request.name,
+            target_host=request.host,
+            result="unknown",
+            error_code="LXDOperationUnknownError",
+            error_message="Daemon outcome could not be confirmed",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "project_write_unknown",
+                "message": (
+                    "The daemon outcome could not be confirmed. Check the exact project "
+                    "state before retrying."
+                ),
+            },
+        ) from e
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
         activity_logger.log_activity(
@@ -526,6 +649,8 @@ async def create_project(
         # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
         # instead of 403.
         raise
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
     except Exception as e:
         logger.error(f"Error creating project: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -549,69 +674,84 @@ async def update_project(
     request: ProjectUpdateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a project's description and resource limits."""
     verify_cluster_access(host)
     _refuse_a_project_outside_the_bound(host, project_name)
     try:
-        # Get current project to ensure it exists
-        projects = await lxd_service.list_projects(host)
-        project = next((p for p in projects if p["name"] == project_name), None)
-        
-        if not project:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Project '{project_name}' not found on {host}"
-            )
-        
-        # If resource limits are being updated (non-zero), validate against available resources
-        # Note: 0 = clear limit (unlimited), None = no change
-        has_real_limits = (
-            (request.max_cpu is not None and request.max_cpu > 0) or
-            (request.max_ram is not None and request.max_ram != "0") or
-            (request.max_storage is not None and request.max_storage != "0")
-        )
-        if has_real_limits:
-            # important: the quota precheck must not be able to fail the update. Reading node
-            # resources is a live call to the cluster now that it no longer rides pylxd's
-            # connect-time memo, so a transient read failure used to surface here as a 400
-            # telling the operator their limits were invalid. The create path already degrades
-            # this way; matching it keeps one behaviour rather than two.
-            try:
-                available = lxd_service.get_node_resources(host)
-            except LXDOperationError:
-                logger.warning(
-                    f"Could not validate resources for {host}, proceeding with the update anyway"
-                )
-                available = None
+        async with serialize_cluster_configuration(db, host):
+            policy = await _cluster_write_policy(user, host, db)
 
-        if has_real_limits and available is not None:
-            # Same rule as create: a cap is refused only above the hardware total. 0 clears a
-            # limit and None leaves it alone, so neither is compared.
-            _refuse_cap_above_hardware(
-                available,
-                max_cpu=request.max_cpu if request.max_cpu and request.max_cpu > 0 else None,
-                ram_bytes=(
-                    _parse_size_to_bytes(request.max_ram)
-                    if request.max_ram and request.max_ram != "0" else None
-                ),
-                storage_bytes=(
-                    _parse_size_to_bytes(request.max_storage)
-                    if request.max_storage and request.max_storage != "0" else None
-                ),
-                labels=(str(request.max_cpu), request.max_ram or "", request.max_storage or ""),
+            # This exact daemon record is both the update target and the isolation evidence.
+            # Keep the read, admission, and write under the same ownership lock.
+            projects = await lxd_service.list_projects(host)
+            project = next((p for p in projects if p["name"] == project_name), None)
+
+            if not project:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Project '{project_name}' not found on {host}"
+                )
+            validate_project_update(policy, project.get("config") or {})
+
+            # If resource limits are being updated (non-zero), validate against available
+            # resources. 0 clears a limit and None leaves it unchanged.
+            has_real_limits = (
+                (request.max_cpu is not None and request.max_cpu > 0) or
+                (request.max_ram is not None and request.max_ram != "0") or
+                (request.max_storage is not None and request.max_storage != "0")
             )
-        
-        # Update project
-        project_data = await lxd_service.update_project(
-            host=host,
-            project_name=project_name,
-            description=request.description,
-            max_cpu=request.max_cpu,
-            max_ram=request.max_ram,
-            max_storage=request.max_storage,
-        )
+            available = None
+            if has_real_limits:
+                # important: the quota precheck must not be able to fail the update. Reading
+                # node resources is a live call, so a transient failure must not mislabel the
+                # typed request as invalid.
+                try:
+                    available = await _bounded_node_resources(lxd_service, host)
+                except (
+                    BlockingPoolFull,
+                    BlockingTimeout,
+                    LXDConnectionError,
+                    LXDOperationError,
+                ):
+                    logger.warning(
+                        "Could not validate resources for %s, proceeding with the update anyway",
+                        host,
+                    )
+
+            if has_real_limits and available is not None:
+                _refuse_cap_above_hardware(
+                    available,
+                    max_cpu=request.max_cpu if request.max_cpu and request.max_cpu > 0 else None,
+                    ram_bytes=(
+                        _parse_size_to_bytes(request.max_ram)
+                        if request.max_ram and request.max_ram != "0" else None
+                    ),
+                    storage_bytes=(
+                        _parse_size_to_bytes(request.max_storage)
+                        if request.max_storage and request.max_storage != "0" else None
+                    ),
+                    labels=(
+                        str(request.max_cpu),
+                        request.max_ram or "",
+                        request.max_storage or "",
+                    ),
+                )
+
+            project_data, request_cancelled = await _finish_critical_write(
+                lxd_service.update_project(
+                    host=host,
+                    project_name=project_name,
+                    description=request.description,
+                    max_cpu=request.max_cpu,
+                    max_ram=request.max_ram,
+                    max_storage=request.max_storage,
+                )
+            )
+            if request_cancelled:
+                raise asyncio.CancelledError
         
         # Invalidate project list caches so frontend gets fresh data
         cache = get_cache_manager()
@@ -634,9 +774,23 @@ async def update_project(
         
     except HTTPException:
         raise
+    except InstanceSecurityPolicyViolation as exc:
+        raise _policy_refusal(exc) from exc
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
+    except LXDOperationUnknownError as e:
+        logger.warning("Project update outcome is unknown for %s on %s", project_name, host)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "project_write_unknown",
+                "message": (
+                    "The daemon outcome could not be confirmed. Check the exact project "
+                    "state before retrying."
+                ),
+            },
+        ) from e
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
