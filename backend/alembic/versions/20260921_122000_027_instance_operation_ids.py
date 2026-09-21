@@ -1,7 +1,7 @@
 """Retain every daemon operation correlated to an instance job.
 
 Revision ID: 027_instance_operation_ids
-Revises: 026_unknown_instance_jobs_are_active
+Revises: 026_unknown_jobs_active
 """
 
 from alembic import op
@@ -10,7 +10,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "027_instance_operation_ids"
-down_revision = "026_unknown_instance_jobs_are_active"
+down_revision = "026_unknown_jobs_active"
 branch_labels = None
 depends_on = None
 

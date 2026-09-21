@@ -1,6 +1,6 @@
 """Keep unknown instance operations exclusive until reconciled.
 
-Revision ID: 026_unknown_instance_jobs_are_active
+Revision ID: 026_unknown_jobs_active
 Revises: 025_instance_operation_jobs
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "026_unknown_instance_jobs_are_active"
+revision = "026_unknown_jobs_active"
 down_revision = "025_instance_operation_jobs"
 branch_labels = None
 depends_on = None

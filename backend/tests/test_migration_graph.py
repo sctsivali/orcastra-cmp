@@ -85,6 +85,16 @@ def _model_tables() -> set:
 
 
 class RevisionGraphTests(unittest.TestCase):
+    def test_revision_ids_fit_the_default_alembic_version_column(self) -> None:
+        revisions = [revision.revision for revision in _script_directory().walk_revisions()]
+        too_long = sorted(revision for revision in revisions if len(revision) > 32)
+        self.assertEqual(
+            too_long,
+            [],
+            "Alembic's default version_num column is VARCHAR(32); longer revision IDs fail "
+            "only after their migration DDL runs on PostgreSQL.",
+        )
+
     def test_graph_has_exactly_one_head(self) -> None:
         heads = _script_directory().get_heads()
         self.assertEqual(len(heads), 1, f"expected a single head, got {heads}")
