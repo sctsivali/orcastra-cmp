@@ -60,7 +60,8 @@ services:
     environment:
       - APP_VERSION=${APP_VERSION:-latest}
       - API_VERSION=${API_VERSION:-latest}
-      - DEBUG=${DEBUG:-false}
+      # DEBUG intentionally comes only from env_file. Generic host tooling commonly exports a
+      # non-boolean DEBUG value, and Compose interpolation would override the deployment value.
       # Keep migrations enabled for normal starts. A reviewed application-only rollback across
       # an additive schema may set this false so an older image does not reject the newer stamp.
       - RUN_MIGRATIONS=${RUN_MIGRATIONS:-true}
