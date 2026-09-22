@@ -22,8 +22,8 @@ for (const role of ["admin", "partner"]) {
     await expect(page.getByRole("tab", { name: "Hardware" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Software" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Fleet Totals" })).toBeVisible();
-    await expect(page.getByText("Partial totals from 1 of 2 nodes.")).toBeVisible();
-    await expect(page.getByText("Hardware by Node", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Partial totals from 1 of 2 clusters.")).toBeVisible();
+    await expect(page.getByText("Hardware by Cluster", { exact: true })).toHaveCount(0);
 
     const expectedCards = ["CPU Resources", "Memory", "Storage", "GPU Resources"];
     for (const title of expectedCards) {
@@ -46,8 +46,8 @@ for (const role of ["admin", "partner"]) {
     await expect(cpuCard).toBeFocused();
 
     await page.getByRole("tab", { name: "Software" }).click();
-    await expect(page.getByRole("heading", { name: "Software by Node" })).toBeVisible();
-    await expect(page.getByText("Hardware by Node", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Software by Cluster" })).toBeVisible();
+    await expect(page.getByText("Hardware by Cluster", { exact: true })).toHaveCount(0);
 
     await expectProjectTheme(page, testInfo);
     await expectNoHorizontalOverflow(page);
@@ -101,11 +101,11 @@ test("platform inventory error remains distinct from an empty fleet", async ({ p
   const api = await installApiFixtures(page, "admin", { nodeError: true });
 
   await page.goto("/technologies");
-  await expect(page.getByRole("heading", { name: "Could not load node data" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Could not load cluster data" })).toBeVisible({
     timeout: 15_000,
   });
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
-  await expect(page.getByText("No node data yet", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("No cluster data yet", { exact: true })).toHaveCount(0);
 
   await expectProjectTheme(page, testInfo);
   await capture(page, testInfo, "technologies-platform-error");

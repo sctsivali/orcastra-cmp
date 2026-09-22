@@ -23,34 +23,62 @@ function snapshotFixturesEnabled(options = {}) {
 
 function validateSnapshotFixtureOptions(options = {}) {
   const snapshotCreate = options.snapshotCreate ?? null;
-  if (!snapshotCreate) return;
-  if (!snapshotCreate.instanceName) {
-    throw new Error("snapshotCreate.instanceName is required so mutation fixtures stay exact");
+  if (snapshotCreate) {
+    if (!snapshotCreate.instanceName) {
+      throw new Error("snapshotCreate.instanceName is required so mutation fixtures stay exact");
+    }
+    if (!Object.hasOwn(snapshotCreate, "expectedBody")) {
+      throw new Error("snapshotCreate.expectedBody is required so mutation fixtures stay exact");
+    }
+    if (Object.hasOwn(snapshotCreate, "rawBody") && typeof snapshotCreate.rawBody !== "string") {
+      throw new Error("snapshotCreate.rawBody must be a string when provided");
+    }
+    if (Object.hasOwn(snapshotCreate, "rawBody") && Object.hasOwn(snapshotCreate, "body")) {
+      throw new Error("snapshotCreate must declare either body or rawBody, not both");
+    }
+    const expectedCount = snapshotCreate.expectedCount ?? 1;
+    if (!Number.isInteger(expectedCount) || expectedCount < 0) {
+      throw new Error("snapshotCreate.expectedCount must be a non-negative integer");
+    }
   }
-  if (!Object.hasOwn(snapshotCreate, "expectedBody")) {
-    throw new Error("snapshotCreate.expectedBody is required so mutation fixtures stay exact");
+
+  const reconciliation = options.snapshotReconciliation ?? null;
+  if (!reconciliation) return;
+  const freshInstanceReads = reconciliation.freshInstanceReads ?? 0;
+  if (!Number.isInteger(freshInstanceReads) || freshInstanceReads < 0) {
+    throw new Error(
+      "snapshotReconciliation.freshInstanceReads must be a non-negative integer",
+    );
   }
-  if (Object.hasOwn(snapshotCreate, "rawBody") && typeof snapshotCreate.rawBody !== "string") {
-    throw new Error("snapshotCreate.rawBody must be a string when provided");
+  const operation = reconciliation.operation ?? null;
+  if (!operation) return;
+  if (!operation.id || !operation.host) {
+    throw new Error("snapshotReconciliation.operation requires exact id and host values");
   }
-  if (Object.hasOwn(snapshotCreate, "rawBody") && Object.hasOwn(snapshotCreate, "body")) {
-    throw new Error("snapshotCreate must declare either body or rawBody, not both");
-  }
-  const expectedCount = snapshotCreate.expectedCount ?? 1;
-  if (!Number.isInteger(expectedCount) || expectedCount < 0) {
-    throw new Error("snapshotCreate.expectedCount must be a non-negative integer");
+  if (!Object.hasOwn(operation, "body")) {
+    throw new Error("snapshotReconciliation.operation.body is required");
   }
 }
 
 function initializeSnapshotState(state, options = {}) {
   validateSnapshotFixtureOptions(options);
   const snapshotCreate = options.snapshotCreate ?? null;
+  const reconciliation = options.snapshotReconciliation ?? null;
+  const operation = reconciliation?.operation ?? null;
   Object.assign(state, {
     snapshotMutations: [],
     unexpectedMutations: [],
     expectedSnapshotMutationCount: snapshotCreate?.expectedCount ?? (snapshotCreate ? 1 : 0),
     createdSnapshotName: null,
     snapshotReadCounts: {},
+    snapshotReconciliation: {
+      freshInstanceReads: 0,
+      operationReads: [],
+    },
+    expectedSnapshotReconciliation: {
+      freshInstanceReads: reconciliation?.freshInstanceReads ?? 0,
+      operationReads: operation ? 1 : 0,
+    },
   });
 }
 
@@ -404,6 +432,29 @@ function snapshotReadDescriptor({ path, url, entry, role, options, state, iso, f
     const host = url.searchParams.get("host");
     const project = url.searchParams.get("project");
     const unscoped = host === null && project === null;
+    const queryKeys = Array.from(url.searchParams.keys());
+    const exactFreshFleetRead =
+      unscoped &&
+      url.searchParams.get("fresh") === "true" &&
+      queryKeys.length === 1 &&
+      queryKeys[0] === "fresh";
+    // An instance-page fixture already declares the fleet stream whose initial sync uses this
+    // same read. Snapshot-only pages must opt into each post-mutation reconciliation explicitly.
+    if (exactFreshFleetRead && options.snapshotInstancePage !== true) {
+      state.snapshotReconciliation.freshInstanceReads += 1;
+      if (
+        state.snapshotReconciliation.freshInstanceReads >
+        state.expectedSnapshotReconciliation.freshInstanceReads
+      ) {
+        return invalidScope(state, entry, "Undeclared snapshot instance reconciliation read");
+      }
+      return nextRead(
+        options,
+        state,
+        "reconciliationInstances",
+        instanceInventory(fullInstance, target, options),
+      );
+    }
     if (unscoped && (options.snapshotInstancePage === true || role === "tenant")) {
       return nextRead(
         options,
@@ -448,6 +499,32 @@ function snapshotReadDescriptor({ path, url, entry, role, options, state, iso, f
       "detail",
       targetInstance(fullInstance, target, options.instanceStatus || "Running"),
     );
+  }
+  const expectedOperation = options.snapshotReconciliation?.operation ?? null;
+  if (
+    expectedOperation &&
+    path === `/operations/${encodeURIComponent(expectedOperation.id)}`
+  ) {
+    const exactHost = url.searchParams.get("host") === expectedOperation.host;
+    const queryKeys = Array.from(url.searchParams.keys());
+    const exactQuery = exactHost && queryKeys.length === 1 && queryKeys[0] === "host";
+    state.snapshotReconciliation.operationReads.push({
+      id: expectedOperation.id,
+      host: url.searchParams.get("host"),
+    });
+    if (
+      !exactQuery ||
+      state.snapshotReconciliation.operationReads.length >
+        state.expectedSnapshotReconciliation.operationReads
+    ) {
+      return invalidScope(state, entry, `Unexpected snapshot operation scope: ${url.search}`);
+    }
+    return {
+      status: expectedOperation.status ?? 200,
+      headers: expectedOperation.headers,
+      body: expectedOperation.body,
+      delayMs: expectedOperation.delayMs,
+    };
   }
   return null;
 }

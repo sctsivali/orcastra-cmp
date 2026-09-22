@@ -32,6 +32,7 @@ test("Partner takes one stateless snapshot through the explicit target cascade",
       expectedBody: BASE_CREATE_BODY,
       delayMs: 1_200,
     },
+    snapshotReconciliation: { freshInstanceReads: 1 },
   });
 
   await page.goto("/inventory/snapshots");
@@ -137,6 +138,7 @@ test("Partner takes one stateless snapshot through the explicit target cascade",
         new URLSearchParams(entry.search).get("project") === "tenant-a",
     ),
   ).toBe(true);
+  await expect.poll(() => api.snapshotReconciliation.freshInstanceReads).toBe(1);
 
   await expectProjectTheme(page, testInfo);
   await expectNoHorizontalOverflow(page);
@@ -494,6 +496,7 @@ test("Billing-linked target requires a reason and explicit acknowledgement", asy
   const api = await installApiFixtures(page, "partner", {
     snapshotBillingLinked: true,
     snapshotCreate: { instanceName: "tenant-owned-vm", expectedBody },
+    snapshotReconciliation: { freshInstanceReads: 1 },
   });
 
   await page.goto("/inventory/snapshots");
@@ -515,6 +518,7 @@ test("Billing-linked target requires a reason and explicit acknowledgement", asy
 
   await expect(page.getByText("Snapshot taken", { exact: true })).toBeVisible();
   expect(api.snapshotMutations[0].body).toEqual(expectedBody);
+  await expect.poll(() => api.snapshotReconciliation.freshInstanceReads).toBe(1);
   await expectCleanHarness(api);
 });
 
@@ -553,6 +557,14 @@ test("Pending refresh uses its create target, not page scope", async ({ page }, 
       instanceName: "tenant-owned-vm",
       expectedBody: BASE_CREATE_BODY,
       status: 202,
+    },
+    snapshotReconciliation: {
+      freshInstanceReads: 2,
+      operation: {
+        id: "fixture-operation-1",
+        host: "cluster-a",
+        body: { status: "Success", status_code: 200, err: "" },
+      },
     },
   });
 
@@ -602,6 +614,8 @@ test("Pending refresh uses its create target, not page scope", async ({ page }, 
   await expectSnapshotUrlScope(page);
   await expect(refresh).toHaveAttribute("aria-busy", "false");
   await expect(pending).toBeVisible();
+  await expect.poll(() => api.snapshotReconciliation.operationReads.length).toBe(1);
+  await expect.poll(() => api.snapshotReconciliation.freshInstanceReads).toBe(2);
 
   if (testInfo.project.name === "mobile-dark") {
     await expectProjectTheme(page, testInfo);

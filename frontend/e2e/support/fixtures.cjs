@@ -403,6 +403,14 @@ async function expectCleanHarness(state) {
   expect(state.snapshotMutations, "declared snapshot mutation count").toHaveLength(
     state.expectedSnapshotMutationCount,
   );
+  expect(
+    state.snapshotReconciliation.freshInstanceReads,
+    "declared fresh instance reconciliation reads",
+  ).toBe(state.expectedSnapshotReconciliation.freshInstanceReads);
+  expect(
+    state.snapshotReconciliation.operationReads,
+    "declared snapshot operation reconciliation reads",
+  ).toHaveLength(state.expectedSnapshotReconciliation.operationReads);
   expect(state.mutations, "only declared snapshot mutations may leave the browser").toEqual(
     state.snapshotMutations,
   );

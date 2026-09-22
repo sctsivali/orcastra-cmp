@@ -46,7 +46,7 @@ test("Partner safe policy keeps typed create fields and hides host-level control
   });
   await page.goto("/inventory/instances/create?node=cluster-a&type=container&project=tenant-a");
 
-  await expect(page.getByLabel("CPU Cores")).toBeVisible();
+  await expect(page.getByLabel("vCPUs")).toBeVisible();
   await expect(page.getByLabel("Memory")).toBeVisible();
   await expect(page.getByLabel("Storage", { exact: true })).toBeVisible();
   await expect(page.getByText("GPU Passthrough")).toHaveCount(0);
@@ -95,7 +95,7 @@ test("advanced create controls fail closed when policy cannot be read", async ({
   });
   await page.goto("/inventory/instances/create?node=cluster-a&type=container&project=tenant-a");
 
-  await expect(page.getByLabel("CPU Cores")).toBeVisible();
+  await expect(page.getByLabel("vCPUs")).toBeVisible();
   await expect(page.getByText("GPU Passthrough")).toHaveCount(0);
   await page.getByText("Cloud-Init", { exact: true }).first().click();
   await expect(page.getByText("Advanced controls are unavailable because the server policy could not be verified.")).toBeVisible();
@@ -215,15 +215,19 @@ test("Partner create preflight keeps long effective identifiers inside a mobile 
 
 test("read-only mode disables direct and empty-state create actions", async ({ page }) => {
   await authenticate(page.context(), "partner");
+  const empty = emptyInventory();
   const api = await installApiFixtures(page, "partner", {
     readOnly: true,
     snapshotInstancePage: true,
     instanceCreatePage: true,
-    snapshotReadSequences: { instancePage: [{ body: emptyInventory() }] },
+    // The instance stream performs one forced fleet reconciliation after it opens. Both the
+    // initial cached read and that fresh read must describe the same empty fleet.
+    snapshotReadSequences: { instancePage: [{ body: empty }, { body: empty }] },
   });
 
   await page.goto("/inventory/instances");
   await expect(page.getByRole("button", { name: "New Instance" })).toBeDisabled();
+  await expect.poll(() => api.snapshotReadCounts.instancePage).toBeGreaterThanOrEqual(2);
   await expect(page.getByRole("button", { name: "Create Instance" })).toBeDisabled();
 
   await page.goto("/inventory/instances/create?node=cluster-a&type=container&project=tenant-a");

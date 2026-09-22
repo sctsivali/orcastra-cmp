@@ -247,19 +247,32 @@ async function installCreateRoutes(page, {
 async function selectOption(page, label, option) {
   const picker = page.getByLabel(label, { exact: true });
   await expect(picker).toBeEnabled();
-  await picker.click();
-  await page.getByRole("option", { name: option, exact: false }).click();
+  const choice = page.getByRole("option", { name: option, exact: false });
+  // Availability updates can replace the portalled option between pointer-down and pointer-up.
+  // Reopen and resolve the current option instead of forcing a click on a detached element.
+  await expect(async () => {
+    if (!(await choice.isVisible())) await picker.click({ timeout: 1_000 });
+    await choice.click({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+  await expect(picker).toHaveAttribute("aria-expanded", "false");
+  await expect(picker).toContainText(option);
 }
 
-async function expectNoOptionalReads(requests) {
+async function expectNoOptionalReads(requests, { localImageReads = 0 } = {}) {
   for (const path of OPTIONAL_CREATE_PATHS) {
     expect(countRequests(requests, path), `${path} must remain intent-gated`).toBe(0);
   }
   expect(
     requests.filter((entry) => isLocalImagePath(entry.path)),
-    "local image inventory must remain intent-gated",
-  ).toEqual([]);
+    localImageReads === 0
+      ? "local image inventory must remain intent-gated"
+      : "only the required local image inventory read is allowed",
+  ).toHaveLength(localImageReads);
   expect(requests.filter((entry) => isGpuPath(entry.path)), "GPU inventory must remain intent-gated").toEqual([]);
+}
+
+function localImageRow(scope) {
+  return scope.getByRole("row").filter({ hasText: "local-orchestration-image" });
 }
 
 test("create inventory reads are staged by cluster and picker intent", async ({ page }) => {
@@ -297,7 +310,8 @@ test("create inventory reads are staged by cluster and picker intent", async ({ 
   await expect(page.getByRole("dialog", { name: "Select Base Image" })).toBeVisible();
   await expect.poll(() => countRequests(requests, "/images/cluster-a")).toBe(1);
   await expect.poll(() => countRequests(requests, "/images/remote")).toBe(1);
-  await expect(page.getByText("local-orchestration-image", { exact: true })).toBeVisible();
+  await expect(localImageRow(page)).toHaveCount(1);
+  await expect(localImageRow(page)).toBeVisible();
   await expect(page.getByText("debian/bookworm", { exact: true })).toBeVisible();
 
   expect(requests.every((entry) => entry.authorization === "Bearer e2e-admin-access-token")).toBe(true);
@@ -332,7 +346,8 @@ test("local images remain usable while the remote catalogue fails and retries", 
   await page.getByRole("button", { name: "Select base image" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Select Base Image" });
-  await expect(dialog.getByText("local-orchestration-image", { exact: true })).toBeVisible();
+  await expect(localImageRow(dialog)).toHaveCount(1);
+  await expect(localImageRow(dialog)).toBeVisible();
   await expect(dialog.getByText("Loading remote catalogues…", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Select" })).toBeEnabled();
 
@@ -340,12 +355,12 @@ test("local images remain usable while the remote catalogue fails and retries", 
   const retry = dialog.getByRole("button", { name: "Remote catalogues unavailable. Retry" });
   await expect(retry).toBeVisible();
   await expect.poll(() => countRequests(requests, "/images/remote")).toBe(2);
-  await expect(dialog.getByText("local-orchestration-image", { exact: true })).toBeVisible();
+  await expect(localImageRow(dialog)).toBeVisible();
   await retry.click();
 
   await expect.poll(() => countRequests(requests, "/images/remote")).toBe(3);
   await expect(dialog.getByText("debian/bookworm", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("local-orchestration-image", { exact: true })).toBeVisible();
+  await expect(localImageRow(dialog)).toBeVisible();
   await expect(retry).toHaveCount(0);
   await expectCleanHarness(api);
 });
@@ -521,7 +536,7 @@ test("a local-image deep link wakes only the required local source", async ({ pa
   await expect(page.getByRole("button", { name: /local-orchestration-image/ })).toBeVisible();
   await expect.poll(() => countRequests(requests, "/images/cluster-a")).toBe(1);
   expect(countRequests(requests, "/images/remote")).toBe(0);
-  await expectNoOptionalReads(requests);
+  await expectNoOptionalReads(requests, { localImageReads: 1 });
   await expect(page.getByLabel("Cluster *", { exact: true })).toContainText("Cluster A");
   await expect(page.getByLabel("Project", { exact: true })).toContainText("tenant-a");
   await expectCleanHarness(api);

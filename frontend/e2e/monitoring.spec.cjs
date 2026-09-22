@@ -42,7 +42,7 @@ test("Monitoring pause freezes automation while manual refresh and resume still 
 
   const refresh = page.getByRole("button", { name: "Refresh monitoring" });
   const pause = page.getByRole("button", { name: "Pause automatic monitoring updates" });
-  const filter = page.getByRole("combobox", { name: "Filter by node" });
+  const filter = page.getByRole("combobox", { name: "Filter by cluster" });
   await expect(refresh).toBeVisible();
   await expect(pause).toBeVisible();
   await expect(filter).toBeVisible();
