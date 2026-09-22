@@ -87,7 +87,7 @@ function OverviewTab({ task }: { task: TaskRecord }) {
               ) : undefined
             }
           />
-          <DetailField label="Node" value={<NodeLink clusterId={task.cluster_id} wrap />} />
+          <DetailField label="Cluster" value={<NodeLink clusterId={task.cluster_id} wrap />} />
           <DetailField label="Project" value={task.project} />
           <DetailField label="Source" value={task.source} />
           <DetailField

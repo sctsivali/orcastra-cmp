@@ -64,7 +64,7 @@ function MissingReading({ node, noun }: { node: NodeStatus; noun: string }) {
     <div className="flex items-start gap-3 rounded-md border border-dashed p-3 text-sm">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <p className="break-words text-muted-foreground">
-        {node.error || `This node is not reporting ${noun} right now.`}
+        {node.error || `This cluster is not reporting ${noun} right now.`}
       </p>
     </div>
   );
@@ -85,12 +85,12 @@ function CpuDetail({ node }: { node: NodeStatus }) {
       <DetailSection title="Capacity">
         <DetailGrid cols={4}>
           <DetailField label="Total Hardware Threads" value={resources.cpu_total} />
-          <DetailField label="Allocated Virtual CPUs" value={resources.cpu_used} />
-          <DetailField label="Unallocated Threads" value={resources.cpu_available} />
+          <DetailField label="Allocated vCPUs" value={resources.cpu_used} />
+          <DetailField label="Unallocated Hardware Threads" value={resources.cpu_available} />
           <DetailField label="Sockets" value={resources.cpu_sockets} />
           <DetailField label="Architecture" value={architectures || undefined} mono />
           <DetailField label="Physical Cores" value={hardware?.cpu.cores} />
-          <DetailField label="Topology Threads" value={hardware?.cpu.threads} />
+          <DetailField label="Topology Hardware Threads" value={hardware?.cpu.threads} />
           <DetailField label="NUMA Nodes" value={hardware?.cpu.numa_nodes} />
         </DetailGrid>
       </DetailSection>
@@ -262,8 +262,8 @@ export function HardwareDetailDialog({
           </DialogTitle>
           <DialogDescription>
             {category
-              ? `${category.description}. Values remain separated by node so partial readings stay visible.`
-              : "Hardware detail by node."}
+              ? `${category.description}. Values remain separated by cluster so partial readings stay visible.`
+              : "Hardware detail by cluster."}
           </DialogDescription>
         </DialogHeader>
 
@@ -293,7 +293,7 @@ export function HardwareDetailDialog({
             <EmptyState
               icon={Cpu}
               title="No hardware detail available"
-              description="Details appear here once a node is registered and reporting resources."
+              description="Details appear here once a cluster is registered and reporting resources."
             />
           )}
         </DialogBody>
@@ -301,7 +301,7 @@ export function HardwareDetailDialog({
         {orderedNodes.length > 1 ? (
           <DataTablePagination
             variant="compact"
-            label={`${category?.title ?? "hardware"} node details`}
+            label={`${category?.title ?? "hardware"} cluster details`}
             currentPage={currentPage}
             totalPages={totalPages}
             onPageChange={setNodePage}

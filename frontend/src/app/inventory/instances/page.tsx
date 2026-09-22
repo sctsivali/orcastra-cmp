@@ -25,7 +25,7 @@ import {
   type PendingCreate,
 } from "@/lib/pending-creates";
 
-import { VMInfo } from "@/types/api";
+import { VMInfo, type VMListResponse } from "@/types/api";
 
 import { LoadingLottiePage } from "@/components/loading-lottie";
 
@@ -84,14 +84,10 @@ function InstancesContent() {
   // rather than showing a shorter table with nothing to explain it.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
 
-  // Hosts to stream from: those that currently have instances (pending-create
-  // hosts are added inside the hook). One LXD events WS per host keeps the list
-  // live. Creates show a "Creating… <progress>" placeholder, and lifecycle
-  // events upsert/remove rows directly so status changes appear without a poll.
-  const instanceHosts = Array.from(
-    new Set(instances.map((i: any) => i.host as string)),
-  ) as string[];
-  const pendingCreates = useInstanceStream(instanceHosts);
+  // The response names every authorized cluster, including clusters with zero instances.
+  // Subscribing from rows alone missed the first create event on an empty cluster.
+  const authorizedHosts = ((data as VMListResponse | undefined)?.nodes ?? []);
+  const pendingCreates = useInstanceStream(authorizedHosts);
 
   // A placeholder is "resolved" once a matching instance appears in list data that
   // landed AFTER the create was issued (the stream normally removes it first; this
@@ -147,12 +143,10 @@ function InstancesContent() {
   );
   useEffect(() => {
     if (!hasLivePlaceholder) return;
-    // The tick also refetches, so the list-freshness fallback above can actually fire: a create
-    // whose frames never arrive (a stream drop, a daemon that names no project) used to wait for
-    // an unrelated render, on a page that never polls.
+    // The stream hook owns the 30-second visible-tab safety read. This timer only makes an
+    // expired placeholder render its stale state when no other UI state changed.
     const id = setInterval(() => {
       forceStaleCheck((n) => n + 1);
-      void refetch();
     }, 30_000);
     return () => clearInterval(id);
   }, [hasLivePlaceholder]);

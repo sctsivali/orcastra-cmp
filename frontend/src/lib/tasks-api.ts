@@ -70,7 +70,13 @@ function withQuery(path: string, params: Record<string, ParamValue>): string {
 }
 
 function uncachedRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
-  return fetchAPI<T>(endpoint, {}, undefined, false, { force: opts.fresh === true });
+  return fetchAPI<T>(
+    endpoint,
+    { signal: opts.signal },
+    undefined,
+    false,
+    { force: opts.fresh === true },
+  );
 }
 
 const seg = (value: string): string => encodeURIComponent(value);
@@ -83,15 +89,21 @@ export const tasksAPI = {
   summary: (opts: ReadOptions = {}): Promise<TaskListResponse> =>
     uncachedRead<TaskListResponse>(withQuery("/tasks", { limit: 0 }), opts),
 
-  get: (id: string): Promise<TaskDetailResponse> =>
-    fetchAPI<TaskDetailResponse>(`/tasks/${seg(id)}`),
+  get: (id: string, opts: ReadOptions = {}): Promise<TaskDetailResponse> =>
+    uncachedRead<TaskDetailResponse>(`/tasks/${seg(id)}`, opts),
 
   queue: (opts: ReadOptions = {}): Promise<TaskQueueResponse> =>
     uncachedRead<TaskQueueResponse>("/tasks/queue", opts),
 
   /** DELETE /tasks/{id}; a refusal is a 409 whose APIError message is the server's sentence. */
   cancel: (id: string): Promise<CancelResponse> =>
-    fetchAPI<CancelResponse>(`/tasks/${seg(id)}`, { method: "DELETE" }),
+    fetchAPI<CancelResponse>(
+      `/tasks/${seg(id)}`,
+      { method: "DELETE" },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
+    ),
 
   log: (params: LogListParams = {}, opts: ReadOptions = {}): Promise<ClusterLogResponse> =>
     uncachedRead<ClusterLogResponse>(withQuery("/cluster-log", { ...params }), opts),
@@ -112,9 +124,53 @@ export const tasksAPI = {
       `/console/${seg(instanceName)}/active-sessions/${seg(operationId)}` +
         `?host=${seg(host)}&project=${seg(project || "default")}`,
       { method: "DELETE" },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
     );
     if (result && result.success === false) {
       throw new Error(result.error || result.message || "The cluster did not end the session");
+    }
+  },
+
+  killAllConsoleSessions: async (
+    instanceName: string,
+    host: string,
+    project: string,
+  ): Promise<void> => {
+    const result = await fetchAPI<{ success?: boolean; error?: string | null; message?: string | null }>(
+      `/console/${seg(instanceName)}/kill-all-sessions` +
+        `?host=${seg(host)}&project=${seg(project || "default")}`,
+      { method: "POST" },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
+    );
+    if (result && result.success === false) {
+      throw new Error(result.error || result.message || "The cluster did not end the sessions");
+    }
+  },
+
+  /** Best-effort authenticated cleanup that the browser may finish after page teardown. */
+  killAllConsoleSessionsOnUnload: async (
+    instanceName: string,
+    host: string,
+    project: string,
+  ): Promise<void> => {
+    const result = await fetchAPI<{
+      success?: boolean;
+      error?: string | null;
+      message?: string | null;
+    }>(
+      `/console/${seg(instanceName)}/kill-all-sessions` +
+        `?host=${seg(host)}&project=${seg(project || "default")}`,
+      { method: "POST", keepalive: true },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
+    );
+    if (result.success === false) {
+      throw new Error(result.error || result.message || "The cluster did not end the sessions");
     }
   },
 };

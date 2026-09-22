@@ -29,7 +29,7 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
             value={<Badge variant={statusDisplay.tone}>{statusDisplay.label}</Badge>}
           />
           <DetailField label="Project" value={instance.project || "default"} />
-          <DetailField label="Node" value={<NodeLink clusterId={instance.host} />} />
+          <DetailField label="Cluster" value={<NodeLink clusterId={instance.host} />} />
           <DetailField label="Cluster Member" value={instance.location} />
           <DetailField label="Description" value={instance.description} span="full" />
         </DetailGrid>

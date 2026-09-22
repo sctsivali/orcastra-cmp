@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { parseLimitsCpu } from "@/lib/lxd-limits";
+import { parseLimitsCpu, parseLxdSize } from "@/lib/lxd-limits";
 import {
   FolderKanban,
   ChevronDown,
@@ -34,6 +34,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { InstanceRow } from "./instance-row";
 import { ProjectDeleteDialog, ProjectEditDialog } from "./project-card-dialogs";
 import { NodeLink } from "@/components/ui/node-link";
+import { formatByteQuota, formatMemoryQuota } from "@/lib/utils";
 
 interface ProjectCardProps {
   project: ProjectInfo;
@@ -56,20 +57,6 @@ interface ProjectCardProps {
   onInstancePageChange: (key: string, page: number) => void;
   refetch: () => void;
   isReadOnly?: boolean;
-}
-
-// A quota chip prints "19.9 of 512.0" over "GiB", so both numbers have to share one unit. The
-// unit comes from the limit and stops at TiB, which is what keeps the value line short enough for
-// three chips to sit across a card: an 8 TiB pool would otherwise print "0.0 of 8192.0".
-function formatQuota(usedBytes: number, limitBytes: number): { value: string; unit: string } {
-  const GIB = 1024 * 1024 * 1024;
-  const useTiB = limitBytes >= 1024 * GIB;
-  const divisor = useTiB ? 1024 * GIB : GIB;
-
-  return {
-    value: `${(usedBytes / divisor).toFixed(1)} of ${(limitBytes / divisor).toFixed(1)}`,
-    unit: useTiB ? "TiB" : "GiB",
-  };
 }
 
 // One page of instances inside an expanded project card. Five, the same number the app's other
@@ -126,7 +113,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
         cpuUsed += parseLimitsCpu(vmCpu, 0);
       }
 
-      // count RAM
+      // Count memory.
       if (vm.resources?.memory_usage) {
         ramUsedBytes += vm.resources.memory_usage;
       }
@@ -146,27 +133,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
   const limits = React.useMemo(() => {
     const cpuLimit = project.config?.["limits.cpu"] ? parseInt(project.config["limits.cpu"]) : null;
     
-    const ramLimitStr = project.config?.["limits.memory"];
-    let ramLimitBytes = null;
-    if (ramLimitStr) {
-      const match = ramLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB|GB|MB)$/i);
-      if (match) {
-        const value = parseFloat(match[1]);
-        const unit = match[2].toUpperCase();
-        ramLimitBytes = unit.includes('G') ? value * 1024 * 1024 * 1024 : value * 1024 * 1024;
-      }
-    }
-
-    const storageLimitStr = project.config?.["limits.disk"];
-    let storageLimitBytes = null;
-    if (storageLimitStr) {
-      const match = storageLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB|GB|MB)$/i);
-      if (match) {
-        const value = parseFloat(match[1]);
-        const unit = match[2].toUpperCase();
-        storageLimitBytes = unit.includes('G') ? value * 1024 * 1024 * 1024 : value * 1024 * 1024;
-      }
-    }
+    const ramLimitBytes = parseLxdSize(project.config?.["limits.memory"]);
+    const storageLimitBytes = parseLxdSize(project.config?.["limits.disk"]);
 
     return { cpuLimit, ramLimitBytes, storageLimitBytes };
   }, [project.config]);
@@ -284,25 +252,25 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             {
               key: "cpu",
               Icon: Cpu,
-              label: "CPU",
+              label: "vCPU",
               spec: limits.cpuLimit
-                ? { value: `${resourceUsage.cpuUsed} of ${limits.cpuLimit}`, unit: "cores" }
-                : { value: "Unlimited", unit: "CPU" },
+                ? { value: `${resourceUsage.cpuUsed} of ${limits.cpuLimit}`, unit: "vCPU" }
+                : { value: "Unlimited", unit: "vCPU" },
             },
             {
               key: "ram",
               Icon: MemoryStick,
-              label: "RAM",
+              label: "Memory",
               spec: limits.ramLimitBytes
-                ? formatQuota(resourceUsage.ramUsedBytes, limits.ramLimitBytes)
-                : { value: "Unlimited", unit: "RAM" },
+                ? formatMemoryQuota(resourceUsage.ramUsedBytes, limits.ramLimitBytes)
+                : { value: "Unlimited", unit: "Memory" },
             },
             {
               key: "storage",
               Icon: HardDrive,
               label: "Storage",
               spec: limits.storageLimitBytes
-                ? formatQuota(resourceUsage.storageUsedBytes, limits.storageLimitBytes)
+                ? formatByteQuota(resourceUsage.storageUsedBytes, limits.storageLimitBytes)
                 : { value: "Unlimited", unit: "Storage" },
             },
           ].map(({ key, Icon, label, spec }) => (
@@ -312,8 +280,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             >
               <Icon className="h-4 w-4 text-foreground/80 shrink-0" />
               <div className="flex flex-col min-w-0 break-words">
-                {/* the icon is the only thing naming CPU against RAM against Storage once the
-                    unit line reads "GiB" twice, so a screen reader gets the name in words. */}
+                {/* The icon is the only thing naming the resource when a unit occupies the
+                    second line, so a screen reader also gets the resource name in words. */}
                 {spec.unit !== label && <span className="sr-only">{label}</span>}
                 <span className="text-xs font-semibold text-foreground/80">{spec.value}</span>
                 <span className="text-[10px] text-muted-foreground">{spec.unit}</span>

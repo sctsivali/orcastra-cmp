@@ -36,7 +36,7 @@ import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn, formatMemory} from "@/lib/utils";
+import { cn, formatMemory } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
@@ -69,7 +69,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
-        description: "Node name updates are disabled in read-only mode",
+        description: "Cluster name updates are disabled in read-only mode",
         variant: "destructive",
       });
       return;
@@ -86,7 +86,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
       setTimeout(() => {
         toast({
           title: "Name Updated",
-          description: `Display name for node '${node.name}' has been updated to '${newDisplayName}'.`,
+          description: `Display name for cluster '${node.name}' has been updated to '${newDisplayName}'.`,
           variant: "success",
         });
         onTagsUpdate?.();
@@ -118,7 +118,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
       });
       toast({
         title: "Tags Updated",
-        description: `Tags for node '${node.name}' have been updated.`,
+        description: `Tags for cluster '${node.name}' have been updated.`,
         variant: "success",
       });
       onTagsUpdate?.();
@@ -202,7 +202,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               <div onClick={(e) => e.stopPropagation()}>
                 <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for node ${node.name}`}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for cluster ${node.name}`}>
                       <MoreVertical className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -250,21 +250,21 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Cpu className="h-3.5 w-3.5" />
-                <span className="font-medium">CPU</span>
+                <span className="font-medium">vCPU Allocation</span>
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">
-                  {cpu.allocated} / {cpu.threads} threads
+                  {cpu.allocated} vCPU / {cpu.threads} hardware threads
                 </div>
                 <div className={cpu.textClassName}>{cpuAllocationText(cpu)}</div>
               </div>
             </div>
 
-            {/* RAM Info */}
+            {/* Memory */}
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <MemoryStick className="h-3.5 w-3.5" />
-                <span className="font-medium">RAM</span>
+                <span className="font-medium">Memory</span>
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">
@@ -325,7 +325,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             onTagsChange={handleTagsChange}
             readonly={isReadOnly}
             maxTags={10}
-            placeholder="Add node tag..."
+            placeholder="Add cluster tag..."
           />
         </div>
 
@@ -367,9 +367,9 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="sm:max-w-[425px]" onClick={(e) => e.stopPropagation()}>
           <DialogHeader>
-            <DialogTitle>Edit Node Display Name</DialogTitle>
+            <DialogTitle>Edit Cluster Display Name</DialogTitle>
             <DialogDescription>
-              Change the display name for node {node.name}. The original node name will remain unchanged.
+              Change the display name for cluster {node.name}. The original cluster name will remain unchanged.
             </DialogDescription>
           </DialogHeader>
           

@@ -88,7 +88,7 @@ export function ImageDetailDialog({
             <DetailField label="Architecture" value={image.architecture} mono />
             <DetailField label="Type" value={formatInstanceType(image.type)} />
             <DetailField label="Size" value={formatBytes(image.size)} />
-            <DetailField label="Node" value={<NodeLink clusterId={image.node} />} />
+            <DetailField label="Cluster" value={<NodeLink clusterId={image.node} />} />
             <DetailField label="Project" value={image.project} />
             <DetailField label="Cached" value={image.cached ? "Yes" : "No"} />
             <DetailField label="Auto-update" value={image.auto_update ? "Yes" : "No"} />

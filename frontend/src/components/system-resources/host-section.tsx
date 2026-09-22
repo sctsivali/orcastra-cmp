@@ -68,14 +68,14 @@ function HostCpuCard({ host }: { host: HostInfo | null }) {
         <CardTitle>Host CPU</CardTitle>
         <CardDescription>
           {cpu
-            ? `${cpu.count_physical} physical cores, ${cpu.count_logical} logical processors`
+            ? `${cpu.count_physical} physical cores, ${cpu.count_logical} hardware threads`
             : "Core count not reported by this backend"}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
-            <span>Overall Usage</span>
+            <span>CPU Usage</span>
             <span className="font-medium">{cpu ? `${cpu.percent.toFixed(1)}%` : EMPTY_VALUE}</span>
           </div>
           <UsageProgress value={cpu?.percent ?? 0} />
@@ -106,7 +106,7 @@ function HostMemoryCard({ host }: { host: HostInfo | null }) {
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
-            <span>RAM Usage</span>
+            <span>Memory Usage</span>
             <span className="font-medium">{memory ? `${memory.percent.toFixed(1)}%` : EMPTY_VALUE}</span>
           </div>
           <UsageProgress value={memory?.percent ?? 0} />

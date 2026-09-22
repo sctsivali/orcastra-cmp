@@ -19,8 +19,10 @@
  */
 
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { toast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -103,6 +105,7 @@ const CONTROLS: {
 ];
 
 export function DesktopControlSettings() {
+  const queryClient = useQueryClient();
   const [organizations, setOrganizations] = React.useState<Organization[]>([]);
   const [orgId, setOrgId] = React.useState<number | null>(null);
   const [draft, setDraft] = React.useState<Draft>(EMPTY);
@@ -187,6 +190,9 @@ export function DesktopControlSettings() {
       };
       setDraft(next);
       setSaved(next);
+      void reconcileMutationImpact(queryClient, "organization.preferences").catch(
+        () => undefined,
+      );
       toast({
         title: "Consent updated",
         description: next.enabled

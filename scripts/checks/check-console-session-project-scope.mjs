@@ -47,8 +47,10 @@ for (const key of routeFiles) {
   }
 }
 
-if (calls !== 6) {
-  offenders.push(`expected 6 console cancellation URL builders, found ${calls}`);
+// All three write URLs live in tasksAPI now: kill one, kill all, and keepalive kill all.
+// Call sites pass typed project arguments instead of rebuilding endpoint strings themselves.
+if (calls !== 3) {
+  offenders.push(`expected 3 centralized console cancellation URL builders, found ${calls}`);
 }
 if (!/project:\s*string/.test(bodies.taskHook) ||
     !/killConsoleSession\(instanceName, operationId, host, project\)/.test(bodies.taskHook)) {
@@ -56,6 +58,15 @@ if (!/project:\s*string/.test(bodies.taskHook) ||
 }
 if (!/project:\s*task\.project\s*\|\|\s*["']default["']/.test(bodies.taskDialog)) {
   offenders.push(`${files.taskDialog}: task detail does not pass its recorded project`);
+}
+for (const [key, marker] of [
+  ["page", "tasksAPI.killConsoleSession(instanceName, operationId, host, project)"],
+  ["page", "tasksAPI.killAllConsoleSessionsOnUnload(instanceName, host, project)"],
+  ["window", "consoleInstance.project || \"default\""],
+]) {
+  if (!bodies[key].includes(marker)) {
+    offenders.push(`${files[key]}: missing project-scoped centralized cancellation marker ${marker}`);
+  }
 }
 
 if (offenders.length) {

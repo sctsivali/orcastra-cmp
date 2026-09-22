@@ -12,7 +12,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatBytes, formatLabel, formatMemory} from "@/lib/utils";
+import { formatBytes, formatLabel, formatMemory } from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
@@ -63,7 +63,7 @@ export function NodeCpuPanel({
           <>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Architecture" value={architecture} />
-              <Field label="Total Threads" value={String(resources.cpu_total)} />
+              <Field label="Hardware Threads" value={String(resources.cpu_total)} />
               <Field label="CPU Sockets" value={String(resources.cpu_sockets)} />
               <Field
                 label="Threads per Socket"
@@ -82,14 +82,14 @@ export function NodeCpuPanel({
                   label="Allocated"
                   total={cpu.threads}
                   used={cpu.allocated}
-                  value={`${cpu.allocated} / ${cpu.threads} threads (${cpu.ratioLabel})`}
+                  value={`${cpu.allocated} vCPU / ${cpu.threads} hardware threads (${cpu.ratioLabel})`}
                 />
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
                     {cpu.over > 0 ? "Beyond capacity" : "Unallocated"}
                   </span>
                   <span className={`font-semibold tabular-nums ${cpu.over > 0 ? cpu.textClassName : ""}`}>
-                    {cpu.over > 0 ? `${cpu.over} vCPU (${cpuAllocationText(cpu)})` : `${cpu.unallocated} threads`}
+                    {cpu.over > 0 ? `${cpu.over} vCPU (${cpuAllocationText(cpu)})` : `${cpu.unallocated} hardware threads`}
                   </span>
                 </div>
               </div>

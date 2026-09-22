@@ -172,6 +172,58 @@ assert.equal(calls.length, beforeSameActorMutation + 2);
 assert.equal(calls.at(-2).options.headers.Authorization, "Bearer test-token-a3-old");
 assert.equal(calls.at(-1).options.headers.Authorization, "Bearer test-token-a3-new");
 
+// A debounced personalization callback captures both actor label and monotonic generation.
+// It must dispatch nothing after A -> B, including the ABA case where the label becomes A again.
+const actorMutationFence = compileCommonJs(
+  "frontend/src/lib/actor-mutation-fence.ts",
+  { "@/lib/api": api },
+  { fetch: fetchStub, window: {} },
+);
+const { personalizationAPI } = compileCommonJs(
+  "frontend/src/lib/personalization-api.ts",
+  { "@/lib/api": api },
+  { fetch: fetchStub, window: {} },
+);
+fetchImplementation = async () => response(200, { saved: true });
+
+api.setAccessToken("test-token-pref-a", "actor-pref-a");
+const stalePreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
+api.setAccessToken("test-token-pref-b", "actor-pref-b");
+const beforeRetiredPreference = calls.length;
+assert.deepEqual(
+  await actorMutationFence.dispatchActorMutation(
+    stalePreferenceFence,
+    () => personalizationAPI.update({ branding: { appName: "A private" } }, "test-token-pref-a"),
+  ),
+  { retired: true },
+);
+assert.equal(calls.length, beforeRetiredPreference, "A's delayed preference save used B's bearer");
+
+api.setAccessToken("test-token-pref-a2", "actor-pref-a");
+const abaPreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
+api.setAccessToken("test-token-pref-b2", "actor-pref-b");
+api.setAccessToken("test-token-pref-a3", "actor-pref-a");
+const beforeAbaPreference = calls.length;
+assert.deepEqual(
+  await actorMutationFence.dispatchActorMutation(
+    abaPreferenceFence,
+    () => personalizationAPI.delete("test-token-pref-a2"),
+  ),
+  { retired: true },
+);
+assert.equal(calls.length, beforeAbaPreference, "an A -> B -> A preference delete was revived");
+
+const currentPreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
+api.setAccessToken("test-token-pref-a4", "actor-pref-a");
+const beforeCurrentPreference = calls.length;
+const currentPreference = await actorMutationFence.dispatchActorMutation(
+  currentPreferenceFence,
+  () => personalizationAPI.update({ theme: "dark" }, "test-token-pref-a3"),
+);
+assert.equal(currentPreference.retired, false, "same-actor token rotation retired a valid save");
+assert.equal(calls.length, beforeCurrentPreference + 1);
+assert.equal(calls.at(-1).options.headers.Authorization, "Bearer test-token-pref-a4");
+
 // WebSocket URL builders read the same installed bearer. Once B is marked synchronized, a newly
 // mounted stream must carry B and not A.
 const wsUrls = compileCommonJs(
@@ -215,6 +267,122 @@ assert.equal(cacheClient.getQueryData(["unscoped-sensitive-body"]), undefined);
 assert.equal(retiredClient.getQueryData(["unscoped-sensitive-body"]), undefined);
 stopWatchingActor();
 
+// Break-glass lives outside the React tree, so exercise its actor epoch directly. A delayed
+// A request or grant must stay retired even when the identity cycles A -> B -> A, where comparing
+// only an actor label would otherwise suffer the classic ABA race.
+function createTestZustandStore(initializer) {
+  let state;
+  const get = () => state;
+  const set = (patch) => {
+    const next = typeof patch === "function" ? patch(state) : patch;
+    state = { ...state, ...next };
+  };
+  state = initializer(set, get, {});
+  const useStore = () => state;
+  useStore.getState = get;
+  useStore.setState = set;
+  return useStore;
+}
+
+let actorChanged;
+let checkBreakGlass = async () => {
+  throw new Error("No break-glass check scenario installed");
+};
+let createBreakGlassGrant = async () => {
+  throw new Error("No break-glass grant scenario installed");
+};
+let reconcileBreakGlass = async () => {};
+const breakGlassModule = compileCommonJs(
+  "frontend/src/lib/break-glass-store.ts",
+  {
+    zustand: { create: createTestZustandStore },
+    "@/lib/api": {
+      api: {
+        breakGlass: {
+          check: (...args) => checkBreakGlass(...args),
+          createGrant: (...args) => createBreakGlassGrant(...args),
+        },
+      },
+      onAuthActorChanged: (listener) => {
+        actorChanged = listener;
+        return () => {};
+      },
+    },
+    "@/lib/mutation-coherence": {
+      captureExternalMutationContext: () => ({ actorScope: "captured-actor" }),
+      reconcileExternalMutation: (...args) => reconcileBreakGlass(...args),
+    },
+  },
+  { fetch: fetchStub, window: {} },
+);
+const breakGlassStore = breakGlassModule.useBreakGlassStore;
+
+const delayedBreakGlassCheck = deferred();
+let staleCheckSignal;
+checkBreakGlass = (_clusterId, options) => {
+  staleCheckSignal = options.signal;
+  return delayedBreakGlassCheck.promise;
+};
+const staleBreakGlassRequest = breakGlassStore
+  .getState()
+  .request("cluster-a", "instance-a");
+actorChanged(); // A -> B
+actorChanged(); // B -> A
+assert.equal(staleCheckSignal.aborted, true, "actor change did not abort the old grant check");
+delayedBreakGlassCheck.resolve({
+  required: true,
+  has_active_grant: false,
+  target_organization_slug: "org-a",
+});
+assert.equal(
+  await staleBreakGlassRequest,
+  false,
+  "an A check completed after A -> B -> A and reopened its stale prompt",
+);
+assert.equal(breakGlassStore.getState().prompt, null);
+
+const requiredGrantCheck = {
+  required: true,
+  has_active_grant: false,
+  target_organization_slug: "org-current",
+};
+checkBreakGlass = async () => requiredGrantCheck;
+createBreakGlassGrant = async () => ({ id: "grant-a" });
+const delayedGrantReconcile = deferred();
+const reconciliationStarted = deferred();
+let grantReconcileCalls = 0;
+reconcileBreakGlass = async () => {
+  grantReconcileCalls += 1;
+  reconciliationStarted.resolve();
+  return delayedGrantReconcile.promise;
+};
+
+const oldGrantOutcome = breakGlassStore.getState().request("cluster-a", "instance-a");
+await Promise.resolve();
+assert.equal(breakGlassStore.getState().prompt?.instanceName, "instance-a");
+const oldGrantSubmit = breakGlassStore.getState().submit("incident", 15);
+await reconciliationStarted.promise;
+actorChanged(); // A -> B while the accepted grant is reconciling
+actorChanged(); // B -> A before that reconciliation resolves
+assert.equal(await oldGrantOutcome, false, "actor retirement did not close the old prompt");
+
+const replacementOutcome = breakGlassStore
+  .getState()
+  .request("cluster-a", "instance-replacement");
+await Promise.resolve();
+const replacementPrompt = breakGlassStore.getState().prompt;
+assert.equal(replacementPrompt?.instanceName, "instance-replacement");
+delayedGrantReconcile.resolve();
+await oldGrantSubmit;
+assert.equal(grantReconcileCalls, 1);
+assert.equal(
+  breakGlassStore.getState().prompt,
+  replacementPrompt,
+  "an old actor's post-grant reconciliation cleared the replacement actor's prompt",
+);
+breakGlassStore.getState().cancel();
+assert.equal(await replacementOutcome, false);
+
 const authProvider = readFileSync(
   join(root, "frontend/src/components/auth-provider.tsx"),
   "utf8",
@@ -228,6 +396,14 @@ const taskMutations = readFileSync(
 );
 const taskCancelDialog = readFileSync(
   join(root, "frontend/src/components/task-panel/task-cancel-dialog.tsx"),
+  "utf8",
+);
+const breakGlassStoreSource = readFileSync(
+  join(root, "frontend/src/lib/break-glass-store.ts"),
+  "utf8",
+);
+const personalizationProvider = readFileSync(
+  join(root, "frontend/src/components/personalization-provider.tsx"),
   "utf8",
 );
 
@@ -275,7 +451,7 @@ const structuralChecks = [
     "an instance-detail or member-resource query can reuse another actor's cached body",
   ],
   [
-    /api\.snapshots\.list\(instanceName, host, project\)/.test(hooks) &&
+    /api\.snapshots\.list\(instanceName, host, project(?:, \{ signal \})?\)/.test(hooks) &&
       /api\.snapshotSchedules\.list\(filters, opts\)/.test(hooks) &&
       /vmAPI\.getMetrics\(host, instanceName, project\)/.test(hooks),
     "a project-qualified detail query stopped propagating its project to the API",
@@ -290,7 +466,12 @@ const structuralChecks = [
   [
     (taskMutations.match(/activeActorGuardRef\.current !== requestActorGuard/g)?.length ?? 0) >=
       4 &&
-      /taskKeys\.all\(requestActorGuard\.scopeKey\)/.test(taskMutations) &&
+      (taskMutations.match(
+        /reconcileMutationImpact\(queryClient, "task\.cancel"\)/g,
+      )?.length ?? 0) === 3 &&
+      (taskMutations.match(
+        /reconcileMutationImpact\(queryClient, "task\.session"\)/g,
+      )?.length ?? 0) === 1 &&
       (taskMutations.match(
         /mutation\.variables\?\.requestActorGuard === activeActorGuardRef\.current/g,
       )?.length ?? 0) === 2,
@@ -305,6 +486,21 @@ const structuralChecks = [
       /cancelInFlightRef\.current\?\.actorGuard === requestActorGuard/.test(taskCancelDialog),
     "the cancel dialog can apply or render an old actor's mutation response",
   ],
+  [
+    /await reconcileExternalMutation\("break-glass\.write"[\s\S]*?controller\.signal\.aborted[\s\S]*?submitEpoch !== actorEpoch[\s\S]*?get\(\)\.prompt !== p[\s\S]*?p\.resolve\(true\)/.test(
+      breakGlassStoreSource,
+    ),
+    "break-glass submit does not re-check its actor epoch and prompt after awaited reconciliation",
+  ],
+  [
+    /onAuthActorChanged\(\(\) => \{[\s\S]{0,160}clearPendingSave\(\)/.test(
+      personalizationProvider,
+    ) &&
+      (personalizationProvider.match(/captureActorMutationFence\(scopeKey\)/g)?.length ?? 0) >= 3 &&
+      (personalizationProvider.match(/dispatchActorMutation\(/g)?.length ?? 0) >= 2 &&
+      (personalizationProvider.match(/isActorMutationFenceCurrent\(actorFence\)/g)?.length ?? 0) >= 4,
+    "personalization writes are not retired before dispatch and after actor-boundary awaits",
+  ],
 ];
 
 const failures = structuralChecks.filter(([passed]) => !passed).map(([, reason]) => reason);
@@ -314,4 +510,6 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("auth transition isolation: runtime race cases and 11 structural guards passed");
+console.log(
+  `auth transition isolation: runtime race cases and ${structuralChecks.length} structural guards passed`,
+);

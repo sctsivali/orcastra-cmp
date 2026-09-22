@@ -85,7 +85,7 @@ const GROUPS = defineTable<any>()({
       search: (g) => g.description, filter: fromSort("text") },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (g) => g.node,
       search: (g) => g.node,
       facet: (g) => g.node,
@@ -280,7 +280,7 @@ function GroupsContent() {
                 <TableRow>
                   <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Identities" field="identities" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Permissions" field="permissions" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <TableHead className="text-right">Actions</TableHead>
@@ -421,7 +421,7 @@ function GroupsContent() {
               Are you sure you want to delete group
               <strong className="text-foreground"> {groupToDelete?.name}</strong>
               {groupToDelete?.node && (
-                <> from node <strong className="text-foreground">{groupToDelete.node}</strong></>
+                <> from cluster <strong className="text-foreground">{groupToDelete.node}</strong></>
               )}?
               <span className="block mt-2 text-muted-foreground text-xs">
                 This action cannot be undone. All identities and permissions assigned to this group will be removed.

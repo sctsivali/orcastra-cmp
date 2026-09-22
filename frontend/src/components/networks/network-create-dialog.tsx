@@ -77,7 +77,7 @@ export function NetworkCreateDialog({ open, onOpenChange, onSaved }: NetworkCrea
       <DialogContent className="max-w-3xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0 pr-8 pb-4">
           <DialogTitle>Create Network</DialogTitle>
-          <DialogDescription>Create a Bridge or OVN network on a node.</DialogDescription>
+          <DialogDescription>Create a Bridge or OVN network on a cluster.</DialogDescription>
         </DialogHeader>
         <NetworkCreateBody
           onBusyChange={setBusy}
@@ -219,7 +219,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
           <h3 className="text-sm font-semibold">General</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label>Node *</Label>
+              <Label>Cluster *</Label>
               <SearchableSelect
                 value={node}
                 onValueChange={(next) => {
@@ -231,9 +231,9 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                   setProject("default");
                 }}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select node"}
-                searchPlaceholder="Search nodes..."
-                emptyText="No nodes found."
+                placeholder={loadingNodes ? "Loading..." : "Select cluster"}
+                searchPlaceholder="Search clusters..."
+                emptyText="No clusters found."
                 disabled={loadingNodes}
               />
               <NodeStatusNotice
@@ -333,9 +333,9 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                 options={uplinkOptions}
                 placeholder={
                   !node
-                    ? "Select a node first"
+                    ? "Select a cluster first"
                     : uplinkOptions.length === 0
-                      ? "No usable uplink on this node"
+                      ? "No usable uplink on this cluster"
                       : "Select uplink network"
                 }
                 searchPlaceholder="Search networks..."
@@ -395,7 +395,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
             {isReadOnly
               ? "Disabled in read-only mode"
               : !node
-                ? "Select a node"
+                ? "Select a cluster"
                 : name === ""
                   ? "Enter a name"
                   : nameError || ipv4Error || ipv6Error || uplinkError || ""}

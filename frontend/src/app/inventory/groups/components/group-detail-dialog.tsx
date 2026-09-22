@@ -225,7 +225,7 @@ export function GroupDetailDialog({
             <DetailGrid cols={3}>
               {/* Both dropped by the modal this replaces. */}
               <DetailField label="Description" value={group.description} span="full" />
-              <DetailField label="Node" value={<NodeLink clusterId={group.node} />} />
+              <DetailField label="Cluster" value={<NodeLink clusterId={group.node} />} />
               <DetailField label="Members" value={memberCount} />
               <DetailField label="Permissions" value={group.permissions?.length ?? 0} />
             </DetailGrid>

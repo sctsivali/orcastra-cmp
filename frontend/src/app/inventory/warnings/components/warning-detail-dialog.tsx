@@ -64,8 +64,8 @@ export function WarningDetailDialog({
           <DetailSection title="Where and When">
             <DetailGrid cols={3}>
               {/* note: location and source_node are different things, per the type comment. */}
-              <DetailField label="Location" value={record.location} />
-              <DetailField label="Source Node" value={record.source_node} />
+              <DetailField label="Cluster Member" value={record.location} />
+              <DetailField label="Cluster" value={record.source_node} />
               <DetailField label="Project" value={record.project} />
               <DetailField label="Status" value={status.label} />
               <DetailField label="Seen" value={record.count?.toLocaleString?.() ?? record.count} />

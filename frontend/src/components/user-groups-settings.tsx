@@ -70,6 +70,7 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { formatLabel } from "@/lib/utils";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import type {
   UserGroupEntry,
   IntegrationOrganization,
@@ -231,7 +232,7 @@ function UserGroupsSettingsContent() {
   const assignMutation = useMutation({
     mutationFn: api.userGroups.assign,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["user-groups"] });
+      void reconcileMutationImpact(queryClient, "user-group.write").catch(() => undefined);
       setAssignOpen(false);
       resetForm();
     },
@@ -241,7 +242,7 @@ function UserGroupsSettingsContent() {
   const deleteMutation = useMutation({
     mutationFn: (userEmail: string) => api.userGroups.remove(userEmail),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["user-groups"] });
+      void reconcileMutationImpact(queryClient, "user-group.write").catch(() => undefined);
       setDeleteEmail(null);
     },
   });

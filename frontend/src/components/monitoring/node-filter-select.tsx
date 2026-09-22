@@ -61,7 +61,7 @@ export function NodeFilterSelect({
     rows.sort((a, b) => a._rank - b._rank || a.label.localeCompare(b.label));
 
     return [
-      { value: ALL_NODES, label: "All Nodes" },
+      { value: ALL_NODES, label: "All Clusters" },
       ...rows.map(({ _rank, ...opt }) => opt),
     ];
   }, [nodes, isPartner]);
@@ -72,10 +72,10 @@ export function NodeFilterSelect({
       onValueChange={onValueChange}
       options={options}
       icon={Server}
-      ariaLabel="Filter by node"
-      placeholder="All Nodes"
-      searchPlaceholder="Search nodes..."
-      emptyText="No nodes found."
+      ariaLabel="Filter by cluster"
+      placeholder="All Clusters"
+      searchPlaceholder="Search clusters..."
+      emptyText="No clusters found."
       // The trigger sits in a toolbar beside the pause and refresh buttons, so it keeps its own
       // width and the 36px height those share rather than the form-field default.
       className="h-9 w-auto min-w-[160px] max-w-[300px]"

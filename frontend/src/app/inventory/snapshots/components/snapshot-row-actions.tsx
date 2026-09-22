@@ -63,7 +63,7 @@ export function SnapshotRowActions({
 
   // Said on the item, not only in the dialog, so an operator learns before opening it.
   const billingNote = needsTypedName
-    ? " (taken on the host, type its name)"
+    ? " (taken on the cluster, type its name)"
     : origin === "upstream"
       ? " (upstream restore point, needs a reason)"
       : billingLinked

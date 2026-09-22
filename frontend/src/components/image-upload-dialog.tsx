@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   Dialog,
@@ -18,19 +19,36 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useProjects } from "@/hooks/use-lxd";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
-import { api, imageAPI } from "@/lib/api";
-import type { ProjectListResponse } from "@/types/api";
+import {
+  api,
+  imageAPI,
+  isAuthActorSynchronized,
+  onAuthActorChanged,
+} from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import {
+  followUploadToTerminal,
+  UploadOutcomeUnknown,
+  UploadTerminalFailure,
+} from "@/lib/upload-terminal";
+import { APIError, type ProjectListResponse } from "@/types/api";
 import { formatBytes } from "@/lib/utils";
 import { Loader2, UploadCloud } from "lucide-react";
 
 // 16 MiB chunks: large enough to keep request overhead low, small enough that a
 // dropped connection only re-sends a little (the server tracks the real offset).
 const CHUNK_SIZE = 16 * 1024 * 1024;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Phase = "idle" | "uploading" | "importing" | "done" | "error";
+type Phase = "idle" | "uploading" | "importing" | "done" | "failed" | "unknown";
 type ImageType = "container" | "virtual-machine";
+
+interface ActiveUploadSession {
+  id: string;
+  actorScope: string;
+  abortable: boolean;
+}
 
 const TYPE_OPTIONS = [
   { value: "virtual-machine", label: "Virtual Machine" },
@@ -60,7 +78,9 @@ function suggestAlias(fileName: string): string {
 }
 
 export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploadDialogProps) {
+  const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { scopeKey } = useActorQueryScope();
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
@@ -90,34 +110,31 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
   // Tracks the live session so we can release its server-side slot on
   // cancel/error/teardown instead of leaving it for the idle sweep. Held in a
   // ref (not state) so the unmount/pagehide handlers see the latest value.
-  const sessionIdRef = useRef<string | null>(null);
+  const sessionRef = useRef<ActiveUploadSession | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const runInFlightRef = useRef(false);
+  const actorEpochRef = useRef(0);
+  const contextKey = `${scopeKey}\u0000${node}\u0000${project}\u0000${alias}\u0000${imageType}`;
+  const activeContextRef = useRef<{ key: string }>({ key: contextKey });
+  if (activeContextRef.current.key !== contextKey) {
+    activeContextRef.current = { key: contextKey };
+  }
 
-  const abortActive = () => {
-    const sid = sessionIdRef.current;
-    if (sid) {
-      sessionIdRef.current = null;
-      void api.imageUploads.abort(sid); // best-effort, never throws
+  const abortActive = useCallback(() => {
+    const session = sessionRef.current;
+    sessionRef.current = null;
+    if (
+      session?.abortable &&
+      isAuthActorSynchronized(session.actorScope)
+    ) {
+      void api.imageUploads.abort(session.id, {
+        actorScope: session.actorScope,
+        keepalive: true,
+      });
     }
-  };
-
-  // If the tab is closed/reloaded or the component unmounts mid-upload, free the
-  // slot. abort() uses keepalive so the DELETE survives an unload.
-  useEffect(() => {
-    const onUnload = () => abortActive();
-    window.addEventListener("pagehide", onUnload);
-    return () => {
-      window.removeEventListener("pagehide", onUnload);
-      abortActive();
-    };
   }, []);
 
-  const busy = phase === "uploading" || phase === "importing";
-  const aliasValid = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(alias);
-  const canUpload =
-    !!node && aliasValid && !!file && !busy && phase !== "done";
-
-  const reset = () => {
-    abortActive(); // release any session left behind by an error/cancel
+  const clearFormState = useCallback(() => {
     setNode("");
     setProject("default");
     setAlias("");
@@ -127,6 +144,43 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
     setProgress(0);
     setError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  // If the tab is closed/reloaded or the component unmounts mid-upload, free the
+  // slot. abort() uses keepalive so the DELETE survives an unload.
+  useEffect(() => {
+    const onUnload = () => abortActive();
+    const stopActorListener = onAuthActorChanged(() => {
+      actorEpochRef.current += 1;
+      uploadAbortRef.current?.abort(
+        new DOMException("Authenticated actor changed", "AbortError"),
+      );
+      uploadAbortRef.current = null;
+      // The new actor must never delete A's server-side upload with B's bearer.
+      sessionRef.current = null;
+      runInFlightRef.current = false;
+      clearFormState();
+    });
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      stopActorListener();
+      window.removeEventListener("pagehide", onUnload);
+      uploadAbortRef.current?.abort();
+      abortActive();
+    };
+  }, [abortActive, clearFormState]);
+
+  const busy = phase === "uploading" || phase === "importing";
+  const aliasValid = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(alias);
+  const canUpload =
+    !!node && aliasValid && !!file && !busy && phase !== "done";
+
+  const reset = () => {
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
+    abortActive(); // release a session only when finalization has not started
+    runInFlightRef.current = false;
+    clearFormState();
   };
 
   const handleFile = (f: File | null) => {
@@ -135,67 +189,143 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
   };
 
   const startUpload = async () => {
-    if (!file) return;
+    if (!file || runInFlightRef.current) return;
+    runInFlightRef.current = true;
+    const requestContext = activeContextRef.current;
+    const requestActorEpoch = actorEpochRef.current;
+    const requestScope = scopeKey;
+    const targetNode = node;
+    const targetProject = project;
+    const targetAlias = alias;
+    const targetImageType = imageType;
+    const uploadFile = file;
+    const controller = new AbortController();
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = controller;
+    const isCurrentRequest = () =>
+      activeContextRef.current === requestContext &&
+      actorEpochRef.current === requestActorEpoch &&
+      isAuthActorSynchronized(requestScope);
+    const reconcileOutcome = async (): Promise<boolean> => {
+      if (!isCurrentRequest()) return false;
+      await Promise.allSettled([
+        reconcileMutationImpact(queryClient, "image.upload"),
+      ]);
+      return isCurrentRequest();
+    };
     setError(null);
     setPhase("uploading");
     setProgress(0);
+    let finalizationAttempted = false;
+    let finalizationDefinitivelyRejected = false;
     try {
       const { session_id } = await api.imageUploads.create({
-        cluster_id: node,
-        project,
-        alias,
-        instance_type: imageType,
-        total_bytes: file.size,
-        max_bytes: file.size,
-      });
-      sessionIdRef.current = session_id;
+        cluster_id: targetNode,
+        project: targetProject,
+        alias: targetAlias,
+        instance_type: targetImageType,
+        total_bytes: uploadFile.size,
+        max_bytes: uploadFile.size,
+      }, { signal: controller.signal, actorScope: requestScope });
+      if (!isCurrentRequest()) return;
+      sessionRef.current = { id: session_id, actorScope: requestScope, abortable: true };
 
       // Stream the file in chunks; the server returns the authoritative offset,
       // which lets a failed/retried chunk resume from the right place.
       let offset = 0;
-      while (offset < file.size) {
-        const end = Math.min(offset + CHUNK_SIZE, file.size);
-        const chunk = file.slice(offset, end);
-        offset = await api.imageUploads.patchChunk(session_id, offset, chunk);
-        setProgress(Math.round((offset / file.size) * 100));
+      while (offset < uploadFile.size) {
+        const end = Math.min(offset + CHUNK_SIZE, uploadFile.size);
+        const chunk = uploadFile.slice(offset, end);
+        offset = await api.imageUploads.patchChunk(session_id, offset, chunk, {
+          signal: controller.signal,
+          actorScope: requestScope,
+        });
+        if (!isCurrentRequest()) return;
+        setProgress(Math.round((offset / uploadFile.size) * 100));
       }
 
-      // Trigger the import and poll until the image lands (or fails).
+      // Finalize is non-idempotent. Attempt it once, then follow only the durable status read.
       setPhase("importing");
-      await api.imageUploads.finalize(session_id);
-      let fingerprint: string | null = null;
-      for (;;) {
-        const s = await api.imageUploads.status(session_id);
-        if (s.status === "ready") {
-          fingerprint = s.fingerprint;
-          break;
-        }
-        if (s.status === "failed") {
-          throw new Error(s.error || "Import failed on the cluster");
-        }
-        await sleep(2000);
+      finalizationAttempted = true;
+      if (sessionRef.current?.id === session_id) {
+        sessionRef.current.abortable = false;
       }
+      const terminalStartedAt = Date.now();
+      let initialStatus;
+      try {
+        initialStatus = await api.imageUploads.finalize(session_id, {
+          signal: controller.signal,
+          actorScope: requestScope,
+        });
+      } catch (error) {
+        if (!isCurrentRequest() || controller.signal.aborted) throw error;
+        finalizationDefinitivelyRejected =
+          error instanceof APIError && error.status >= 400 && error.status < 500;
+        if (finalizationDefinitivelyRejected) throw error;
+        // A lost/5xx response can hide an accepted import. Never replay finalize; status is the
+        // only safe way to determine whether the first request took effect.
+      }
+      const terminal = await followUploadToTerminal({
+        signal: controller.signal,
+        initialStatus,
+        startedAt: terminalStartedAt,
+        readStatus: (signal) =>
+          api.imageUploads.status(session_id, { signal, actorScope: requestScope }),
+        unknownMessage:
+          "Orcastra could not confirm the final image-import state within 30 minutes. Check Images and Operations before trying again.",
+      });
+      if (!isCurrentRequest()) return;
 
-      sessionIdRef.current = null; // completed: nothing to release
+      sessionRef.current = null; // terminal: nothing to release
       // The store that holds it. The upload names a project, but a project without its own
       // image store lands in the host's default store, and the list read says which.
       const store = await imageAPI
-        .listByHost(node, project)
-        .then((listing) => listing.project || project)
-        .catch(() => project);
+        .listByHost(targetNode, targetProject, { fresh: true, signal: controller.signal })
+        .then((listing) => listing.project || targetProject)
+        .catch(() => targetProject);
+      if (!isCurrentRequest()) return;
+      // Finalize only starts the import. Terminal ready is the point at which every image
+      // consumer must become stale; the owning page performs its focused refetch below.
+      if (!(await reconcileOutcome())) return;
       setPhase("done");
       toast({
         title: "Image uploaded",
         description:
           store === "default"
-            ? `"${alias}" is ready in the default image store on ${node}.`
-            : `"${alias}" is ready in project ${store}'s image store on ${node}.`,
+            ? `"${targetAlias}" is ready in the default image store on ${targetNode}.`
+            : `"${targetAlias}" is ready in project ${store}'s image store on ${targetNode}.`,
       });
-      onUploaded?.({ node, project: store, fingerprint, alias });
-    } catch (e) {
-      setPhase("error");
-      setError(e instanceof Error ? e.message : String(e));
-      abortActive(); // release the slot the failed upload was holding
+      onUploaded?.({
+        node: targetNode,
+        project: store,
+        fingerprint: terminal.fingerprint,
+        alias: targetAlias,
+      });
+    } catch (e: unknown) {
+      if (!isCurrentRequest() || controller.signal.aborted) return;
+      if (finalizationAttempted) {
+        sessionRef.current = null;
+        if (!(await reconcileOutcome())) return;
+      } else {
+        abortActive();
+      }
+      const outcomeUnknown =
+        finalizationAttempted &&
+        !finalizationDefinitivelyRejected &&
+        !(e instanceof UploadTerminalFailure);
+      setPhase(outcomeUnknown ? "unknown" : "failed");
+      setError(
+        outcomeUnknown
+          ? e instanceof UploadOutcomeUnknown
+            ? e.message
+            : "Orcastra could not confirm the final image-import state. Check Images and Operations before trying again."
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
+      if (activeContextRef.current === requestContext) runInFlightRef.current = false;
     }
   };
 
@@ -228,14 +358,14 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="grid gap-2">
-              <Label>Node *</Label>
+              <Label>Cluster *</Label>
               <SearchableSelect
                 value={node}
                 onValueChange={selectNode}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select node"}
-                searchPlaceholder="Search nodes..."
-                emptyText="No nodes found."
+                placeholder={loadingNodes ? "Loading..." : "Select cluster"}
+                searchPlaceholder="Search clusters..."
+                emptyText="No clusters found."
                 disabled={loadingNodes || busy}
               />
               <NodeStatusNotice
@@ -276,7 +406,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
             />
             <p className="text-xs text-muted-foreground">
               A project with its own image store keeps the image there; any other project
-              shares the default store on the node.
+              shares the default store on the cluster.
             </p>
           </div>
 
@@ -336,7 +466,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
         </div>
 
         <DialogFooter>
-          {phase === "done" ? (
+          {phase === "done" || phase === "unknown" ? (
             <Button
               onClick={() => {
                 reset();

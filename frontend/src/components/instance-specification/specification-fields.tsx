@@ -91,7 +91,7 @@ export function SpecificationFields({
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="space-y-2">
-        <Label htmlFor="specification-cpu">CPU count</Label>
+        <Label htmlFor="specification-cpu">vCPU count</Label>
         <Input
           id="specification-cpu"
           type="number"

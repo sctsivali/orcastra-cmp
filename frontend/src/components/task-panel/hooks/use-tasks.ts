@@ -21,6 +21,8 @@ import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { tasksAPI } from "@/lib/tasks-api";
 import { DYNAMIC_DATA_CONFIG, POLL_MS, jitter } from "@/lib/query-config";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import { APIError } from "@/types/api";
 import type {
   CancelResponse,
   ClusterLogEntry,
@@ -91,7 +93,7 @@ export function useTaskSummary(feedConnected: boolean) {
   const refetchInterval = usePollInterval(POLL_MS.active, feedConnected);
   return useRefreshableQuery<TaskListResponse>({
     queryKey: taskKeys.summary(scopeKey),
-    queryFn: ({ fresh }) => tasksAPI.summary({ fresh }),
+    queryFn: ({ fresh, signal }) => tasksAPI.summary({ fresh, signal }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated,
     refetchInterval,
@@ -104,7 +106,7 @@ export function useTaskList(feedConnected: boolean, limit: number) {
   const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
   return useRefreshableQuery<TaskListResponse>({
     queryKey: taskKeys.list(scopeKey, limit),
-    queryFn: ({ fresh }) => tasksAPI.list({ limit }, { fresh }),
+    queryFn: ({ fresh, signal }) => tasksAPI.list({ limit }, { fresh, signal }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated,
     refetchInterval,
@@ -121,7 +123,7 @@ export function useTaskWindow(since: string, feedConnected: boolean) {
   const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
   return useRefreshableQuery<TaskListResponse>({
     queryKey: taskKeys.window(scopeKey, since),
-    queryFn: ({ fresh }) => tasksAPI.list({ since, limit: WINDOW_LIMIT }, { fresh }),
+    queryFn: ({ fresh, signal }) => tasksAPI.list({ since, limit: WINDOW_LIMIT }, { fresh, signal }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && since !== "",
     refetchInterval,
@@ -135,7 +137,7 @@ export function useTaskQueue(enabled: boolean) {
   const [refetchInterval] = useState(() => jitter(POLL_MS.watched));
   return useRefreshableQuery({
     queryKey: taskKeys.queue(scopeKey),
-    queryFn: ({ fresh }) => tasksAPI.queue({ fresh }),
+    queryFn: ({ fresh, signal }) => tasksAPI.queue({ fresh, signal }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && enabled,
     refetchInterval,
@@ -148,7 +150,7 @@ export function useTaskDetail(id: string | null) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery<TaskDetailResponse>({
     queryKey: taskKeys.detail(scopeKey, id ?? ""),
-    queryFn: () => tasksAPI.get(id ?? ""),
+    queryFn: ({ signal }) => tasksAPI.get(id ?? "", { signal }),
     ...DYNAMIC_DATA_CONFIG,
     staleTime: 0,
     enabled: isAuthenticated && id !== null && id !== "",
@@ -160,7 +162,7 @@ export function useClusterLog(enabled: boolean, feedConnected: boolean, limit: n
   const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
   return useRefreshableQuery<ClusterLogResponse>({
     queryKey: logKeys.list(scopeKey, limit),
-    queryFn: ({ fresh }) => tasksAPI.log({ limit }, { fresh }),
+    queryFn: ({ fresh, signal }) => tasksAPI.log({ limit }, { fresh, signal }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && enabled,
     refetchInterval,
@@ -179,16 +181,20 @@ export function useCancelTask() {
     { id: string; requestActorGuard: ActorMutationGuard }
   >({
     mutationFn: ({ id }) => tasksAPI.cancel(id),
-    onSuccess: (_response, { requestActorGuard }) => {
+    retry: false,
+    onSuccess: (_response, { id, requestActorGuard }) => {
       if (
         activeActorGuardRef.current !== requestActorGuard ||
         requestActorGuard.scopeKey === null
       ) {
         return;
       }
-      void queryClient.invalidateQueries({
-        queryKey: taskKeys.all(requestActorGuard.scopeKey),
-      });
+      void followTaskCancellation(
+        queryClient,
+        id,
+        requestActorGuard,
+        activeActorGuardRef,
+      );
     },
     onError: (error, { requestActorGuard }) => {
       if (activeActorGuardRef.current !== requestActorGuard) return;
@@ -219,6 +225,71 @@ export function useCancelTask() {
   };
 }
 
+const TASK_CANCEL_POLL_MS = 2_000;
+const TASK_CANCEL_MAX_POLL_MS = 2 * 60_000;
+const TASK_CANCEL_MAX_FAILURES = 4;
+const TERMINAL_TASK_STATUSES = new Set<TaskRecord["status"]>([
+  "success",
+  "failure",
+  "cancelled",
+  "lost",
+]);
+
+function waitForTaskCancelPoll(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+/** Follow one accepted cancellation request. This read loop never repeats DELETE /tasks/{id}. */
+async function followTaskCancellation(
+  queryClient: QueryClient,
+  id: string,
+  requestActorGuard: ActorMutationGuard,
+  activeActorGuardRef: MutableRefObject<ActorMutationGuard>,
+): Promise<void> {
+  const isCurrentActor = () =>
+    requestActorGuard.scopeKey !== null && activeActorGuardRef.current === requestActorGuard;
+  if (!isCurrentActor()) return;
+
+  await reconcileMutationImpact(queryClient, "task.cancel").catch(() => undefined);
+  const startedAt = Date.now();
+  let failures = 0;
+
+  while (isCurrentActor() && Date.now() - startedAt < TASK_CANCEL_MAX_POLL_MS) {
+    try {
+      const detail = await tasksAPI.get(id, { fresh: true });
+      if (!isCurrentActor()) return;
+      failures = 0;
+      if (TERMINAL_TASK_STATUSES.has(detail.task.status)) {
+        await reconcileMutationImpact(queryClient, "task.cancel").catch(() => undefined);
+        return;
+      }
+    } catch (error) {
+      if (!isCurrentActor()) return;
+      if (error instanceof APIError && error.status === 429) {
+        const remainingMs = Math.max(
+          0,
+          TASK_CANCEL_MAX_POLL_MS - (Date.now() - startedAt),
+        );
+        await waitForTaskCancelPoll(Math.min(
+          remainingMs,
+          Math.max(TASK_CANCEL_POLL_MS, (error.retryAfter ?? 30) * 1_000),
+        ));
+        continue;
+      }
+      if (error instanceof APIError && [401, 403, 404].includes(error.status)) break;
+      failures += 1;
+      if (failures >= TASK_CANCEL_MAX_FAILURES) break;
+    }
+
+    await waitForTaskCancelPoll(TASK_CANCEL_POLL_MS);
+  }
+
+  // Unknown outcome: read-reconcile once, stop, and never replay the cancellation mutation.
+  if (isCurrentActor()) {
+    await reconcileMutationImpact(queryClient, "task.cancel").catch(() => undefined);
+  }
+}
+
 export interface KillConsoleSessionInput {
   instanceName: string;
   operationId: string;
@@ -236,6 +307,7 @@ export function useKillConsoleSession() {
   >({
     mutationFn: ({ instanceName, operationId, host, project }) =>
       tasksAPI.killConsoleSession(instanceName, operationId, host, project),
+    retry: false,
     onSuccess: (_data, { instanceName, requestActorGuard }) => {
       if (
         activeActorGuardRef.current !== requestActorGuard ||
@@ -247,9 +319,7 @@ export function useKillConsoleSession() {
         title: "Session killed",
         description: `Console session for ${instanceName} has been terminated`,
       });
-      void queryClient.invalidateQueries({
-        queryKey: taskKeys.all(requestActorGuard.scopeKey),
-      });
+      void reconcileMutationImpact(queryClient, "task.session").catch(() => undefined);
     },
     onError: (error, { requestActorGuard }) => {
       if (activeActorGuardRef.current !== requestActorGuard) return;

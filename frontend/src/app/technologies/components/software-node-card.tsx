@@ -96,7 +96,7 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
         {runtimes.length > 0 ? (
           <DetailSection
             title="Instance Runtimes"
-            description="Each runtime with the version this node reports for it."
+            description="Each runtime with the version this cluster reports for it."
           >
             <DetailGrid cols={3}>
               {runtimes.map((runtime) => (

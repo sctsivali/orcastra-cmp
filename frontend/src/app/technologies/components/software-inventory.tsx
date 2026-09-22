@@ -59,15 +59,15 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
   // sitting directly under it. The other two are the copy this section has always carried.
   const subtitle =
     connected.length === 0
-      ? "Each node reports its own software inventory, and they do not have to agree."
+      ? "Each cluster reports its own software inventory, and they do not have to agree."
       : connected.length === 1
-        ? "Reported by the one connected node. A missing version means the node does not report that component, not that it is absent."
-        : `Reported separately by each of the ${connected.length} connected nodes, because they do not have to agree. A missing version means the node does not report that component, not that it is absent.`;
+        ? "Reported by the one connected cluster. A missing version means the cluster does not report that component, not that it is absent."
+        : `Reported separately by each of the ${connected.length} connected clusters, because they do not have to agree. A missing version means the cluster does not report that component, not that it is absent.`;
 
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-xl font-semibold">Software by Node</h2>
+        <h2 className="text-xl font-semibold">Software by Cluster</h2>
         {/* --foreground on the page background, same reason as the hardware sections. */}
         <p className="text-sm text-foreground">{subtitle}</p>
         {divergence.length > 0 ? (
@@ -91,8 +91,8 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
           <CardContent className="pt-6">
             <EmptyState
               icon={Server}
-              title="No node reports a software inventory yet"
-              description="Versions appear here once a node is connected and answering."
+              title="No cluster reports a software inventory yet"
+              description="Versions appear here once a cluster is connected and answering."
             />
           </CardContent>
         </Card>

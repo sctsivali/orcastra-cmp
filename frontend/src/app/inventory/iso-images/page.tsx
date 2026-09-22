@@ -66,7 +66,7 @@ const ISOS = defineTable<any>()({
       facetSpec: { primary: true } },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (i) => i.node,
       search: (i) => i.node,
       facet: (i) => i.node,
@@ -344,7 +344,7 @@ function IsoImagesContent() {
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Pool" field="pool" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && (
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -476,7 +476,7 @@ function isoSubject(volume: StorageVolumeInfo): UsedBySubject {
     usedBy: volume.used_by ?? [],
     facts: [
       { label: "Pool", value: volume.pool },
-      { label: "Node", value: <NodeLink clusterId={volume.node} /> },
+      { label: "Cluster", value: <NodeLink clusterId={volume.node} /> },
       { label: "Content Type", value: volume.content_type },
     ],
     panels: Object.keys(config).length

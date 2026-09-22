@@ -66,7 +66,7 @@ export function NodeStatusNotice({
         )}
       >
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span>Cluster reachability is unavailable. Nodes are listed without status.</span>
+        <span>Cluster reachability is unavailable. Clusters are listed without status.</span>
       </p>
     );
   }

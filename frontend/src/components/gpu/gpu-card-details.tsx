@@ -7,7 +7,7 @@ import {
   gpuClassOf,
   gpuIdentifier,
 } from "@/lib/gpu";
-import { cn, formatBytes, formatMemory} from "@/lib/utils";
+import { cn, formatBytes, formatMemory } from "@/lib/utils";
 import type { GPUCardInfo } from "@/types/api";
 
 import { GpuClassBadge } from "./gpu-class-badge";
@@ -80,7 +80,7 @@ export function GpuCardDetails({ card, dense = false }: GpuCardDetailsProps) {
                 {card.memory_shared ? " unified" : ""}
               </p>
               {card.memory_shared && (
-                <p className="text-xs text-muted-foreground">Shared with system RAM</p>
+                <p className="text-xs text-muted-foreground">Shared with system memory</p>
               )}
             </>
           ) : (

@@ -163,7 +163,7 @@ export const LOADING_PHASES = {
   vms: [
     { id: "init", label: "Initializing" },
     { id: "fetch", label: "Fetching VMs" },
-    { id: "nodes", label: "Loading Nodes" },
+    { id: "nodes", label: "Loading Clusters" },
     { id: "process", label: "Processing" },
     { id: "render", label: "Rendering" },
   ],
@@ -181,7 +181,7 @@ export const LOADING_PHASES = {
     { id: "init", label: "Initializing" },
     { id: "health", label: "Health Check" },
     { id: "stats", label: "Loading Stats" },
-    { id: "nodes", label: "Loading Nodes" },
+    { id: "nodes", label: "Loading Clusters" },
     { id: "render", label: "Rendering" },
   ],
 };

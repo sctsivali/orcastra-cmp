@@ -19,8 +19,8 @@ interface NodeConnectionSummaryProps {
 
 function getDisconnectedReason(node: NodeStatus): string {
   if (node.error) return node.error;
-  if (!node.connected) return "Node endpoint is unreachable or not authenticated.";
-  if (!node.server_version) return "Node is reachable but has not returned server details yet.";
+  if (!node.connected) return "Cluster endpoint is unreachable or not authenticated.";
+  if (!node.server_version) return "Cluster is reachable but has not returned server details yet.";
   return "Connection details are incomplete.";
 }
 
@@ -68,14 +68,14 @@ export function NodeConnectionSummary({
         <TooltipContent align="start" side="bottom" className="max-w-sm p-3">
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase text-muted-foreground">
-              Disconnected node details
+              Disconnected cluster details
             </p>
             <div className="space-y-2">
               {detailNodes.map((node) => (
                 <div key={node.name} className="space-y-0.5 border-t border-border/60 pt-2 first:border-t-0 first:pt-0">
                   <p className="text-sm font-medium">{node.display_name || node.name}</p>
                   {node.display_name && (
-                    <p className="text-xs text-muted-foreground">Node ID: {node.name}</p>
+                    <p className="text-xs text-muted-foreground">Cluster ID: {node.name}</p>
                   )}
                   <p className="break-all font-mono text-xs text-muted-foreground">{node.endpoint}</p>
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

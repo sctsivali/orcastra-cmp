@@ -2,11 +2,16 @@
  * Custom React Query hooks for Orcastra CMP
  */
 
-import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { usePermissions } from "@/hooks/use-permissions";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { APIError } from "@/types/api";
 import { 
   vmAPI, 
@@ -15,7 +20,9 @@ import {
   projectAPI, 
   tagAPI, 
   healthCheck,
-  api 
+  api,
+  fetchAPI,
+  isAuthActorSynchronized,
 } from "@/lib/api";
 import {
   VMCreateRequest,
@@ -24,7 +31,6 @@ import {
   InstanceSpecificationUpdateRequest,
   VMActionRequest,
   ProjectCreateRequest,
-  VMListResponse,
   SnapshotCreateRequest,
   SnapshotRestoreRequest,
   MoveRequest,
@@ -41,6 +47,15 @@ import {
   backingOffInterval,
   jitter,
 } from "@/lib/query-config";
+import {
+  reconcileMutationImpact,
+  type MutationImpactId,
+} from "@/lib/mutation-coherence";
+import {
+  optimisticallyRemoveExactInstance,
+  reconcileInstanceFleet,
+  restoreExactInstanceRollback,
+} from "@/lib/instance-reconciliation";
 
 // Query Keys
 export const queryKeys = {
@@ -100,12 +115,15 @@ export const queryKeys = {
   memberResources: (actorScope: string, node: string, memberName: string) =>
     ["memberResources", actorScope, node, memberName] as const,
   images: ["images"] as const,
-  imagesByHost: (host: string) => ["images", host] as const,
+  imagesByHost: (actorScope: string, host: string) =>
+    ["images", actorScope, host] as const,
   // A store read is keyed apart from the host's fleet slice, which useImages(host) owns with a
   // different shape (an array of one response).
-  imageStore: (host: string, project: string) => ["images", host, "store", project] as const,
+  imageStore: (actorScope: string, host: string, project: string) =>
+    ["images", actorScope, host, "store", project] as const,
   // Every store on a host, distinct from useImages(host)'s one-element array under ["images", host].
-  imageStores: (host: string) => ["images", host, "stores"] as const,
+  imageStores: (actorScope: string, host: string) =>
+    ["images", actorScope, host, "stores"] as const,
   nodes: ["nodes"] as const,
   nodesFor: (actorScope: string) => ["nodes", actorScope] as const,
   nodeNames: ["nodeNames"] as const,
@@ -136,53 +154,33 @@ function normalizeProject(project?: string | null) {
 }
 
 function refreshInstanceQueries(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: queryKeys.vms });
-  void queryClient.invalidateQueries({ queryKey: ["instances"] });
-  // a create, delete or start changes the allocation table the IPAM page reads
-  void queryClient.invalidateQueries({ queryKey: ["ipam"] });
-  // and what a project has allocated against its limits
-  void queryClient.invalidateQueries({ queryKey: ["projectUsage"] });
+  void reconcileMutationImpact(queryClient, "instance.state");
 }
 
-function removeInstanceFromList(
-  data: VMListResponse | undefined,
-  name: string,
-  host: string,
-  project?: string | null
+function reconcile(
+  queryClient: QueryClient,
+  impact: MutationImpactId,
+  queryKeys?: readonly (readonly unknown[])[],
 ) {
-  if (!data?.vms) return data;
-
-  const filteredVms = data.vms.filter((vm) => {
-    const matchesInstance = vm.name === name && vm.host === host;
-    const matchesProject = !project || normalizeProject(vm.project) === normalizeProject(project);
-    return !(matchesInstance && matchesProject);
-  });
-
-  const removedCount = data.vms.length - filteredVms.length;
-  if (removedCount === 0) return data;
-
-  return {
-    ...data,
-    total: Math.max(0, data.total - removedCount),
-    vms: filteredVms,
-  };
+  return reconcileMutationImpact(queryClient, impact, { queryKeys });
 }
 
-function removeInstanceFromCaches(
+function removeInstanceDetails(
   queryClient: QueryClient,
   actorScope: string,
   name: string,
   host: string,
-  project?: string | null
+  project?: string | null,
 ) {
-  queryClient.setQueriesData<VMListResponse | undefined>(
-    { queryKey: ["vms", actorScope] },
-    (data) => removeInstanceFromList(data, name, host, project)
-  );
-  queryClient.setQueriesData<VMListResponse | undefined>(
-    { queryKey: ["instances", actorScope] },
-    (data) => removeInstanceFromList(data, name, host, project)
-  );
+  const effectiveProject = normalizeProject(project);
+  queryClient.removeQueries({
+    queryKey: queryKeys.instanceDetail(actorScope, host, effectiveProject, name),
+    exact: true,
+  });
+  queryClient.removeQueries({
+    queryKey: queryKeys.vm(actorScope, name, host, effectiveProject),
+    exact: true,
+  });
 }
 
 // Default retry configuration with exponential backoff
@@ -196,7 +194,7 @@ export function useVMs(host?: string, status?: string) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
     queryKey: queryKeys.vmsFor(scopeKey, host, status),
-    queryFn: () => vmAPI.list(host, status),
+    queryFn: ({ signal }) => vmAPI.list(host, status, undefined, undefined, { signal }),
     enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
@@ -220,9 +218,7 @@ export function useCreateVM() {
   
   return useMutation({
     mutationFn: (data: VMCreateRequest) => vmAPI.create(data),
-    onSuccess: () => {
-      refreshInstanceQueries(queryClient);
-    },
+    onSuccess: () => reconcile(queryClient, "instance.create-legacy"),
   });
 }
 
@@ -293,15 +289,28 @@ export function useDeleteVM() {
       force?: boolean;
       project?: string;
     }) => vmAPI.delete(name, host, force, project),
-    onSuccess: (_data, variables) => {
-      removeInstanceFromCaches(
+    onMutate: (variables) => optimisticallyRemoveExactInstance(queryClient, {
+      actorScope: scopeKey,
+      name: variables.name,
+      host: variables.host,
+      project: normalizeProject(variables.project),
+    }).then((rollback) => ({ rollback })),
+    onError: (_error, _variables, context) => {
+      if (!isAuthActorSynchronized(scopeKey)) return;
+      restoreExactInstanceRollback(queryClient, context?.rollback);
+      void reconcileInstanceFleet(queryClient, scopeKey, { fresh: true }).catch(
+        () => undefined,
+      );
+    },
+    onSuccess: async (_data, variables) => {
+      removeInstanceDetails(
         queryClient,
         scopeKey,
         variables.name,
         variables.host,
         variables.project,
       );
-      refreshInstanceQueries(queryClient);
+      await reconcile(queryClient, "instance.delete");
     },
   });
 }
@@ -352,15 +361,18 @@ export function useInstanceMetrics(
 
 // Images Hooks
 export function useImages(host?: string, opts?: { enabled?: boolean }) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: host ? queryKeys.imagesByHost(host) : queryKeys.images,
-    enabled: opts?.enabled ?? true,
-    queryFn: async ({ fresh }) => {
+    queryKey: host
+      ? queryKeys.imagesByHost(scopeKey, host)
+      : [...queryKeys.images, scopeKey],
+    enabled: isAuthenticated && (opts?.enabled ?? true),
+    queryFn: async (read) => {
       if (host) {
-        const result = await imageAPI.listByHost(host);
+        const result = await imageAPI.listByHost(host, undefined, read);
         return [result]; // Normalize to array
       }
-      return imageAPI.listAll({ fresh });
+      return imageAPI.listAll(read);
     },
     // Always enabled - fetches all images when host is undefined, or filtered when host is provided
     // Matched to the 180s backend response cache: capacity and state move without
@@ -374,11 +386,19 @@ export function useImages(host?: string, opts?: { enabled?: boolean }) {
 // The image store a project reads on a host. The backend resolves `features.images`, so the
 // response's `project` is the store that actually answered (its own, or `default` when the
 // project shares the host's store).
-export function useImagesByHost(host: string, project = "default") {
+export function useImagesByHost(
+  host: string,
+  project = "default",
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.imageStore(host, project),
-    queryFn: () => imageAPI.listByHost(host, project),
-    enabled: !!host,
+    queryKey: [
+      ...queryKeys.imageStore(scopeKey, host, project),
+      opts?.requestEpoch ?? 0,
+    ],
+    queryFn: ({ signal }) => imageAPI.listByHost(host, project, { signal }),
+    enabled: isAuthenticated && !!host && (opts?.enabled ?? true),
     staleTime: 60000,
   });
 }
@@ -386,10 +406,11 @@ export function useImagesByHost(host: string, project = "default") {
 // Every image store on a host the caller may see; rows carry their store. Keyed under
 // ["images", host] so the invalidations that reach the fleet list reach this too.
 export function useImageStores(host?: string, opts?: { enabled?: boolean }) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.imageStores(host ?? ""),
+    queryKey: queryKeys.imageStores(scopeKey, host ?? ""),
     queryFn: () => imageAPI.listStores(host ?? ""),
-    enabled: !!host && (opts?.enabled ?? true),
+    enabled: isAuthenticated && !!host && (opts?.enabled ?? true),
     staleTime: 60000,
   });
 }
@@ -409,18 +430,16 @@ export function useDeleteImage() {
       force?: boolean;
       project?: string;
     }) => imageAPI.delete(fingerprint, host, force, project),
-    onSuccess: () => {
-      // queryKeys.images is ["images"] and every host and store key starts with it, so one
-      // invalidation covers the fleet list and every store list the create form holds.
-      queryClient.invalidateQueries({ queryKey: queryKeys.images });
-    },
+    onSuccess: () => reconcile(queryClient, "image.delete"),
   });
 }
 
-export function useRemoteImages() {
+export function useRemoteImages(opts?: { enabled?: boolean }) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["remoteImages", "all"],
-    queryFn: ({ fresh }) => imageAPI.listRemote({ fresh }),
+    queryKey: ["remoteImages", scopeKey, "all"],
+    queryFn: (read) => imageAPI.listRemote(read),
+    enabled: isAuthenticated && (opts?.enabled ?? true),
     // Remote catalog changes ~daily and the backend caches it for 1h.
     staleTime: 1000 * 60 * 30,
     gcTime: 1000 * 60 * 60,
@@ -436,7 +455,7 @@ export function useNodesStatus() {
   const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: queryKeys.nodesFor(scopeKey),
-    queryFn: ({ fresh }) => nodeAPI.status({ fresh }),
+    queryFn: (read) => nodeAPI.status(read),
     enabled: isAuthenticated,
     // important: this was 3600000. One hour, against a backend that caches the same body for
     // 180s, so every number sourced from /nodes was up to an hour old and the cluster cards
@@ -458,7 +477,7 @@ export function useNodeNames() {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
     queryKey: queryKeys.nodeNamesFor(scopeKey),
-    queryFn: () => nodeAPI.names(),
+    queryFn: ({ signal }) => nodeAPI.names({ signal }),
     enabled: isAuthenticated,
     // note: this was staleTime: Infinity with refetchOnMount: false. Membership does change,
     // and registering a cluster then opening a create form showed a stale list until a hard
@@ -484,7 +503,7 @@ export function useNodeAvailability() {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: queryKeys.nodeAvailabilityFor(scopeKey),
-    queryFn: ({ fresh }) => nodeAPI.availability({ fresh }),
+    queryFn: (read) => nodeAPI.availability(read),
     enabled: isAuthenticated,
     // note: this hand-rolled set was character for character the attended tier. Using the
     // preset keeps the one place a 60s cadence is defined from drifting away from the
@@ -499,9 +518,7 @@ export function useUpdateNodeDisplayName() {
   return useMutation({
     mutationFn: ({ nodeName, displayName }: { nodeName: string; displayName: string }) =>
       nodeAPI.updateDisplayName(nodeName, displayName),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-    },
+    onSuccess: () => reconcile(queryClient, "node.update"),
   });
 }
 
@@ -510,10 +527,7 @@ export function useInvalidateNodeCache() {
   
   return useMutation({
     mutationFn: (nodeName: string) => nodeAPI.invalidateCache(nodeName),
-    onSuccess: () => {
-      // Also invalidate React Query cache to force re-fetch
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-    },
+    onSuccess: () => reconcile(queryClient, "node.cache"),
   });
 }
 
@@ -522,11 +536,7 @@ export function useInvalidateAllNodesCache() {
   
   return useMutation({
     mutationFn: () => nodeAPI.invalidateAllCache(),
-    onSuccess: () => {
-      // Invalidate all node-related React Query caches
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
-    },
+    onSuccess: () => reconcile(queryClient, "node.cache"),
   });
 }
 
@@ -551,12 +561,15 @@ export function useNodeResources(nodeName: string, opts?: { enabled?: boolean })
   });
 }
 
-export function useNodeGpus(nodeName: string) {
+export function useNodeGpus(
+  nodeName: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.nodeGpus(scopeKey, nodeName),
-    queryFn: () => nodeAPI.gpus(nodeName),
-    enabled: isAuthenticated && !!nodeName,
+    queryKey: [...queryKeys.nodeGpus(scopeKey, nodeName), opts?.requestEpoch ?? 0],
+    queryFn: ({ signal }) => nodeAPI.gpus(nodeName, { signal }),
+    enabled: isAuthenticated && !!nodeName && (opts?.enabled ?? true),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -586,12 +599,12 @@ export function useAllProjects(options: { enabled?: boolean } = {}) {
 
 export function useProjects(
   host: string,
-  options: { enabled?: boolean; verifyFresh?: boolean } = {},
+  options: { enabled?: boolean; verifyFresh?: boolean; requestEpoch?: number } = {},
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.projectsFor(scopeKey, host),
-    queryFn: () => projectAPI.list(host),
+    queryKey: [...queryKeys.projectsFor(scopeKey, host), options.requestEpoch ?? 0],
+    queryFn: ({ signal }) => projectAPI.list(host, { signal }),
     enabled: isAuthenticated && !!host && (options.enabled ?? true),
     staleTime: options.verifyFresh ? 0 : 30000,
     refetchOnMount: options.verifyFresh ? "always" : true,
@@ -603,11 +616,16 @@ export function useProjects(
  * once a node and a project are chosen and the project sets a limit; a create or delete
  * invalidates it server-side and through refreshInstanceQueries.
  */
-export function useProjectUsage(host: string, project: string, opts?: { enabled?: boolean }) {
+export function useProjectUsage(
+  host: string,
+  project: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["projectUsage", host, project],
-    queryFn: () => projectAPI.usage(host, project),
-    enabled: (opts?.enabled ?? true) && !!host && !!project,
+    queryKey: ["projectUsage", scopeKey, host, project, opts?.requestEpoch ?? 0],
+    queryFn: ({ signal }) => projectAPI.usage(host, project, { signal }),
+    enabled: isAuthenticated && (opts?.enabled ?? true) && !!host && !!project,
     staleTime: 30000,
     retry: (failureCount: number, error: unknown) =>
       !(error instanceof APIError && [401, 403, 404, 429].includes(error.status)) && failureCount < 1,
@@ -620,10 +638,7 @@ export function useCreateProject() {
   
   return useMutation({
     mutationFn: (data: ProjectCreateRequest) => projectAPI.create(data),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
-    },
+    onSuccess: () => reconcile(queryClient, "project.write"),
   });
 }
 
@@ -633,13 +648,7 @@ export function useDeleteProject() {
   return useMutation({
     mutationFn: ({ host, projectName }: { host: string; projectName: string }) => 
       projectAPI.delete(host, projectName),
-    onSuccess: async (_, variables) => {
-      // Invalidate and refetch to ensure UI updates immediately
-      await queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
-      // Force refetch to update the UI immediately
-      await queryClient.refetchQueries({ queryKey: queryKeys.allProjects });
-    },
+    onSuccess: () => reconcile(queryClient, "project.write"),
   });
 }
 
@@ -649,10 +658,7 @@ export function useUpdateProject() {
   return useMutation({
     mutationFn: ({ host, projectName, data }: { host: string; projectName: string; data: any }) => 
       projectAPI.update(host, projectName, data),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
-    },
+    onSuccess: () => reconcile(queryClient, "project.write"),
   });
 }
 
@@ -667,9 +673,14 @@ export function useUpdateInstanceTags() {
       tags: string[]; 
       project?: string 
     }) => tagAPI.updateInstanceTags(host, instanceName, tags, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
-    },
+    onSuccess: (_, variables) => reconcile(queryClient, "instance.tags", [
+      tagQueryKeys.resourceTags(
+        "instance",
+        variables.instanceName,
+        variables.host,
+        variables.project,
+      ),
+    ]),
   });
 }
 
@@ -682,10 +693,9 @@ export function useUpdateProjectTags() {
       projectName: string; 
       tags: string[] 
     }) => tagAPI.updateProjectTags(host, projectName, tags),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
-    },
+    onSuccess: (_, variables) => reconcile(queryClient, "project.write", [
+      tagQueryKeys.resourceTags("project", variables.projectName, variables.host),
+    ]),
   });
 }
 
@@ -695,9 +705,9 @@ export function useUpdateNodeTags() {
   return useMutation({
     mutationFn: ({ nodeName, tags }: { nodeName: string; tags: string[] }) => 
       tagAPI.updateNodeTags(nodeName, tags),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-    },
+    onSuccess: (_, variables) => reconcile(queryClient, "node.update", [
+      tagQueryKeys.resourceTags("node", variables.nodeName),
+    ]),
   });
 }
 
@@ -793,10 +803,7 @@ export function useCreateTagCategory() {
 
   return useMutation({
     mutationFn: (data: import("@/types/api").TagCategoryCreate) => tagAPI.createCategory(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.categories });
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.catalogue"),
   });
 }
 
@@ -809,10 +816,7 @@ export function useUpdateTagCategory() {
   return useMutation({
     mutationFn: ({ categoryId, data }: { categoryId: number; data: import("@/types/api").TagCategoryUpdate }) =>
       tagAPI.updateCategory(categoryId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.categories });
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.catalogue"),
   });
 }
 
@@ -824,10 +828,7 @@ export function useCreateTag() {
 
   return useMutation({
     mutationFn: (data: import("@/types/api").TagCreate) => tagAPI.createTag(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.catalogue"),
   });
 }
 
@@ -840,9 +841,7 @@ export function useUpdateTag() {
   return useMutation({
     mutationFn: ({ tagId, data }: { tagId: number; data: import("@/types/api").TagUpdate }) =>
       tagAPI.updateTag(tagId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.catalogue"),
   });
 }
 
@@ -854,10 +853,7 @@ export function useDeleteTag() {
 
   return useMutation({
     mutationFn: (tagId: number) => tagAPI.deleteTag(tagId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.catalogue"),
   });
 }
 
@@ -882,30 +878,14 @@ export function useSetResourceTags() {
       host?: string;
       project?: string;
     }) => tagAPI.setResourceTags(resourceType, resourceId, tags, host, project),
-    onSuccess: (_, variables) => {
-      // Invalidate resource-specific tag cache
-      queryClient.invalidateQueries({
-        queryKey: tagQueryKeys.resourceTags(
-          variables.resourceType,
-          variables.resourceId,
-          variables.host,
-          variables.project
-        ),
-      });
-      // Invalidate related data
-      if (variables.resourceType === "node") {
-        queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-      } else if (variables.resourceType === "project") {
-        queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
-        if (variables.host) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
-        }
-      } else if (variables.resourceType === "instance") {
-        queryClient.invalidateQueries({ queryKey: queryKeys.vms });
-      }
-      // Update tag stats
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
-    },
+    onSuccess: (_, variables) => reconcile(queryClient, "tag.resource", [
+      tagQueryKeys.resourceTags(
+        variables.resourceType,
+        variables.resourceId,
+        variables.host,
+        variables.project,
+      ),
+    ]),
   });
 }
 
@@ -929,17 +909,14 @@ export function useAddResourceTags() {
       host?: string;
       project?: string;
     }) => tagAPI.addResourceTags(resourceType, resourceId, tags, host, project),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: tagQueryKeys.resourceTags(
-          variables.resourceType,
-          variables.resourceId,
-          variables.host,
-          variables.project
-        ),
-      });
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
-    },
+    onSuccess: (_, variables) => reconcile(queryClient, "tag.resource", [
+      tagQueryKeys.resourceTags(
+        variables.resourceType,
+        variables.resourceId,
+        variables.host,
+        variables.project,
+      ),
+    ]),
   });
 }
 
@@ -963,17 +940,14 @@ export function useRemoveResourceTag() {
       host?: string;
       project?: string;
     }) => tagAPI.removeResourceTag(resourceType, resourceId, tagName, host, project),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: tagQueryKeys.resourceTags(
-          variables.resourceType,
-          variables.resourceId,
-          variables.host,
-          variables.project
-        ),
-      });
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
-    },
+    onSuccess: (_, variables) => reconcile(queryClient, "tag.resource", [
+      tagQueryKeys.resourceTags(
+        variables.resourceType,
+        variables.resourceId,
+        variables.host,
+        variables.project,
+      ),
+    ]),
   });
 }
 
@@ -986,11 +960,7 @@ export function useUpdateUserTagVisibility() {
   return useMutation({
     mutationFn: (settings: import("@/types/api").UserTagVisibilitySettings) =>
       tagAPI.updateUserVisibility(settings),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.userVisibility });
-      // Also invalidate tag list as visibility affects what user sees
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.visibility"),
   });
 }
 
@@ -1003,9 +973,7 @@ export function useInitTagCategories() {
 
   return useMutation({
     mutationFn: () => tagAPI.initCategories(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: tagQueryKeys.categories });
-    },
+    onSuccess: () => reconcile(queryClient, "tag.catalogue"),
   });
 }
 
@@ -1034,7 +1002,7 @@ export function useWarnings(host?: string, options: { enabled?: boolean } = {}) 
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: ["warnings", scopeKey, host],
-    queryFn: ({ fresh }) => api.warnings.list(host, { fresh }),
+    queryFn: (read) => api.warnings.list(host, read),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && isPartner && (options.enabled ?? true),
     refetchInterval: 60000, // Check warnings every minute
@@ -1043,9 +1011,11 @@ export function useWarnings(host?: string, options: { enabled?: boolean } = {}) 
 
 // IPAM Hooks
 export function useIPAM(host?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["ipam", host],
-    queryFn: ({ fresh }) => api.ipam.list(host, { fresh }),
+    queryKey: ["ipam", scopeKey, host],
+    queryFn: (read) => api.ipam.list(host, read),
+    enabled: isAuthenticated,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1058,11 +1028,6 @@ export function useIPAM(host?: string) {
 // create form's dropdown kept the old list until SEMI_STATIC_DATA_CONFIG's staleTime lapsed,
 // and the storage-pools refresh button did not touch it at all.
 const STORAGE_POOL_LIST_KEY = "storagePoolList";
-const STORAGE_POOL_KEYS = ["storagePools", STORAGE_POOL_LIST_KEY] as const;
-
-function invalidateStoragePools(queryClient: ReturnType<typeof useQueryClient>) {
-  STORAGE_POOL_KEYS.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
-}
 
 // important: `useStoragePools` used to resolve the per-node list and `resources-all` in one
 // unguarded Promise.all, so a slow or failing fan-out across every cluster took the pool list
@@ -1071,22 +1036,30 @@ function invalidateStoragePools(queryClient: ReturnType<typeof useQueryClient>) 
 // cluster's timeout as "no storage here" and refused a create it could have made. Anything that
 // only needs the list should still use this hook, which never pays for the capacity read at
 // all; the combined hook below now degrades instead of failing.
-export function useStoragePoolList(host?: string, opts?: { enabled?: boolean }) {
+export function useStoragePoolList(
+  host?: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: [STORAGE_POOL_LIST_KEY, host],
-    queryFn: ({ fresh }) => api.storagePools.list(host, { fresh }),
+    queryKey: [STORAGE_POOL_LIST_KEY, scopeKey, host, opts?.requestEpoch ?? 0],
+    queryFn: (read) => api.storagePools.list(host, read),
     // note: `enabled` lets a form that has no node yet skip the fleet-wide read it would
     // otherwise fire on mount. Default true, so the list pages are unchanged.
-    enabled: opts?.enabled ?? true,
+    enabled: isAuthenticated && (opts?.enabled ?? true),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
-export function useStoragePools(host?: string, opts?: { enabled?: boolean }) {
+export function useStoragePools(
+  host?: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    enabled: opts?.enabled ?? true,
-    queryKey: ["storagePools", host],
-    queryFn: async ({ fresh }) => {
+    enabled: isAuthenticated && (opts?.enabled ?? true),
+    queryKey: ["storagePools", scopeKey, host, opts?.requestEpoch ?? 0],
+    queryFn: async (read) => {
       // important: the capacity read is secondary and must not be able to fail the list. It
       // fans out to every cluster, so it is the likelier of the two to time out, and losing it
       // used to blank the whole page under "No storage pools found" while the list itself had
@@ -1094,8 +1067,8 @@ export function useStoragePools(host?: string, opts?: { enabled?: boolean }) {
       // `capacityFailed` is what lets the surface say which of the two happened, instead of
       // rendering an absent reading the same way as a reading of nothing.
       const [poolsData, resourcesData] = await Promise.all([
-        api.storagePools.list(host, { fresh }) as Promise<Record<string, unknown>>,
-        (api.storagePools.getResourcesAll({ fresh }) as Promise<Record<string, unknown> | null>)
+        api.storagePools.list(host, read) as Promise<Record<string, unknown>>,
+        (api.storagePools.getResourcesAll(read) as Promise<Record<string, unknown> | null>)
           .then((value) => ({ ok: true as const, value }))
           .catch(() => ({ ok: false as const, value: null })),
       ]);
@@ -1137,9 +1110,7 @@ export function useCreateStoragePool() {
   
   return useMutation({
     mutationFn: ({ data, host }: { data: any; host: string }) => api.storagePools.create(data, host),
-    onSuccess: () => {
-      invalidateStoragePools(queryClient);
-    },
+    onSuccess: () => reconcile(queryClient, "storage.pool"),
   });
 }
 
@@ -1149,18 +1120,21 @@ export function useDeleteStoragePool() {
   return useMutation({
     mutationFn: ({ name, host }: { name: string; host: string }) => 
       api.storagePools.delete(name, host),
-    onSuccess: () => {
-      invalidateStoragePools(queryClient);
-    },
+    onSuccess: () => reconcile(queryClient, "storage.pool"),
   });
 }
 
 // Storage Volumes Hooks
-export function useStorageVolumes(pool?: string, host?: string, opts?: { enabled?: boolean }) {
+export function useStorageVolumes(
+  pool?: string,
+  host?: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["storageVolumes", pool, host],
-    enabled: opts?.enabled ?? true,
-    queryFn: ({ fresh }) => api.storageVolumes.list(host, pool, { fresh }),
+    queryKey: ["storageVolumes", scopeKey, pool, host, opts?.requestEpoch ?? 0],
+    enabled: isAuthenticated && (opts?.enabled ?? true),
+    queryFn: (read) => api.storageVolumes.list(host, pool, read),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
     refetchInterval: jitter(POLL_MS.fleet),
@@ -1188,9 +1162,7 @@ export function useCreateStorageVolume() {
   
   return useMutation({
     mutationFn: ({ data, host }: { data: any; host: string }) => api.storageVolumes.create(data, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["storageVolumes"] });
-    },
+    onSuccess: () => reconcile(queryClient, "storage.volume"),
   });
 }
 
@@ -1201,9 +1173,7 @@ export function useDeleteStorageVolume() {
     // important: same scrambled argument order as useStorageVolume above. See the note there.
     mutationFn: ({ pool, type, name, host }: { pool: string; type: string; name: string; host: string }) =>
       api.storageVolumes.delete(type, name, host, pool),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["storageVolumes"] });
-    },
+    onSuccess: () => reconcile(queryClient, "storage.volume"),
   });
 }
 
@@ -1236,12 +1206,7 @@ export function useSetNicAddress() {
         project,
         ipv4_address: ipv4Address,
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["instances"] });
-      queryClient.invalidateQueries({ queryKey: ["instance"] });
-      // a pin or a clear flips the row on the IPAM page between Static and DHCP
-      queryClient.invalidateQueries({ queryKey: ["ipam"] });
-    },
+    onSuccess: () => reconcile(queryClient, "instance.nic"),
   });
 }
 
@@ -1251,13 +1216,24 @@ export function useSetNicAddress() {
  *   get the set that project can actually use, which is what a picker needs: a project only
  *   holds its own networks when it sets features.networks, otherwise it sees default's.
  */
-export function useNetworks(host?: string, project?: string, opts?: { enabled?: boolean }) {
+export function useNetworks(
+  host?: string,
+  project?: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     // important: the project belongs in the key. Without it React Query serves one project's
     // rows to another project's caller from cache.
-    queryKey: ["networks", host, project ?? null],
-    enabled: opts?.enabled ?? true,
-    queryFn: ({ fresh }) => api.networks.list(host, project, { fresh }),
+    queryKey: [
+      "networks",
+      scopeKey,
+      host,
+      project ?? null,
+      opts?.requestEpoch ?? 0,
+    ],
+    enabled: isAuthenticated && (opts?.enabled ?? true),
+    queryFn: (read) => api.networks.list(host, project, read),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
     refetchInterval: jitter(POLL_MS.fleet),
@@ -1268,19 +1244,21 @@ export function useNetworks(host?: string, project?: string, opts?: { enabled?: 
 }
 
 export function useNetwork(name: string, host: string, project?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["network", name, host, project ?? null],
+    queryKey: ["network", scopeKey, name, host, project ?? null],
     queryFn: () => api.networks.get(name, host, project),
-    enabled: !!name && !!host,
+    enabled: isAuthenticated && !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
 export function useNetworkState(name: string, host: string, project?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["networkState", name, host, project ?? null],
+    queryKey: ["networkState", scopeKey, name, host, project ?? null],
     queryFn: () => api.networks.getState(name, host, project),
-    enabled: !!name && !!host,
+    enabled: isAuthenticated && !!name && !!host,
     ...DYNAMIC_DATA_CONFIG,
   });
 }
@@ -1291,9 +1269,7 @@ export function useCreateNetwork() {
   return useMutation({
     mutationFn: ({ data, host, project }: { data: any; host: string; project?: string }) =>
       api.networks.create(data, host, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["networks"] });
-    },
+    onSuccess: () => reconcile(queryClient, "network.write"),
   });
 }
 
@@ -1303,9 +1279,7 @@ export function useDeleteNetwork() {
   return useMutation({
     mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
       api.networks.delete(name, host, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["networks"] });
-    },
+    onSuccess: () => reconcile(queryClient, "network.write"),
   });
 }
 
@@ -1314,7 +1288,7 @@ export function useDeleteNetwork() {
 export function useNetworkACLs(host?: string, project?: string) {
   return useRefreshableQuery({
     queryKey: ["networkACLs", host, project ?? null],
-    queryFn: ({ fresh }) => api.networkACLs.list(host, project, { fresh }),
+    queryFn: (read) => api.networkACLs.list(host, project, read),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1362,9 +1336,7 @@ export function useCreateNetworkACL() {
   return useMutation({
     mutationFn: ({ data, host, project }: { data: any; host: string; project?: string }) =>
       api.networkACLs.create(data, host, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
-    },
+    onSuccess: () => reconcile(queryClient, "network-acl.write"),
   });
 }
 
@@ -1374,9 +1346,7 @@ export function useDeleteNetworkACL() {
   return useMutation({
     mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
       api.networkACLs.delete(name, host, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
-    },
+    onSuccess: () => reconcile(queryClient, "network-acl.write"),
   });
 }
 
@@ -1402,30 +1372,41 @@ export function useUpdateNetworkACL() {
       /** From useNetworkACLForEdit; the write is refused with 412 if the ACL changed since. */
       etag?: string | null;
     }) => api.networkACLs.update(name, host, data, project, etag),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
-      queryClient.invalidateQueries({ queryKey: ["networkACL"] });
-    },
+    onSuccess: () => reconcile(queryClient, "network-acl.write"),
   });
 }
 
 // Profiles Hooks
 /** @param project omit for every project. See useNetworks. */
 export function useProfiles(host?: string, project?: string, opts?: { enabled?: boolean }) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["profiles", host, project ?? null],
-    enabled: opts?.enabled ?? true,
-    queryFn: ({ fresh }) => api.profiles.list(host, project, { fresh }),
+    queryKey: ["profiles", scopeKey, host, project ?? null],
+    enabled: isAuthenticated && (opts?.enabled ?? true),
+    queryFn: (read) => api.profiles.list(host, project, read),
     // Always enabled - fetches all profiles when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
-export function useProfile(name: string, host: string, project?: string) {
+export function useProfile(
+  name: string,
+  host: string,
+  project?: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["profile", name, host, project ?? null],
-    queryFn: () => api.profiles.get(name, host, project),
-    enabled: !!name && !!host,
+    queryKey: [
+      "profile",
+      scopeKey,
+      name,
+      host,
+      project ?? null,
+      opts?.requestEpoch ?? 0,
+    ],
+    queryFn: ({ signal }) => api.profiles.get(name, host, project, { signal }),
+    enabled: isAuthenticated && !!name && !!host && (opts?.enabled ?? true),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1442,10 +1423,11 @@ export function useProfileForEdit(
   nonce: number,
   enabled: boolean,
 ) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["profile", "edit", name, host, project ?? null, nonce],
-    queryFn: () => api.profiles.get(name, host, project),
-    enabled: enabled && !!name && !!host,
+    queryKey: ["profile", scopeKey, "edit", name, host, project ?? null, nonce],
+    queryFn: ({ signal }) => api.profiles.get(name, host, project, { signal }),
+    enabled: isAuthenticated && enabled && !!name && !!host,
     staleTime: 0,
     gcTime: 0,
     retry: false,
@@ -1462,9 +1444,7 @@ export function useCreateProfile() {
   return useMutation({
     mutationFn: ({ data, host, project }: { data: ProfileCreateRequest; host: string; project?: string }) =>
       api.profiles.create(data, host, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["profiles"] });
-    },
+    onSuccess: () => reconcile(queryClient, "profile.write"),
   });
 }
 
@@ -1486,10 +1466,7 @@ export function useUpdateProfile() {
       /** From useProfileForEdit; the write is refused with 412 if the profile changed since. */
       etag?: string | null;
     }) => api.profiles.update(name, host, data, project, etag),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["profile"] });
-    },
+    onSuccess: () => reconcile(queryClient, "profile.write"),
   });
 }
 
@@ -1499,10 +1476,7 @@ export function useDeleteProfile() {
   return useMutation({
     mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
       api.profiles.delete(name, host, project),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["profile"] });
-    },
+    onSuccess: () => reconcile(queryClient, "profile.write"),
   });
 }
 
@@ -1520,8 +1494,11 @@ export function useInstances(
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: queryKeys.instancesFor(scopeKey, host, opts?.project),
-    queryFn: ({ fresh }) =>
-      api.instances.list(host, undefined, undefined, undefined, undefined, { fresh, project: opts?.project }),
+    queryFn: (read) =>
+      api.instances.list(host, undefined, undefined, undefined, undefined, {
+        ...read,
+        project: opts?.project,
+      }),
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && (opts?.enabled ?? true),
@@ -1562,7 +1539,7 @@ export function useInstance(name: string, host: string, enabled = true, project?
   const effectiveProject = project || "default";
   return useQuery({
     queryKey: queryKeys.instanceDetail(scopeKey, host, effectiveProject, name),
-    queryFn: () => api.instances.get(name, host, effectiveProject),
+    queryFn: ({ signal }) => api.instances.get(name, host, effectiveProject, { signal }),
     ...ON_DEMAND_CONFIG,
     enabled: isAuthenticated && enabled && !!name && !!host,
     // important: both re-asserted after the spread. This payload completes a partial summary,
@@ -1583,9 +1560,7 @@ export function useCreateInstance() {
       data: InstanceCreateRequest;
       idempotencyKey: string;
     }) => api.instances.create(data, idempotencyKey),
-    onSuccess: () => {
-      refreshInstanceQueries(queryClient);
-    },
+    onSuccess: () => reconcile(queryClient, "instance.create"),
   });
 }
 
@@ -1597,12 +1572,18 @@ export function usePreflightInstanceCreate() {
 }
 
 /** Server-resolved shared/exclusive write policy. Advanced controls fail closed without it. */
-export function useInstanceWritePolicy(host: string) {
+export function useInstanceWritePolicy(
+  host: string,
+  opts?: { enabled?: boolean; requestEpoch?: number },
+) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: queryKeys.instanceWritePolicy(scopeKey, host),
-    queryFn: () => api.instances.getWritePolicy(host),
-    enabled: isAuthenticated && !!host,
+    queryKey: [
+      ...queryKeys.instanceWritePolicy(scopeKey, host),
+      opts?.requestEpoch ?? 0,
+    ],
+    queryFn: ({ signal }) => api.instances.getWritePolicy(host, { signal }),
+    enabled: isAuthenticated && !!host && (opts?.enabled ?? true),
     staleTime: 0,
     retry: 1,
     refetchOnMount: "always",
@@ -1628,7 +1609,8 @@ export function useInstanceSpecificationForEdit(
       name,
       nonce,
     ),
-    queryFn: () => api.instances.getSpecification(name, host, project),
+    queryFn: ({ signal }) =>
+      api.instances.getSpecification(name, host, project, { signal }),
     enabled: isAuthenticated && enabled && !!name && !!host,
     staleTime: 0,
     gcTime: 0,
@@ -1664,9 +1646,7 @@ export function useUpdateInstanceSpecification() {
       etag: string;
       idempotencyKey: string;
     }) => api.instances.updateSpecification(name, data, etag, idempotencyKey),
-    onSuccess: () => {
-      refreshInstanceQueries(queryClient);
-    },
+    onSuccess: () => reconcile(queryClient, "instance.specification"),
   });
 }
 
@@ -1678,9 +1658,11 @@ const TERMINAL_INSTANCE_OPERATION = new Set([
 
 export function useInstanceOperationJob(jobId: string | null, enabled = true) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
-  return useQuery({
+  const queryClient = useQueryClient();
+  const reconciledTerminal = useRef<string | null>(null);
+  const query = useQuery({
     queryKey: queryKeys.instanceOperation(scopeKey, jobId ?? ""),
-    queryFn: () => api.instances.getOperation(jobId!),
+    queryFn: ({ signal }) => api.instances.getOperation(jobId!, { signal }),
     enabled: isAuthenticated && enabled && !!jobId,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
@@ -1697,6 +1679,23 @@ export function useInstanceOperationJob(jobId: string | null, enabled = true) {
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
   });
+  const status = query.data?.status;
+  useEffect(() => {
+    if (!jobId || !status || !TERMINAL_INSTANCE_OPERATION.has(status)) return;
+    const terminalKey = `${scopeKey}:${jobId}:${status}`;
+    if (reconciledTerminal.current === terminalKey) return;
+    reconciledTerminal.current = terminalKey;
+    const impact = query.data?.kind === "create"
+      ? "instance.create"
+      : "instance.specification";
+    void (async () => {
+      await reconcileMutationImpact(queryClient, impact).catch(() => undefined);
+      if (!isAuthActorSynchronized(scopeKey)) return;
+      // This authoritative read must be the last list write after invalidation-triggered refetches.
+      await reconcileInstanceFleet(queryClient, scopeKey, { fresh: true }).catch(() => undefined);
+    })();
+  }, [jobId, query.data?.kind, queryClient, scopeKey, status]);
+  return query;
 }
 
 // Instance Action Mutations (using vmAPI)
@@ -1750,15 +1749,28 @@ export function useDeleteInstance() {
   return useMutation({
     mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
       api.vms.delete(name, host, force, project),
-    onSuccess: (_data, variables) => {
-      removeInstanceFromCaches(
+    onMutate: (variables) => optimisticallyRemoveExactInstance(queryClient, {
+      actorScope: scopeKey,
+      name: variables.name,
+      host: variables.host,
+      project: normalizeProject(variables.project),
+    }).then((rollback) => ({ rollback })),
+    onError: (_error, _variables, context) => {
+      if (!isAuthActorSynchronized(scopeKey)) return;
+      restoreExactInstanceRollback(queryClient, context?.rollback);
+      void reconcileInstanceFleet(queryClient, scopeKey, { fresh: true }).catch(
+        () => undefined,
+      );
+    },
+    onSuccess: async (_data, variables) => {
+      removeInstanceDetails(
         queryClient,
         scopeKey,
         variables.name,
         variables.host,
         variables.project,
       );
-      refreshInstanceQueries(queryClient);
+      await reconcile(queryClient, "instance.delete");
     },
   });
 }
@@ -1767,7 +1779,7 @@ export function useDeleteInstance() {
 export function useServerInfo(host?: string) {
   return useRefreshableQuery({
     queryKey: ["serverInfo", host],
-    queryFn: ({ fresh }) => api.server.list(host, { fresh }),
+    queryFn: (read) => api.server.list(host, read),
     ...STATIC_DATA_CONFIG,
   });
 }
@@ -1783,18 +1795,21 @@ export function useServerResources(host: string) {
 
 // Identities Hooks
 export function useIdentities(host?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["identities", host],
-    queryFn: ({ fresh }) => api.identities.list(host, { fresh }),
+    queryKey: ["identities", scopeKey, host],
+    queryFn: (read) => api.identities.list(host, read),
+    enabled: isAuthenticated,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
 export function useIdentity(id: string, host: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["identity", id, host],
+    queryKey: ["identity", scopeKey, id, host],
     queryFn: () => api.identities.get(id, host),
-    enabled: !!id && !!host,
+    enabled: isAuthenticated && !!id && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1805,27 +1820,27 @@ export function useDeleteIdentity() {
   return useMutation({
     mutationFn: ({ authType, identityId, host }: { authType: string; identityId: string; host: string }) => 
       api.identities.delete(authType, identityId, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["identities"] });
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-    },
+    onSuccess: () => reconcile(queryClient, "identity.write"),
   });
 }
 
 // Groups Hooks
 export function useGroups(host?: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["groups", host],
-    queryFn: ({ fresh }) => api.groups.list(host, { fresh }),
+    queryKey: ["groups", scopeKey, host],
+    queryFn: (read) => api.groups.list(host, read),
+    enabled: isAuthenticated,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
 export function useGroup(name: string, host: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["group", name, host],
+    queryKey: ["group", scopeKey, name, host],
     queryFn: () => api.groups.get(name, host),
-    enabled: !!name && !!host,
+    enabled: isAuthenticated && !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1836,9 +1851,7 @@ export function useCreateGroup() {
   return useMutation({
     mutationFn: ({ data, host }: { data: any; host: string }) => 
       api.groups.create(data, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-    },
+    onSuccess: () => reconcile(queryClient, "group.write"),
   });
 }
 
@@ -1848,10 +1861,7 @@ export function useUpdateGroup() {
   return useMutation({
     mutationFn: ({ name, data, host }: { name: string; data: any; host: string }) => 
       api.groups.update(name, data, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-      queryClient.invalidateQueries({ queryKey: ["group"] });
-    },
+    onSuccess: () => reconcile(queryClient, "group.write"),
   });
 }
 
@@ -1865,10 +1875,7 @@ export function useAddIdentityToGroup() {
       identityId: string; 
       host: string 
     }) => api.groups.addIdentity(groupName, authType, identityId, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-      queryClient.invalidateQueries({ queryKey: ["group"] });
-    },
+    onSuccess: () => reconcile(queryClient, "group.write"),
   });
 }
 
@@ -1882,10 +1889,7 @@ export function useRemoveIdentityFromGroup() {
       identityId: string; 
       host: string 
     }) => api.groups.removeIdentity(groupName, authType, identityId, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-      queryClient.invalidateQueries({ queryKey: ["group"] });
-    },
+    onSuccess: () => reconcile(queryClient, "group.write"),
   });
 }
 
@@ -1895,9 +1899,7 @@ export function useDeleteGroup() {
   return useMutation({
     mutationFn: ({ name, host }: { name: string; host: string }) => 
       api.groups.delete(name, host),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["groups"] });
-    },
+    onSuccess: () => reconcile(queryClient, "group.write"),
   });
 }
 
@@ -1905,7 +1907,7 @@ export function useDeleteGroup() {
 export function useClusterMembers(node: string) {
   return useRefreshableQuery({
     queryKey: ["clusterMembers", node],
-    queryFn: ({ fresh }) => api.clusterMembers.list(node, { fresh }),
+    queryFn: (read) => api.clusterMembers.list(node, read),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
     refetchInterval: jitter(POLL_MS.fleet),
@@ -1934,7 +1936,7 @@ export function useMemberResources(
     queryKey: queryKeys.memberResources(scopeKey, node, memberName),
     // note: getResources routes through the extended fan-out budget, which was unreachable
     // from the UI while this hook never passed a fresh flag.
-    queryFn: ({ fresh }) => api.clusterMembers.getResources(node, memberName, { fresh }),
+    queryFn: (read) => api.clusterMembers.getResources(node, memberName, read),
     // note: gated so a closed modal stops polling. The backend caches this for 60s, so the
     // interval matches: anything faster returns the same body.
     enabled: isAuthenticated && (opts?.enabled ?? true) && !!node && !!memberName,
@@ -1950,7 +1952,8 @@ export function useClusters(fresh: boolean = false) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: queryKeys.clustersFor(scopeKey, fresh),
-    queryFn: ({ fresh: manual }) => api.clusters.list(fresh || manual),
+    queryFn: ({ fresh: manual, signal }) =>
+      api.clusters.list(fresh || manual, { signal }),
     enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
@@ -1977,25 +1980,7 @@ export function useRegisterCluster() {
   
   return useMutation({
     mutationFn: (data: any) => api.clusters.register(data),
-    onSuccess: async () => {
-      // Use refetchQueries to ensure data is actually refreshed
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: 'active' }),
-      ]);
-      // Also invalidate for inactive queries
-      queryClient.invalidateQueries({ queryKey: ["clusters"] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-      // the picker's membership and status keys, which used to be left stale here: a newly
-      // registered cluster did not appear in any create form until a hard reload
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodeNames });
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodeAvailability });
-      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
-      queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
-      queryClient.invalidateQueries({ queryKey: ["instances"] });
-      queryClient.invalidateQueries({ queryKey: ["facilities"] });
-      queryClient.invalidateQueries({ queryKey: ["regions"] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.register"),
   });
 }
 
@@ -2004,35 +1989,7 @@ export function useCheckClusterAuth() {
   
   return useMutation({
     mutationFn: (clusterId: string) => api.clusters.checkAuth(clusterId),
-    onSuccess: async () => {
-      // First pass: immediate refetch so clusters list updates
-      await queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.nodeAvailability });
-      
-      // Remove stale cached data for instances/VMs/projects
-      // so the next fetch pulls fresh data including the new cluster
-      queryClient.removeQueries({ queryKey: queryKeys.vms });
-      queryClient.removeQueries({ queryKey: ["instances"] });
-      queryClient.removeQueries({ queryKey: queryKeys.allProjects });
-      
-      // Small delay to let the backend's LXD connection stabilize
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Second pass: refetch instance data from scratch
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: 'active' }),
-        queryClient.refetchQueries({ queryKey: queryKeys.vms, type: 'active' }),
-        queryClient.refetchQueries({ queryKey: queryKeys.allProjects, type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["instances"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["regions"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["groups"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["identities"], type: 'active' }),
-      ]);
-      // Also invalidate to ensure any inactive queries will refetch when they become active
-      queryClient.invalidateQueries({ queryKey: ["clusters"] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
-      queryClient.invalidateQueries({ queryKey: ["regions"] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.auth-check"),
   });
 }
 
@@ -2041,14 +1998,7 @@ export function useDeleteCluster() {
   
   return useMutation({
     mutationFn: (clusterId: string) => api.clusters.delete(clusterId),
-    onSuccess: async () => {
-      // Remove cached data and force fresh fetch
-      await queryClient.invalidateQueries({ queryKey: ["clusters"], refetchType: 'all' });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.nodes, refetchType: 'all' });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.nodeNames, refetchType: 'all' });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.nodeAvailability, refetchType: 'all' });
-      await queryClient.invalidateQueries({ queryKey: ["certificates"], refetchType: 'all' });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.delete"),
   });
 }
 
@@ -2057,9 +2007,7 @@ export function useRegenerateCert() {
   
   return useMutation({
     mutationFn: (clusterId: string) => api.clusters.regenerateCert(clusterId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["clusters"] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.certificate"),
   });
 }
 
@@ -2069,11 +2017,7 @@ export function useUpdateClusterLocation() {
   return useMutation({
     mutationFn: ({ clusterId, location }: { clusterId: string; location: any }) => 
       api.clusters.updateLocation(clusterId, location),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["clusters"] });
-      queryClient.invalidateQueries({ queryKey: ["regions"] });
-      queryClient.invalidateQueries({ queryKey: ["facilities"] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.location"),
   });
 }
 
@@ -2091,7 +2035,7 @@ export function useMonitoringDashboard(enabled: boolean = true, refetchInterval:
   const scopeKey = useMonitoringScopeKey();
   return useRefreshableQuery({
     queryKey: ["monitoring", "dashboard", scopeKey],
-    queryFn: ({ fresh }) => api.monitoring.getDashboard({ fresh }),
+    queryFn: (read) => api.monitoring.getDashboard(read),
     enabled,
     refetchInterval: refetchInterval > 0 ? refetchInterval : false, // 0 = disabled (WS push active)
     staleTime: 5000, // Consider fresh for 5 seconds to avoid redundant fetches
@@ -2196,7 +2140,7 @@ export function useMonitoringNetwork(enabled: boolean = true) {
 export function useCertificates() {
   return useRefreshableQuery({
     queryKey: ["certificates"],
-    queryFn: ({ fresh }) => api.certificates.list({ fresh }),
+    queryFn: (read) => api.certificates.list(read),
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
   });
@@ -2217,11 +2161,7 @@ export function useInitiateCertRenewal() {
   return useMutation({
     mutationFn: (request: { cluster_id: string; ttl: string; trust_password?: string }) => 
       api.certificates.initiateRenewal(request as any),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["certificates"] });
-      queryClient.invalidateQueries({ queryKey: ["certificate", variables.cluster_id] });
-      queryClient.invalidateQueries({ queryKey: ["clusters"] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.certificate"),
   });
 }
 
@@ -2231,14 +2171,7 @@ export function useVerifyCertRenewal() {
   return useMutation({
     mutationFn: (request: { cluster_id: string; pending_cert_id?: string }) => 
       api.certificates.verifyRenewal(request),
-    onSuccess: async (_, variables) => {
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["certificates"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: 'active' }),
-      ]);
-      queryClient.invalidateQueries({ queryKey: ["certificate", variables.cluster_id] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.certificate"),
   });
 }
 
@@ -2247,10 +2180,7 @@ export function useCancelPendingCert() {
   
   return useMutation({
     mutationFn: (clusterId: string) => api.certificates.cancelPending(clusterId),
-    onSuccess: (_, clusterId) => {
-      queryClient.invalidateQueries({ queryKey: ["certificates"] });
-      queryClient.invalidateQueries({ queryKey: ["certificate", clusterId] });
-    },
+    onSuccess: () => reconcile(queryClient, "cluster.certificate"),
   });
 }
 
@@ -2263,7 +2193,7 @@ export function useSystemWarnings(options: { enabled?: boolean } = {}) {
     queryKey: ["systemWarnings", scopeKey],
     // note: every sibling destructures { fresh }; this one did not, so the second half of
     // "Refresh all" on the warnings page silently reused whatever was already in flight.
-    queryFn: ({ fresh }) => api.certificates.getSystemWarnings({ fresh }),
+    queryFn: (read) => api.certificates.getSystemWarnings(read),
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
   });
@@ -2273,7 +2203,7 @@ export function useSystemWarnings(options: { enabled?: boolean } = {}) {
 export function useRegionsOverview() {
   return useRefreshableQuery({
     queryKey: ["regions", "overview"],
-    queryFn: ({ fresh }) => api.regions.getOverview({ fresh }),
+    queryFn: (read) => api.regions.getOverview(read),
     refetchInterval: 120000, // Refresh every 2 minutes
     staleTime: 60000, // Data considered fresh for 1 minute
   });
@@ -2309,8 +2239,8 @@ export function useInstanceSnapshots(
     // spent the shared 12-per-minute cache-bypass budget on requests that had nothing to bypass,
     // so an operator watching a restore and clicking Refresh could exhaust the allowance for the
     // surfaces that really are cached. The refetch still happens; only the pointless parameter is
-    // gone.
-    queryFn: () => api.snapshots.list(instanceName, host, project),
+    // gone. Cancellation still propagates so changing actor or target cannot land a stale row.
+    queryFn: ({ signal }) => api.snapshots.list(instanceName, host, project, { signal }),
     ...SEMI_STATIC_DATA_CONFIG,
     ...(verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
     // After the spread on purpose: the preset carries its own `enabled` and would otherwise
@@ -2339,12 +2269,6 @@ export function useFleetSnapshots(host?: string, project?: string) {
     queryFn: (opts) => api.snapshots.listFleet(host, project, opts),
     ...SEMI_STATIC_DATA_CONFIG,
   });
-}
-
-/** Every snapshot query, invalidated together: a mutation changes both the per-instance and fleet views. */
-function invalidateSnapshots(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: ["instanceSnapshots"] });
-  queryClient.invalidateQueries({ queryKey: ["fleetSnapshots"] });
 }
 
 // ── snapshot schedules ─────────────────────────────────────────────────────────────────────────
@@ -2377,26 +2301,12 @@ export function useSnapshotSchedules(
   });
 }
 
-function invalidateSchedules(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: ["snapshotSchedules"] });
-}
-
-/**
- * important: every schedule mutation invalidates the SNAPSHOT queries too, not only the schedule
- * ones. Running a schedule creates a snapshot, and deleting one changes what the list beside it
- * means. Invalidating only its own key would leave the two halves of one screen disagreeing.
- */
-function invalidateBoth(queryClient: ReturnType<typeof useQueryClient>) {
-  invalidateSchedules(queryClient);
-  invalidateSnapshots(queryClient);
-}
-
 export function useCreateSnapshotSchedule() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: import("@/types/api").SnapshotScheduleCreateRequest) =>
       api.snapshotSchedules.create(body),
-    onSuccess: () => invalidateBoth(queryClient),
+    onSuccess: () => reconcile(queryClient, "snapshot.schedule"),
   });
 }
 
@@ -2411,7 +2321,7 @@ export function useUpdateSnapshotSchedule() {
       body: import("@/types/api").SnapshotScheduleUpdateRequest;
     }) =>
       api.snapshotSchedules.update(id, body),
-    onSuccess: () => invalidateBoth(queryClient),
+    onSuccess: () => reconcile(queryClient, "snapshot.schedule"),
   });
 }
 
@@ -2419,7 +2329,7 @@ export function usePauseSnapshotSchedule() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.snapshotSchedules.pause(id),
-    onSuccess: () => invalidateSchedules(queryClient),
+    onSuccess: () => reconcile(queryClient, "snapshot.schedule"),
   });
 }
 
@@ -2427,7 +2337,7 @@ export function useResumeSnapshotSchedule() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.snapshotSchedules.resume(id),
-    onSuccess: () => invalidateSchedules(queryClient),
+    onSuccess: () => reconcile(queryClient, "snapshot.schedule"),
   });
 }
 
@@ -2435,7 +2345,8 @@ export function useRunSnapshotScheduleNow() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.snapshotSchedules.runNow(id),
-    onSuccess: () => invalidateBoth(queryClient),
+    retry: false,
+    onSuccess: () => reconcile(queryClient, "snapshot.schedule-run"),
   });
 }
 
@@ -2443,23 +2354,32 @@ export function useDeleteSnapshotSchedule() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.snapshotSchedules.remove(id),
-    onSuccess: () => invalidateBoth(queryClient),
+    onSuccess: () => reconcile(queryClient, "snapshot.schedule"),
   });
 }
 
 export function useCreateSnapshot() {
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   return useMutation({
     mutationFn: ({ instanceName, body }: { instanceName: string; body: SnapshotCreateRequest }) =>
       api.snapshots.create(instanceName, body),
     // A timed-out POST can still have reached LXD. Retrying it can create a second restore point.
     retry: false,
-    onSuccess: () => invalidateSnapshots(queryClient),
+    onSuccess: (result, { body }) => {
+      void (async () => {
+        await reconcileSnapshotState(queryClient, scopeKey);
+        if (result.operation_id) {
+          await reconcileSnapshotOperation(queryClient, scopeKey, result.operation_id, body.host);
+        }
+      })();
+    },
   });
 }
 
 export function useDeleteSnapshot() {
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   return useMutation({
     mutationFn: ({
       instanceName,
@@ -2486,12 +2406,21 @@ export function useDeleteSnapshot() {
         acknowledgeUpstreamSnapshot,
         confirmSnapshot,
       }),
-    onSuccess: () => invalidateSnapshots(queryClient),
+    retry: false,
+    onSuccess: (result, { host }) => {
+      void (async () => {
+        await reconcileSnapshotState(queryClient, scopeKey);
+        if (result.operation_id) {
+          await reconcileSnapshotOperation(queryClient, scopeKey, result.operation_id, host);
+        }
+      })();
+    },
   });
 }
 
 export function useRestoreSnapshot() {
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   return useMutation({
     mutationFn: ({
       instanceName,
@@ -2502,21 +2431,223 @@ export function useRestoreSnapshot() {
       snapshotName: string;
       body: SnapshotRestoreRequest;
     }) => api.snapshots.restore(instanceName, snapshotName, body),
-    onSuccess: () => {
-      invalidateSnapshots(queryClient);
-      // A restore rolls the instance back, so its own row is stale too.
-      queryClient.invalidateQueries({ queryKey: ["instances"] });
-      // important: and the DETAIL query, which is keyed ["instance", ...] singular. React Query
-      // matches by prefix, so invalidating ["instances"] does not touch it: the list behind the
-      // dialog refreshed while the dialog the operator was looking at kept painting the state the
-      // restore had just discarded.
-      queryClient.invalidateQueries({ queryKey: ["instance"] });
-      queryClient.invalidateQueries({ queryKey: ["instanceMetrics"] });
+    retry: false,
+    onSuccess: (result, { body }) => {
+      void (async () => {
+        await reconcileSnapshotState(queryClient, scopeKey);
+        if (result.operation_id) {
+          await reconcileSnapshotOperation(queryClient, scopeKey, result.operation_id, body.host);
+        }
+      })();
     },
   });
 }
 
 // Instance Mobility Hooks
+type CopyOperationInfo = {
+  status?: string | null;
+  status_code?: number | null;
+  err?: string | null;
+};
+
+type CopyOperationVerdict = "running" | "success" | "failure" | "partial" | "unknown";
+
+const COPY_OPERATION_POLL_MS = 2_000;
+const COPY_OPERATION_MAX_POLL_MS = 30 * 60_000;
+const COPY_OPERATION_MAX_TRANSIENT_FAILURES = 4;
+
+function copyOperationVerdict(operation: CopyOperationInfo): CopyOperationVerdict {
+  const status = (operation.status ?? "").trim().toLowerCase();
+  const statusCode = operation.status_code ?? 0;
+
+  if (status.includes("partial")) return "partial";
+  if (statusCode === 200 || ["success", "succeeded", "completed", "done"].includes(status)) {
+    return "success";
+  }
+  if (
+    statusCode >= 400 ||
+    ["failure", "failed", "cancelled", "canceled", "error", "aborted"].includes(status)
+  ) {
+    return "failure";
+  }
+  if (
+    (statusCode >= 100 && statusCode < 200) ||
+    [
+      "created",
+      "pending",
+      "starting",
+      "started",
+      "running",
+      "cancelling",
+      "canceling",
+      "stopping",
+      "freezing",
+      "frozen",
+      "thawed",
+    ].includes(status)
+  ) {
+    return "running";
+  }
+  return "unknown";
+}
+
+function waitForCopyPoll(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function reconcileSnapshotState(
+  queryClient: QueryClient,
+  actorScope: string,
+): Promise<void> {
+  if (!isAuthActorSynchronized(actorScope)) return;
+  await reconcile(queryClient, "snapshot.write").catch(() => undefined);
+  if (!isAuthActorSynchronized(actorScope)) return;
+  await reconcileInstanceFleet(queryClient, actorScope, { fresh: true }).catch(() => undefined);
+}
+
+/** Follow the accepted daemon operation without ever replaying the snapshot mutation. */
+async function reconcileSnapshotOperation(
+  queryClient: QueryClient,
+  actorScope: string,
+  operationId: string,
+  host: string,
+): Promise<void> {
+  const startedAt = Date.now();
+  let transientFailures = 0;
+  let unknownReads = 0;
+
+  while (
+    isAuthActorSynchronized(actorScope) &&
+    Date.now() - startedAt < COPY_OPERATION_MAX_POLL_MS
+  ) {
+    try {
+      const operation = await fetchAPI<CopyOperationInfo>(
+        `/operations/${encodeURIComponent(operationId)}?host=${encodeURIComponent(host)}`,
+        {},
+        30_000,
+        false,
+        { force: true },
+      );
+      if (!isAuthActorSynchronized(actorScope)) return;
+
+      transientFailures = 0;
+      const verdict = copyOperationVerdict(operation);
+      if (verdict === "success" || verdict === "failure" || verdict === "partial") {
+        await reconcileSnapshotState(queryClient, actorScope);
+        return;
+      }
+      if (verdict === "unknown") {
+        unknownReads += 1;
+        if (unknownReads >= COPY_OPERATION_MAX_TRANSIENT_FAILURES) break;
+      } else {
+        unknownReads = 0;
+      }
+    } catch (error) {
+      if (!isAuthActorSynchronized(actorScope)) return;
+      if (error instanceof APIError && error.status === 429) {
+        const remainingMs = Math.max(
+          0,
+          COPY_OPERATION_MAX_POLL_MS - (Date.now() - startedAt),
+        );
+        await waitForCopyPoll(Math.min(
+          remainingMs,
+          Math.max(COPY_OPERATION_POLL_MS, (error.retryAfter ?? 30) * 1_000),
+        ));
+        continue;
+      }
+      if (error instanceof APIError && [401, 403, 404].includes(error.status)) break;
+      transientFailures += 1;
+      if (transientFailures >= COPY_OPERATION_MAX_TRANSIENT_FAILURES) break;
+    }
+
+    await waitForCopyPoll(COPY_OPERATION_POLL_MS);
+  }
+
+  // Unknown outcomes are read-reconciled once and never cause a second create/delete/restore.
+  if (isAuthActorSynchronized(actorScope)) {
+    await reconcileSnapshotState(queryClient, actorScope);
+  }
+}
+
+async function reconcileCopyState(
+  queryClient: QueryClient,
+  actorScope: string,
+): Promise<void> {
+  if (!isAuthActorSynchronized(actorScope)) return;
+  await reconcile(queryClient, "instance.copy").catch(() => undefined);
+  if (!isAuthActorSynchronized(actorScope)) return;
+  await reconcileInstanceFleet(queryClient, actorScope, { fresh: true }).catch(() => undefined);
+}
+
+/**
+ * Follow only the operation returned by the accepted copy. This function never repeats the
+ * mutation: a missing, expired, or unreadable operation becomes an unknown outcome and relies on
+ * the same authoritative fleet reconciliation as every explicit terminal verdict.
+ */
+async function reconcileCopyOperation(
+  queryClient: QueryClient,
+  actorScope: string,
+  operationId: string,
+  targetHost: string,
+): Promise<void> {
+  const startedAt = Date.now();
+  let transientFailures = 0;
+  let unknownReads = 0;
+
+  while (
+    isAuthActorSynchronized(actorScope) &&
+    Date.now() - startedAt < COPY_OPERATION_MAX_POLL_MS
+  ) {
+    try {
+      const operation = await fetchAPI<CopyOperationInfo>(
+        `/operations/${encodeURIComponent(operationId)}?host=${encodeURIComponent(targetHost)}`,
+        {},
+        30_000,
+        false,
+        { force: true },
+      );
+      if (!isAuthActorSynchronized(actorScope)) return;
+
+      transientFailures = 0;
+      const verdict = copyOperationVerdict(operation);
+      if (verdict === "success" || verdict === "failure" || verdict === "partial") {
+        await reconcileCopyState(queryClient, actorScope);
+        return;
+      }
+      if (verdict === "unknown") {
+        unknownReads += 1;
+        if (unknownReads >= COPY_OPERATION_MAX_TRANSIENT_FAILURES) break;
+      } else {
+        unknownReads = 0;
+      }
+    } catch (error) {
+      if (!isAuthActorSynchronized(actorScope)) return;
+      if (error instanceof APIError && error.status === 429) {
+        const remainingMs = Math.max(
+          0,
+          COPY_OPERATION_MAX_POLL_MS - (Date.now() - startedAt),
+        );
+        await waitForCopyPoll(Math.min(
+          remainingMs,
+          Math.max(COPY_OPERATION_POLL_MS, (error.retryAfter ?? 30) * 1_000),
+        ));
+        continue;
+      }
+      if (error instanceof APIError && [401, 403, 404].includes(error.status)) break;
+      transientFailures += 1;
+      if (transientFailures >= COPY_OPERATION_MAX_TRANSIENT_FAILURES) break;
+    }
+
+    await waitForCopyPoll(COPY_OPERATION_POLL_MS);
+  }
+
+  // Unknown never replays the copy. One final read reconciliation is safe and converges if the
+  // destination appeared while the operation record expired or the status endpoint degraded.
+  if (isAuthActorSynchronized(actorScope)) {
+    await reconcileCopyState(queryClient, actorScope);
+  }
+}
+
 export function useMovePreflight(
   instanceName: string,
   host: string,
@@ -2542,13 +2673,26 @@ export function useMovePreflight(
 
 export function useCopyInstance() {
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   return useMutation({
     mutationFn: ({ instanceName, body }: { instanceName: string; body: MoveRequest }) =>
       api.mobility.copy(instanceName, body),
-    onSuccess: () => {
-      // A copy creates an instance on the destination, so the list is behind everywhere.
-      queryClient.invalidateQueries({ queryKey: ["instances"] });
-      queryClient.invalidateQueries({ queryKey: ["vms"] });
+    retry: false,
+    onSuccess: (result) => {
+      // Do not hold the accepted mutation open while a large transfer settles. The returned
+      // operation id is retained by React Query and followed in the background without replaying
+      // the copy request.
+      void (async () => {
+        await reconcileCopyState(queryClient, scopeKey);
+        if (result.operation_id) {
+          await reconcileCopyOperation(
+            queryClient,
+            scopeKey,
+            result.operation_id,
+            result.target_host,
+          );
+        }
+      })();
     },
   });
 }

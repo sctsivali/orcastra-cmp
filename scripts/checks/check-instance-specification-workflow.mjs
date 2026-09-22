@@ -31,6 +31,22 @@ requireText(apiPath, api, [
   "/instances/operations/",
 ]);
 
+const hooksPath = "frontend/src/hooks/use-lxd.ts";
+const hooks = read(hooksPath);
+requireText(hooksPath, hooks, [
+  "queryFn: ({ signal }) =>\n      api.instances.getSpecification(name, host, project, { signal })",
+  "queryFn: ({ signal }) => api.instances.getOperation(jobId!, { signal })",
+]);
+
+const specificationRead = api.match(
+  /getSpecification: async \([\s\S]*?\n  \},\n\n  preflightSpecification:/,
+)?.[0] ?? "";
+for (const marker of ["opts: ReadOptions = {}", "{ signal: opts.signal }"]) {
+  if (!specificationRead.includes(marker)) {
+    failures.push(`${apiPath} specification reads do not propagate ${marker}`);
+  }
+}
+
 const createPath = "frontend/src/components/instance-create-form.tsx";
 const create = read(createPath);
 requireText(createPath, create, [
@@ -38,21 +54,15 @@ requireText(createPath, create, [
   "preview.plan_revision",
   "preview.required_acknowledgements",
   "jobId: result.job_id",
-  "tags: [...form.tags]",
+  '"user.tags": [...form.tags].sort().join(",")',
   "submission.payload.name",
   "submission.payload.host",
   "submission.payload.project",
   "submission.payload.instance_type",
-  "submission.tags",
   "error.status === 408",
   "error.status >= 500",
   "!(error instanceof APIError)",
-  "focusCreateError(mapped)",
-  "useInstanceWritePolicy(form.selectedNode)",
-  "!writePolicy.isFetching",
-  "!writePolicy.isError",
-  'writePolicy.data.mode === "full"',
-  "writePolicy.data.can_use_advanced_create === true",
+  "focusCreateError(mapped, submission.fence, false)",
   "useReadOnlyMode()",
   "createDisabledReason",
   "policyMutationDisabledReason",
@@ -62,15 +72,24 @@ requireText(createPath, create, [
   'htmlFor="create-storage"',
   'matchMedia("(prefers-reduced-motion: reduce)")',
 ]);
+const baseInventoryPath = "frontend/src/components/instance-create/use-base-inventory.ts";
+const baseInventory = read(baseInventoryPath);
+requireText(baseInventoryPath, baseInventory, [
+  "useInstanceWritePolicy(host, {",
+  "!writePolicy.isFetching",
+  "!writePolicy.isError",
+  'writePolicy.data.mode === "full"',
+  "writePolicy.data.can_use_advanced_create === true",
+]);
 if (create.indexOf("preflightCreate.mutateAsync(payload)") > create.indexOf("createAccepted(submission)")) {
   failures.push(`${createPath} can submit before its server preflight`);
 }
-const advancedPolicyGate = create.match(
-  /const canUseAdvancedCreate =([\s\S]*?);\n\s*const advancedPolicyMessage/,
+const advancedPolicyGate = baseInventory.match(
+  /const canUseAdvancedCreate =([\s\S]*?);\n\s*const hadFullAdvancedPolicy/,
 )?.[1] ?? "";
 for (const guard of ["!writePolicy.isFetching", "!writePolicy.isError", 'data.mode === "full"']) {
   if (!advancedPolicyGate.includes(guard)) {
-    failures.push(`${createPath} advanced create gate is missing ${guard}`);
+    failures.push(`${baseInventoryPath} advanced create gate is missing ${guard}`);
   }
 }
 const acceptedCreate = create.match(
@@ -91,11 +110,44 @@ for (const mutable of [
 const pendingAt = acceptedCreate.indexOf("addPendingCreate");
 const navigationAt = acceptedCreate.indexOf('navigate("/inventory/instances")');
 const tagSyncAt = acceptedCreate.indexOf("api.tags.updateInstanceTags");
-if (!(pendingAt >= 0 && navigationAt > pendingAt && tagSyncAt > navigationAt)) {
-  failures.push(`${createPath} must persist and navigate before best-effort tag sync`);
+if (!(pendingAt >= 0 && navigationAt > pendingAt)) {
+  failures.push(`${createPath} must persist the accepted job before navigation`);
 }
-if (acceptedCreate.includes("await api.tags.updateInstanceTags")) {
-  failures.push(`${createPath} must not block durable create handoff on tag sync`);
+if (tagSyncAt >= 0) {
+  failures.push(`${createPath} must leave tag materialization to the durable create job`);
+}
+
+const createRouterPath = "backend/app/routers/instances.py";
+const createRouter = read(createRouterPath);
+requireText(createRouterPath, createRouter, [
+  "def _normalize_create_tags",
+  'if "user.tags" not in config',
+  "TagService.validate_tag_name(tag)",
+  '"tags": tags_value.split(",") if tags_value else []',
+  "request = _normalize_create_tags(request)",
+]);
+const firstNormalize = createRouter.indexOf("request = _normalize_create_tags(request)");
+const firstHashAfterNormalize = createRouter.indexOf("_create_request_hash(request)", firstNormalize);
+if (!(firstNormalize >= 0 && firstHashAfterNormalize > firstNormalize)) {
+  failures.push(`${createRouterPath} must normalize create tags before durable hashing`);
+}
+
+const createServicePath = "backend/app/services/lxd/instance.py";
+const createService = read(createServicePath);
+requireText(createServicePath, createService, [
+  "async def _upsert_materialized_create_tags",
+  '.on_conflict_do_nothing(index_elements=[Tag.name])',
+  '.on_conflict_do_nothing(constraint="uq_tag_assignment_resource")',
+  "materialized_tags = _requested_create_tags(persisted)",
+  "await _upsert_materialized_create_tags(db, persisted, materialized_tags)",
+]);
+const finishCreate = createService.match(
+  /async def _finish_create_job[\s\S]*?\n\ndef _is_graceful_timeout/,
+)?.[0] ?? "";
+const tagUpsertAt = finishCreate.indexOf("await _upsert_materialized_create_tags");
+const terminalCommitAt = finishCreate.indexOf("await db.commit()");
+if (!(tagUpsertAt >= 0 && terminalCommitAt > tagUpsertAt)) {
+  failures.push(`${createServicePath} must commit tag assignments with the terminal create CAS`);
 }
 
 const createErrorPath = "frontend/src/components/instance-create/daemon-error.ts";
@@ -205,22 +257,21 @@ if (persistedProjection.includes("cloud_init") || persistedProjection.includes("
 const streamPath = "frontend/src/hooks/use-instance-stream.ts";
 const stream = read(streamPath);
 requireText(streamPath, stream, [
-  "api.instances.getOperation(entry.jobId!)",
+  'entry.jobId && entry.jobStatus !== "success"',
+  "Waiting for exact create job status",
+]);
+
+const pendingJobsPath = "frontend/src/hooks/use-pending-create-jobs.ts";
+const pendingJobs = read(pendingJobsPath);
+requireText(pendingJobsPath, pendingJobs, [
+  "api.instances.getOperation(entry.jobId!, {",
   'job.status === "partial"',
   'job.status === "unknown"',
-  'queryKey: ["instances", scopeKey]',
+  "reconcileInstanceFleet(queryClient, scopeKey, { fresh: true })",
   "lastSignalAt: Date.now()",
-  'if (p.jobId && p.jobStatus !== "success")',
-  "if (p.jobId)",
-  "Waiting for exact create job status",
   "matchesCreateOperation(entry, job)",
+  "TERMINAL.has(job.status)",
 ]);
-const partialBranch = stream.match(
-  /else if \(job\.status === "partial"\)([\s\S]*?)else if \(job\.status === "unknown"\)/,
-)?.[1] ?? "";
-if (!partialBranch.includes('queryKey: ["instances", scopeKey]')) {
-  failures.push(`${streamPath} must refresh inventory after a partial create verdict`);
-}
 
 const identityPath = "frontend/src/lib/instance-operation-identity.ts";
 const identity = read(identityPath);
@@ -274,6 +325,7 @@ requireText(preflightDialogPath, preflightDialog, [
 
 for (const path of [
   "frontend/src/hooks/use-instance-stream.ts",
+  "frontend/src/hooks/use-pending-create-jobs.ts",
   "frontend/src/components/instance-specification/instance-specification-dialog.tsx",
 ]) {
   const lines = read(path).split("\n").length - 1;
@@ -304,8 +356,8 @@ requireText(operationE2EPath, operationE2E, [
 const summaryPath = "frontend/src/components/instance-specification/operation-summary.tsx";
 const summary = read(summaryPath);
 requireText(summaryPath, summary, [
-  'change.field === "root_disk_bytes" ? formatBytes(value) : formatMemory(value)',
-  "<dd>{formatBytes(disk)}</dd>",
+  'change.field === "root_disk_bytes" ? formatLxdLimit(value) : formatMemory(value)',
+  "<dd>{formatLxdLimit(disk)}</dd>",
 ]);
 
 if (failures.length > 0) {

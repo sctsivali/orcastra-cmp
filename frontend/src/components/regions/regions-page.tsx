@@ -11,7 +11,7 @@ import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
-import { formatBytes, formatMemory} from "@/lib/utils";
+import { formatBytes, formatMemory } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -50,7 +50,7 @@ function RegionCard({
   onToggle: () => void;
   onViewOnMap: () => void;
 }) {
-  const onlineNodes = region.nodes.filter((n) => n.status === "online").length;
+  const onlineClusters = region.nodes.filter((n) => n.status === "online").length;
   // Every cluster with no recorded location is grouped into one synthetic region whose fields
   // the backend fills with "XX" and "Unknown" (routers/regions.py). Rendering those verbatim
   // put an "XX" country badge over the line "Unknown, Unknown", which states a place rather
@@ -93,9 +93,9 @@ function RegionCard({
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-right">
-                  <p className="text-sm font-medium">{region.node_count} nodes</p>
+                  <p className="text-sm font-medium">{region.node_count} clusters</p>
                   <p className="text-xs text-muted-foreground">
-                    {onlineNodes} online
+                    {onlineClusters} online
                   </p>
                 </div>
                 {isExpanded ? (
@@ -130,9 +130,9 @@ function RegionCard({
             {/* Detailed hardware */}
             <HardwareSummary hardware={region.hardware} />
             
-            {/* Nodes list */}
+            {/* Registered clusters */}
             <div className="space-y-2">
-              <p className="text-sm font-medium">Nodes in this region:</p>
+              <p className="text-sm font-medium">Clusters in this region:</p>
               <div className="space-y-1">
                 {region.nodes.map((node) => (
                   <div
@@ -161,7 +161,7 @@ function RegionCard({
                       )}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{node.hardware.cpu_total} CPU</span>
+                      <span>{node.hardware.cpu_total} hardware threads</span>
                       <span>•</span>
                       <span>{formatMemory(node.hardware.memory_total)}</span>
                       {node.hardware.gpu_total > 0 && (
@@ -323,7 +323,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
             <CardContent className="pt-4">
               <div className="flex items-center gap-2">
                 <Server className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Nodes</span>
+                <span className="text-sm text-muted-foreground">Clusters</span>
               </div>
               <p className="text-2xl font-bold mt-1">{data.total_nodes}</p>
             </CardContent>
@@ -332,7 +332,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
             <CardContent className="pt-4">
               <div className="flex items-center gap-2">
                 <Cpu className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Total CPU</span>
+                <span className="text-sm text-muted-foreground">Hardware Threads</span>
               </div>
               <p className="text-2xl font-bold mt-1">{data.total_cpu}</p>
             </CardContent>
@@ -343,7 +343,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
                 <MemoryStick className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Memory</span>
               </div>
-              <p className="text-2xl font-bold mt-1">{formatBytes(data.total_memory)}</p>
+              <p className="text-2xl font-bold mt-1">{formatMemory(data.total_memory)}</p>
             </CardContent>
           </Card>
           <Card>
@@ -403,7 +403,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
                 <Globe className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
                 <p className="text-muted-foreground">
                   {data?.regions.length === 0
-                    ? "No nodes with location data registered yet."
+                    ? "No clusters with location data are registered yet."
                     : "No regions match your filters."}
                 </p>
                 {filters.activeFilterCount > 0 && (

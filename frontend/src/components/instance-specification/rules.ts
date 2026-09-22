@@ -90,7 +90,7 @@ export function validateSpecificationDraft(
       request.cpu_count = cpu;
     }
   } else if (specification.cpu.value !== null) {
-    errors.cpu = "CPU cannot be empty. Profile reset is not available here.";
+    errors.cpu = "vCPU cannot be empty. Profile reset is not available here.";
   }
 
   const memoryText = draft.memory.value.trim();

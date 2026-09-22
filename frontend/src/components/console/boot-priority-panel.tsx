@@ -7,6 +7,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   GripVertical,
   Server,
@@ -27,7 +28,10 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/hooks/use-toast";
-import { API_URL, getAccessToken } from "@/lib/api";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { isAuthActorSynchronized } from "@/lib/api";
+import { consoleAPI } from "@/lib/console-api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { cn } from "@/lib/utils";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 
@@ -61,6 +65,8 @@ export function BootPriorityPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
 
   // Fetch startup order
   const fetchStartupOrder = useCallback(async () => {
@@ -68,20 +74,13 @@ export function BootPriorityPanel({
     setError(null);
 
     try {
-      const response = await fetch(
-        `${API_URL}/console/startup-order?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
-        { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch startup order');
-      }
-
-      const data = await response.json();
+      const actorScope = scopeKey;
+      const data = await consoleAPI.getStartupOrder(host, project);
+      if (!isAuthActorSynchronized(actorScope)) return;
       
       if (data.success && data.entries) {
         // Convert snake_case to camelCase
-        const converted = data.entries.map((e: any) => ({
+        const converted: StartupOrderEntry[] = data.entries.map((e) => ({
           instanceName: e.instance_name,
           host: e.host,
           project: e.project,
@@ -97,12 +96,13 @@ export function BootPriorityPanel({
         throw new Error(data.error || 'Failed to fetch startup order');
       }
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error fetching startup order:', err);
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [host, project]);
+  }, [host, project, scopeKey]);
 
   // Load on mount
   useEffect(() => {
@@ -122,31 +122,18 @@ export function BootPriorityPanel({
         autostart: entry.autostart,
       }));
 
-      const response = await fetch(
-        `${API_URL}/console/startup-order?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
-          body: JSON.stringify({ updates }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to save startup order');
-      }
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast({
-          title: "Saved",
-          description: "Startup order updated successfully",
-        });
-        setOriginalEntries(JSON.parse(JSON.stringify(entries)));
-      } else {
-        throw new Error(data.error || 'Failed to save');
-      }
+      const actorScope = scopeKey;
+      await consoleAPI.updateStartupOrder(host, project, updates);
+      if (!isAuthActorSynchronized(actorScope)) return;
+      await reconcileMutationImpact(queryClient, "instance.boot-order");
+      if (!isAuthActorSynchronized(actorScope)) return;
+      toast({
+        title: "Saved",
+        description: "Startup order updated successfully",
+      });
+      setOriginalEntries(JSON.parse(JSON.stringify(entries)));
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error saving startup order:', err);
       toast({
         title: "Error",

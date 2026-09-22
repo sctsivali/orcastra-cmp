@@ -16,6 +16,9 @@ import {
   SIDEBAR_BG_PRESETS,
   DEFAULT_PERSONALIZATION,
 } from "@/types/personalization";
+import { getAccessToken } from "@/lib/api";
+import { personalizationAPI } from "@/lib/personalization-api";
+import { formatMemory } from "@/lib/utils";
 
 // The picker fills an empty field with the shipped default, so it has to read the same
 // object everything else does. Retyping the hexes here is how a picker ends up offering to
@@ -49,7 +52,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-// Max file size: 500KB for logos, 2MB for backgrounds
+// Binary limits: 500 KiB for logos, 2 MiB for backgrounds.
 const MAX_LOGO_SIZE = 500 * 1024;
 const MAX_BACKGROUND_SIZE = 2 * 1024 * 1024;
 
@@ -63,27 +66,9 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-// Fetch image from URL via backend proxy (avoids CORS)
-import { getAccessToken } from "@/lib/api";
-// Use relative URLs - Next.js rewrites proxy to backend
-const API_BASE = "";
-
 async function fetchImageAsBase64(url: string): Promise<string> {
   const token = getAccessToken();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const response = await fetch(`${API_BASE}/api/v1/user-preferences/proxy-image`, {
-    method: "POST",
-    headers,
-    credentials: "include",
-    body: JSON.stringify({ url }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
-    throw new Error(err.detail || `Failed to fetch image: ${response.status}`);
-  }
-  const data = await response.json();
+  const data = await personalizationAPI.proxyImage(url, token ?? undefined);
   return data.data; // base64 data URI
 }
 
@@ -113,12 +98,13 @@ function ImageUploader({
   const [urlValue, setUrlValue] = React.useState("");
   const [isLoadingUrl, setIsLoadingUrl] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const maxSizeLabel = formatMemory(maxSize, 0);
 
   const handleFile = async (file: File) => {
     setError(null);
 
     if (file.size > maxSize) {
-      setError(`File size must be less than ${Math.round(maxSize / 1024)}KB`);
+      setError(`File size must not exceed ${maxSizeLabel}`);
       return;
     }
 
@@ -158,7 +144,7 @@ function ImageUploader({
       // Check approximate size (base64 is ~33% larger than binary)
       const approxSize = (base64.length * 3) / 4;
       if (approxSize > maxSize) {
-        setError(`Image size exceeds ${Math.round(maxSize / 1024)}KB limit`);
+        setError(`Image size exceeds the ${maxSizeLabel} limit`);
         return;
       }
       
@@ -266,7 +252,7 @@ function ImageUploader({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Enter image URL and click Fetch. Max {Math.round(maxSize / 1024)}KB.
+            Enter image URL and click Fetch. Maximum {maxSizeLabel}.
           </p>
           {currentImage && (
             <Badge variant="secondary" className="w-fit">
@@ -321,7 +307,7 @@ function ImageUploader({
                 Drag & drop or click to upload
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Max {Math.round(maxSize / 1024)}KB • PNG, JPG, SVG, WebP
+                Maximum {maxSizeLabel} • PNG, JPG, SVG, WebP
               </p>
             </div>
           </div>

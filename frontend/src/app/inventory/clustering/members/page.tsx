@@ -224,21 +224,21 @@ function ClusterMembersContent() {
       <div className="mb-6">
         <div className="flex items-center gap-4 mb-4">
           <label htmlFor="members-node" className="text-sm font-medium">
-            Select Clustered Node:
+            Select Cluster:
           </label>
           <SearchableSelect
             id="members-node"
             value={node}
             onValueChange={handleNodeChange}
             className="w-[300px]"
-            placeholder="Select a clustered node"
+            placeholder="Select a cluster"
             searchPlaceholder="Search clusters..."
             // important: not disabled when the list is empty. SearchableSelect carries
             // `emptyText` for exactly this, every other picker in the app stays operable, and
             // node-picker-status-coverage.spec.ts opens this control before deciding whether
             // there is anything to assert. A disabled control turns "nothing to choose" into a
             // dead end the operator cannot confirm by looking.
-            emptyText="No clustered host is available"
+            emptyText="No cluster with clustering enabled is available"
             options={clusters.map((cluster: any) => {
               const meta = clusterStatusMeta(cluster.status);
               return {
@@ -261,7 +261,7 @@ function ClusterMembersContent() {
             {node ? (
               <>View all members in the {nodeName || node} cluster</>
             ) : (
-              <>Please select a clustered node to view its cluster members</>
+              <>Please select a cluster to view its cluster members</>
             )}
           </p>
         </div>
@@ -277,7 +277,7 @@ function ClusterMembersContent() {
                   ? "Cluster did not answer"
                   : isClustered
                     ? "Members in this cluster"
-                    : "Node is not part of a cluster"}
+                    : "Clustering is not enabled"}
               </CardDescription>
             </div>
             {/* important: no node means nothing to refresh. React Query's refetch() runs the
@@ -308,7 +308,7 @@ function ClusterMembersContent() {
               <EmptyState
                 icon={ShieldAlert}
                 title="No cluster here is known to be clustered"
-                description="A host is listed once it has authenticated and reported its clustering state. Clusters still waiting on their trust handshake are not offered here."
+                description="A cluster is listed once it has authenticated and reported its clustering state. Clusters still waiting on their trust handshake are not offered here."
                 action={
                   <Button asChild variant="outline" size="sm">
                     <IntentLink href="/inventory/clusters">Go to clusters</IntentLink>
@@ -319,20 +319,20 @@ function ClusterMembersContent() {
               <EmptyState
                 icon={Server}
                 title="No cluster selected"
-                description="Pick a clustered node above to see its members."
+                description="Pick a cluster above to see its members."
               />
             )
           ) : error ? (
             <EmptyState
               icon={AlertTriangle}
               title="Could not reach this cluster"
-              description={`${node} did not answer, so its members cannot be listed. This says nothing about whether the node is clustered.`}
+              description={`${node} did not answer, so its members cannot be listed. This says nothing about whether clustering is enabled.`}
             />
           ) : !isClustered ? (
             <EmptyState
               icon={Server}
-              title="Not a clustered node"
-              description="This node is not part of a hypervisor cluster"
+              title="Clustering is not enabled"
+              description="This cluster does not have hypervisor clustering enabled"
             />
           ) : members.length === 0 ? (
             <EmptyState
@@ -345,7 +345,7 @@ function ClusterMembersContent() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <SortableTableHead label="Server Name" field="server_name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Cluster Member" field="server_name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="URL" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Roles" field="roles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />

@@ -76,10 +76,6 @@ test("NETWORKLESS acceptance tracks the exact create job across reload", async (
   const preflights = [];
   const tagWrites = [];
   let operationReads = 0;
-  let releaseTag;
-  let markTagStarted;
-  const tagRelease = new Promise((resolve) => { releaseTag = resolve; });
-  const tagStarted = new Promise((resolve) => { markTagStarted = resolve; });
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -253,9 +249,7 @@ test("NETWORKLESS acceptance tracks the exact create job across reload", async (
     }
     if (method === "PUT" && path === "/tags/instances/cluster-a/networkless-vm") {
       tagWrites.push({ body: request.postDataJSON(), project: url.searchParams.get("project") });
-      markTagStarted();
-      await tagRelease;
-      await json(route, { detail: "Tag service unavailable" }, 503);
+      await json(route, { detail: "The create flow must not perform a second tag write" }, 500);
       return;
     }
     if (method === "GET" && path === "/instances/operations/create-job-networkless") {
@@ -312,12 +306,10 @@ test("NETWORKLESS acceptance tracks the exact create job across reload", async (
   await page.getByLabel("Tags").press("Enter");
   await page.getByRole("button", { name: "Retry same request" }).click();
 
-  await tagStarted;
   await expect(page).toHaveURL(/\/inventory\/instances$/, { timeout: 2_000 });
   await expect(page.getByText("networkless-vm", { exact: true })).toBeVisible();
   await expect(page.getByText("edited-after-timeout", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Verifying created instance")).toBeVisible();
-  releaseTag();
 
   expect(preflights).toHaveLength(2);
   expect(creates).toHaveLength(2);
@@ -329,10 +321,7 @@ test("NETWORKLESS acceptance tracks the exact create job across reload", async (
     acknowledgements: ["networkless"],
     config: { "user.tags": "original-tag" },
   });
-  expect(tagWrites).toEqual([{
-    body: { tags: ["original-tag"], resource_type: "instance", resource_id: "networkless-vm" },
-    project: "tenant-a",
-  }]);
+  expect(tagWrites).toEqual([]);
   await page.evaluate(() => {
     const pair = Object.entries(sessionStorage).find(([key]) =>
       key.startsWith("orcastra.pending-creates.v1."),

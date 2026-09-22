@@ -18,7 +18,7 @@ export interface PickerState {
 }
 
 export interface PickerStateInput {
-  /** The control waits on another choice (ex; a node). */
+  /** The control waits on another choice (ex; a cluster). */
   gated?: boolean;
   gatedText?: string;
   isLoading: boolean;
@@ -27,7 +27,7 @@ export interface PickerStateInput {
   optionCount: number;
   /** Plural noun in sentence case, ex; "Storage pools". */
   subject: string;
-  /** Where the read went, ex; the node's display name. */
+  /** Where the read went, ex; the cluster's display name. */
   nodeLabel?: string;
   selectText?: string;
   emptyText?: string;
@@ -45,7 +45,7 @@ export function derivePickerState(input: PickerStateInput): PickerState {
   const emptyText = input.emptyText ?? `No ${subjectLower}${where}.`;
 
   if (input.gated) {
-    return { disabled: true, placeholder: input.gatedText ?? "Select a node first", emptyText };
+    return { disabled: true, placeholder: input.gatedText ?? "Select a cluster first", emptyText };
   }
   if (input.isLoading) {
     return {

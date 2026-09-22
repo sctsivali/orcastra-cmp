@@ -450,7 +450,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     if (!currentGroup || !workingNode) {
       toast({
         title: "Configuration Error",
-        description: `No valid node available. Current: ${currentGroup?.node || 'undefined'}, Fallback: ${fallbackNode || 'none'}`,
+        description: `No valid cluster available. Current: ${currentGroup?.node || 'undefined'}, fallback: ${fallbackNode || 'none'}`,
         variant: "destructive",
       });
       return;
@@ -504,7 +504,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     if (!currentGroup || !workingNode) {
       toast({
         title: "Configuration Error",
-        description: "No valid node available",
+        description: "No valid cluster available",
         variant: "destructive",
       });
       setIdentityToRemove(null);
@@ -622,7 +622,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               </div>
 
               <div className="space-y-2">
-                <Label>Node</Label>
+                <Label>Cluster</Label>
                 <Input value={currentGroup.node} disabled className="bg-muted" />
               </div>
 

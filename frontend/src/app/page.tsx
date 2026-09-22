@@ -41,8 +41,8 @@ export default function HomePage() {
   const features = [
     {
       icon: Server,
-      title: "Multi-Node Management",
-      description: "Operate nodes accros regions from a single unified dashboard interface",
+      title: "Multi-Cluster Management",
+      description: "Operate clusters across regions from one dashboard",
     },
     {
       icon: Cloud,
@@ -62,7 +62,7 @@ export default function HomePage() {
     {
       icon: Shield,
       title: "Secure by Design",
-      description: "Protect operations with TLS-backed node access, scoped API keys, and tenant access policies.",
+      description: "Protect operations with TLS-backed cluster access, scoped API keys, and tenant access policies.",
     },
     {
       icon: TrendingUp,
@@ -132,7 +132,7 @@ export default function HomePage() {
           {isPartner && (
           <Button asChild variant="outline" size="lg" className="gap-2">
             <Link href="/register-node">
-              Register Node
+              Register Cluster
             </Link>
           </Button>
           )}
@@ -143,7 +143,7 @@ export default function HomePage() {
       <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Total Nodes</CardDescription>
+            <CardDescription>Total Clusters</CardDescription>
             <CardTitle className="text-4xl">
               {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalNodes}
             </CardTitle>
@@ -164,7 +164,7 @@ export default function HomePage() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              Across all nodes
+              Across all clusters
             </p>
           </CardContent>
         </Card>

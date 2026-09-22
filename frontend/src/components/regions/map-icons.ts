@@ -1,5 +1,5 @@
 import L from "leaflet";
-import { formatBytes, formatMemory} from "@/lib/utils";
+import { formatBytes, formatMemory } from "@/lib/utils";
 import { escapeHtml } from "@/lib/map-basemap";
 import { RegionSummary } from "@/types/api";
 
@@ -154,9 +154,9 @@ export function createPopupContent(region: RegionSummary): string {
       ${facilitySection}
 
       <div style="font-size: 12px; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; color: hsl(var(--foreground));">
-        ${row("Nodes", region.node_count)}
+        ${row("Clusters", region.node_count)}
         ${row("Instances", region.instance_count)}
-        ${row("CPU", `${region.hardware.cpu_total} cores`)}
+        ${row("Hardware threads", region.hardware.cpu_total)}
         ${row("Memory", formatMemory(region.hardware.memory_total))}
         ${gpuSection}
       </div>

@@ -67,7 +67,7 @@ const NETWORKS = defineTable<NetworkInfo>()({
     },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (n) => n.node,
       facet: (n) => n.node,
       facetSpec: { role: "node", primary: true },
@@ -267,7 +267,7 @@ function NetworksContent() {
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && (
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="IPv4 Address" field="ipv4" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="IPv6 Address" field="ipv6" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -420,7 +420,7 @@ function networkSubject(network: NetworkInfo): UsedBySubject {
       { label: "Type", value: formatLabel(network.type) },
       { label: "Status", value: networkStatusDisplay(network.status).label },
       { label: "Managed", value: network.managed ? "Yes" : "No" },
-      { label: "Node", value: <NodeLink clusterId={network.node} /> },
+      { label: "Cluster", value: <NodeLink clusterId={network.node} /> },
       { label: "IPv4", value: config["ipv4.address"] || EMPTY_VALUE },
       { label: "IPv6", value: config["ipv6.address"] || EMPTY_VALUE },
     ],

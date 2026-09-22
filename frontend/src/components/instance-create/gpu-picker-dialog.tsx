@@ -18,7 +18,7 @@ import {
   gpuIdentifier,
   sortGpuCards,
 } from "@/lib/gpu";
-import { cn, formatBytes, formatMemory} from "@/lib/utils";
+import { cn, formatBytes, formatMemory } from "@/lib/utils";
 import type { GPUCardInfo } from "@/types/api";
 import { OverflowText } from "@/components/ui/overflow-text";
 
@@ -66,7 +66,7 @@ export function GpuPickerDialog({
         <DialogHeader className="pb-4">
           <DialogTitle>Select GPU</DialogTitle>
           <DialogDescription>
-            Cards detected on {nodeName || "the node"}. Compute GPUs are listed first. A display
+            Cards detected on {nodeName || "the cluster"}. Compute GPUs are listed first. A display
             controller can be attached but cannot run compute work.
           </DialogDescription>
         </DialogHeader>
@@ -78,12 +78,12 @@ export function GpuPickerDialog({
             className="flex items-center gap-2 text-sm text-muted-foreground"
           >
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            Reading GPUs from {nodeName || "the node"}
+            Reading GPUs from {nodeName || "the cluster"}
           </div>
         ) : isError ? (
           <div className="space-y-3">
             <p className="text-sm text-destructive">
-              Could not read GPUs from {nodeName || "the node"}. This does not mean the node has
+              Could not read GPUs from {nodeName || "the cluster"}. This does not mean the cluster has
               none.
             </p>
             <div className="flex gap-2">
@@ -98,7 +98,7 @@ export function GpuPickerDialog({
           </div>
         ) : sorted.length === 0 ? (
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">No GPUs detected on this node.</p>
+            <p className="text-sm text-muted-foreground">No GPUs detected on this cluster.</p>
             <Button type="button" variant="outline" size="sm" onClick={onAddCustom}>
               <Plus className="h-4 w-4 mr-1" />
               Add custom GPU device

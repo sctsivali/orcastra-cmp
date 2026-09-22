@@ -81,13 +81,13 @@ import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
 
 const MY_KEYS = defineTable<KeyInfo>()({
-  searchPlaceholder: "Search by name, project, or node",
+  searchPlaceholder: "Search by name, project, or cluster",
   defaultSort: { field: "name", direction: "asc" },
   columns: [
     { field: "name", label: "Name", sort: (k) => k.name, search: (k) => k.name, filter: fromSort("text") },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (k) => k.node,
       search: (k) => k.node,
       facet: (k) => k.node,
@@ -138,7 +138,7 @@ function MyKeysContent() {
     // trip AND its own react-query cache entry. Filtering client-side removes both, and it
     // is what makes the tab counts and the facet counts honest.
     queryKey: ["my-keys"],
-    queryFn: ({ fresh }) => api.myKeys.list(undefined, undefined, { fresh }) });
+    queryFn: ({ fresh, signal }) => api.myKeys.list(undefined, undefined, { fresh, signal }) });
 
   const keys = useMemo(() => (keysData as any)?.keys || [], [keysData]);
   // Derived from the full list rather than the response counters, so a tab label cannot
@@ -411,7 +411,7 @@ function MyKeysContent() {
               <TableHeader>
                 <TableRow>
                   <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Access Level" field="auth_level" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -614,15 +614,15 @@ function CreateKeyDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="node">Node</Label>
+            <Label htmlFor="node">Cluster</Label>
             <SearchableSelect
               id="node"
               value={formData.node}
               onValueChange={handleNodeChange}
               options={nodeOptions}
-              placeholder={loadingNodes ? "Loading..." : "Select a node"}
-              searchPlaceholder="Search nodes..."
-              emptyText="No nodes available."
+              placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
+              searchPlaceholder="Search clusters..."
+              emptyText="No clusters available."
               disabled={loadingNodes}
             />
             <NodeStatusNotice
@@ -654,7 +654,7 @@ function CreateKeyDialog({
                 }))}
                 placeholder={
                   !formData.node
-                    ? "Select a node first"
+                    ? "Select a cluster first"
                     : projectsLoading
                       ? "Loading projects..."
                       : uniqueProjects.length === 0

@@ -110,7 +110,7 @@ function UnreachableNodesDetail({ nodes, noun, reasons, partial = false, classNa
     <BannerShell className={className}>
       <div>
         <span className="font-medium">
-          {lead} {nodes.length} node{nodes.length === 1 ? "" : "s"}
+          {lead} {nodes.length} cluster{nodes.length === 1 ? "" : "s"}
           {detailed ? "." : ":"}
         </span>{" "}
         {detailed ? null : <>{nodes.join(", ")}. </>}

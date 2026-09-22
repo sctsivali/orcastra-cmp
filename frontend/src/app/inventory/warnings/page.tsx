@@ -105,14 +105,14 @@ const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
       facetSpec: { primary: true, format: warningSeverityLabel, order: [...WARNING_SEVERITY_ORDER] } },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       // important: the registered node, not `location`. On a clustered host `location` is the
       // LXD member name (microcloud20), which nothing else in the console links by, so a link
       // carrying the cluster id landed on "No warning matches the current filters." while
       // the tile it came from counted five. The member is rendered as sub-text and searched.
       sort: (w) => warningNodeValue(w),
       facet: (w) => warningNodeValue(w),
-      facetSpec: { role: "node", primary: true, emptyLabel: "(no node)" } },
+      facetSpec: { role: "node", primary: true, emptyLabel: "(no cluster)" } },
     // note: real and populated, and until now rendered only inside the detail dialog.
     { field: "project", label: "Project", facet: (w) => w.project, facetSpec: { role: "project", emptyLabel: "(no project)" } },
     { field: "count", label: "Count", sort: (w) => w.count ?? 0, filter: fromSort("number", { unit: "count" }) },
@@ -155,7 +155,7 @@ const CERT_WARNINGS = defineTable<CertificateWarning>()({
 
 const NODE_WARNINGS = defineTable<CertificateWarning>()({
   id: "nodes",
-  searchPlaceholder: "Search offline nodes",
+  searchPlaceholder: "Search offline clusters",
   // important: the id is searchable too. The accessors below fall back to `cluster_id` only when
   // there is no display name, so a cluster that HAS one could not be found by the id an operator
   // reads off every other surface. sort and facet are deliberately left alone: a facet accessor's
@@ -457,7 +457,7 @@ function WarningsContent() {
         </Card>
         <Card className="border-status-offline/50">
           <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Offline Nodes</CardTitle>
+            <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Offline Clusters</CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
             <div className="text-xl md:text-2xl font-bold text-status-offline">
@@ -484,7 +484,7 @@ function WarningsContent() {
           </TabsTrigger>
           <TabsTrigger value="nodes" className="gap-1 md:gap-2 text-xs md:text-sm">
             <WifiOff className="h-3 w-3 md:h-4 md:w-4" />
-            <span className="hidden sm:inline">Offline Nodes</span>
+            <span className="hidden sm:inline">Offline Clusters</span>
             <span className="sm:hidden">Offline</span>
             <span className="text-[10px] md:text-xs">({nodeWarnings.length})</span>
           </TabsTrigger>
@@ -517,7 +517,7 @@ function WarningsContent() {
                   <SortableTableHead className="min-w-[100px]" label="Type" field="type" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
                   <SortableTableHead className="min-w-[200px]" label="Message" field="message" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
                   <SortableTableHead className="min-w-[80px]" label="Severity" field="severity" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
-                  <SortableTableHead className="min-w-[100px]" label="Node" field="node" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
+                  <SortableTableHead className="min-w-[100px]" label="Cluster" field="node" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
                   <SortableTableHead
                     className="min-w-[60px]"
                     field="count"
@@ -736,17 +736,17 @@ function WarningsContent() {
           </Card>
         </TabsContent>
 
-        {/* Inactive Nodes Tab */}
+        {/* Inactive clusters tab */}
         <TabsContent value="nodes">
           <Card>
             <CardHeader className="p-4 md:p-6 space-y-4">
               <div>
-                <CardTitle className="text-base md:text-lg">Offline Nodes</CardTitle>
+                <CardTitle className="text-base md:text-lg">Offline Clusters</CardTitle>
                 <CardDescription className="text-xs md:text-sm">
-                  Nodes that are disconnected or not responding
+                  Clusters that are disconnected or not responding
                 </CardDescription>
               </div>
-              <TableToolbar filters={nodeFilters} noun="offline nodes" />
+              <TableToolbar filters={nodeFilters} noun="offline clusters" />
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {sortedNodeWarnings.length === 0 ? (
@@ -755,11 +755,11 @@ function WarningsContent() {
                 nodeFilters.activeFilterCount > 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No offline node matches the current filters</p>
+                    <p>No offline cluster matches the current filters</p>
                     <p className="text-sm mt-1">
                       {nodeFilters.activeFilterCount} filter
                       {nodeFilters.activeFilterCount === 1 ? "" : "s"} active. This does not mean
-                      every node is online.
+                      every cluster is online.
                     </p>
                     <Button variant="outline" size="sm" className="mt-4" onClick={() => nodeFilters.clearAll()}>
                       Clear filters
@@ -768,7 +768,7 @@ function WarningsContent() {
                 ) : (
                   <div className="text-center py-8 text-muted-foreground">
                     <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>All nodes are online</p>
+                    <p>All clusters are online</p>
                     <p className="text-sm mt-1">No connectivity issues detected</p>
                   </div>
                 )

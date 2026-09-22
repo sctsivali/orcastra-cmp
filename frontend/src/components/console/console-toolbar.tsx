@@ -57,7 +57,10 @@ import {
 import { InstanceStatus, useConsoleStore } from "@/lib/console-store";
 import { toast } from "@/hooks/use-toast";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
-import { API_URL, getAccessToken } from "@/lib/api";
+import {
+  isActorScopeChangedError,
+  useInstancePowerAction,
+} from "@/hooks/use-instance-power-action";
 
 interface ConsoleToolbarProps {
   consoleId: string;
@@ -130,6 +133,7 @@ export function ConsoleToolbar({
   onReconnect,
 }: ConsoleToolbarProps) {
   const updateInstanceStatus = useConsoleStore(s => s.updateInstanceStatus);
+  const executePowerAction = useInstancePowerAction();
   // important: a reconnect tears down and rebuilds the WebSocket. Without a guard
   // a double-click (or the old onClick + onTouchEnd pair on touch devices) did
   // that twice in a row and left the session racing itself.
@@ -162,28 +166,13 @@ export function ConsoleToolbar({
     updateInstanceStatus(consoleId, transitionStatus[operation]);
 
     try {
-      const response = await fetch(
-        `${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-          body: JSON.stringify({
-            host,
-            force,
-            timeout: 30,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(error.detail || `Failed to ${operation} instance`);
-      }
-
-      const result = await response.json();
+      await executePowerAction(operation, {
+        name: instanceName,
+        host,
+        project,
+        force,
+        timeout: 30,
+      });
       
       const finalStatus: Record<OperationType, InstanceStatus> = {
         start: 'Running',
@@ -198,6 +187,7 @@ export function ConsoleToolbar({
       });
 
     } catch (error) {
+      if (isActorScopeChangedError(error)) return;
       console.error(`Error ${operation}ing instance:`, error);
       updateInstanceStatus(consoleId, 'Error');
       toast({
@@ -208,7 +198,7 @@ export function ConsoleToolbar({
     } finally {
       setLoading(null);
     }
-  }, [consoleId, instanceName, host, updateInstanceStatus]);
+  }, [consoleId, executePowerAction, host, instanceName, project, updateInstanceStatus]);
 
   // Handle operation with confirmation for stop/restart
   const handleOperation = useCallback((operation: OperationType) => {

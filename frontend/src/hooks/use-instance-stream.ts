@@ -1,16 +1,27 @@
 "use client";
 
-/** Keeps the inventory current from daemon events while exact durable jobs own create verdicts. */
+/** Keeps inventory current from daemon events, durable jobs, and a bounded safety read. */
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { api } from "@/lib/api";
-import { queryKeys } from "@/hooks/use-lxd";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { getEventsWsUrl } from "@/lib/ws-url";
+import { usePendingCreateJobs } from "@/hooks/use-pending-create-jobs";
 import { toast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
 import {
-  PendingCreate,
+  createInstanceFreshnessCoordinator,
+  getInstanceStreamHosts,
+} from "@/lib/instance-freshness";
+import {
+  createExactInstanceReadFence,
+  reconcileInstanceFleet,
+  removeExactInstance,
+  retainInstanceReconcileRateLimit,
+  upsertExactInstance,
+} from "@/lib/instance-reconciliation";
+import { getEventsWsUrl } from "@/lib/ws-url";
+import {
+  type PendingCreate,
   getPendingSnapshot,
   removePendingCreate,
   resolvePendingCreate,
@@ -18,414 +29,242 @@ import {
   updatePendingCreate,
 } from "@/lib/pending-creates";
 import { APIError } from "@/types/api";
-import { matchesCreateOperation } from "@/lib/instance-operation-identity";
 
 const STATUS_SUCCESS = 200;
+const RECONNECT_MS = 2_000;
 
 interface Conn {
   ws: WebSocket | null;
   stop: boolean;
+  healthy: boolean;
 }
 
-const sameInstance = (a: any, host: string, name: string, project?: string) =>
-  a.host === host &&
-  a.name === name &&
-  (project ? (a.project || "default") === (project || "default") : true);
-
-export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
+export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
   const { scopeKey } = useActorQueryScope();
   const subscribe = useCallback(
     (listener: () => void) => subscribePending(scopeKey, listener),
     [scopeKey],
   );
-  const getSnapshot = useCallback(
-    () => getPendingSnapshot(scopeKey),
-    [scopeKey],
-  );
-  const pending = useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getSnapshot,
-  );
+  const getSnapshot = useCallback(() => getPendingSnapshot(scopeKey), [scopeKey]);
+  const pending = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const queryClient = useQueryClient();
 
-  const pendingJobsKey = pending
-    .filter(
-      (entry) =>
-        entry.jobId &&
-        !entry.pollingHalted &&
-        entry.jobStatus !== "success" &&
-        entry.jobStatus !== "failure" &&
-        entry.jobStatus !== "partial",
-    )
-    .map((entry) => `${entry.id}:${entry.jobId}`)
-    .sort()
-    .join(",");
+  usePendingCreateJobs(pending, scopeKey, queryClient);
 
-  // The daemon event stream is still the fastest path, but it is not the source of truth for
-  // a submitted create. Poll the exact durable job so a WebSocket drop, a missing project on
-  // an event frame, or a page reload cannot leave the row claiming "Creating" indefinitely.
-  useEffect(() => {
-    if (!pendingJobsKey) return;
-    let active = true;
-    let polling = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const trackedJobs = new Set(pendingJobsKey.split(","));
-
-    const poll = async () => {
-      if (!active || polling) return;
-      polling = true;
-      let nextDelay = 2_500;
-      const entries = getPendingSnapshot(scopeKey).filter(
-        (entry) => entry.jobId && trackedJobs.has(`${entry.id}:${entry.jobId}`),
-      );
-      await Promise.all(
-        entries.map(async (entry) => {
-          try {
-            const job = await api.instances.getOperation(entry.jobId!);
-            if (!active) return;
-            if (!matchesCreateOperation(entry, job)) {
-              updatePendingCreate(scopeKey, entry.id, {
-                status: "Error",
-                jobStatus: "unknown",
-                pollingHalted: true,
-                error: "The operation identity did not match this pending instance. Polling stopped.",
-              });
-              return;
-            }
-            const alreadyFailed =
-              entry.jobStatus === "failure" ||
-              entry.jobStatus === "partial" ||
-              entry.jobStatus === "unknown";
-            const patch: Partial<PendingCreate> = {
-              jobStatus: job.status,
-              phase: job.phase,
-              operationId: job.operation_id || entry.operationId,
-              lastSignalAt: Date.now(),
-            };
-            if (job.status === "success") {
-              patch.status = "Success";
-              patch.error = undefined;
-              patch.description = "Refreshing instance inventory";
-              void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
-            } else if (job.status === "failure") {
-              patch.status = "Error";
-              patch.error = job.error || "Creation failed";
-            } else if (job.status === "partial") {
-              patch.status = "Partial";
-              patch.error = job.error || "Creation completed only partially";
-              void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
-            } else if (job.status === "unknown") {
-              nextDelay = Math.max(nextDelay, 10_000);
-              patch.status = "Unknown";
-              patch.error = job.error || "The cluster could not confirm the final create state";
-            } else {
-              patch.status = job.status === "pending" ? "Pending" : "Running";
-              patch.error = undefined;
-            }
-            updatePendingCreate(scopeKey, entry.id, patch);
-            if (
-              !alreadyFailed &&
-              (job.status === "failure" || job.status === "partial" || job.status === "unknown")
-            ) {
-              toast({
-                variant: "destructive",
-                title: `Could not finish creating ${entry.name}`,
-                description: patch.error,
-              });
-            }
-          } catch (error) {
-            if (!active) return;
-            nextDelay = Math.max(nextDelay, 5_000);
-            if (error instanceof APIError && (error.status === 401 || error.status === 403 || error.status === 404)) {
-              updatePendingCreate(scopeKey, entry.id, {
-                status: "Error",
-                jobStatus: "unknown",
-                pollingHalted: true,
-                error:
-                  error.status === 404
-                    ? "The create operation is no longer available. Refresh inventory before retrying."
-                    : "You no longer have permission to view this create operation.",
-              });
-            }
-          }
-        }),
-      );
-      polling = false;
-      if (active) timer = setTimeout(() => void poll(), nextDelay);
-    };
-
-    void poll();
-    return () => {
-      active = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [pendingJobsKey, queryClient, scopeKey]);
-
-  const hosts = Array.from(
-    new Set([...instanceHosts, ...pending.map((p) => p.host)]),
-  ).filter(Boolean);
+  // Authorized clusters come from VMListResponse.nodes, including clusters with zero rows.
+  // Pending hosts remain connected until their durable create verdict is known.
+  const hosts = getInstanceStreamHosts(
+    authorizedHosts,
+    pending.map((entry) => entry.host),
+  );
   const hostsKey = hosts.slice().sort().join(",");
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    const readFence = createExactInstanceReadFence();
     const conns = new Map<string, Conn>();
     const reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
     const ipRetryTimers = new Set<ReturnType<typeof setTimeout>>();
-    // A list is keyed ["instances", actor, host, project], with "*" for every host or
-    // project. A row only belongs in the current actor's lists whose scope contains it.
-    const scopeHolds = (key: readonly unknown[], vm: any) => {
-      const [kind, actor, host, project] = key as [string, string, string, string];
-      return (
-        kind === "instances" &&
-        actor === scopeKey &&
-        (host === "*" || host === vm.host) &&
-        (project === "*" || project === (vm.project || "default"))
+
+    const visible = () =>
+      typeof document === "undefined" || document.visibilityState === "visible";
+    const allStreamsHealthy = () =>
+      hosts.length === 0 || hosts.every((host) => conns.get(host)?.healthy === true);
+    const freshness = createInstanceFreshnessCoordinator({
+      actorScope: scopeKey,
+      isVisible: visible,
+      areAllStreamsHealthy: allStreamsHealthy,
+      reconcile: async ({ actorScope, fresh }) => {
+        await reconcileInstanceFleet(queryClient, actorScope, {
+          fresh,
+          signal: controller.signal,
+        });
+      },
+      classifyRateLimit: (error) =>
+        error instanceof APIError && error.status === 429
+          ? { retryAfterSeconds: error.retryAfter }
+          : null,
+      retainRateLimit: retainInstanceReconcileRateLimit,
+    });
+    const scheduleReconcile = freshness.requestReconcile;
+
+    const findPending = (host: string, name: string, project?: string | null) => {
+      const matches = getPendingSnapshot(scopeKey).filter(
+        (entry) =>
+          entry.host === host &&
+          entry.name === name &&
+          (!project || (entry.project || "default") === project),
       );
+      return matches.length === 1 ? matches[0] : undefined;
     };
 
-    const upsertInstance = (vm: any) => {
-      if (!active) return;
-      queryClient.setQueriesData(
-        { queryKey: ["instances", scopeKey], predicate: (q) => scopeHolds(q.queryKey, vm) },
-        (old: any) => {
-          if (!old || !Array.isArray(old.vms)) return old;
-          const idx = old.vms.findIndex((i: any) =>
-            sameInstance(i, vm.host, vm.name, vm.project),
-          );
-          const vms =
-            idx >= 0
-              ? old.vms.map((i: any, k: number) => (k === idx ? vm : i))
-              : [vm, ...old.vms];
-          return { ...old, vms, total: vms.length };
-        },
-      );
-    };
-
-    const removeInstance = (host: string, name: string, project?: string) => {
-      if (!active) return;
-      queryClient.setQueriesData(
-        {
-          queryKey: ["instances", scopeKey],
-          predicate: (q) => {
-            const [, actor, scopedHost, scopedProject] = q.queryKey as [
-              string,
-              string,
-              string,
-              string,
-            ];
-            return (
-              actor === scopeKey &&
-              (scopedHost === "*" || scopedHost === host) &&
-              (!project || scopedProject === "*" || scopedProject === project)
-            );
-          },
-        },
-        (old: any) => {
-          if (!old || !Array.isArray(old.vms)) return old;
-          const vms = old.vms.filter(
-            (i: any) => !sameInstance(i, host, name, project),
-          );
-          if (vms.length === old.vms.length) return old;
-          return { ...old, vms, total: vms.length };
-        },
-      );
-    };
-
-    // Fetch one instance and upsert it. A just-started instance is "Running"
-    // before its DHCP lease lands, so its IPs are briefly empty; in that case we
-    // re-fetch a few times (bounded and event-triggered, not a return to polling)
-    // until the address appears or we give up.
-    // important: with the project. Two projects can each hold an instance called "test", and a
-    // GET without one answers whichever the backend finds first.
     const fetchAndUpsert = async (
       host: string,
       name: string,
-      project?: string,
+      project: string,
       ipRetries = 6,
     ): Promise<boolean> => {
+      const identity = { actorScope: scopeKey, host, project, name };
+      const lease = readFence.start(identity);
       try {
-        const vm: any = await api.instances.get(name, host, project);
-        if (!active) return false;
-        upsertInstance(vm);
+        const vm = await api.instances.get(name, host, project, {
+          signal: lease.signal,
+        });
+        if (!active || !readFence.isCurrent(lease)) return false;
+        if (!upsertExactInstance(queryClient, identity, vm)) {
+          scheduleReconcile(true);
+          return false;
+        }
         const needsIp =
           vm.status === "Running" &&
           (!Array.isArray(vm.ip_addresses) || vm.ip_addresses.length === 0);
         if (needsIp && ipRetries > 0) {
           const timer = setTimeout(() => {
             ipRetryTimers.delete(timer);
-            if (!active) return;
-            // Only keep retrying while the row is still present.
-            void fetchAndUpsert(host, name, project, ipRetries - 1);
-          }, 4000);
+            if (active && readFence.isCurrent(lease)) {
+              void fetchAndUpsert(host, name, project, ipRetries - 1);
+            }
+          }, 4_000);
           ipRetryTimers.add(timer);
         }
         return true;
       } catch {
-        // Instance gone, or a transient race. The list never polls in realtime mode, so a
-        // refetch is the one thing that can still carry the row in.
-        if (active) {
-          void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
-        }
+        if (active && readFence.isCurrent(lease)) scheduleReconcile(true);
         return false;
+      } finally {
+        readFence.release(lease);
       }
     };
 
-    // Match project when the daemon provides it. Older frames only carry host and name.
-    const findPending = (host: string, name: string, project?: string | null) =>
-      getPendingSnapshot(scopeKey).find(
-        (x) =>
-          x.host === host &&
-          x.name === name &&
-          (!project || (x.project || "default") === project),
-      );
-
-    const dropPending = (host: string, name: string, project?: string | null) => {
-      const p = findPending(host, name, project);
-      if (!p) return;
-      if (p.jobId && p.jobStatus !== "success") {
-        updatePendingCreate(scopeKey, p.id, { lastSignalAt: Date.now() });
-        return;
+    const dropPending = (host: string, name: string, project: string) => {
+      const entry = findPending(host, name, project);
+      if (!entry) return;
+      if (entry.jobId && entry.jobStatus !== "success") {
+        updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
+      } else {
+        removePendingCreate(scopeKey, entry.id);
       }
-      removePendingCreate(scopeKey, p.id);
     };
 
-    // Retire only after the real row is cached. Exact jobs also require a success verdict.
-    const settle = (host: string, name: string, project: string | null | undefined, ok: boolean) => {
+    const settle = (host: string, name: string, project: string, ok: boolean) => {
       if (!ok) return;
-      const p = findPending(host, name, project);
-      if (!p) return;
-      if (p.jobId && p.jobStatus !== "success") {
-        updatePendingCreate(scopeKey, p.id, { lastSignalAt: Date.now() });
-        return;
+      const entry = findPending(host, name, project);
+      if (!entry) return;
+      if (entry.jobId && entry.jobStatus !== "success") {
+        updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
+      } else {
+        resolvePendingCreate(scopeKey, entry.id);
       }
-      resolvePendingCreate(scopeKey, p.id);
     };
 
-    const handleOperation = (host: string, msg: any) => {
-      if (!active) return;
-      const names: string[] = Array.isArray(msg.instances)
-        ? msg.instances
-        : msg.instance
-          ? [msg.instance]
+    const handleOperation = (host: string, message: Record<string, unknown>) => {
+      const names = Array.isArray(message.instances)
+        ? message.instances.filter((name): name is string => typeof name === "string")
+        : typeof message.instance === "string"
+          ? [message.instance]
           : [];
+      const project = typeof message.project === "string" ? message.project : undefined;
       if (names.length === 0) return;
-      const project: string | undefined = msg.project || undefined;
-      for (const p of getPendingSnapshot(scopeKey)) {
-        if (p.host !== host || !names.includes(p.name)) continue;
-        if (project && (p.project || "default") !== project) continue;
-        updatePendingCreate(scopeKey, p.id, { lastSignalAt: Date.now() });
-        const code: number | undefined =
-          typeof msg.status_code === "number" ? msg.status_code : undefined;
+      for (const entry of getPendingSnapshot(scopeKey)) {
+        if (entry.host !== host || !names.includes(entry.name)) continue;
+        if (project && (entry.project || "default") !== project) continue;
+        updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
+        const code = typeof message.status_code === "number" ? message.status_code : undefined;
         if (code !== undefined && code >= STATUS_SUCCESS) {
           if (code === STATUS_SUCCESS) {
-            // Created: pull the real row in, then retire the placeholder into a focused row.
-            void fetchAndUpsert(host, p.name, p.project).then((ok) =>
-              settle(host, p.name, p.project, ok),
+            void fetchAndUpsert(host, entry.name, entry.project || "default").then((ok) =>
+              settle(host, entry.name, entry.project || "default", ok),
             );
-          } else {
-            const reason = msg.err || "Creation failed";
-            if (p.jobId) {
-              // A daemon frame covers one leg. The exact job owns the durable verdict.
-              updatePendingCreate(scopeKey, p.id, {
-                lastSignalAt: Date.now(),
-                statusCode: code,
-                description: msg.description || "Waiting for exact create job status",
-                operationId: msg.operation_id || p.operationId,
-              });
-              continue;
-            }
-            // LXD can emit more than one frame for the same failed operation, so only the
-            // transition into Error raises a toast. Without this the operator gets the same
-            // destructive toast several times for one create.
-            const alreadyFailed = p.status === "Error";
-            updatePendingCreate(scopeKey, p.id, {
-              status: "Error",
-              statusCode: code,
-              error: reason,
-            });
-            // important: the failed row is NOT auto-removed. It used to disappear after 8s,
-            // which meant an operator who looked away for a moment saw a create that had
-            // reported success simply never arrive, with nothing left on screen to say why.
-            // The row stays until it is dismissed or the page is left; it is the only record
-            // of the failure the operator has, because the audit trail is not readable from
-            // the dashboard.
-            //
-            // The toast is what covers the operator who is no longer on this page. Toaster is
-            // mounted in the root layout, so it survives the navigate() the create form does
-            // straight after submitting.
-            if (!alreadyFailed) {
-              toast({
-                variant: "destructive",
-                title: `Could not create ${p.name}`,
-                description: reason,
-              });
-            }
+            continue;
           }
-        } else {
-          updatePendingCreate(scopeKey, p.id, {
-            lastSignalAt: Date.now(),
-            status: msg.status || "Running",
+          const reason = typeof message.err === "string" ? message.err : "Creation failed";
+          if (entry.jobId) {
+            updatePendingCreate(scopeKey, entry.id, {
+              lastSignalAt: Date.now(),
+              statusCode: code,
+              description: typeof message.description === "string"
+                ? message.description
+                : "Waiting for exact create job status",
+              operationId: typeof message.operation_id === "string"
+                ? message.operation_id
+                : entry.operationId,
+            });
+            continue;
+          }
+          const alreadyFailed = entry.status === "Error";
+          updatePendingCreate(scopeKey, entry.id, {
+            status: "Error",
             statusCode: code,
-            progress: msg.progress || undefined,
-            description: msg.description || undefined,
-            operationId: msg.operation_id || p.operationId,
+            error: reason,
           });
+          if (!alreadyFailed) {
+            toast({
+              variant: "destructive",
+              title: `Could not create ${entry.name}`,
+              description: reason,
+            });
+          }
+          continue;
         }
+        updatePendingCreate(scopeKey, entry.id, {
+          lastSignalAt: Date.now(),
+          status: typeof message.status === "string" ? message.status : "Running",
+          statusCode: code,
+          progress:
+            typeof message.progress === "string" || typeof message.progress === "number"
+              ? String(message.progress)
+              : undefined,
+          description: typeof message.description === "string" ? message.description : undefined,
+          operationId: typeof message.operation_id === "string"
+            ? message.operation_id
+            : entry.operationId,
+        });
       }
     };
 
-    const handleLifecycle = (host: string, msg: any) => {
-      if (!active) return;
-      const name: string | undefined = msg.instance;
+    const handleLifecycle = (host: string, message: Record<string, unknown>) => {
+      const name = typeof message.instance === "string" ? message.instance : undefined;
+      const project = typeof message.project === "string" ? message.project : undefined;
       if (!name) return;
-      const action: string = msg.action || "";
-      if (action === "instance-deleted") {
-        const project: string | undefined = msg.project || undefined;
+      if (message.action === "instance-deleted") {
+        if (!project) {
+          readFence.tombstoneName(scopeKey, host, name);
+          scheduleReconcile(true);
+          return;
+        }
+        const identity = { actorScope: scopeKey, host, project, name };
+        readFence.tombstone(identity);
+        removeExactInstance(queryClient, identity);
+        dropPending(host, name, project);
+        return;
+      }
+      if (message.action === "instance-renamed" || !project) {
         if (project) {
-          removeInstance(host, name, project);
-          dropPending(host, name, project);
+          readFence.tombstone({ actorScope: scopeKey, host, project, name });
         } else {
-          // A name is only unique inside a project. Without one, refetch instead of removing
-          // every same-named instance from this actor's visible cache.
-          void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
+          readFence.tombstoneName(scopeKey, host, name);
         }
+        const entry = findPending(host, name, project);
+        if (entry) updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
+        scheduleReconcile(true);
         return;
       }
-      if (action === "instance-renamed") {
-        // Name changed. The cheapest correct move is a single refetch.
-        void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
-        return;
-      }
-      // created / started / stopped / restarted / updated / paused / resumed …
-      const project: string | undefined = msg.project || undefined;
-      if (!project) {
-        const pendingEntry = findPending(host, name);
-        if (pendingEntry) {
-          updatePendingCreate(scopeKey, pendingEntry.id, { lastSignalAt: Date.now() });
-        }
-        void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
-        return;
-      }
-      const pendingEntry = findPending(host, name, project);
-      if (pendingEntry) {
-        updatePendingCreate(scopeKey, pendingEntry.id, { lastSignalAt: Date.now() });
-      }
-      void fetchAndUpsert(host, name, project).then((ok) =>
-        settle(host, name, project, ok),
-      );
+      const entry = findPending(host, name, project);
+      if (entry) updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
+      void fetchAndUpsert(host, name, project).then((ok) => settle(host, name, project, ok));
     };
 
     const handleMessage = (host: string, raw: string) => {
       if (!active) return;
-      let msg: any;
+      let message: Record<string, unknown>;
       try {
-        msg = JSON.parse(raw);
+        message = JSON.parse(raw) as Record<string, unknown>;
       } catch {
         return;
       }
-      if (msg?.type === "operation") handleOperation(host, msg);
-      else if (msg?.type === "lifecycle") handleLifecycle(host, msg);
+      if (message.type === "operation") handleOperation(host, message);
+      else if (message.type === "lifecycle") handleLifecycle(host, message);
     };
 
     const connect = (host: string) => {
@@ -433,14 +272,27 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       if (!active || !conn || conn.stop) return;
       const ws = new WebSocket(getEventsWsUrl(host));
       conn.ws = ws;
-      ws.onmessage = (ev) => handleMessage(host, ev.data as string);
-      ws.onclose = () => {
+      conn.healthy = false;
+      ws.onopen = () => {
+        conn.healthy = true;
+        // Every initial-open/reconnect burst gets one actor-wide authoritative snapshot.
+        freshness.streamOpened();
+      };
+      ws.onmessage = (event) => handleMessage(host, event.data as string);
+      ws.onclose = (event) => {
         conn.ws = null;
+        conn.healthy = false;
+        if (event.code === 1008) {
+          // Policy violation means the server revoked this actor's scope. Re-read the
+          // authorized fleet immediately and do not hammer a socket we may no longer open.
+          scheduleReconcile(true);
+          return;
+        }
         if (active && !conn.stop) {
           const timer = setTimeout(() => {
             reconnectTimers.delete(timer);
             if (active) connect(host);
-          }, 2000);
+          }, RECONNECT_MS);
           reconnectTimers.add(timer);
         }
       };
@@ -448,7 +300,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         try {
           ws.close();
         } catch {
-          /* ignore */
+          // The close path is best effort; the safety read still reconciles the fleet.
         }
       };
     };
@@ -458,6 +310,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       if (!conn) return;
       conn.stop = true;
       if (conn.ws) {
+        conn.ws.onopen = null;
         conn.ws.onmessage = null;
         conn.ws.onclose = null;
         conn.ws.onerror = null;
@@ -465,25 +318,28 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       try {
         conn.ws?.close();
       } catch {
-        /* ignore */
+        // The socket may already be gone.
       }
       conns.delete(host);
     };
 
+    freshness.start();
     for (const host of hosts) {
-      if (!conns.has(host)) {
-        conns.set(host, { ws: null, stop: false });
-        connect(host);
-      }
+      conns.set(host, { ws: null, stop: false, healthy: false });
+      connect(host);
     }
-    for (const host of Array.from(conns.keys())) {
-      if (!hosts.includes(host)) closeHost(host);
-    }
+
+    const handleVisibility = freshness.visibilityChanged;
+    document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
       active = false;
+      controller.abort();
+      readFence.abortAll();
+      freshness.stop();
       reconnectTimers.forEach(clearTimeout);
       ipRetryTimers.forEach(clearTimeout);
+      document.removeEventListener("visibilitychange", handleVisibility);
       for (const host of Array.from(conns.keys())) closeHost(host);
     };
   }, [hostsKey, queryClient, scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps

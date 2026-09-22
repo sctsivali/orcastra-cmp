@@ -1,10 +1,35 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useSearchParams } from "next/navigation";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { readCreateSeed } from "@/components/instance-create/prefill";
+import { useCreateInventoryIntent } from "@/components/instance-create/use-create-inventory-intent";
+import { useBaseCreateInventory } from "@/components/instance-create/use-base-inventory";
+import { useCreateVolumeInventory } from "@/components/instance-create/use-volume-inventory";
+import { useCreateNetworkInventory } from "@/components/instance-create/use-network-inventory";
+import { useCreateGpuInventory } from "@/components/instance-create/use-gpu-inventory";
+import {
+  useImageCatalogue,
+  type ImageCatalogueRow,
+} from "@/components/instance-create/use-image-catalogue";
+import { useCreateSeedValidation } from "@/components/instance-create/use-seed-validation";
+import {
+  ADVANCED_DEFAULTS,
+  DEFAULT_INSTANCE_CREATE_FORM,
+  MEMORY_UNITS,
+  STORAGE_UNITS,
+  isPositiveInteger,
+  type AdvancedKey,
+  type GpuDevice,
+  type InstanceCreateFormState,
+  type InstanceType,
+} from "@/components/instance-create/model";
+import {
+  submissionFenceMatches,
+  type SubmissionFence,
+} from "@/components/instance-create/submission-fence";
 import {
   ArrowLeft,
   Monitor,
@@ -31,7 +56,6 @@ import { DiskRow } from "@/components/instance-create/disk-row";
 import { NicRow } from "@/components/instance-create/nic-row";
 import type { DiskDevice, NicDevice } from "@/components/instance-create/devices";
 import { PickerNotice } from "@/components/ui/picker-notice";
-import { derivePickerState } from "@/lib/picker-state";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { SubmitBlockers, submitBlockers } from "@/components/instance-create/submit-blockers";
 import { ProjectQuotaLine, quotaCheck } from "@/components/instance-create/quota-line";
@@ -46,13 +70,12 @@ import {
   ProjectChangeNotice,
   projectChangeNotice,
 } from "@/components/instance-create/project-change-notice";
-import { imageStoreEmptyHint, imageStoreNote } from "@/components/instance-create/image-store-copy";
-import { formatLimitBytes, parseLxdSize, projectSetsLimits, readProjectLimits } from "@/lib/lxd-limits";
+import { imageStoreEmptyHint } from "@/components/instance-create/image-store-copy";
+import { formatLimitBytes, parseLxdSize } from "@/lib/lxd-limits";
 import {
   gpuCardLabel,
   gpuClassOf,
   gpuIdentifier,
-  type GpuClass,
 } from "@/lib/gpu";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -96,51 +119,27 @@ import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import {
   useCreateInstance,
   usePreflightInstanceCreate,
-  useImagesByHost,
-  useStoragePoolList,
-  useProjects,
-  useProjectUsage,
-  useRemoteImages,
-  useStorageVolumes,
-  useNetworks,
-  useProfile,
-  useNodeGpus,
-  useInstanceWritePolicy,
 } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
 import { safeRandomUUID } from "@/lib/utils";
-import { api } from "@/lib/api";
 import { APIError } from "@/types/api";
 import type {
   InstanceCreateRequest,
   InstanceCreatePreflightResponse,
-  ImageInfo,
-  StoragePoolInfo,
-  StoragePoolListResponse,
-  ProjectInfo,
-  ProjectListResponse,
-  StorageVolumeInfo,
-  StorageVolumeListResponse,
-  NetworkInfo,
-  NetworkListResponse,
-  ProfileInfo,
   GPUCardInfo,
-  RemoteImageInfo,
 } from "@/types/api";
 
 interface PendingCreateSubmission {
   payload: InstanceCreateRequest;
-  /** Normalized tag intent paired with this exact payload, never read back from mutable form state. */
-  tags: string[];
   /** Stable representation of the operator's form before plan fields are added. */
   fingerprint: string;
   idempotencyKey: string;
   preflight: InstanceCreatePreflightResponse;
+  fence: SubmissionFence;
 }
 
 function isAmbiguousCreateError(error: unknown): boolean {
@@ -148,95 +147,11 @@ function isAmbiguousCreateError(error: unknown): boolean {
   return error.status === 0 || error.status === 408 || error.status >= 500;
 }
 
-// A physical GPU passed through to the instance, identified by PCI address or id.
-type GpuDevice = {
-  id: string; // react key
-  name: string; // LXD device name
-  identifyBy: "pci" | "id";
-  pci: string; // PCI address, ex; 0000:11:00.0
-  gid: string; // GPU id (the "id" device key)
-  // Local only, never sent: what the operator saw when they picked this card.
-  label?: string;
-  gpuClass?: GpuClass;
-};
-
-// LXD byte-size suffixes. LXD only accepts INTEGER values with these suffixes.
-const MEMORY_UNITS = ["B", "kB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB"];
-const STORAGE_UNITS = [
-  "kB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB", "PB", "PiB", "EB", "EiB",
-];
-
-const isPositiveInt = (v: string) => /^[1-9]\d*$/.test(v.trim());
-
-// note: decimal, and the label says so. An image size is a size on disk, and lib/utils
-// formatBytes is the one definition of that. Kept local only for the one-decimal shape and
-// the empty string on zero, which this form relies on to hide the hint entirely.
-function formatBytes(bytes: number): string {
-  if (!bytes) return "";
-  const gb = bytes / 1000 ** 3;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  return `${Math.round(bytes / 1000 ** 2)} MB`;
-}
-
-type InstanceType = "container" | "vm";
-
-interface FormState {
-  type: InstanceType;
-  name: string;
-  description: string;
-  selectedNode: string;
-  selectedProject: string;
-  // Boot source. "image" installs a base image into the root disk (VM boots the
-  // OS). "none" creates an empty root disk and attaches a chosen ISO as boot
-  // media, so the VM boots the ISO/installer. VM-only -- a container has no OS to
-  // boot without a rootfs, so containers are always "image".
-  sourceType: "image" | "none";
-  // Selected base image: the value to send (fingerprint for local, alias for
-  // remote), the remote server ("" for local), and a display label.
-  selectedImage: string;
-  imageServer: string;
-  imageLabel: string;
-  // ISO boot media (only when sourceType === "none"): the custom ISO volume the
-  // VM boots. Attached at create as a cdrom device with a high boot priority.
-  selectedIso: string;      // volume name
-  selectedIsoPool: string;  // the ISO volume's storage pool
-  selectedIsoLabel: string; // display label
-  selectedPool: string;
-  cpu: string;
-  memoryValue: string;
-  memoryUnit: string;
-  memorySwap: string; // "" = default, "true" = allow, "false" = disallow (containers)
-  diskPriority: string; // "" = default, 0-10
-  maxProcesses: string; // "" = default (containers)
-  storageValue: string;
-  storageUnit: string;
-  tags: string[];
-}
-
-const DEFAULT_FORM: FormState = {
-  type: "container",
-  name: "",
-  description: "",
-  selectedNode: "",
-  selectedProject: "default",
-  sourceType: "image",
-  selectedImage: "",
-  imageServer: "",
-  imageLabel: "",
-  selectedIso: "",
-  selectedIsoPool: "",
-  selectedIsoLabel: "",
-  selectedPool: "",
-  cpu: "1",
-  memoryValue: "1",
-  memoryUnit: "GiB",
-  memorySwap: "true",
-  diskPriority: "5",
-  maxProcesses: "",
-  storageValue: "10",
-  storageUnit: "GiB",
-  tags: [],
-};
+type FormState = InstanceCreateFormState;
+type AdvKey = AdvancedKey;
+const ADV_DEFAULT = ADVANCED_DEFAULTS;
+const DEFAULT_FORM = DEFAULT_INSTANCE_CREATE_FORM;
+const isPositiveInt = isPositiveInteger;
 
 function InstanceCreateFormContent() {
   // note: navigate() rather than a bare push, so the leaving transition raises the
@@ -244,6 +159,12 @@ function InstanceCreateFormContent() {
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const { scopeKey } = useActorQueryScope();
+  const actorScopeRef = useRef(scopeKey);
+  // Updated during render rather than the reset effect. A delayed promise can settle between an
+  // actor-context render and that effect, and must already see the new actor in that window.
+  const latestScopeKeyRef = useRef(scopeKey);
+  latestScopeKeyRef.current = scopeKey;
+  const actorSelectionActive = actorScopeRef.current === scopeKey;
   const { writeAvailability } = useReadOnlyMode();
   const createDisabledReason = writeAvailability === "checking"
     ? "Creating instances is disabled while system write availability is being checked."
@@ -270,8 +191,27 @@ function InstanceCreateFormContent() {
   // the same values after mount would.
   const searchParams = useSearchParams();
   const seedRef = useRef(readCreateSeed(searchParams));
-  const [form, setForm] = useState<FormState>(() => ({ ...DEFAULT_FORM, ...seedRef.current }));
+  const [form, setForm] = useState<FormState>(() => ({
+    ...DEFAULT_FORM,
+    tags: [],
+    ...seedRef.current,
+  }));
+  const {
+    localImages: localImageIntent,
+    remoteImages: remoteImageIntent,
+    volumes: volumeIntent,
+    networks: networkIntent,
+    clusterEpochRef,
+    selectionEpochRef,
+    nextSelectionEpoch,
+    openImageSources,
+    requireVolumes,
+    requireNetworks,
+    resetNetworks,
+    resetForCluster,
+  } = useCreateInventoryIntent(seedRef.current?.sourceType);
   const [seedDropped, setSeedDropped] = useState<string | null>(null);
+  const [seedValidationPending, setSeedValidationPending] = useState(!!seedRef.current);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const imageButtonRef = useRef<HTMLButtonElement>(null);
   const configurationSectionRef = useRef<HTMLDivElement>(null);
@@ -285,19 +225,62 @@ function InstanceCreateFormContent() {
   const [fieldError, setFieldError] = useState<CreateError | null>(null);
   const [changeNotice, setChangeNotice] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
+  const [tagError, setTagError] = useState<string | null>(null);
   const [pendingSubmission, setPendingSubmission] =
     useState<PendingCreateSubmission | null>(null);
   const idempotencyRef = useRef<{ payload: string; key: string } | null>(null);
   const ambiguousSubmissionRef = useRef<PendingCreateSubmission | null>(null);
   const [hasAmbiguousSubmission, setHasAmbiguousSubmission] = useState(false);
+  const formRevisionRef = useRef(0);
+  const activeTargetRef = useRef({
+    host: form.selectedNode,
+    project: form.selectedProject || "default",
+  });
+  activeTargetRef.current = {
+    host: form.selectedNode,
+    project: form.selectedProject || "default",
+  };
+
+  const captureSubmissionFence = (): SubmissionFence => ({
+    actorScope: latestScopeKeyRef.current,
+    clusterEpoch: clusterEpochRef.current,
+    selectionEpoch: selectionEpochRef.current,
+    formRevision: formRevisionRef.current,
+    host: form.selectedNode,
+    project: form.selectedProject || "default",
+  });
+  const submissionStillCurrent = (
+    captured: SubmissionFence,
+    requireFormRevision: boolean,
+  ) => submissionFenceMatches(captured, {
+    actorScope: latestScopeKeyRef.current,
+    clusterEpoch: clusterEpochRef.current,
+    selectionEpoch: selectionEpochRef.current,
+    formRevision: formRevisionRef.current,
+    host: activeTargetRef.current.host,
+    project: activeTargetRef.current.project,
+  }, requireFormRevision);
+  const invalidatePreparedSubmission = () => {
+    formRevisionRef.current += 1;
+    setPendingSubmission(null);
+    idempotencyRef.current = null;
+    // The old async attempt is fenced by its captured revision/target. Release this form's local
+    // click lock so the edited target can submit once React Query reports that attempt settled.
+    submitInFlightRef.current = false;
+  };
 
   const clearMatchingFieldError = (...fields: CreateError["field"][]) => {
     setFieldError((current) => current?.field && fields.includes(current.field) ? null : current);
   };
 
-  const focusCreateError = (mapped: CreateError) => {
+  const focusCreateError = (
+    mapped: CreateError,
+    fence: SubmissionFence,
+    requireFormRevision: boolean,
+  ) => {
     if (!mapped.field) return;
     window.requestAnimationFrame(() => {
+      if (!submissionStillCurrent(fence, requireFormRevision)) return;
       const focusTarget = mapped.field === "name"
         ? nameInputRef.current
         : mapped.field === "image"
@@ -323,226 +306,112 @@ function InstanceCreateFormContent() {
   // Inline tag editor helpers (write straight to form.tags).
   const addTag = (raw: string) => {
     const v = raw.trim().toLowerCase();
-    if (v && !form.tags.includes(v)) updateField("tags", [...form.tags, v]);
+    if (!/^[a-z][a-z0-9_-]{0,99}$/.test(v)) {
+      setTagError(
+    "Use between 1 and 100 lowercase letters, numbers, dashes, or underscores, starting with a letter.",
+      );
+      return;
+    }
+    setTagError(null);
+    if (!form.tags.includes(v)) updateField("tags", [...form.tags, v]);
     setTagInput("");
   };
   const removeTag = (tag: string) =>
     updateField("tags", form.tags.filter((t) => t !== tag));
 
-  const wantedImageType: "container" | "virtual-machine" =
-    form.type === "vm" ? "virtual-machine" : "container";
-
   // --- Data sources -----------------------------------------------------------
-  const nodePicker = useNodePickerOptions();
-  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
-  const nodeLabel = form.selectedNode ? nodePicker.labelOf(form.selectedNode) : undefined;
-  const writePolicy = useInstanceWritePolicy(form.selectedNode);
-  const canUseAdvancedCreate =
-    !writePolicy.isFetching &&
-    !writePolicy.isError &&
-    writePolicy.data?.host === form.selectedNode &&
-    writePolicy.data.mode === "full" &&
-    writePolicy.data.can_use_advanced_create === true;
-  const hadFullAdvancedPolicy =
-    writePolicy.data?.host === form.selectedNode &&
-    writePolicy.data.mode === "full" &&
-    writePolicy.data.can_use_advanced_create === true;
-  const policyMutationDisabledReason = hadFullAdvancedPolicy && writePolicy.isFetching
-    ? "Create is paused while the server rechecks the advanced write policy."
-    : hadFullAdvancedPolicy && writePolicy.isError
-      ? "Create is paused because the previously granted advanced write policy could not be verified. Reload or select the node again."
-      : undefined;
+  const baseInventory = useBaseCreateInventory({
+    actorSelectionActive,
+    host: form.selectedNode,
+    project: form.selectedProject || "default",
+    clusterEpoch: clusterEpochRef.current,
+    selectionEpoch: selectionEpochRef.current,
+    seedValidationPending,
+  });
+  const {
+    nodePicker,
+    nodeOptions,
+    loadingNodes,
+    nodeLabel,
+    nodeState,
+    canUseAdvancedCreate,
+    policyMutationDisabledReason,
+    advancedPolicyMessage,
+    projectsQuery,
+    projectOptions,
+    projectState,
+    projectLimits,
+    projectLimited,
+    projectUsed,
+    poolsQuery,
+    poolOptions,
+    poolState,
+    defaultPool,
+  } = baseInventory;
+  const {
+    isLoading: loadingProjects,
+    isFetching: fetchingProjects,
+    isError: projectsFailed,
+    isSuccess: projectsSucceeded,
+    refetch: refetchProjects,
+  } = projectsQuery;
+  const {
+    isLoading: loadingPools,
+    isError: poolsFailed,
+    refetch: refetchPools,
+  } = poolsQuery;
   const submissionDisabledReason = createDisabledReason ?? policyMutationDisabledReason;
   const submissionDisabledReasonRef = useRef(submissionDisabledReason);
   submissionDisabledReasonRef.current = submissionDisabledReason;
-  const advancedPolicyMessage = !form.selectedNode
-    ? "Select a node to check which advanced controls are available."
-    : writePolicy.isFetching
-      ? "Checking the server policy. Safe typed controls remain available."
-      : writePolicy.isError
-        ? "Advanced controls are unavailable because the server policy could not be verified."
-        : canUseAdvancedCreate
-          ? null
-          : "Advanced host controls are unavailable for this cluster. Safe resource, network, volume, metadata, and cloud-init fields remain available.";
-  // note: "No nodes found." is reserved for a read that answered with nothing. A read that
-  // failed (a lost registry, a 429, a timeout) disables the picker and says why underneath,
-  // because an empty list here used to be the only thing the operator saw.
-  const nodeState = derivePickerState({
-    isLoading: loadingNodes,
-    isError: nodePicker.isError,
-    error: nodePicker.namesError,
-    optionCount: nodeOptions.length,
-    subject: "Nodes",
-    selectText: "Select node",
-    emptyText: "No nodes found.",
-  });
-
-  const {
-    data: projectsResp,
-    isLoading: loadingProjects,
-    isError: projectsFailed,
-    error: projectsError,
-    refetch: refetchProjects,
-  } = useProjects(form.selectedNode);
-  // Built from a successful response only. On failure this used to collapse to ["default"],
-  // which looked like an answer and hid that the read never happened.
-  const projectOptions = projectsFailed
-    ? []
-    : Array.from(
-        new Set([
-          "default",
-          ...(
-            ((projectsResp as unknown as ProjectListResponse | undefined)?.projects ??
-              []) as ProjectInfo[]
-          ).map((p) => p.name),
-        ]),
-      ).map((name) => ({ value: name, label: name }));
-  const projectState = derivePickerState({
-    gated: !form.selectedNode,
-    isLoading: loadingProjects,
-    isError: projectsFailed,
-    error: projectsError,
-    optionCount: projectOptions.length,
-    subject: "Projects",
-    nodeLabel,
-    selectText: "Select project",
-  });
-  const selectedProjectInfo = (
-    ((projectsResp as unknown as ProjectListResponse | undefined)?.projects ?? []) as ProjectInfo[]
-  ).find((p) => p.name === (form.selectedProject || "default"));
-  const projectLimits = readProjectLimits(selectedProjectInfo?.config);
-  const projectLimited = projectSetsLimits(projectLimits);
-  // note: read only when the project sets a limit, so an unlimited project costs no request.
-  const { data: projectUsage } = useProjectUsage(form.selectedNode, form.selectedProject || "default", {
-    enabled: !!form.selectedNode && projectLimited,
-  });
-  const projectUsed =
-    projectUsage && projectUsage.complete
-      ? {
-          cpu: projectUsage.used.cpu,
-          memoryBytes: projectUsage.used.memory_bytes,
-          instances: projectUsage.used.instances,
-        }
-      : null;
-
-  const {
-    data: poolsResp,
-    isLoading: loadingPools,
-    isError: poolsFailed,
-    error: poolsError,
-    refetch: refetchPools,
-  } = useStoragePoolList(form.selectedNode, { enabled: !!form.selectedNode });
-  const poolOptions = (
-    ((poolsResp as unknown as StoragePoolListResponse | undefined)?.pools ??
-      []) as StoragePoolInfo[]
-  ).map((p) => ({ value: p.name, label: `${p.name} (${p.driver})` }));
-  const poolState = derivePickerState({
-    gated: !form.selectedNode,
-    isLoading: loadingPools,
-    isError: poolsFailed,
-    error: poolsError,
-    optionCount: poolOptions.length,
-    subject: "Storage pools",
-    nodeLabel,
-    selectText: "Select storage pool",
-  });
-  const defaultPool =
-    poolOptions.find((p) => p.value === "default")?.value ||
-    poolOptions[0]?.value ||
-    "";
   const effectivePool = form.selectedPool || defaultPool;
 
   // --- Additional disk devices ------------------------------------------------
   const [disks, setDisks] = useState<DiskDevice[]>([]);
-  // All custom volumes on the node (filtered per-row by pool).
-  // note: every read below is gated on a node. Without the gate the form fired a fleet-wide
-  // pool, volume and network read on mount with no node chosen, which on a busy fleet cost
-  // three fan-outs and a share of the rate limit before the operator had touched anything.
-  const {
-    data: volumesResp,
-    isLoading: loadingVolumes,
-    isError: volumesFailed,
-    error: volumesError,
-    refetch: refetchVolumes,
-  } = useStorageVolumes(undefined, form.selectedNode, { enabled: !!form.selectedNode });
-  // important: the volume list now spans every project and, on a clustered host, lists a
-  // per-member pool's volume once per member. A disk on this instance can only attach a custom
-  // volume from the instance's own project (or default, which a project without its own
-  // volumes sees), and one option per (pool, name) is what the operator picks; the member is
-  // decided by placement.
-  const volumeProject = form.selectedProject || "default";
-  const customVolumes = useMemo(() => {
-    const rows = (
-      ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
-        []) as StorageVolumeInfo[]
-    ).filter((v) => v.type === "custom");
-    const scoped = rows.filter((v) => (v.project ?? "default") === volumeProject);
-    const pool = scoped.length ? scoped : rows.filter((v) => (v.project ?? "default") === "default");
-    const seen = new Set<string>();
-    return pool.filter((v) => {
-      const key = `${v.pool}/${v.name}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [volumesResp, volumeProject]);
-  // The project fallback above, evaluated for a project the form is about to switch to.
-  const isoVisibleIn = (project: string, pool: string, name: string) => {
-    const rows = (
-      ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
-        []) as StorageVolumeInfo[]
-    ).filter((v) => v.type === "custom" && v.content_type === "iso");
-    const scoped = rows.filter((v) => (v.project ?? "default") === project);
-    const visible = scoped.length ? scoped : rows.filter((v) => (v.project ?? "default") === "default");
-    return visible.some((v) => v.pool === pool && v.name === name);
-  };
-  const volumesInPool = (pool: string) =>
-    customVolumes.filter((v) => v.pool === pool);
-  const volumeContentType = (pool: string, name: string) =>
-    customVolumes.find((v) => v.pool === pool && v.name === name)?.content_type;
-  // One notice for every disk row: the volume read is per node, not per row.
-  const volumesNotice = derivePickerState({
-    gated: !form.selectedNode,
-    isLoading: loadingVolumes,
-    isError: volumesFailed,
-    error: volumesError,
-    optionCount: customVolumes.length,
-    subject: "Custom volumes",
+  const volumeInventory = useCreateVolumeInventory({
+    actorSelectionActive,
+    host: form.selectedNode,
+    project: form.selectedProject || "default",
     nodeLabel,
-  }).notice;
-  const volumeStateFor = (disk: DiskDevice, poolVolumes: StorageVolumeInfo[]) =>
-    derivePickerState({
-      gated: !disk.pool,
-      gatedText: "Select pool first",
-      isLoading: loadingVolumes,
-      isError: volumesFailed,
-      error: volumesError,
-      optionCount: poolVolumes.length,
-      subject: "Custom volumes",
-      emptyText: `No custom volumes in ${disk.pool}.`,
-      selectText: "Select volume",
-    });
-
-  // Custom ISO volumes on the node, for the "From ISO" boot-source picker. The
-  // option value encodes pool + name so we can rebuild the cdrom device on submit.
-  const isoVolumes = customVolumes.filter((v) => v.content_type === "iso");
-  const isoOptions = isoVolumes.map((v) => ({
-    value: `${v.pool}/${v.name}`,
-    label: `${v.name} (${v.pool})`,
-  }));
+    clusterEpoch: clusterEpochRef.current,
+    enabledByIntent:
+      volumeIntent || form.sourceType === "none" || disks.length > 0 || !!form.selectedIso,
+    seedValidationPending,
+  });
+  const {
+    query: volumesQuery,
+    isoVisibleIn,
+    volumesInPool,
+    volumeContentType,
+    volumesNotice,
+    volumeStateFor,
+    isoVolumes,
+    isoOptions,
+    isoState,
+  } = volumeInventory;
+  const {
+    isLoading: loadingVolumes,
+    isFetching: fetchingVolumes,
+    isError: volumesFailed,
+    isSuccess: volumesSucceeded,
+    refetch: refetchVolumes,
+  } = volumesQuery;
 
   const addDisk = () => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("storage", "devices");
+    requireVolumes();
     setDisks((d) => [
       ...d,
       { id: safeRandomUUID(), kind: "volume", pool: defaultPool, source: "", path: "" },
     ]);
   };
   const updateDisk = (id: string, patch: Partial<DiskDevice>) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("storage", "devices");
     setDisks((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
   const removeDisk = (id: string) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("storage", "devices");
     setDisks((d) => d.filter((x) => x.id !== id));
   };
@@ -560,79 +429,45 @@ function InstanceCreateFormContent() {
 
   // --- Network interfaces -----------------------------------------------------
   const [nics, setNics] = useState<NicDevice[]>([]);
-  // important: scoped to the project the instance is going into, not to the node alone.
-  // Offering every network the default project holds is what let an operator attach an
-  // instance in an isolated project to a network that project cannot reach, which the
-  // daemon then failed in the background with nothing to show for it.
-  const {
-    data: networksResp,
-    isLoading: loadingNetworks,
-    isError: networksFailed,
-    error: networksError,
-    refetch: refetchNetworks,
-  } = useNetworks(form.selectedNode, form.selectedProject || undefined, {
-    enabled: !!form.selectedNode,
-  });
-  const projectNetworks = (
-    ((networksResp as unknown as NetworkListResponse | undefined)?.networks ??
-      []) as NetworkInfo[]
-  ).filter((n) => n.managed);
-  const networkOptions = projectNetworks.map((n) => ({
-    value: n.name,
-    label: `${n.name} (${n.type})`,
-  }));
-  const networkState = derivePickerState({
-    gated: !form.selectedNode,
-    isLoading: loadingNetworks,
-    isError: networksFailed,
-    error: networksError,
-    optionCount: networkOptions.length,
-    subject: "Managed networks",
+  const [pendingNicAdd, setPendingNicAdd] = useState(false);
+  const networkInventory = useCreateNetworkInventory({
+    actorSelectionActive,
+    host: form.selectedNode,
+    project: form.selectedProject || "default",
     nodeLabel,
-    emptyText: `No managed networks in project ${form.selectedProject || "default"}.`,
-    selectText: "Select network",
+    selectionEpoch: selectionEpochRef.current,
+    enabledByIntent: networkIntent,
+    pendingNicAdd,
+    setPendingNicAdd,
+    setNics,
   });
-  const networksByName = new Map(projectNetworks.map((n) => [n.name, n]));
+  const {
+    networksQuery,
+    networkOptions,
+    networkState,
+    networksByName,
+    defaultProfileQuery,
+    inheritedNics,
+    defaultProfileNotice,
+  } = networkInventory;
+  const { refetch: refetchNetworks } = networksQuery;
+  const { refetch: refetchDefaultProfile } = defaultProfileQuery;
 
-  // Inherited NICs from the instance's profile(s) (the form applies "default"),
-  // mirroring LXD UI's "inherited" rows so the user can override them instead of
-  // adding a duplicate on the same network (which causes a DNS-name conflict).
-  // The project's own default profile, not the default project's. A project that sets
-  // features.profiles has a different one, so the inherited rows shown were fiction.
-  const { data: defaultProfile } = useProfile(
-    "default",
-    form.selectedNode,
-    form.selectedProject || undefined,
-  );
-  const inheritedNics = Object.entries(
-    ((defaultProfile as unknown as ProfileInfo | undefined)?.devices ?? {}) as Record<
-      string,
-      Record<string, string>
-    >,
-  )
-    .filter(([, dev]) => dev.type === "nic")
-    .map(([name, dev]) => ({ name, network: dev.network || dev.parent || "" }));
-
-  // Attach: pre-fill the first not-yet-overridden inherited NIC (so the common
-  // action overrides eth0), else a fresh interface name.
+  // Attach is deliberately two-phase. The click first enables both reads; only a successful,
+  // settled default-profile response may prove there is no inherited NIC and justify a fresh
+  // interface name. A failed read stays pending with Retry rather than fabricating eth0.
   const addNic = () => {
+    if (pendingNicAdd) return;
+    invalidatePreparedSubmission();
     clearMatchingFieldError("network", "devices");
-    setNics((prev) => {
-      const used = new Set(prev.map((x) => x.name.trim()));
-      const inh = inheritedNics.find((i) => !used.has(i.name));
-      return [
-        ...prev,
-        {
-          id: safeRandomUUID(),
-          network: inh?.network ?? "",
-          name: inh?.name ?? `eth${prev.length}`,
-        },
-      ];
-    });
+    requireNetworks();
+    setPendingNicAdd(true);
   };
   // Override a specific inherited NIC (adds an editable row pre-filled with it).
   const overrideNic = (inh: { name: string; network: string }) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("network", "devices");
+    requireNetworks();
     setNics((prev) =>
       prev.some((x) => x.name.trim() === inh.name)
         ? prev
@@ -643,10 +478,12 @@ function InstanceCreateFormContent() {
     );
   };
   const updateNic = (id: string, patch: Partial<NicDevice>) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("network", "devices");
     setNics((n) => n.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
   const removeNic = (id: string) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("network", "devices");
     setNics((n) => n.filter((x) => x.id !== id));
   };
@@ -667,16 +504,23 @@ function InstanceCreateFormContent() {
   // --- GPU passthrough --------------------------------------------------------
   const [gpus, setGpus] = useState<GpuDevice[]>([]);
   const [gpuPickerOpen, setGpuPickerOpen] = useState(false);
+  const gpuInventory = useCreateGpuInventory({
+    actorSelectionActive,
+    canUseAdvancedCreate,
+    host: form.selectedNode,
+    pickerOpen: gpuPickerOpen,
+    clusterEpoch: clusterEpochRef.current,
+  });
   const {
-    data: gpusResp,
     isLoading: loadingGpus,
     isError: gpusFailed,
     refetch: refetchGpus,
-  } = useNodeGpus(canUseAdvancedCreate ? form.selectedNode : "");
-  const availableGpus = gpusResp?.gpus ?? [];
+  } = gpuInventory.query;
+  const { availableGpus } = gpuInventory;
   // Add a GPU from the node's detected list. The label and class travel with it so a wrong
   // pick is visible on the form before submit, without reopening the picker.
   const addGpuFromCard = (card: GPUCardInfo) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("devices");
     const identifier = gpuIdentifier(card);
     setGpus((g) => [
@@ -694,6 +538,7 @@ function InstanceCreateFormContent() {
     setGpuPickerOpen(false);
   };
   const addGpu = () => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("devices");
     setGpus((g) => [
       ...g,
@@ -707,10 +552,12 @@ function InstanceCreateFormContent() {
     ]);
   };
   const updateGpu = (id: string, patch: Partial<GpuDevice>) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("devices");
     setGpus((g) => g.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
   const removeGpu = (id: string) => {
+    invalidatePreparedSubmission();
     clearMatchingFieldError("devices");
     setGpus((g) => g.filter((x) => x.id !== id));
   };
@@ -725,306 +572,113 @@ function InstanceCreateFormContent() {
     : gpus.length === 0;
 
   // --- Advanced options (collapsible: security/snapshots/migration/boot/cloud-init)
-  const ADV_DEFAULT = {
-    // Security policies ("" = inherit/default; tri-state selects use "true"/"false")
-    secProtectDelete: "",
-    secPrivileged: "",
-    secNesting: "",
-    secProtectShift: "",
-    secBaseHostId: "",
-    secIdmapSize: "",
-    secUniqueIdmap: "",
-    // Default OFF, because most community VM images are not Secure Boot signed.
-    //
-    // important: this is the one advanced key deliberately NOT left to inherit, and the
-    // compatibility problem it causes is solved in the backend rather than here. Measured on a
-    // live LXD 5.21.7 cluster: Alpine and the daily Ubuntu builds create fine without this key
-    // and then refuse to start with "The image used by this instance is incompatible with
-    // secureboot", while LXD 6.9 refuses the key outright and fails the create. Neither
-    // always-send nor never-send is right, and which one applies is a property of the target
-    // cluster, so services/lxd/instance.py drops it for the versions that refuse it. Only
-    // signed release images carry image.requirements.secureboot=false and cope unaided.
-    secSecureboot: "false",
-    secCsm: "",
-    // Migration
-    migStateful: "",
-    migEvacuate: "",
-    // Boot
-    bootAutostart: "",
-    bootAutostartDelay: "",
-    bootAutostartPriority: "",
-    bootHostShutdownTimeout: "",
-    bootStopPriority: "",
-    // Cloud-init
-    ciUser: "",
-    ciVendor: "",
-    ciNetwork: "",
-  };
-  type AdvKey = keyof typeof ADV_DEFAULT;
-  const [adv, setAdv] = useState<Record<AdvKey, string>>(ADV_DEFAULT);
+  const [adv, setAdv] = useState<Record<AdvKey, string>>(() => ({ ...ADV_DEFAULT }));
   const [advOpen, setAdvOpen] = useState(false);
-  const updateAdv = (key: AdvKey, value: string) =>
+  const updateAdv = (key: AdvKey, value: string) => {
+    invalidatePreparedSubmission();
     setAdv((prev) => ({ ...prev, [key]: value }));
+  };
 
   // --- Base image selection (Local + remote catalogs, browsable dialog) ------
-  type ImageRow = {
-    key: string;
-    distribution: string;
-    release: string;
-    variant: string;
-    architecture: string; // normalized (amd64/arm64)
-    type: string;
-    alias: string;
-    source: string; // Local | Custom | Ubuntu
-    server: string; // "" for local
-    value: string; // fingerprint (local) or alias (remote)
-    cached: boolean;
-    label: string;
-  };
-  const normalizeArch = (a: string) =>
-    a === "x86_64" ? "amd64" : a === "aarch64" ? "arm64" : a;
-
-  // important: read the store the target project uses, not the host's default store. LXD
-  // resolves a local fingerprint only inside the target project, so a project with its own
-  // store (`features.images`) cannot create from a default-store row. The backend resolves
-  // that flag and answers with the store it read (`imagesResp.project`).
-  const { data: imagesResp, isLoading: loadingImages, isError: imagesFailed } = useImagesByHost(
-    form.selectedNode,
-    form.selectedProject || "default",
-  );
-  const localImages = (imagesResp?.images ?? []) as ImageInfo[];
-  const localFingerprints = new Set(localImages.map((i) => i.fingerprint));
-  const imageStore = imagesResp?.project ?? null;
-  const imageStoreLine = imageStoreNote({
-    node: form.selectedNode,
+  const imageCatalogue = useImageCatalogue({
+    actorSelectionActive,
+    host: form.selectedNode,
     project: form.selectedProject || "default",
-    store: imageStore,
-    localCount: localImages.length,
-    loading: loadingImages,
+    nodeLabel,
+    type: form.type,
+    localIntent: localImageIntent,
+    remoteIntent: remoteImageIntent,
+    selectionEpoch: selectionEpochRef.current,
+    seedValidationPending,
   });
-
-  const { data: remoteResp, isLoading: loadingRemote } = useRemoteImages();
-  const remoteImages = (remoteResp?.images ?? []) as RemoteImageInfo[];
-  const imagesLoading = loadingImages || loadingRemote;
-
-  const localRows: ImageRow[] = localImages.map((img) => {
-    const name =
-      img.aliases?.find(Boolean) || img.description || img.fingerprint;
-    return {
-      key: `local:${img.fingerprint}`,
-      distribution: name,
-      release: "",
-      variant: "",
-      architecture: normalizeArch(img.architecture || ""),
-      type: img.type,
-      alias: img.aliases?.find(Boolean) || img.fingerprint,
-      source: "Local",
-      server: "",
-      value: img.fingerprint,
-      cached: true,
-      label: name + (img.size ? ` · ${formatBytes(img.size)}` : ""),
-    };
-  });
-  const remoteRows: ImageRow[] = remoteImages.map((img) => ({
-    key: `remote:${img.server}:${img.alias}:${img.type}:${img.architecture}`,
-    distribution: img.distribution,
-    release: img.release,
-    variant: img.variant,
-    architecture: normalizeArch(img.architecture),
-    type: img.type,
-    alias: img.alias,
-    source: img.source,
-    server: img.server,
-    value: img.alias,
-    cached: !!img.fingerprint && localFingerprints.has(img.fingerprint),
-    label:
-      `${img.distribution} ${img.release}`.trim() +
-      (img.variant && img.variant !== "default" ? ` (${img.variant})` : ""),
-  }));
-  const imageRows = [...localRows, ...remoteRows];
+  const {
+    wantedImageType,
+    localQuery,
+    remoteQuery,
+    localImages,
+    localFingerprints,
+    localImageState,
+    imageStore,
+    imageStoreLine,
+    localRows,
+    imageRows,
+    imagesLoading,
+    imageDialogOpen,
+    setImageDialogOpen,
+    imgSearch,
+    setImgSearch,
+    distribution: fDistribution,
+    setDistribution: setFDistribution,
+    release: fRelease,
+    setRelease: setFRelease,
+    variant: fVariant,
+    setVariant: setFVariant,
+    architecture: fArch,
+    setArchitecture: setFArch,
+    imageType: fType,
+    setImageType: setFType,
+    cachedOnly: fCachedOnly,
+    setCachedOnly: setFCachedOnly,
+    distributionOptions,
+    releaseOptions,
+    variantOptions,
+    architectureOptions: archOptions,
+    filteredRows: filteredImageRows,
+    page: imagePage,
+    setPage: setImagePage,
+    pageSize: imagePageSize,
+    setPageSize: setImagePageSize,
+    totalPages: imageTotalPages,
+    currentPage: imageCurrentPage,
+    pagedRows: pagedImageRows,
+    reset: resetImageCatalogue,
+  } = imageCatalogue;
+  const {
+    data: imagesResp,
+    isLoading: loadingImages,
+    isFetching: fetchingImages,
+    isError: imagesFailed,
+    isSuccess: imagesSucceeded,
+    refetch: refetchImages,
+  } = localQuery;
+  const {
+    isLoading: loadingRemote,
+    isError: remoteImagesFailed,
+    refetch: refetchRemoteImages,
+  } = remoteQuery;
 
   // --- Deep-link seed: verify it, then get out of the way ----------------------
-  //
-  // A row action can only encode what was true when the operator clicked. The node can go
-  // offline, the image can be deleted, the ISO can be detached and removed. Submitting a form
-  // that looks ready and is not is worse than not seeding at all, so the seed is checked
-  // against the loaded lists once and cleared with a stated reason if it no longer holds.
   const seed = seedRef.current;
-  const seedCheckedRef = useRef(false);
-  useEffect(() => {
-    if (!seed || seedCheckedRef.current) return;
-    // Nothing to check against yet. Every list below is keyed on the seeded node.
-    if (loadingNodes || nodeOptions.length === 0) return;
-    if (seed.sourceType === "image" && (loadingImages || loadingProjects)) return;
-    if (seed.sourceType === "none" && loadingVolumes) return;
-    seedCheckedRef.current = true;
-
-    const nodeExists = nodeOptions.some((option) => option.value === seed.selectedNode);
-    if (!nodeExists) {
-      setForm({ ...DEFAULT_FORM });
-      setSeedDropped(
-        `${seed.selectedNode} is not available to you right now, so nothing was pre-filled.`,
-      );
-      return;
-    }
-
-    if (seed.sourceType === "image" && seed.selectedImage) {
-      // The link named the store the image lives in. If that project is not one this node
-      // offers the operator, the fingerprint cannot resolve there either, so both go.
-      const seededProject = seed.selectedProject || "default";
-      if (
-        seededProject !== "default" &&
-        !projectsFailed &&
-        !projectOptions.some((option) => option.value === seededProject)
-      ) {
-        setForm((prev) => ({
-          ...prev,
-          sourceType: "image",
-          selectedProject: "default",
-          selectedImage: "",
-          imageServer: "",
-          imageLabel: "",
-        }));
-        setSeedDropped(
-          `Project ${seededProject} is not available on ${seed.selectedNode}, so pick a project and a base image.`,
-        );
-        return;
-      }
-      if (!localFingerprints.has(seed.selectedImage)) {
-        setForm((prev) => ({
-          ...prev,
-          sourceType: "image",
-          selectedImage: "",
-          imageServer: "",
-          imageLabel: "",
-        }));
-        setSeedDropped(
-          seededProject === "default"
-            ? `That image is no longer on ${seed.selectedNode}, so pick another base image.`
-            : `That image is no longer in project ${seededProject}'s image store on ${seed.selectedNode}, so pick another base image.`,
-        );
-        return;
-      }
-      // Show the name the operator knows rather than the fingerprint the URL carried. The
-      // label is resolved here, never read from the query string, which is display text a
-      // link could otherwise put words into.
-      const row = localRows.find((r) => r.value === seed.selectedImage);
-      if (row) setForm((prev) => ({ ...prev, imageLabel: row.label }));
-      return;
-    }
-
-    if (seed.sourceType === "none" && seed.selectedIso) {
-      const stillThere = isoVolumes.some(
-        (v) => v.name === seed.selectedIso && v.pool === seed.selectedIsoPool,
-      );
-      if (!stillThere) {
-        setForm((prev) => ({
-          ...prev,
-          selectedIso: "",
-          selectedIsoPool: "",
-          selectedIsoLabel: "",
-        }));
-        setSeedDropped(
-          `That ISO is no longer in ${seed.selectedIsoPool} on ${seed.selectedNode}, so pick another one.`,
-        );
-      }
-    }
-  }, [
+  const seedCheckedRef = useCreateSeedValidation({
     seed,
     loadingNodes,
+    nodeNamesLoaded: nodePicker.namesLoaded,
     nodeOptions,
-    loadingImages,
-    loadingProjects,
-    projectsFailed,
+    fetchingProjects,
+    fetchingImages,
+    projectsSucceeded,
+    imagesSucceeded,
     projectOptions,
-    loadingVolumes,
+    fetchingVolumes,
+    volumesSucceeded,
     localFingerprints,
     localRows,
     isoVolumes,
-  ]);
-
-  // Land on the one field the deep link could not fill. Only when a link actually seeded
-  // something: focusing on an ordinary visit would steal focus from the node picker, which is
-  // where an operator starting from scratch needs to be.
-  const focusedRef = useRef(false);
-  useEffect(() => {
-    if (!seed || focusedRef.current || !nameInputRef.current) return;
-    focusedRef.current = true;
-    nameInputRef.current.focus({ preventScroll: true });
-    const reduced =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    nameInputRef.current.scrollIntoView({
-      block: "center",
-      behavior: reduced ? "auto" : "smooth",
-    });
-  }, [seed]);
-
-  // Dialog + filter state
-  const [imageDialogOpen, setImageDialogOpen] = useState(false);
-  const [imgSearch, setImgSearch] = useState("");
-  const [fDistribution, setFDistribution] = useState("any");
-  const [fRelease, setFRelease] = useState("any");
-  const [fVariant, setFVariant] = useState("any");
-  const [fArch, setFArch] = useState("amd64");
-  const [fType, setFType] = useState<string>("container");
-  const [fCachedOnly, setFCachedOnly] = useState(false);
-
-  const uniq = (vals: string[]) =>
-    Array.from(new Set(vals.filter(Boolean))).sort();
-  const distributionOptions = uniq(imageRows.map((r) => r.distribution));
-  const releaseOptions = uniq(imageRows.map((r) => r.release));
-  const variantOptions = uniq(imageRows.map((r) => r.variant));
-  const archOptions = uniq(imageRows.map((r) => r.architecture));
-
-  const filteredImageRows = imageRows.filter((r) => {
-    // Always restrict to the instance type being created. Picking a VM image for
-    // a container (or vice versa) only fails server-side, so never show the
-    // mismatch. The Type control below is locked to this for the same reason.
-    if (r.type !== wantedImageType) return false;
-    if (fDistribution !== "any" && r.distribution !== fDistribution) return false;
-    if (fRelease !== "any" && r.release !== fRelease) return false;
-    if (fVariant !== "any" && r.variant !== fVariant) return false;
-    if (fArch !== "any" && r.architecture && r.architecture !== fArch) return false;
-    if (fCachedOnly && !r.cached) return false;
-    if (imgSearch.trim()) {
-      const hay =
-        `${r.distribution} ${r.release} ${r.variant} ${r.alias} ${r.source}`.toLowerCase();
-      if (!hay.includes(imgSearch.trim().toLowerCase())) return false;
-    }
-    return true;
+    nameInputRef,
+    setForm,
+    setSeedDropped,
+    setSeedValidationPending,
   });
-
-  const [imagePage, setImagePage] = useState(1);
-  const [imagePageSize, setImagePageSize] = useState(TABLE_PAGE_SIZE);
-
-  // important: one reset seam for every image filter, compared during render rather than in an
-  // effect. An effect would paint a blank page first and correct it after, and a per-setter
-  // reset would have to be remembered again the next time a filter is added here. Narrowing
-  // from a later page is the failure this prevents: the slice starts past the end of the
-  // shorter list and the picker shows nothing while reporting a count.
-  const imageFilterKey = [
-    imgSearch, fDistribution, fRelease, fVariant, fArch, fCachedOnly, wantedImageType,
-  ].join("|");
-  const [lastImageFilterKey, setLastImageFilterKey] = useState(imageFilterKey);
-  if (lastImageFilterKey !== imageFilterKey) {
-    setLastImageFilterKey(imageFilterKey);
-    setImagePage(1);
-  }
-
-  // Clamped on read. The catalogue is refetched per node, so the list can shrink underneath.
-  const imageTotalPages = Math.max(1, Math.ceil(filteredImageRows.length / imagePageSize));
-  const imageCurrentPage = Math.min(imagePage, imageTotalPages);
-  const pagedImageRows = filteredImageRows.slice(
-    (imageCurrentPage - 1) * imagePageSize,
-    imageCurrentPage * imagePageSize,
-  );
 
   const openImageDialog = () => {
     setFType(wantedImageType); // default to the instance type being created
+    openImageSources();
     setImageDialogOpen(true);
   };
-  const selectImage = (row: ImageRow) => {
+  const selectImage = (row: ImageCatalogueRow) => {
+    invalidatePreparedSubmission();
+    seedCheckedRef.current = true;
+    setSeedValidationPending(false);
     clearMatchingFieldError("image");
     setChangeNotice(null);
     setForm((prev) => ({
@@ -1063,50 +717,80 @@ function InstanceCreateFormContent() {
   const quota = quotaCheck(projectLimits, requestedCpu, requestedMemoryBytes, projectUsed);
   // What still stands between the form and a create. The buttons are disabled exactly when
   // this is non-empty, so the line under them and the disabled state cannot disagree.
-  const blockers = submitBlockers({
-    nameValid,
-    hasNode: !!form.selectedNode,
-    bootFromIso,
-    hasImage: !!form.selectedImage,
-    imageStoreLoading: !!form.selectedImage && form.imageServer === "" && loadingImages,
-    hasIso: !!form.selectedIso,
-    resourcesValid,
-    hasPool: !!effectivePool || loadingPools,
-    disksValid,
-    nicsValid,
-    gpusValid,
-    cpuWithinLimit: !quota.cpuExceeds,
-    memoryWithinLimit: !quota.memoryExceeds,
-  });
-  const canSubmit = !submissionDisabledReason && !isSubmitting && blockers.length === 0;
+  const blockers = [
+    ...(!actorSelectionActive
+      ? [{ id: "actor", reason: "the current actor scope to finish loading" }]
+      : []),
+    ...(seedValidationPending
+      ? [{
+          id: "seed-validation",
+          reason: seed?.sourceType === "none"
+            ? "the linked ISO inventory to be verified"
+            : "the linked image inventory to be verified",
+        }]
+      : []),
+    ...(pendingNicAdd
+      ? [{ id: "network-intent", reason: "the network and default profile reads to finish" }]
+      : []),
+    ...submitBlockers({
+      nameValid,
+      hasNode: !!form.selectedNode,
+      bootFromIso,
+      hasImage: !!form.selectedImage,
+      imageStoreLoading: !!form.selectedImage && form.imageServer === "" && loadingImages,
+      hasIso: !!form.selectedIso,
+      resourcesValid,
+      hasPool: !!effectivePool || loadingPools,
+      disksValid,
+      nicsValid,
+      gpusValid,
+      cpuWithinLimit: !quota.cpuExceeds,
+      memoryWithinLimit: !quota.memoryExceeds,
+    }),
+    ...(tagError || tagInput.trim()
+      ? [{ id: "tag", reason: "the pending tag to be added or cleared" }]
+      : []),
+  ];
+  const canSubmit =
+    actorSelectionActive && !submissionDisabledReason && !isSubmitting && blockers.length === 0;
 
   // --- Field updates ----------------------------------------------------------
   const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) => {
+    invalidatePreparedSubmission();
     if (field === "selectedPool" || field === "storageValue" || field === "storageUnit") {
       clearMatchingFieldError("storage");
     } else if (field === "sourceType") {
+      seedCheckedRef.current = true;
+      setSeedValidationPending(false);
       clearMatchingFieldError("image");
+      if (value === "none") requireVolumes();
     }
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
   // Node changes which images/pools/projects are valid; type changes valid images.
-  const selectNode = (node: string) =>
-    {
-      setFieldError(null);
-      setForm((prev) => ({
-        ...prev,
-        selectedNode: node,
-        selectedImage: "",
-        imageServer: "",
-        imageLabel: "",
-        selectedIso: "",
-        selectedIsoPool: "",
-        selectedIsoLabel: "",
-        selectedPool: "",
-        selectedProject: "default",
-      }));
-    };
+  const selectNode = (node: string) => {
+    invalidatePreparedSubmission();
+    resetForCluster();
+    seedCheckedRef.current = true;
+    setSeedValidationPending(false);
+    setFieldError(null);
+    setImageDialogOpen(false);
+    setGpuPickerOpen(false);
+    setPendingNicAdd(false);
+    setForm((prev) => ({
+      ...prev,
+      selectedNode: node,
+      selectedImage: "",
+      imageServer: "",
+      imageLabel: "",
+      selectedIso: "",
+      selectedIsoPool: "",
+      selectedIsoLabel: "",
+      selectedPool: "",
+      selectedProject: "default",
+    }));
+  };
   // Switching node invalidates volume/pool selections in attached disks.
   const selectNodeWithDisks = (node: string) => {
     selectNode(node);
@@ -1116,6 +800,9 @@ function InstanceCreateFormContent() {
   };
   // Host-path disks are container-only, so clear disks when the type changes.
   const selectType = (type: InstanceType) => {
+    invalidatePreparedSubmission();
+    seedCheckedRef.current = true;
+    setSeedValidationPending(false);
     setFieldError(null);
     setForm((prev) => ({
       ...prev,
@@ -1137,14 +824,63 @@ function InstanceCreateFormContent() {
   // kept provisionally: two projects that share the host's store hold the same rows, so the
   // pick is only cleared once the new project's store has loaded without it (the effect
   // below). Whatever was cleared is said under the picker rather than silently dropped.
-  const projectSwitchRef = useRef<{ project: string; clearedIso: boolean; clearedNics: number } | null>(null);
+  const projectSwitchRef = useRef<{
+    host: string;
+    project: string;
+    epoch: number;
+    clearedIso: boolean;
+    clearedNics: number;
+  } | null>(null);
+
+  // The actor scope is part of every read key, but form/device/advanced state is local. Reset all
+  // of it as one generation before the new actor can submit. Every object default is cloned so a
+  // later edit cannot mutate the template shared by the next actor.
+  useEffect(() => {
+    if (actorScopeRef.current === scopeKey) return;
+    actorScopeRef.current = scopeKey;
+    formRevisionRef.current += 1;
+    seedRef.current = null;
+    seedCheckedRef.current = true;
+    setSeedValidationPending(false);
+    setSeedDropped(null);
+    setForm({ ...DEFAULT_FORM, tags: [] });
+    setDisks([]);
+    setNics([]);
+    setGpus([]);
+    setPendingNicAdd(false);
+    resetForCluster();
+    resetImageCatalogue();
+    setGpuPickerOpen(false);
+    setAdvOpen(false);
+    setAdv({ ...ADV_DEFAULT });
+    projectSwitchRef.current = null;
+    setPendingSubmission(null);
+    ambiguousSubmissionRef.current = null;
+    idempotencyRef.current = null;
+    submitInFlightRef.current = false;
+    setHasAmbiguousSubmission(false);
+    setFieldError(null);
+    setError(null);
+    setChangeNotice(null);
+    setTagInput("");
+    setTagError(null);
+  }, [resetForCluster, resetImageCatalogue, scopeKey]);
+
   const selectProject = (project: string) => {
+    invalidatePreparedSubmission();
+    seedCheckedRef.current = true;
+    setSeedValidationPending(false);
+    const epoch = nextSelectionEpoch();
     const clearedNics = nics.length;
     const keepIso = !!form.selectedIso && isoVisibleIn(project, form.selectedIsoPool, form.selectedIso);
     const clearedIso = !!form.selectedIso && !keepIso;
     projectSwitchRef.current =
-      form.selectedImage && form.imageServer === "" ? { project, clearedIso, clearedNics } : null;
+      form.selectedImage && form.imageServer === ""
+        ? { host: form.selectedNode, project, epoch, clearedIso, clearedNics }
+        : null;
     setNics([]);
+    setPendingNicAdd(false);
+    resetNetworks();
     setFieldError(null);
     setChangeNotice(projectChangeNotice({ project, clearedLocalImage: false, clearedIso, clearedNics }));
     setForm((prev) => ({
@@ -1157,12 +893,18 @@ function InstanceCreateFormContent() {
   };
   useEffect(() => {
     const pending = projectSwitchRef.current;
-    if (!pending || pending.project !== form.selectedProject) return;
-    // A store that could not be read (a project outside the caller's bound answers 403)
-    // cannot hold the pick as far as this form can tell, so it is cleared like a miss.
-    if (loadingImages || (!imagesResp && !imagesFailed)) return;
+    if (
+      !pending ||
+      pending.host !== form.selectedNode ||
+      pending.project !== form.selectedProject ||
+      pending.epoch !== selectionEpochRef.current
+    ) return;
+    // A failed or rate-limited read proves nothing about the selected fingerprint. Keep the
+    // selection until a successful authoritative listing proves that the target project does not
+    // expose it; preflight remains the final authorization boundary.
+    if (loadingImages || !imagesResp) return;
     projectSwitchRef.current = null;
-    if (!form.selectedImage || form.imageServer !== "" || (!imagesFailed && localFingerprints.has(form.selectedImage))) return;
+    if (!form.selectedImage || form.imageServer !== "" || localFingerprints.has(form.selectedImage)) return;
     setForm((prev) => ({ ...prev, selectedImage: "", imageServer: "", imageLabel: "" }));
     setChangeNotice(
       projectChangeNotice({
@@ -1172,10 +914,11 @@ function InstanceCreateFormContent() {
         clearedNics: pending.clearedNics,
       }),
     );
-  }, [form.selectedProject, form.selectedImage, form.imageServer, loadingImages, imagesResp, imagesFailed, localFingerprints]);
+  }, [form.selectedNode, form.selectedProject, form.selectedImage, form.imageServer, loadingImages, imagesResp, imagesFailed, localFingerprints]);
 
   // --- Submit -----------------------------------------------------------------
   const createAccepted = async (submission: PendingCreateSubmission) => {
+    if (!submissionStillCurrent(submission.fence, false)) return false;
     const submittedName = submission.payload.name;
     const submittedHost = submission.payload.host;
     const submittedProject = submission.payload.project || "default";
@@ -1186,12 +929,16 @@ function InstanceCreateFormContent() {
       data: submission.payload,
       idempotencyKey: submission.idempotencyKey,
     });
+    // The actor or target may have changed while the accepted request was in flight. The server
+    // still owns that operation, but its completion must not populate, toast, or navigate the new
+    // actor's form. Fleet reconciliation will surface it in the actor that can still access it.
+    if (!submissionStillCurrent(submission.fence, false)) return false;
     if ((result.status === "accepted" || result.status === "unknown") && !result.job_id) {
       throw new Error("The server accepted the create without a readable job identity.");
     }
-    // The durable handoff comes first. Auxiliary tag sync must never strand an accepted job
-    // on the create form, and it must use the same immutable target snapshot as the POST.
-    addPendingCreate(scopeKey, {
+    // The durable job owns tag materialization together with instance completion. The browser
+    // performs no second write after this accepted response.
+    addPendingCreate(submission.fence.actorScope, {
       name: submittedName,
       host: submittedHost,
       project: submittedProject,
@@ -1218,27 +965,18 @@ function InstanceCreateFormContent() {
       title: result.status === "unknown" ? "Create outcome pending verification" : "Creating instance",
       description:
         result.message ||
-        `Creating ${submittedType === "virtual-machine" ? "VM" : "container"} "${submittedName}" on "${submittedHost}".`,
+        `Creating ${submittedType === "virtual-machine" ? "VM" : "container"} "${submittedName}" on cluster "${submittedHost}".`,
     });
     navigate("/inventory/instances");
-    if (submission.tags.length > 0) {
-      void api.tags.updateInstanceTags(
-        submittedHost,
-        submittedName,
-        [...submission.tags],
-        submittedProject,
-      ).catch((tagErr: unknown) => {
-        toast({
-          title: "Instance creating, but tags were not applied",
-          description: tagErr instanceof Error ? tagErr.message : "Failed to set tags",
-          variant: "destructive",
-        });
-      });
-    }
+    return true;
   };
 
   const confirmPreflight = async () => {
     if (!pendingSubmission || submissionDisabledReasonRef.current || submitInFlightRef.current) return;
+    if (!submissionStillCurrent(pendingSubmission.fence, true)) {
+      setPendingSubmission(null);
+      return;
+    }
     submitInFlightRef.current = true;
     setError(null);
     const submission: PendingCreateSubmission = {
@@ -1251,6 +989,7 @@ function InstanceCreateFormContent() {
     try {
       await createAccepted({ ...submission });
     } catch (err) {
+      if (!submissionStillCurrent(submission.fence, false)) return;
       if (isAmbiguousCreateError(err)) {
         ambiguousSubmissionRef.current = submission;
         setHasAmbiguousSubmission(true);
@@ -1263,22 +1002,26 @@ function InstanceCreateFormContent() {
         const mapped = mapCreateError(err);
         setError(mapped.message);
         setFieldError(mapped.field ? mapped : null);
-        focusCreateError(mapped);
+        focusCreateError(mapped, submission.fence, false);
       }
       setPendingSubmission(null);
     } finally {
-      submitInFlightRef.current = false;
+      if (submissionStillCurrent(submission.fence, false)) {
+        submitInFlightRef.current = false;
+      }
     }
   };
 
   const retryAmbiguousCreate = async () => {
     const submission = ambiguousSubmissionRef.current;
     if (!submission || submissionDisabledReasonRef.current || submitInFlightRef.current) return;
+    if (!submissionStillCurrent(submission.fence, false)) return;
     submitInFlightRef.current = true;
     setError(null);
     try {
       await createAccepted({ ...submission });
     } catch (err) {
+      if (!submissionStillCurrent(submission.fence, false)) return;
       if (isAmbiguousCreateError(err)) {
         setError("The server response was interrupted again. Retry still uses the original operation key.");
       } else {
@@ -1288,17 +1031,19 @@ function InstanceCreateFormContent() {
         const mapped = mapCreateError(err);
         setError(mapped.message);
         setFieldError(mapped.field ? mapped : null);
-        focusCreateError(mapped);
+        focusCreateError(mapped, submission.fence, false);
       }
     } finally {
-      submitInFlightRef.current = false;
+      if (submissionStillCurrent(submission.fence, false)) {
+        submitInFlightRef.current = false;
+      }
     }
   };
 
   const submit = async (startAfterCreate: boolean) => {
     // Claim the slot before anything can await. A second click that arrives before the
     // first render carrying isSubmitting=true lands here and is dropped.
-    if (submissionDisabledReasonRef.current || submitInFlightRef.current) return;
+    if (submissionDisabledReasonRef.current || isSubmitting || submitInFlightRef.current) return;
     submitInFlightRef.current = true;
 
     if (ambiguousSubmissionRef.current) {
@@ -1331,10 +1076,10 @@ function InstanceCreateFormContent() {
     if (!effectivePool) {
       setError(
         loadingPools
-          ? "Still loading storage pools for this node. Try again in a moment."
+          ? "Still loading storage pools for this cluster. Try again in a moment."
           : poolsFailed
-            ? "Could not load storage pools for this node, so the root disk cannot be sized. Retry in a moment."
-            : "No storage pool is available on this node, so the root disk cannot be sized.",
+            ? "Could not load storage pools for this cluster, so the root disk cannot be sized. Retry in a moment."
+            : "No storage pool is available on this cluster, so the root disk cannot be sized.",
       );
       submitInFlightRef.current = false;
       return;
@@ -1477,11 +1222,9 @@ function InstanceCreateFormContent() {
         ...(form.diskPriority.trim()
           ? { "limits.disk.priority": form.diskPriority.trim() }
           : {}),
-        // Set user.tags at creation so tags show immediately (the tag service's
-        // LXD sync can't run while the instance is still provisioning). Both this
-        // and the immutable post-accept tag snapshot come from this normalized
-        // (lowercased/trimmed/deduped) array, so the two write paths cannot drift.
-        ...(form.tags.length ? { "user.tags": form.tags.join(",") } : {}),
+        // The daemon and durable PostgreSQL assignment consume this same canonical value.
+        // The backend validates and normalizes it again before preflight and hashing.
+        ...(form.tags.length ? { "user.tags": [...form.tags].sort().join(",") } : {}),
         ...advConfig,
       },
       ...(Object.keys(devices).length ? { devices } : {}),
@@ -1489,9 +1232,13 @@ function InstanceCreateFormContent() {
     };
 
     const fingerprint = JSON.stringify(payload);
+    const fence = captureSubmissionFence();
     let attemptedSubmission: PendingCreateSubmission | null = null;
     try {
       const preview = await preflightCreate.mutateAsync(payload);
+      // Preflight is a plan for this exact form revision. Any actor, target, or payload edit while
+      // it was running invalidates the response before it can open a confirmation dialog or POST.
+      if (!submissionStillCurrent(fence, true)) return;
       if (submissionDisabledReasonRef.current) {
         setError(submissionDisabledReasonRef.current);
         return;
@@ -1500,7 +1247,7 @@ function InstanceCreateFormContent() {
         const mapped = mapCreatePreflightBlockers(preview.blockers);
         setError(mapped.message);
         setFieldError(mapped.field ? mapped : null);
-        focusCreateError(mapped);
+        focusCreateError(mapped, fence, true);
         return;
       }
       if (!preview.ready && preview.required_acknowledgements.length === 0) {
@@ -1520,10 +1267,10 @@ function InstanceCreateFormContent() {
           plan_revision: preview.plan_revision,
           acknowledgements: [],
         },
-        tags: [...form.tags],
         fingerprint,
         idempotencyKey: idempotencyRef.current.key,
         preflight: preview,
+        fence,
       };
       if (preview.warnings.length > 0 || preview.required_acknowledgements.length > 0) {
         setPendingSubmission(submission);
@@ -1532,6 +1279,7 @@ function InstanceCreateFormContent() {
       attemptedSubmission = submission;
       await createAccepted(submission);
     } catch (err) {
+      if (!submissionStillCurrent(fence, attemptedSubmission === null)) return;
       if (attemptedSubmission && isAmbiguousCreateError(err)) {
         ambiguousSubmissionRef.current = attemptedSubmission;
         setHasAmbiguousSubmission(true);
@@ -1544,12 +1292,14 @@ function InstanceCreateFormContent() {
         const mapped = mapCreateError(err);
         setError(mapped.message);
         setFieldError(mapped.field ? mapped : null);
-        focusCreateError(mapped);
+        focusCreateError(mapped, fence, attemptedSubmission === null);
       }
     } finally {
       // Released on the failure path so the operator can correct and retry. On success the
       // form has already navigated away, so this only tidies up the unmounting component.
-      submitInFlightRef.current = false;
+      if (submissionStillCurrent(fence, false)) {
+        submitInFlightRef.current = false;
+      }
     }
   };
 
@@ -1757,7 +1507,11 @@ function InstanceCreateFormContent() {
                 <Input
                   id="tags"
                   value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
+                  onChange={(e) => {
+                    invalidatePreparedSubmission();
+                    setTagInput(e.target.value);
+                    if (tagError) setTagError(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === ",") {
                       e.preventDefault();
@@ -1768,20 +1522,27 @@ function InstanceCreateFormContent() {
                     if (tagInput.trim()) addTag(tagInput);
                   }}
                   placeholder="Type a tag and press Enter"
+                  aria-invalid={tagError ? true : undefined}
+                  aria-describedby={tagError ? "create-tag-error" : undefined}
                 />
+                {tagError && (
+                  <p id="create-tag-error" className="text-xs text-destructive">
+                    {tagError}
+                  </p>
+                )}
               </div>
 
               {/* Node + project */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="create-node">Node *</Label>
+                  <Label htmlFor="create-node">Cluster *</Label>
                   <SearchableSelect
                     id="create-node"
                     value={form.selectedNode}
                     onValueChange={selectNodeWithDisks}
                     options={nodeOptions}
                     placeholder={nodeState.placeholder}
-                    searchPlaceholder="Search nodes..."
+                    searchPlaceholder="Search clusters..."
                     emptyText={nodeState.emptyText}
                     disabled={nodeState.disabled}
                     ariaDescribedBy={nodeState.notice ? "create-node-notice" : undefined}
@@ -1882,47 +1643,52 @@ function InstanceCreateFormContent() {
                     <Disc className="h-4 w-4" />
                     Boot ISO *
                   </Label>
-                  {isoOptions.length > 0 || loadingVolumes || !form.selectedNode ? (
-                    <>
-                      <SearchableSelect
-                        value={
-                          form.selectedIso
-                            ? `${form.selectedIsoPool}/${form.selectedIso}`
-                            : ""
-                        }
-                        onValueChange={(v) => {
-                          const sep = v.indexOf("/");
-                          const pool = v.slice(0, sep);
-                          const name = v.slice(sep + 1);
-                          setForm((prev) => ({
-                            ...prev,
-                            selectedIso: name,
-                            selectedIsoPool: pool,
-                            selectedIsoLabel: `${name} (${pool})`,
-                          }));
-                        }}
-                        options={isoOptions}
-                        placeholder={
-                          !form.selectedNode
-                            ? "Select a node first"
-                            : loadingVolumes
-                              ? "Loading ISOs…"
-                              : "Select an ISO"
-                        }
-                        searchPlaceholder="Search ISOs..."
-                        emptyText="No ISOs found."
-                        disabled={!form.selectedNode || loadingVolumes}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        The VM boots this ISO on an empty {form.storageValue.trim()}
-                        {form.storageUnit} disk. Install the OS to the disk from the
-                        console, then eject the ISO and reboot.
-                      </p>
-                    </>
-                  ) : (
+                  <SearchableSelect
+                    value={
+                      form.selectedIso
+                        ? `${form.selectedIsoPool}/${form.selectedIso}`
+                        : ""
+                    }
+                    onValueChange={(v) => {
+                      invalidatePreparedSubmission();
+                      seedCheckedRef.current = true;
+                      setSeedValidationPending(false);
+                      const sep = v.indexOf("/");
+                      const pool = v.slice(0, sep);
+                      const name = v.slice(sep + 1);
+                      setForm((prev) => ({
+                        ...prev,
+                        selectedIso: name,
+                        selectedIsoPool: pool,
+                        selectedIsoLabel: `${name} (${pool})`,
+                      }));
+                    }}
+                    options={isoOptions}
+                    placeholder={
+                      form.selectedIso && !volumesSucceeded
+                        ? form.selectedIsoLabel
+                        : isoState.placeholder
+                    }
+                    searchPlaceholder="Search ISOs..."
+                    emptyText={isoState.emptyText}
+                    disabled={isoState.disabled}
+                    ariaDescribedBy={isoState.notice ? "create-iso-notice" : undefined}
+                    ariaInvalid={isoState.notice?.kind === "error"}
+                  />
+                  <PickerNotice
+                    id="create-iso-notice"
+                    notice={isoState.notice}
+                    onRetry={() => refetchVolumes()}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The VM boots this ISO on an empty {form.storageValue.trim()}
+                    {form.storageUnit} disk. Install the OS to the disk from the
+                    console, then eject the ISO and reboot.
+                  </p>
+                  {volumesSucceeded && isoOptions.length === 0 && (
                     <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
                       <p className="font-medium text-foreground mb-1">
-                        No ISOs available on this node.
+                        No ISOs available on this cluster.
                       </p>
                       <p>
                         Upload one under Inventory → Storage → ISO Images, then it
@@ -1943,13 +1709,22 @@ function InstanceCreateFormContent() {
                     variant="outline"
                     className="justify-start font-normal"
                     onClick={openImageDialog}
-                    disabled={!form.selectedNode || imagesLoading}
-                    aria-invalid={fieldError?.field === "image" ? true : undefined}
-                    aria-describedby={fieldError?.field === "image" ? "create-image-error" : undefined}
+                    disabled={!form.selectedNode}
+                    aria-invalid={
+                      fieldError?.field === "image" || localImageState.notice?.kind === "error"
+                        ? true
+                        : undefined
+                    }
+                    aria-describedby={[
+                      fieldError?.field === "image" ? "create-image-error" : "",
+                      form.selectedImage && form.imageServer === "" && localImageState.notice
+                        ? "create-local-image-notice"
+                        : "",
+                    ].filter(Boolean).join(" ") || undefined}
                   >
                     {form.imageLabel ||
                       (!form.selectedNode
-                        ? "Select a node first"
+                        ? "Select a cluster first"
                         : imagesLoading
                           ? "Loading images…"
                           : "Select base image")}
@@ -1958,6 +1733,13 @@ function InstanceCreateFormContent() {
                     Browse Local, Custom (images.lxd.canonical.com) and Ubuntu
                     images. Remote images are pulled on creation.
                   </p>
+                  {form.selectedImage && form.imageServer === "" && (
+                    <PickerNotice
+                      id="create-local-image-notice"
+                      notice={localImageState.notice}
+                      onRetry={() => refetchImages()}
+                    />
+                  )}
                   {fieldError?.field === "image" && (
                     <p id="create-image-error" className="text-xs text-destructive">
                       {fieldRefusalText(fieldError)}
@@ -1990,7 +1772,7 @@ function InstanceCreateFormContent() {
                   className="flex items-center gap-2 text-sm font-normal text-muted-foreground"
                 >
                   <Cpu className="h-4 w-4" />
-                  CPU Cores
+                  vCPUs
                 </Label>
                 <Input
                   id="create-cpu"
@@ -2368,12 +2150,40 @@ function InstanceCreateFormContent() {
                     variant="outline"
                     size="sm"
                     onClick={addNic}
-                    disabled={!form.selectedNode}
+                    disabled={!form.selectedNode || pendingNicAdd}
                   >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Attach network
+                    {pendingNicAdd ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4 mr-1" />
+                    )}
+                    {pendingNicAdd ? "Preparing interface" : "Attach network"}
                   </Button>
                 </div>
+
+                {pendingNicAdd && (
+                  <>
+                    <PickerNotice
+                      id="create-default-profile-notice"
+                      notice={defaultProfileNotice}
+                      onRetry={() => refetchDefaultProfile()}
+                    />
+                    <PickerNotice
+                      id="create-networks-notice"
+                      notice={networkState.notice}
+                      onRetry={() => refetchNetworks()}
+                    />
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto w-fit p-0 text-xs"
+                      onClick={() => setPendingNicAdd(false)}
+                    >
+                      Cancel attach
+                    </Button>
+                  </>
+                )}
 
                 {/* Inherited NICs from the default profile (read-only) */}
                 {inheritedNics.map((inh) => {
@@ -2410,15 +2220,15 @@ function InstanceCreateFormContent() {
                   );
                 })}
 
-                {nics.length === 0 && inheritedNics.length === 0 && (
+                {!pendingNicAdd && nics.length === 0 && inheritedNics.length === 0 && (
                   <p className="text-xs text-muted-foreground">
                     {form.selectedNode
                       ? "No network interfaces. Attach one to connect the instance."
-                      : "Select a node to see inherited network interfaces."}
+                      : "Select a cluster to see inherited network interfaces."}
                   </p>
                 )}
 
-                {nics.length > 0 && (
+                {!pendingNicAdd && nics.length > 0 && (
                   <PickerNotice
                     id="create-networks-notice"
                     notice={networkState.notice}
@@ -2840,6 +2650,25 @@ function InstanceCreateFormContent() {
                 onChange={(e) => setImgSearch(e.target.value)}
                 placeholder="Search an image"
               />
+              {(loadingImages || loadingRemote || imagesFailed || remoteImagesFailed) && (
+                <div
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+                  role={imagesFailed || remoteImagesFailed ? "alert" : "status"}
+                >
+                  {loadingImages && <span>Loading local images…</span>}
+                  {loadingRemote && <span>Loading remote catalogues…</span>}
+                  {imagesFailed && (
+                    <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void refetchImages()}>
+                      Local images unavailable. Retry
+                    </Button>
+                  )}
+                  {remoteImagesFailed && (
+                    <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void refetchRemoteImages()}>
+                      Remote catalogues unavailable. Retry
+                    </Button>
+                  )}
+                </div>
+              )}
               <Table
                 className="min-w-[760px]"
                 containerClassName="flex-1 min-h-0 rounded-lg border"
@@ -2865,6 +2694,13 @@ function InstanceCreateFormContent() {
                       icon={Loader2}
                       iconClassName="animate-spin"
                       title="Loading images"
+                    />
+                  ) : imageRows.length === 0 && imagesFailed && remoteImagesFailed ? (
+                    <TableEmptyRow
+                      colSpan={7}
+                      icon={ImageIcon}
+                      title="Image sources are unavailable"
+                      description="Retry either source above. A failure in one source does not block the other."
                     />
                   ) : filteredImageRows.length === 0 ? (
                     <TableEmptyRow

@@ -16,6 +16,7 @@ import { TableEmptyValue } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { NodeLink } from "@/components/ui/node-link";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 
 const BREAK_GLASS_STATUS: Record<BreakGlassGrantStatus, { label: string; tone: BadgeTone }> = {
   active: { label: "Active", tone: "positive" },
@@ -66,9 +67,12 @@ export function BreakGlassPanel() {
           grant.id === id ? { ...grant, status: "revoked" } : grant,
         ),
       );
-      await queryClient.invalidateQueries({
-        queryKey: ["break-glass-grants"],
+      await reconcileMutationImpact(queryClient, "break-glass.write", {
+        queryKeys: [grantsQueryKey],
         refetchType: "none",
+      }).catch(() => {
+        // The revoke already succeeded and the exact row above is authoritative. A failed
+        // background refetch must not tell the operator that the grant is still active.
       });
       toast({
         title: "Grant revoked",

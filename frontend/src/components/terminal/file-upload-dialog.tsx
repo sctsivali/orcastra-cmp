@@ -7,6 +7,7 @@
 
 import * as React from "react";
 import { useState, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Upload,
   File as FileIcon,
@@ -27,9 +28,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-import { API_URL, getAccessToken } from "@/lib/api";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { isAuthActorSynchronized } from "@/lib/api";
+import { fileTransferAPI } from "@/lib/file-transfer-api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { OverflowText } from "@/components/ui/overflow-text";
 
 interface FileUploadDialogProps {
@@ -52,16 +56,7 @@ interface FileUploadEntry {
   error?: string;
 }
 
-// format bytes to human-readable
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-}
-
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_FILE_SIZE = 100 * 1000 * 1000; // 100 MB (decimal file-size limit)
 
 export function FileUploadDialog({
   open,
@@ -71,6 +66,8 @@ export function FileUploadDialog({
   project,
   initialFiles,
 }: FileUploadDialogProps) {
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   const [entries, setEntries] = useState<FileUploadEntry[]>([]);
   const [destDir, setDestDir] = useState("/root/");
   const [isUploading, setIsUploading] = useState(false);
@@ -201,6 +198,7 @@ export function FileUploadDialog({
     if (entries.length === 0) return;
 
     setIsUploading(true);
+    const actorScope = scopeKey;
     let successCount = 0;
     let failCount = 0;
 
@@ -217,31 +215,16 @@ export function FileUploadDialog({
       );
 
       try {
-        const formData = new FormData();
-        formData.append("file", entry.file);
-
-        const params = new URLSearchParams({
+        await fileTransferAPI.push(entry.file, {
           host,
-          instance_name: instanceName,
+          instanceName,
           project,
-          dest_path: entry.destPath,
+          destinationPath: entry.destPath,
           mode: "0644",
-          uid: "0",
-          gid: "0",
+          uid: 0,
+          gid: 0,
         });
-
-        const response = await fetch(`${API_URL}/file-transfer/push?${params.toString()}`, {
-          method: "POST",
-          headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({ detail: "Upload failed" }));
-          throw new Error(error.detail || "Upload failed");
-        }
+        if (!isAuthActorSynchronized(actorScope)) return;
 
         setEntries((prev) =>
           prev.map((e, idx) =>
@@ -250,6 +233,7 @@ export function FileUploadDialog({
         );
         successCount++;
       } catch (err) {
+        if (!isAuthActorSynchronized(actorScope)) return;
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         setEntries((prev) =>
           prev.map((e, idx) =>
@@ -258,6 +242,11 @@ export function FileUploadDialog({
         );
         failCount++;
       }
+    }
+
+    if (successCount > 0 && isAuthActorSynchronized(actorScope)) {
+      await reconcileMutationImpact(queryClient, "file-transfer.push");
+      if (!isAuthActorSynchronized(actorScope)) return;
     }
 
     setIsUploading(false);
@@ -276,7 +265,7 @@ export function FileUploadDialog({
         variant: "destructive",
       });
     }
-  }, [entries, host, instanceName, project, onOpenChange]);
+  }, [entries, host, instanceName, onOpenChange, project, queryClient, scopeKey]);
 
   const pendingCount = entries.filter((e) => e.status === "idle" || e.status === "error").length;
 

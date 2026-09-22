@@ -74,7 +74,7 @@ const POOLS = defineTable<PoolRow>()({
     },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (p) => p.node,
       facet: (p) => p.node,
       facetSpec: { role: "node", primary: true },
@@ -248,7 +248,7 @@ function StoragePoolsContent() {
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Driver" field="driver" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && (
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="Size (Used / Total)" field="utilisation" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -366,7 +366,7 @@ function poolSubject(pool: StoragePoolInfo, resources: Record<string, any>): Use
     facts: [
       { label: "Driver", value: formatLabel(pool.driver) },
       { label: "Status", value: storagePoolStatusDisplay(pool.status).label },
-      { label: "Node", value: <NodeLink clusterId={pool.node} /> },
+      { label: "Cluster", value: <NodeLink clusterId={pool.node} /> },
     ],
     panels: [
       { id: "capacity", label: "Capacity", kind: "capacity", space: usage.space, inodes: usage.inodes },

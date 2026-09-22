@@ -60,7 +60,7 @@ const IDENTITIES = defineTable<any>()({
       facetSpec: { primary: true, format: formatLabel } },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (i) => i.node,
       search: (i) => i.node,
       facet: (i) => i.node,
@@ -193,7 +193,7 @@ function IdentitiesContent() {
                     <SortableTableHead label="ID" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Groups" field="groups" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>

@@ -33,13 +33,13 @@ export const REGIONS = defineTable<any>()({
       facetSpec: { emptyLabel: "(no provider)" } },
     {
       field: "node_status",
-      label: "Node Status",
-      // A region matches when any of its nodes matches.
+      label: "Cluster Status",
+      // A region matches when any of its registered clusters matches.
       facet: (r) => (r.nodes ?? []).map((n: any) => n.status).filter(Boolean),
-      facetSpec: { primary: true, format: formatLabel, emptyLabel: "(no nodes)" } },
+      facetSpec: { primary: true, format: formatLabel, emptyLabel: "(no clusters)" } },
     {
       field: "node_type",
-      label: "Node Type",
+      label: "Cluster Type",
       facet: (r) => (r.nodes ?? []).map((n: any) => n.node_type).filter(Boolean),
-      facetSpec: { emptyLabel: "(no nodes)" } },
+      facetSpec: { emptyLabel: "(no clusters)" } },
   ] });

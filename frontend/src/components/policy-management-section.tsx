@@ -37,6 +37,7 @@ import {
   ChevronRight, Edit, Building2, ShieldCheck,
 } from "lucide-react";
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { queryKeys, useClusters } from "@/hooks/use-lxd";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useToast } from "@/hooks/use-toast";
@@ -683,7 +684,7 @@ function PolicyManagementSectionContent() {
   const createMutation = useMutation({
     mutationFn: (data: PolicyCreateRequest) => api.tenantAccess.createPolicy(data),
     onSuccess: (policy) => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-policies"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setCreateOpen(false);
       toast({ title: "Policy Created", description: `"${policy.name}" is ready to assign.` });
     },
@@ -696,8 +697,7 @@ function PolicyManagementSectionContent() {
     mutationFn: ({ id, data }: { id: number; data: PolicyUpdateRequest }) =>
       api.tenantAccess.updatePolicy(id, data),
     onSuccess: (policy) => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-policies"] });
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-assignments"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setEditPolicy(null);
       toast({ title: "Policy Updated", description: `"${policy.name}" updated.` });
     },
@@ -709,8 +709,7 @@ function PolicyManagementSectionContent() {
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.tenantAccess.deletePolicy(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-policies"] });
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-assignments"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setDeleteId(null);
       toast({ title: "Policy Deleted" });
     },

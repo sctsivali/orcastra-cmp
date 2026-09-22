@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -18,8 +19,17 @@ import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import { useImagesByHost, useRemoteImages } from "@/hooks/use-lxd";
-import { api, type RebuildPreflight, type RebuildRequest, type RebuildStatus } from "@/lib/api";
-import type { ImageInfo, RemoteImageInfo } from "@/types/api";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import {
+  api,
+  isAuthActorSynchronized,
+  type RebuildPreflight,
+  type RebuildRequest,
+  type RebuildStatus,
+} from "@/lib/api";
+import { reconcileInstanceFleet } from "@/lib/instance-reconciliation";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import { APIError, type ImageInfo, type RemoteImageInfo } from "@/types/api";
 import { formatBytes } from "@/lib/utils";
 import {
   Loader2,
@@ -39,9 +49,34 @@ interface RebuildDialogProps {
 }
 
 type Mode = "image" | "empty" | "cloud-init";
-type Phase = "loading" | "error" | "form" | "running" | "done" | "failed";
+type Phase = "loading" | "error" | "form" | "running" | "done" | "failed" | "unknown";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const REBUILD_POLL_MS = 2_000;
+const REBUILD_MAX_POLL_MS = 30 * 60_000;
+const REBUILD_MAX_TRANSIENT_FAILURES = 4;
+
+class RebuildTerminalFailure extends Error {}
+class RebuildOutcomeUnknown extends Error {}
+
+function waitForRebuildPoll(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(finish, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new DOMException("Cancelled", "AbortError"));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+    };
+    function finish() {
+      cleanup();
+      resolve();
+    }
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 // Coarse progress for the running phase, keyed by the job's server-side status.
 const PROGRESS: Record<RebuildStatus, number> = {
@@ -65,6 +100,15 @@ const STATUS_LABEL: Record<RebuildStatus, string> = {
 
 export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildDialogProps) {
   const { toast } = useToast();
+  const { scopeKey } = useActorQueryScope();
+  const queryClient = useQueryClient();
+  const contextKey = `${scopeKey}\u0000${instance.host}\u0000${instance.project || "default"}\u0000${instance.name}`;
+  const activeContextRef = useRef<{ key: string }>({ key: contextKey });
+  if (activeContextRef.current.key !== contextKey) {
+    activeContextRef.current = { key: contextKey };
+  }
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const runInFlightRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [preflight, setPreflight] = useState<RebuildPreflight | null>(null);
@@ -78,11 +122,12 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
   const [jobStatus, setJobStatus] = useState<RebuildStatus>("pending");
   const [runError, setRunError] = useState<string | null>(null);
+  const [remoteImageIntent, setRemoteImageIntent] = useState(false);
 
   // --- Load the read-only preflight when the dialog opens --------------------
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    const controller = new AbortController();
     setPhase("loading");
     setPreflight(null);
     setLoadError(null);
@@ -93,33 +138,58 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     setConfirmName("");
     setJobStatus("pending");
     setRunError(null);
+    setRemoteImageIntent(false);
 
     api.instances
-      .rebuildPreflight(instance.name, instance.host, instance.project || "default")
+      .rebuildPreflight(
+        instance.name,
+        instance.host,
+        instance.project || "default",
+        { signal: controller.signal },
+      )
       .then((pf) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setPreflight(pf);
         setPhase("form");
       })
       .catch((e: unknown) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setLoadError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [open, instance.name, instance.host, instance.project]);
+  }, [open, scopeKey, instance.name, instance.host, instance.project]);
+
+  useEffect(
+    () => () => {
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+      runInFlightRef.current = false;
+    },
+    [contextKey],
+  );
 
   // --- Image catalog (local + remote), filtered to the instance type ---------
   const wantType = preflight?.type; // "container" | "virtual-machine"
   // The store the instance's project reads, not the host's default store: a rebuild resolves a
   // local fingerprint the same way a create does, inside the target project.
-  const { data: localResp, isLoading: loadingLocal } = useImagesByHost(
+  const {
+    data: localResp,
+    isLoading: loadingLocal,
+    isError: localImagesFailed,
+    refetch: refetchLocalImages,
+  } = useImagesByHost(
     open ? instance.host : "",
     instance.project || "default",
   );
-  const { data: remoteResp, isLoading: loadingRemote } = useRemoteImages();
+  const {
+    data: remoteResp,
+    isLoading: loadingRemote,
+    isError: remoteImagesFailed,
+    refetch: refetchRemoteImages,
+  } = useRemoteImages({ enabled: open && remoteImageIntent });
 
   const imageRows = useMemo(() => {
     const local = ((localResp?.images ?? []) as ImageInfo[]).map((img) => ({
@@ -150,7 +220,6 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     [imageRows],
   );
   const selectedRow = imageRows.find((r) => r.key === selectedImageKey);
-  const imagesLoading = loadingLocal || loadingRemote;
 
   // --- Validation ------------------------------------------------------------
   const snapshots = preflight?.snapshots ?? [];
@@ -164,6 +233,25 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
   // --- Submit + poll ---------------------------------------------------------
   const startRebuild = async () => {
+    if (runInFlightRef.current) return;
+    runInFlightRef.current = true;
+    const requestContext = activeContextRef.current;
+    const requestScope = scopeKey;
+    const isCurrentRequest = () =>
+      activeContextRef.current === requestContext && isAuthActorSynchronized(requestScope);
+    const pollController = new AbortController();
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = pollController;
+    const reconcileAcceptedOutcome = async (): Promise<boolean> => {
+      await Promise.allSettled([
+        reconcileMutationImpact(queryClient, "instance.rebuild"),
+      ]);
+      if (!isCurrentRequest()) return false;
+      await Promise.allSettled([
+        reconcileInstanceFleet(queryClient, requestScope, { fresh: true }),
+      ]);
+      return isCurrentRequest();
+    };
     const body: RebuildRequest = {
       host: instance.host,
       project: instance.project || "default",
@@ -183,17 +271,68 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
     setPhase("running");
     setJobStatus("pending");
     setRunError(null);
+    let accepted = false;
     try {
       const job = await api.instances.rebuild(instance.name, body);
+      accepted = true;
+      if (!isCurrentRequest()) return;
+      const startedAt = Date.now();
       let status = job.status;
+      let terminalError = job.error;
+      let transientFailures = 0;
       setJobStatus(status);
       while (status !== "ready" && status !== "failed") {
-        await sleep(2000);
-        const j = await api.instances.getRebuildJob(instance.name, job.job_id);
+        if (Date.now() - startedAt >= REBUILD_MAX_POLL_MS) {
+          throw new RebuildOutcomeUnknown(
+            "Orcastra could not confirm the rebuild within 30 minutes. Check Operations and refresh the instance before trying again.",
+          );
+        }
+        await waitForRebuildPoll(REBUILD_POLL_MS, pollController.signal);
+        let j;
+        try {
+          j = await api.instances.getRebuildJob(instance.name, job.job_id, {
+            fresh: true,
+            signal: pollController.signal,
+          });
+        } catch (error) {
+          if (!isCurrentRequest() || pollController.signal.aborted) throw error;
+          if (error instanceof APIError && error.status === 429) {
+            const remainingMs = Math.max(
+              0,
+              REBUILD_MAX_POLL_MS - (Date.now() - startedAt),
+            );
+            await waitForRebuildPoll(
+              Math.min(
+                remainingMs,
+                Math.max(REBUILD_POLL_MS, (error.retryAfter ?? 30) * 1_000),
+              ),
+              pollController.signal,
+            );
+            continue;
+          }
+          if (error instanceof APIError && [401, 403, 404].includes(error.status)) {
+            throw new RebuildOutcomeUnknown(
+              "Orcastra can no longer read this rebuild job. Check Operations and refresh the instance before trying again.",
+            );
+          }
+          transientFailures += 1;
+          if (transientFailures >= REBUILD_MAX_TRANSIENT_FAILURES) {
+            throw new RebuildOutcomeUnknown(
+              "Orcastra could not confirm the rebuild after repeated status-read failures. Check Operations and refresh the instance before trying again.",
+            );
+          }
+          continue;
+        }
+        if (!isCurrentRequest()) return;
+        transientFailures = 0;
         status = j.status;
+        terminalError = j.error;
         setJobStatus(status);
-        if (status === "failed") throw new Error(j.error || "Rebuild failed");
       }
+      if (status === "failed") {
+        throw new RebuildTerminalFailure(terminalError || "Rebuild failed");
+      }
+      if (!(await reconcileAcceptedOutcome())) return;
       setPhase("done");
       toast({
         title: "Rebuild complete",
@@ -204,8 +343,26 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
       });
       onDone?.();
     } catch (e: unknown) {
-      setPhase("failed");
-      setRunError(e instanceof Error ? e.message : String(e));
+      if (!isCurrentRequest() || pollController.signal.aborted) return;
+      if (accepted) {
+        // A failed or unreadable terminal job can still have changed the root disk or power
+        // state. Reconcile actual state, and never replay the destructive rebuild automatically.
+        if (!(await reconcileAcceptedOutcome())) return;
+      }
+      const outcomeUnknown = accepted && !(e instanceof RebuildTerminalFailure);
+      setPhase(outcomeUnknown ? "unknown" : "failed");
+      setRunError(
+        outcomeUnknown
+          ? e instanceof RebuildOutcomeUnknown
+            ? e.message
+            : "Orcastra could not confirm the final rebuild state. Check Operations and refresh the instance before trying again."
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      if (pollAbortRef.current === pollController) pollAbortRef.current = null;
+      if (activeContextRef.current === requestContext) runInFlightRef.current = false;
     }
   };
 
@@ -308,11 +465,48 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
                   options={imageOptions}
                   value={selectedImageKey}
                   onValueChange={setSelectedImageKey}
-                  placeholder={imagesLoading ? "Loading images…" : "Select an image"}
+                  onOpenChange={(pickerOpen) => {
+                    if (pickerOpen) setRemoteImageIntent(true);
+                  }}
+                  freezeOptionsWhileOpen={false}
+                  placeholder={loadingLocal ? "Loading local images…" : "Select an image"}
                   searchPlaceholder="Search images…"
-                  emptyText={imagesLoading ? "Loading…" : "No matching images"}
-                  disabled={imagesLoading}
+                  emptyText={
+                    loadingLocal || loadingRemote
+                      ? "Loading image sources…"
+                      : "No matching images"
+                  }
                 />
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-live="polite">
+                  <span>
+                    Local: {loadingLocal ? "loading" : localImagesFailed ? "unavailable" : `${localResp?.images.length ?? 0} available`}
+                    {localImagesFailed ? (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto px-1 py-0 text-xs"
+                        onClick={() => void refetchLocalImages()}
+                      >
+                        Retry
+                      </Button>
+                    ) : null}
+                  </span>
+                  <span>
+                    Remote: {!remoteImageIntent ? "loads when opened" : loadingRemote ? "loading" : remoteImagesFailed ? "unavailable" : `${remoteResp?.images.length ?? 0} available`}
+                    {remoteImagesFailed ? (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto px-1 py-0 text-xs"
+                        onClick={() => void refetchRemoteImages()}
+                      >
+                        Retry
+                      </Button>
+                    ) : null}
+                  </span>
+                </div>
               </div>
             )}
 
@@ -402,8 +596,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </div>
         )}
 
-        {/* Running / done / failed */}
-        {(phase === "running" || phase === "done" || phase === "failed") && (
+        {/* Running / done / failed / unknown */}
+        {(phase === "running" || phase === "done" || phase === "failed" || phase === "unknown") && (
           <div className="space-y-3">
             {phase === "done" ? (
               <div className="flex items-center gap-2 text-sm font-medium text-emerald-600">
@@ -413,6 +607,10 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               <div className="flex items-center gap-2 text-sm font-medium text-destructive">
                 <XCircle className="h-5 w-5" /> Rebuild failed
               </div>
+            ) : phase === "unknown" ? (
+              <div className="flex items-center gap-2 text-sm font-medium text-amber-600">
+                <AlertTriangle className="h-5 w-5" /> Rebuild status unknown
+              </div>
             ) : (
               <div className="flex items-center gap-2 text-sm">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -420,8 +618,11 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             )}
             <Progress value={phase === "done" ? 100 : PROGRESS[jobStatus]} />
-            {phase === "failed" && runError && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+            {(phase === "failed" || phase === "unknown") && runError && (
+              <div className={phase === "failed"
+                ? "rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive"
+                : "rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300"}
+              >
                 {runError}
               </div>
             )}

@@ -81,19 +81,30 @@ const checks = [
     /queryKeys\.instanceMetrics\(scopeKey, host, instanceName, project\)/.test(bodies.hooks) &&
       /queryKeys\.instanceDetail\(scopeKey, host, effectiveProject, name\)/.test(bodies.hooks) &&
       /queryKeys\.vmsFor\(scopeKey, host, status\)/.test(bodies.hooks) &&
-      /queryKeys\.vmsFor\(actorScope, undefined, undefined\)/.test(bodies.monitoring) &&
+      /actorScope: requestActorScope/.test(bodies.monitoring) &&
+      /project: requestProject/.test(bodies.monitoring) &&
       /user\?\.id \?\? user\?\.email/.test(bodies.queryScope) &&
       /user\?\.groups/.test(bodies.queryScope),
     "live Metrics, Top Consumer hydration, or its VM list is not isolated by actor scope",
   ],
   [
-    !/\["vms", \{ host: undefined, status: undefined \}\]/.test(bodies.monitoring),
-    "Monitoring still reads or writes the unscoped all-VM cache key",
+    !/queryKeys\.vmsFor\(|vmAPI\.list\(|\["vms",/.test(bodies.monitoring) &&
+      /api\.instances\.list\([\s\S]{0,300}fresh: true,[\s\S]{0,80}signal: controller\.signal/.test(
+        bodies.monitoring,
+      ) &&
+      /activeInstanceRequestRef\.current !== request/.test(bodies.monitoring) &&
+      /epoch: \+\+instanceRequestEpochRef\.current/.test(bodies.monitoring) &&
+      /activeInstanceRequestRef\.current\?\.controller\.abort\(\)/.test(bodies.monitoring),
+    "Monitoring must bypass the stale legacy VM cache with a cancellable, authoritative actor/project-fenced read",
   ],
   [
     /queryKeys\.instancesFor\(scopeKey, host, opts\?\.project\)/.test(bodies.hooks) &&
-      /queryKey: \["instances", scopeKey\]/.test(bodies.stream) &&
-      /actor === scopeKey/.test(bodies.stream) &&
+      /createInstanceFreshnessCoordinator\(\{[\s\S]{0,300}actorScope: scopeKey/.test(
+        bodies.stream,
+      ) &&
+      /reconcile: async \(\{ actorScope, fresh \}\)[\s\S]{0,180}reconcileInstanceFleet\(queryClient, actorScope/.test(
+        bodies.stream,
+      ) &&
       /queryKeys\.instancesFor\(actorScope, undefined\)/.test(bodies.sidebar) &&
       /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.tenantAccess) &&
       /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.policyManagement),
@@ -185,7 +196,7 @@ const checks = [
   [
     /subscribePending\(scopeKey, listener\)/.test(bodies.stream) &&
       /getPendingSnapshot\(scopeKey\)/.test(bodies.stream) &&
-      /addPendingCreate\(scopeKey, \{/.test(bodies.createForm) &&
+      /addPendingCreate\(submission\.fence\.actorScope, \{/.test(bodies.createForm) &&
       /resolvePendingCreate\(scopeKey, p\.id\)/.test(bodies.instancesPage) &&
       /removePendingCreate\(scopeKey, p\.id\)/.test(bodies.pendingRows),
     "a pending-create producer or consumer can cross actor scope",

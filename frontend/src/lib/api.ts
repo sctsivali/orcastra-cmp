@@ -181,6 +181,11 @@ export function isAuthActorSynchronized(actorScope: string): boolean {
   return _accessToken !== null && _authActorScope === actorScope;
 }
 
+/** Monotonic identity-boundary token. Same-actor access-token rotation does not advance it. */
+export function getAuthActorGeneration(): number {
+  return _authActorGeneration;
+}
+
 /** True only after TokenSync has installed the session's complete auth context. */
 export function isAuthContextSynchronized(
   token: string | null | undefined,
@@ -277,6 +282,36 @@ function clearAuthFailureState() {
   if (wasAnnounced) _onAuthRecovered?.();
 }
 
+function waitForSessionRefresh(signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let elapsed = 0;
+    let interval: ReturnType<typeof setInterval> | undefined;
+
+    const cleanup = () => {
+      if (interval) clearInterval(interval);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(signal?.reason ?? new DOMException("The request was cancelled", "AbortError"));
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    interval = setInterval(() => {
+      elapsed += 200;
+      if (!_sessionRefreshInFlight || elapsed >= 5000) finish();
+    }, 200);
+  });
+}
+
 // Timeout wrapper for fetch with AbortController
 /** Retry-After as whole seconds: an integer delay or an HTTP-date, undefined when absent or bad. */
 function parseRetryAfter(header: string | null): number | undefined {
@@ -288,13 +323,39 @@ function parseRetryAfter(header: string | null): number | undefined {
   return Math.max(0, Math.ceil((at - Date.now()) / 1000));
 }
 
-async function fetchWithTimeout(
+interface TimedJSONResponse {
+  response: Response;
+  body?: unknown;
+  bodyError?: unknown;
+}
+
+/**
+ * Keep one composed cancellation scope alive until the response body has been consumed.
+ * `fetch()` resolves as soon as headers arrive, while a JSON body can still stall indefinitely.
+ */
+async function fetchJSONWithTimeout(
   url: string,
   options: RequestInit = {},
   timeoutMs: number = 45000
-): Promise<Response> {
+): Promise<TimedJSONResponse> {
   const controller = new AbortController();
+  const callerSignal = options.signal;
+  let abortCause: "caller" | "timeout" | null = null;
+
+  const callerAbort = () => {
+    if (abortCause) return;
+    abortCause = "caller";
+    controller.abort(callerSignal?.reason);
+  };
+
+  if (callerSignal?.aborted) {
+    callerAbort();
+  } else {
+    callerSignal?.addEventListener("abort", callerAbort, { once: true });
+  }
   const timeoutId = setTimeout(() => {
+    if (abortCause) return;
+    abortCause = "timeout";
     controller.abort();
   }, timeoutMs);
 
@@ -303,14 +364,30 @@ async function fetchWithTimeout(
       ...options,
       signal: controller.signal,
     });
-    clearTimeout(timeoutId);
-    return response;
+
+    if (response.status === 204) {
+      return { response };
+    }
+
+    try {
+      return { response, body: await response.json() };
+    } catch (error) {
+      // A malformed error body still carries a useful HTTP status. A caller abort or deadline,
+      // however, must not be mistaken for malformed JSON merely because it happened after headers.
+      if (abortCause) throw error;
+      return { response, bodyError: error };
+    }
   } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (abortCause === "timeout") {
       throw new APIError(`Request timeout after ${timeoutMs / 1000}s - server took too long to respond`, 504, 'Request timeout');
     }
+    if (abortCause === "caller") {
+      throw callerSignal?.reason ?? new DOMException("The request was cancelled", "AbortError");
+    }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    callerSignal?.removeEventListener("abort", callerAbort);
   }
 }
 
@@ -346,6 +423,7 @@ export async function fetchAPI<T>(
 ): Promise<T> {
   const url = `${API_BASE_URL}${API_PREFIX}${endpoint}`;
   const method = (options.method || "GET").toUpperCase();
+  const transportIsCallerScoped = options.signal !== undefined;
   const authGeneration = _authGeneration;
   const requestActorGeneration = _authActorGeneration;
   const inflightKey = `${authGeneration}:${endpoint}`;
@@ -353,7 +431,7 @@ export async function fetchAPI<T>(
   // Deduplicate concurrent GET requests only inside one installed auth context. Without the
   // generation, B can join A's still-pending promise for the same endpoint after an account
   // switch and receive A's response without issuing a request under B's bearer.
-  if (method === "GET" && !_isRetry && !fetchOptions.force) {
+  if (method === "GET" && !_isRetry && !fetchOptions.force && !transportIsCallerScoped) {
     const existing = _inflightGets.get(inflightKey);
     if (existing) {
       return existing as Promise<T>;
@@ -375,7 +453,7 @@ export async function fetchAPI<T>(
   // the same resource and the two never join. That is the point: the click must reach
   // the server. `force` above covers the reads that cannot say so in the URL, where the
   // backend has no response cache to bypass.
-  if (method === "GET") {
+  if (method === "GET" && !transportIsCallerScoped) {
     _inflightGets.set(inflightKey, request);
     request
       .finally(() => {
@@ -411,6 +489,8 @@ export function freshParam(endpoint: string, fresh?: boolean): string {
 export interface ReadOptions {
   /** Bypass the backend response cache. Only ever set by a user action. */
   fresh?: boolean;
+  /** Cancel the transport when the owning query is retired. */
+  signal?: AbortSignal;
 }
 
 export interface InstanceListOptions extends ReadOptions {
@@ -430,7 +510,13 @@ export function fetchRead<T>(
   timeoutMs?: number,
 ): Promise<T> {
   const target = freshParam(endpoint, opts.fresh);
-  return fetchAPI<T>(target, {}, timeoutMs, false, { force: opts.fresh === true });
+  return fetchAPI<T>(
+    target,
+    { signal: opts.signal },
+    timeoutMs,
+    false,
+    { force: opts.fresh === true },
+  );
 }
 
 /** As fetchRead, but with the extended budget the fan-out endpoints need. */
@@ -449,7 +535,13 @@ function fetchHeavyRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T>
  * /identities, /groups, /network-acls and /certificates.
  */
 function fetchUncachedRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
-  return fetchAPI<T>(endpoint, {}, undefined, false, { force: opts.fresh === true });
+  return fetchAPI<T>(
+    endpoint,
+    { signal: opts.signal },
+    undefined,
+    false,
+    { force: opts.fresh === true },
+  );
 }
 
 async function _fetchAPIInternal<T>(
@@ -472,18 +564,18 @@ async function _fetchAPIInternal<T>(
       headers["Authorization"] = `Bearer ${_accessToken}`;
     }
 
-    const response = await fetchWithTimeout(url, {
+    const { response, body, bodyError } = await fetchJSONWithTimeout(url, {
       ...options,
       headers,
     }, timeoutMs);
 
     if (!response.ok) {
       let errorDetail = null;
-      try {
-        const errorData = await response.json();
-        errorDetail = errorData.detail || errorData.error;
-      } catch {
+      if (bodyError) {
         errorDetail = response.statusText;
+      } else {
+        const errorData = body as { detail?: unknown; error?: unknown } | null | undefined;
+        errorDetail = errorData?.detail || errorData?.error;
       }
       
       // handle non-string error details (e.g. FastAPI validation errors return arrays)
@@ -528,17 +620,9 @@ async function _fetchAPIInternal<T>(
           !_isRetry &&
           fetchOptions.retryAfterAuthRefresh !== false
         ) {
-          // Wait for the session refresh to complete (up to 5s)
-          await new Promise<void>((resolve) => {
-            let elapsed = 0;
-            const interval = setInterval(() => {
-              elapsed += 200;
-              if (!_sessionRefreshInFlight || elapsed >= 5000) {
-                clearInterval(interval);
-                resolve();
-              }
-            }, 200);
-          });
+          // Wait for the session refresh to complete (up to 5s), but do not keep a query
+          // alive after its key, actor, or component has been retired.
+          await waitForSessionRefresh(options.signal);
 
           // A same-actor token rotation may retry. A direct A -> B transition may not: the
           // original request, including a mutation body, was authorised and intended by A.
@@ -569,11 +653,17 @@ async function _fetchAPIInternal<T>(
       return undefined as unknown as T;
     }
 
-    return response.json();
+    if (bodyError) throw bodyError;
+    return body as T;
   } catch (error) {
     // Handle network errors or timeout
     if (error instanceof APIError) {
       throw error;
+    }
+    // Browsers disagree on whether an aborted fetch rejects with AbortError or TypeError.
+    // Preserve query cancellation before the generic network-error mapping in either case.
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? new DOMException("The request was cancelled", "AbortError");
     }
     // TypeError from fetch indicates network-level failure (DNS, connection refused,
     // CORS, SSL, etc.). Message varies by browser: "Failed to fetch" (Chrome),
@@ -614,17 +704,23 @@ export const vmAPI = {
   },
 
   create: async (data: VMCreateRequest): Promise<VMCreateResponse> => {
-    return fetchAPI<VMCreateResponse>("/vms", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
+    return fetchAPI<VMCreateResponse>(
+      "/vms",
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
+    );
   },
 
   start: async (
     name: string,
     request: VMActionRequest
   ): Promise<VMActionResponse> => {
-    return fetchAPI<VMActionResponse>(`/vms/${name}/start`, {
+    return fetchAPI<VMActionResponse>(`/vms/${encodeURIComponent(name)}/start`, {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -634,7 +730,7 @@ export const vmAPI = {
     name: string,
     request: VMActionRequest
   ): Promise<VMActionResponse> => {
-    return fetchAPI<VMActionResponse>(`/vms/${name}/stop`, {
+    return fetchAPI<VMActionResponse>(`/vms/${encodeURIComponent(name)}/stop`, {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -644,7 +740,7 @@ export const vmAPI = {
     name: string,
     request: VMActionRequest
   ): Promise<VMActionResponse> => {
-    return fetchAPI<VMActionResponse>(`/vms/${name}/restart`, {
+    return fetchAPI<VMActionResponse>(`/vms/${encodeURIComponent(name)}/restart`, {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -694,9 +790,13 @@ export const imageAPI = {
   // `project` names the store to read: a project that keeps its own images answers with
   // them, a project that shares the host's store answers with the default store and says so
   // in `project`. Omitted, the backend reads the default store.
-  listByHost: async (host: string, project?: string): Promise<ImageListResponse> => {
+  listByHost: async (
+    host: string,
+    project?: string,
+    opts: ReadOptions = {},
+  ): Promise<ImageListResponse> => {
     const query = project ? `?project=${encodeURIComponent(project)}` : "";
-    return fetchAPI<ImageListResponse>(`/images/${host}${query}`);
+    return fetchRead<ImageListResponse>(`/images/${host}${query}`, opts);
   },
 
   // Every store on the node the caller may see, each row naming its store. A separate call
@@ -750,8 +850,8 @@ export const nodeAPI = {
     return fetchHeavyRead<NodesStatusResponse>("/nodes", opts);
   },
 
-  names: async (): Promise<string[]> => {
-    return fetchAPI<string[]>("/nodes/names");
+  names: async (opts: ReadOptions = {}): Promise<string[]> => {
+    return fetchAPI<string[]>("/nodes/names", { signal: opts.signal });
   },
 
   // important: fetchRead, not fetchHeavyRead. Six pickers poll this; putting it on the
@@ -764,9 +864,13 @@ export const nodeAPI = {
     return fetchAPI<NodeResources>(`/nodes/${nodeName}/resources`);
   },
 
-  gpus: async (nodeName: string): Promise<GpuCardListResponse> => {
+  gpus: async (
+    nodeName: string,
+    opts: ReadOptions = {},
+  ): Promise<GpuCardListResponse> => {
     return fetchAPI<GpuCardListResponse>(
       `/nodes/${encodeURIComponent(nodeName)}/gpus`,
+      { signal: opts.signal },
     );
   },
 
@@ -808,13 +912,18 @@ export const projectAPI = {
     return fetchRead<ProjectListResponse[]>("/projects", opts);
   },
 
-  list: async (host: string): Promise<ProjectListResponse> => {
-    return fetchAPI<ProjectListResponse>(`/projects/${encodeURIComponent(host)}`);
+  list: async (host: string, opts: ReadOptions = {}): Promise<ProjectListResponse> => {
+    return fetchRead<ProjectListResponse>(`/projects/${encodeURIComponent(host)}`, opts);
   },
 
-  usage: async (host: string, project: string): Promise<ProjectUsageResponse> => {
+  usage: async (
+    host: string,
+    project: string,
+    opts: ReadOptions = {},
+  ): Promise<ProjectUsageResponse> => {
     return fetchAPI<ProjectUsageResponse>(
-      `/projects/${encodeURIComponent(host)}/${encodeURIComponent(project)}/usage`
+      `/projects/${encodeURIComponent(host)}/${encodeURIComponent(project)}/usage`,
+      { signal: opts.signal },
     );
   },
 
@@ -1128,8 +1237,8 @@ const systemAPI = {
       environment: string;
     }>("/system/version");
   },
-  getResourceUsage: async (): Promise<SystemResourceUsage> => {
-    return fetchAPI<SystemResourceUsage>("/system/resource-usage");
+  getResourceUsage: async (opts: ReadOptions = {}): Promise<SystemResourceUsage> => {
+    return fetchUncachedRead<SystemResourceUsage>("/system/resource-usage", opts);
   },
   clearCache: async (namespace?: string): Promise<{ message?: string; error?: string }> => {
     const params = new URLSearchParams();
@@ -1186,10 +1295,13 @@ export interface RebuildPreflight {
 }
 
 export const instanceAPI = {
-  getWritePolicy: async (host: string): Promise<InstanceWritePolicy> => {
+  getWritePolicy: async (
+    host: string,
+    opts: ReadOptions = {},
+  ): Promise<InstanceWritePolicy> => {
     return fetchUncachedRead<InstanceWritePolicy>(
       withQuery("/instances/write-policy", { host }),
-      { fresh: true },
+      { ...opts, fresh: true },
     );
   },
 
@@ -1215,10 +1327,13 @@ export const instanceAPI = {
     });
   },
 
-  getOperation: async (jobId: string): Promise<InstanceOperationJob> => {
+  getOperation: async (
+    jobId: string,
+    read: ReadOptions = {},
+  ): Promise<InstanceOperationJob> => {
     return fetchUncachedRead<InstanceOperationJob>(
       `/instances/operations/${encodeURIComponent(jobId)}`,
-      { fresh: true },
+      { ...read, fresh: true },
     );
   },
 
@@ -1226,13 +1341,14 @@ export const instanceAPI = {
     name: string,
     host: string,
     project = "default",
+    opts: ReadOptions = {},
   ): Promise<InstanceSpecificationDetail> => {
     return fetchAPI<InstanceSpecificationDetail>(
       withQuery(`/instances/${encodeURIComponent(name)}/specification`, {
         host,
         project,
       }),
-      {},
+      { signal: opts.signal },
       undefined,
       false,
       { force: true },
@@ -1275,10 +1391,16 @@ export const instanceAPI = {
   },
 
   // Read-only pre-check for the Rebuild dialog (snapshots block, volumes survive).
-  rebuildPreflight: async (name: string, host: string, project = "default"): Promise<RebuildPreflight> => {
+  rebuildPreflight: async (
+    name: string,
+    host: string,
+    project = "default",
+    opts: ReadOptions = {},
+  ): Promise<RebuildPreflight> => {
     const p = new URLSearchParams({ host, project });
     return fetchAPI<RebuildPreflight>(
       `/instances/${encodeURIComponent(name)}/rebuild-preflight?${p.toString()}`,
+      { signal: opts.signal },
     );
   },
 
@@ -1289,12 +1411,22 @@ export const instanceAPI = {
       `/instances/${encodeURIComponent(name)}/rebuild`,
       { method: "POST", body: JSON.stringify(body) },
       60000,
+      false,
+      { retryAfterAuthRefresh: false },
     );
   },
 
-  getRebuildJob: async (name: string, jobId: string): Promise<RebuildJobStatus> => {
+  getRebuildJob: async (
+    name: string,
+    jobId: string,
+    opts: ReadOptions = {},
+  ): Promise<RebuildJobStatus> => {
     return fetchAPI<RebuildJobStatus>(
       `/instances/${encodeURIComponent(name)}/rebuild/${encodeURIComponent(jobId)}`,
+      { signal: opts.signal },
+      undefined,
+      false,
+      { force: opts.fresh === true },
     );
   },
 
@@ -1320,10 +1452,18 @@ export const instanceAPI = {
   // important: `project` is optional but should be passed whenever the caller knows it. An
   // instance name is unique per project, not per host, so without it the backend searches every
   // project and returns the first match, which can be a different instance of the same name.
-  get: async (name: string, host: string, project?: string): Promise<VMInfo> => {
+  get: async (
+    name: string,
+    host: string,
+    project?: string,
+    opts: ReadOptions = {},
+  ): Promise<VMInfo> => {
     const params = new URLSearchParams({ host });
     if (project) params.set("project", project);
-    return fetchAPI<VMInfo>(`/instances/${encodeURIComponent(name)}?${params.toString()}`);
+    return fetchAPI<VMInfo>(
+      `/instances/${encodeURIComponent(name)}?${params.toString()}`,
+      { signal: opts.signal },
+    );
   },
 
   getMetrics: async (
@@ -1361,8 +1501,16 @@ export const profileAPI = {
     return fetchRead(withQuery("/profiles", { host, project }), opts);
   },
 
-  get: async (name: string, host: string, project?: string) => {
-    return fetchAPI<ProfileDetail>(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }));
+  get: async (
+    name: string,
+    host: string,
+    project?: string,
+    opts: ReadOptions = {},
+  ) => {
+    return fetchAPI<ProfileDetail>(
+      withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }),
+      { signal: opts.signal },
+    );
   },
 
   create: async (data: ProfileCreateRequest, host: string, project?: string) => {
@@ -1567,7 +1715,29 @@ export const storageVolumeAPI = {
 // the file streams in chunks instead of being buffered as JSON.
 const ISO_UPLOAD_BASE = `${API_BASE_URL}${API_PREFIX}/storage/iso-uploads`;
 
-function isoAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+export interface UploadRequestOptions {
+  signal?: AbortSignal;
+  /** Stable, non-secret actor scope captured before the upload starts. */
+  actorScope?: string;
+}
+
+export interface UploadAbortOptions {
+  /** Stable, non-secret actor scope captured before the upload starts. */
+  actorScope?: string;
+  keepalive?: boolean;
+}
+
+function assertUploadActor(actorScope?: string): void {
+  if (actorScope && !isAuthActorSynchronized(actorScope)) {
+    throw new DOMException("Authenticated actor changed", "AbortError");
+  }
+}
+
+function isoAuthHeaders(
+  extra?: Record<string, string>,
+  actorScope?: string,
+): Record<string, string> {
+  assertUploadActor(actorScope);
   const token = getAccessToken();
   return {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -1597,26 +1767,60 @@ export interface IsoUploadStatus {
   error: string | null;
 }
 
-async function isoErr(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = await res.json();
-    return new Error(body?.detail || fallback);
-  } catch {
-    return new Error(fallback);
+async function isoErr(
+  res: Response,
+  fallback: string,
+  parsedBody?: unknown,
+): Promise<APIError> {
+  let body = parsedBody;
+  if (body === undefined) {
+    try {
+      body = await res.json();
+    } catch {
+      body = undefined;
+    }
   }
+  const errorBody = body as { detail?: unknown; error?: unknown } | undefined;
+  const detail = errorBody?.detail ?? errorBody?.error;
+  const message =
+    typeof detail === "string"
+      ? detail
+      : detail && typeof detail === "object" &&
+          typeof (detail as { message?: unknown }).message === "string"
+        ? (detail as { message: string }).message
+        : fallback;
+  return new APIError(
+    message,
+    res.status,
+    detail,
+    parseRetryAfter(res.headers.get("Retry-After")),
+  );
+}
+
+async function uploadJSON<T>(
+  url: string,
+  options: RequestInit,
+  fallback: string,
+): Promise<T> {
+  const { response, body, bodyError } = await fetchJSONWithTimeout(url, options);
+  if (!response.ok) throw await isoErr(response, fallback, body);
+  if (bodyError) {
+    throw new APIError(fallback, response.status, "Invalid JSON response");
+  }
+  return body as T;
 }
 
 export const isoUploadAPI = {
   create: async (
     body: IsoUploadCreateBody,
+    opts: UploadRequestOptions = {},
   ): Promise<{ session_id: string; offset: number; expires_at: string }> => {
-    const res = await fetch(ISO_UPLOAD_BASE, {
+    return uploadJSON(ISO_UPLOAD_BASE, {
       method: "POST",
-      headers: isoAuthHeaders({ "Content-Type": "application/json" }),
+      headers: isoAuthHeaders({ "Content-Type": "application/json" }, opts.actorScope),
       body: JSON.stringify(body),
-    });
-    if (!res.ok) throw await isoErr(res, `Failed to start upload (${res.status})`);
-    return res.json();
+      signal: opts.signal,
+    }, "Failed to start upload");
   },
 
   // Append one chunk at `offset`; returns the server's new offset (also handles a
@@ -1625,51 +1829,67 @@ export const isoUploadAPI = {
     sessionId: string,
     offset: number,
     chunk: Blob,
+    opts: UploadRequestOptions = {},
   ): Promise<number> => {
-    const res = await fetch(`${ISO_UPLOAD_BASE}/${sessionId}`, {
-      method: "PATCH",
-      headers: isoAuthHeaders({
-        "Content-Type": "application/offset+octet-stream",
-        "Upload-Offset": String(offset),
-      }),
-      body: chunk,
-    });
+    const { response: res, body } = await fetchJSONWithTimeout(
+      `${ISO_UPLOAD_BASE}/${sessionId}`,
+      {
+        method: "PATCH",
+        headers: isoAuthHeaders({
+          "Content-Type": "application/offset+octet-stream",
+          "Upload-Offset": String(offset),
+        }, opts.actorScope),
+        body: chunk,
+        signal: opts.signal,
+      },
+      300_000,
+    );
     if (res.status === 409) {
       return Number(res.headers.get("Upload-Offset") || String(offset));
     }
-    if (!res.ok) throw await isoErr(res, `Chunk upload failed (${res.status})`);
+    if (!res.ok) throw await isoErr(res, `Chunk upload failed (${res.status})`, body);
     return Number(
       res.headers.get("Upload-Offset") || String(offset + chunk.size),
     );
   },
 
-  finalize: async (sessionId: string): Promise<IsoUploadStatus> => {
-    const res = await fetch(`${ISO_UPLOAD_BASE}/${sessionId}/finalize`, {
+  finalize: async (
+    sessionId: string,
+    opts: UploadRequestOptions = {},
+  ): Promise<IsoUploadStatus> => {
+    return uploadJSON(`${ISO_UPLOAD_BASE}/${sessionId}/finalize`, {
       method: "POST",
-      headers: isoAuthHeaders(),
-    });
-    if (!res.ok) throw await isoErr(res, `Finalize failed (${res.status})`);
-    return res.json();
+      headers: isoAuthHeaders(undefined, opts.actorScope),
+      signal: opts.signal,
+    }, "Finalize failed");
   },
 
-  status: async (sessionId: string): Promise<IsoUploadStatus> => {
-    const res = await fetch(`${ISO_UPLOAD_BASE}/${sessionId}`, {
+  status: async (
+    sessionId: string,
+    opts: UploadRequestOptions = {},
+  ): Promise<IsoUploadStatus> => {
+    return uploadJSON(`${ISO_UPLOAD_BASE}/${sessionId}`, {
       method: "GET",
-      headers: isoAuthHeaders(),
-    });
-    if (!res.ok) throw await isoErr(res, `Status check failed (${res.status})`);
-    return res.json();
+      headers: isoAuthHeaders(undefined, opts.actorScope),
+      signal: opts.signal,
+    }, "Status check failed");
   },
 
   // Best-effort cancel: releases the server-side upload slot immediately instead
   // of waiting for the idle sweep/TTL. Never throws so it is safe to fire from
   // cancel/error/teardown paths. `keepalive` lets it survive a tab close/reload.
-  abort: async (sessionId: string): Promise<void> => {
+  abort: async (
+    sessionId: string,
+    opts: UploadAbortOptions = {},
+  ): Promise<void> => {
+    // An A-owned upload may not be deleted using B's newly installed bearer. The backend TTL
+    // is the safe cleanup backstop once the initiating actor has retired.
+    if (opts.actorScope && !isAuthActorSynchronized(opts.actorScope)) return;
     try {
       await fetch(`${ISO_UPLOAD_BASE}/${sessionId}`, {
         method: "DELETE",
-        headers: isoAuthHeaders(),
-        keepalive: true,
+        headers: isoAuthHeaders(undefined, opts.actorScope),
+        keepalive: opts.keepalive ?? true,
       });
     } catch {
       /* nothing to do: the idle sweep and TTL are the backstop */
@@ -1708,14 +1928,14 @@ export interface ImageUploadStatus {
 export const imageUploadAPI = {
   create: async (
     body: ImageUploadCreateBody,
+    opts: UploadRequestOptions = {},
   ): Promise<{ session_id: string; offset: number; expires_at: string }> => {
-    const res = await fetch(IMAGE_UPLOAD_BASE, {
+    return uploadJSON(IMAGE_UPLOAD_BASE, {
       method: "POST",
-      headers: isoAuthHeaders({ "Content-Type": "application/json" }),
+      headers: isoAuthHeaders({ "Content-Type": "application/json" }, opts.actorScope),
       body: JSON.stringify(body),
-    });
-    if (!res.ok) throw await isoErr(res, `Failed to start upload (${res.status})`);
-    return res.json();
+      signal: opts.signal,
+    }, "Failed to start upload");
   },
 
   // Append one chunk at `offset`; returns the server's new offset (also handles a
@@ -1724,48 +1944,62 @@ export const imageUploadAPI = {
     sessionId: string,
     offset: number,
     chunk: Blob,
+    opts: UploadRequestOptions = {},
   ): Promise<number> => {
-    const res = await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
-      method: "PATCH",
-      headers: isoAuthHeaders({
-        "Content-Type": "application/offset+octet-stream",
-        "Upload-Offset": String(offset),
-      }),
-      body: chunk,
-    });
+    const { response: res, body } = await fetchJSONWithTimeout(
+      `${IMAGE_UPLOAD_BASE}/${sessionId}`,
+      {
+        method: "PATCH",
+        headers: isoAuthHeaders({
+          "Content-Type": "application/offset+octet-stream",
+          "Upload-Offset": String(offset),
+        }, opts.actorScope),
+        body: chunk,
+        signal: opts.signal,
+      },
+      300_000,
+    );
     if (res.status === 409) {
       return Number(res.headers.get("Upload-Offset") || String(offset));
     }
-    if (!res.ok) throw await isoErr(res, `Chunk upload failed (${res.status})`);
+    if (!res.ok) throw await isoErr(res, `Chunk upload failed (${res.status})`, body);
     return Number(
       res.headers.get("Upload-Offset") || String(offset + chunk.size),
     );
   },
 
-  finalize: async (sessionId: string): Promise<ImageUploadStatus> => {
-    const res = await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}/finalize`, {
+  finalize: async (
+    sessionId: string,
+    opts: UploadRequestOptions = {},
+  ): Promise<ImageUploadStatus> => {
+    return uploadJSON(`${IMAGE_UPLOAD_BASE}/${sessionId}/finalize`, {
       method: "POST",
-      headers: isoAuthHeaders(),
-    });
-    if (!res.ok) throw await isoErr(res, `Finalize failed (${res.status})`);
-    return res.json();
+      headers: isoAuthHeaders(undefined, opts.actorScope),
+      signal: opts.signal,
+    }, "Finalize failed");
   },
 
-  status: async (sessionId: string): Promise<ImageUploadStatus> => {
-    const res = await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
+  status: async (
+    sessionId: string,
+    opts: UploadRequestOptions = {},
+  ): Promise<ImageUploadStatus> => {
+    return uploadJSON(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
       method: "GET",
-      headers: isoAuthHeaders(),
-    });
-    if (!res.ok) throw await isoErr(res, `Status check failed (${res.status})`);
-    return res.json();
+      headers: isoAuthHeaders(undefined, opts.actorScope),
+      signal: opts.signal,
+    }, "Status check failed");
   },
 
-  abort: async (sessionId: string): Promise<void> => {
+  abort: async (
+    sessionId: string,
+    opts: UploadAbortOptions = {},
+  ): Promise<void> => {
+    if (opts.actorScope && !isAuthActorSynchronized(opts.actorScope)) return;
     try {
       await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
         method: "DELETE",
-        headers: isoAuthHeaders(),
-        keepalive: true,
+        headers: isoAuthHeaders(undefined, opts.actorScope),
+        keepalive: opts.keepalive ?? true,
       });
     } catch {
       /* nothing to do: the idle sweep and TTL are the backstop */
@@ -1898,8 +2132,14 @@ export const clusterAPI = {
     }, 20000); // 20s timeout - node should respond quickly if trust is configured
   },
 
-  list: async (fresh: boolean = false): Promise<ClusterListResponse> => {
-    return fetchRead<ClusterListResponse>("/clusters", { fresh });
+  list: async (
+    fresh: boolean = false,
+    opts: ReadOptions = {},
+  ): Promise<ClusterListResponse> => {
+    return fetchRead<ClusterListResponse>("/clusters", {
+      ...opts,
+      fresh: fresh || opts.fresh === true,
+    });
   },
 
   get: async (clusterId: string): Promise<ClusterInfo> => {
@@ -2202,14 +2442,26 @@ export interface BreakGlassGrant {
   revoked_by: string | null;
 }
 const breakGlassAPI = {
-  check: async (clusterId: string): Promise<BreakGlassCheck> => {
-    return fetchAPI<BreakGlassCheck>(`/break-glass/check?cluster_id=${encodeURIComponent(clusterId)}`);
+  check: async (clusterId: string, opts: ReadOptions = {}): Promise<BreakGlassCheck> => {
+    return fetchAPI<BreakGlassCheck>(
+      `/break-glass/check?cluster_id=${encodeURIComponent(clusterId)}`,
+      { signal: opts.signal },
+    );
   },
   listGrants: async (mine = false): Promise<BreakGlassGrant[]> => {
     return fetchAPI<BreakGlassGrant[]>(`/break-glass/grants${mine ? "?mine=true" : ""}`);
   },
-  createGrant: async (body: { cluster_id: string; reason: string; ticket_ref?: string; duration_minutes?: number }): Promise<BreakGlassGrant> => {
-    return fetchAPI<BreakGlassGrant>("/break-glass/grants", { method: "POST", body: JSON.stringify(body) });
+  createGrant: async (
+    body: { cluster_id: string; reason: string; ticket_ref?: string; duration_minutes?: number },
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<BreakGlassGrant> => {
+    return fetchAPI<BreakGlassGrant>(
+      "/break-glass/grants",
+      { method: "POST", body: JSON.stringify(body), signal: opts.signal },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
+    );
   },
   revokeGrant: async (id: number): Promise<BreakGlassGrant> => {
     return fetchAPI<BreakGlassGrant>(`/break-glass/grants/${id}/revoke`, { method: "POST" });
@@ -2257,9 +2509,14 @@ const snapshotScheduleAPI = {
   resume: async (id: number): Promise<SnapshotScheduleActionResponse> =>
     fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}/resume`, { method: "POST" }),
   runNow: async (id: number): Promise<SnapshotScheduleActionResponse> =>
-    fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}/run-now`, {
-      method: "POST",
-    }),
+    fetchAPI<SnapshotScheduleActionResponse>(
+      `/snapshot-schedules/${id}/run-now`,
+      { method: "POST" },
+      undefined,
+      false,
+      // The daemon snapshot creation is not idempotent. Never replay an ambiguous submission.
+      { retryAfterAuthRefresh: false },
+    ),
   remove: async (id: number): Promise<SnapshotScheduleActionResponse> =>
     fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}`, { method: "DELETE" }),
 };
@@ -2340,6 +2597,9 @@ const snapshotAPI = {
     return fetchAPI<SnapshotActionResponse>(
       `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}?${qs}`,
       { method: "DELETE" },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
     );
   },
   restore: async (
@@ -2350,6 +2610,9 @@ const snapshotAPI = {
     return fetchAPI<SnapshotActionResponse>(
       `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}/restore`,
       { method: "POST", body: JSON.stringify(body) },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
     );
   },
 };
@@ -2377,6 +2640,8 @@ const mobilityAPI = {
       `/instances/${encodeURIComponent(instanceName)}/copy`,
       { method: "POST", body: JSON.stringify(body) },
       120000,
+      false,
+      { retryAfterAuthRefresh: false },
     );
   },
 };

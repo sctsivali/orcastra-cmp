@@ -31,7 +31,12 @@ const srcDir = join(root, 'frontend', 'src');
 //                SearchableSelect (a multi-select has no single trigger to search from)
 //   deferred   - a gap still open, carrying the reason
 const PICKERS = new Map([
-  ['components/instance-create-form.tsx', { kind: 'hook', notice: true }],
+  ['components/instance-create-form.tsx', {
+    kind: 'hook',
+    notice: true,
+    hookSource: 'components/instance-create/use-base-inventory.ts',
+    optionsAlias: 'nodeOptions',
+  }],
   // exported, mounted by no route; covered statically only
   ['components/vm-create-form.tsx', { kind: 'hook', notice: true }],
   ['components/project-create-form.tsx', { kind: 'hook', notice: true }],
@@ -131,14 +136,23 @@ function optionsAlias(body) {
 const escape = (s) => s.replace(/[.$]/g, '\\$&');
 
 function checkHookPicker(rel, body, entry, failures) {
-  if (!/\buseNodePickerOptions\b/.test(body)) {
+  let hookBody = body;
+  if (entry.hookSource) {
+    try {
+      hookBody = readFileSync(join(srcDir, entry.hookSource), 'utf8');
+    } catch {
+      failures.push(`${rel}: registered hook source ${entry.hookSource} does not exist.`);
+      return;
+    }
+  }
+  if (!/\buseNodePickerOptions\b/.test(hookBody)) {
     failures.push(
-      `${rel}: registered as 'hook' but does not call useNodePickerOptions. ` +
+      `${entry.hookSource ?? rel}: registered as 'hook' but does not call useNodePickerOptions. ` +
         `A cluster picker must resolve status through lib/cluster-status.ts.`,
     );
     return;
   }
-  const alias = optionsAlias(body);
+  const alias = entry.optionsAlias ?? optionsAlias(body);
   if (!alias) {
     failures.push(`${rel}: calls useNodePickerOptions but never binds its options.`);
     return;

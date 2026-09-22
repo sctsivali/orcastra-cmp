@@ -37,7 +37,7 @@ import {
   type DateState,
   type RangeState,
 } from "@/lib/filter-url";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatNetworkRate } from "@/lib/utils";
 
 /** What a control needs to know about the rows it filters. Co-filtered, never over the raw set. */
 export type FilterFacts =
@@ -168,7 +168,8 @@ export function formatBound(value: number, unit: string): string {
     if (value < 3600) return `${Math.round(value / 60)}m`;
     return `${(value / 3600).toFixed(1)}h`;
   }
-  if (unit === "bps") return `${formatBytes(value / 8)}/s`;
+  // `bps` is a legacy internal name. The session API has always supplied bytes per second.
+  if (unit === "bps") return formatNetworkRate(value);
   if (unit === "days") return `${value}d`;
   return String(value);
 }

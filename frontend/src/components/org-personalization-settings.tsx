@@ -13,6 +13,7 @@
 
 import * as React from "react";
 import { useSession } from "next-auth/react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   PersonalizationSettings as PersonalizationSettingsType,
   PersonalizationContextType,
@@ -26,6 +27,7 @@ import {
 import { PersonalizationContext, usePersonalization } from "./personalization-provider";
 import { PersonalizationSettings } from "./personalization-settings";
 import { api } from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { toast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +57,7 @@ function mergeWithDefaults(
 }
 
 export function OrgPersonalizationSettings() {
+  const queryClient = useQueryClient();
   const { data: session } = useSession();
   // access global personalization context so we can refresh after saving
   const globalPersonalization = usePersonalization();
@@ -215,6 +218,9 @@ export function OrgPersonalizationSettings() {
         setIsSaving(true);
         try {
           await api.organizations.updatePreferences(orgId, toSave);
+          void reconcileMutationImpact(queryClient, "organization.preferences").catch(
+            () => undefined,
+          );
           // After successful save, refresh global context so the cookie
           // (FOUC hint) and any other consumers stay up-to-date.
           // This is a silent refresh - no loading flash.
@@ -246,7 +252,7 @@ export function OrgPersonalizationSettings() {
         }, 800);
       }
     },
-    [orgId, globalPersonalization],
+    [orgId, globalPersonalization, queryClient],
   );
 
   // field-level updaters matching PersonalizationContextType
@@ -295,6 +301,9 @@ export function OrgPersonalizationSettings() {
     });
     try {
       await api.organizations.deletePreferences(orgId);
+      void reconcileMutationImpact(queryClient, "organization.preferences").catch(
+        () => undefined,
+      );
       toast({ title: "Organization branding reset to defaults" });
       // refresh global sidebar/header after a short delay
       setTimeout(() => globalPersonalization.refreshSettings(), 300);
@@ -304,7 +313,7 @@ export function OrgPersonalizationSettings() {
         variant: "destructive",
       });
     }
-  }, [orgId]);
+  }, [orgId, queryClient]);
 
   const refreshSettings = React.useCallback(async () => {
     if (!orgId) return;

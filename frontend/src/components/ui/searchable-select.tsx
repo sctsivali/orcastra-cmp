@@ -73,6 +73,11 @@ interface SearchableSelectProps {
   ariaDescribedBy?: string;
   // True when the read behind this list failed, so assistive tech announces it as invalid.
   ariaInvalid?: boolean;
+  // Lets intent-gated callers start a read when the picker opens.
+  onOpenChange?: (open: boolean) => void;
+  // Async catalogues need newly-arrived options to appear without forcing a close/reopen cycle.
+  // Infrastructure target pickers keep the safer frozen default.
+  freezeOptionsWhileOpen?: boolean;
 }
 
 // Single-select combobox with optional in-list search. Drop-in replacement for a shadcn Select
@@ -93,6 +98,8 @@ export function SearchableSelect({
   id,
   ariaDescribedBy,
   ariaInvalid,
+  onOpenChange,
+  freezeOptionsWhileOpen = true,
 }: SearchableSelectProps) {
   const [open, setOpen] = React.useState(false);
   const selected = options.find((o) => o.value === value);
@@ -103,8 +110,8 @@ export function SearchableSelect({
   // click. On a control that creates real infrastructure, that is a wrong cluster, not a
   // cosmetic glitch.
   const frozen = React.useRef(options);
-  if (!open) frozen.current = options;
-  const rendered = open ? frozen.current : options;
+  if (!open || !freezeOptionsWhileOpen) frozen.current = options;
+  const rendered = open && freezeOptionsWhileOpen ? frozen.current : options;
 
   const showSearch = rendered.length > searchThreshold;
   const anyStatus = rendered.some((o) => o.status);
@@ -119,7 +126,13 @@ export function SearchableSelect({
   const listboxId = React.useId();
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        onOpenChange?.(next);
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"

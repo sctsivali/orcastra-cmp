@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import { Suspense, useEffect, useState, useRef, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   Terminal as TerminalIcon,
@@ -77,7 +78,14 @@ import {
   FORCE_OPTION_LABEL,
 } from "@/lib/instance-action-copy";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
-import { API_URL, getAccessToken } from "@/lib/api";
+import {
+  isActorScopeChangedError,
+  useInstancePowerAction,
+} from "@/hooks/use-instance-power-action";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { API_URL, getAccessToken, isAuthActorSynchronized } from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import { tasksAPI } from "@/lib/tasks-api";
 import { AgentActivityBadge } from "./components/agent-activity-badge";
 import { OnScreenKeyboard } from "@/components/console/on-screen-keyboard";
 import { OnScreenCursor } from "@/components/console/on-screen-cursor";
@@ -227,6 +235,9 @@ function ConsoleContent() {
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   // Track if SPICE connection is stabilized (after 500ms delay post-connect)
   const isStabilizedRef = useRef(false);
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
+  const executePowerAction = useInstancePowerAction();
 
   const screenId = `spice-screen-${params.id}`;
   const scale = zoom / 100;
@@ -320,24 +331,18 @@ function ConsoleContent() {
   const handleKillSession = async (operationId: string) => {
     setKillingSession(true);
     try {
-      const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions/${encodeURIComponent(operationId)}` +
-          `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
-        {
-          method: "DELETE",
-          headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-        }
-      );
-      if (response.ok) {
-        setSessionConflict((prev) => ({
-          ...prev,
-          sessions: prev.sessions.filter((s) => s.operation_id !== operationId),
-          show: prev.sessions.length > 1,
-        }));
-      }
+      const actorScope = scopeKey;
+      await tasksAPI.killConsoleSession(instanceName, operationId, host, project);
+      if (!isAuthActorSynchronized(actorScope)) return;
+      await reconcileMutationImpact(queryClient, "task.session");
+      if (!isAuthActorSynchronized(actorScope)) return;
+      setSessionConflict((prev) => ({
+        ...prev,
+        sessions: prev.sessions.filter((s) => s.operation_id !== operationId),
+        show: prev.sessions.length > 1,
+      }));
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error("[Console] Failed to kill session:", err);
     } finally {
       setKillingSession(false);
@@ -882,31 +887,20 @@ function ConsoleContent() {
     setInstanceStatus(transitionStatus[operation]);
 
     try {
-      const response = await fetch(
-        `${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-          body: JSON.stringify({ host, force, timeout: 30 }),
-        }
-      );
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: "Unknown error" }));
-        throw new Error(error.detail || `Failed to ${operation} instance`);
-      }
-
-      const result = await response.json();
+      const result = await executePowerAction(operation, {
+        name: instanceName,
+        host,
+        project,
+        force,
+        timeout: 30,
+      });
       const statusMap: Record<string, InstanceStatus> = {
         running: "Running",
         stopped: "Stopped",
         Running: "Running",
         Stopped: "Stopped",
       };
-      const newStatus = statusMap[result.new_status] || "Unknown";
+      const newStatus = result.new_status ? statusMap[result.new_status] || "Unknown" : "Unknown";
       setInstanceStatus(newStatus);
 
       toast({
@@ -918,6 +912,7 @@ function ConsoleContent() {
         setTimeout(() => handleReconnect(), 2000);
       }
     } catch (error) {
+      if (isActorScopeChangedError(error)) return;
       setInstanceStatus("Error");
       toast({
         title: `Failed to ${operation} instance`,
@@ -927,7 +922,7 @@ function ConsoleContent() {
     } finally {
       setOperationLoading(null);
     }
-  }, [instanceName, host, handleReconnect]);
+  }, [executePowerAction, handleReconnect, host, instanceName, project]);
 
   // Request operation with confirmation
   const requestOperation = useCallback((operation: OperationType) => {
@@ -1323,13 +1318,16 @@ function ConsoleContent() {
     
     // Kill sessions when tab is closed
     const handleBeforeUnload = () => {
-      // Use sendBeacon with Blob for POST request during unload
-      const killUrl =
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/kill-all-sessions` +
-        `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
-      // sendBeacon needs a body (Blob) to trigger POST method
-      const blob = new Blob([''], { type: 'application/json' });
-      navigator.sendBeacon(killUrl, blob);
+      const actorScope = scopeKey;
+      void tasksAPI.killAllConsoleSessionsOnUnload(instanceName, host, project)
+        .then(() => {
+          if (isAuthActorSynchronized(actorScope)) {
+            return reconcileMutationImpact(queryClient, "task.session");
+          }
+        })
+        .catch(() => {
+          // The server's operation sweep remains the cleanup backstop.
+        });
       
       // Also close connections
       if (textWsRef.current) textWsRef.current.close();
@@ -1350,7 +1348,7 @@ function ConsoleContent() {
         try { spiceRef.current.stop(); } catch (e) {}
       }
     };
-  }, [handleResize, instanceName, host, project]);
+  }, [handleResize, host, instanceName, project, queryClient, scopeKey]);
 
   // Keyboard shortcuts
   useEffect(() => {

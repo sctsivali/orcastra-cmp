@@ -302,7 +302,7 @@ function IntegrationsSettingsContent() {
     dataUpdatedAt: keysUpdatedAt,
   } = useRefreshableQuery({
     queryKey: ["integrations", "api-keys"],
-    queryFn: ({ fresh }) => api.integrations.listAPIKeys({ fresh }),
+    queryFn: ({ fresh, signal }) => api.integrations.listAPIKeys({ fresh, signal }),
     enabled: mounted,
     staleTime: 30000,
     retry: (failureCount, error) => {

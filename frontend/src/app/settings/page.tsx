@@ -164,7 +164,7 @@ export default function SettingsPage() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    Generate and manage TLS certificates for secure access to your hypervisor nodes and projects. 
+                    Generate and manage TLS certificates for secure access to your clusters and projects.
                     Generate keys with custom permissions and expiration dates.
                   </p>
                   <Button 

@@ -276,7 +276,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
     if (!formData.node) {
       toast({
         title: "Validation Error",
-        description: "Please select a node",
+        description: "Please select a cluster",
         variant: "destructive",
       });
       return;
@@ -334,15 +334,15 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
           {/* Basic Information */}
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="node">Target Node *</Label>
+              <Label htmlFor="node">Target Cluster *</Label>
               <SearchableSelect
                 id="node"
                 value={formData.node}
                 onValueChange={(value) => setFormData({ ...formData, node: value })}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select a node"}
-                searchPlaceholder="Search nodes..."
-                emptyText="No nodes available."
+                placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
+                searchPlaceholder="Search clusters..."
+                emptyText="No clusters available."
                 disabled={loadingNodes}
               />
               <NodeStatusNotice
@@ -359,7 +359,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                 onRecheck={nodePicker.refreshNow}
               />
               <p className="text-xs text-muted-foreground">
-                Resources will be fetched from this node
+                Resources will be fetched from this cluster
               </p>
             </div>
 

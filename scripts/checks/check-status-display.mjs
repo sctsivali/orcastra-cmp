@@ -150,7 +150,7 @@ const checks = [
         "break-glass revoke must update only the actor that issued it",
       ],
       [
-        /queryKey: \["break-glass-grants"\],[\s\S]{0,80}refetchType: "none"/,
+        /reconcileMutationImpact\(queryClient, "break-glass\.write", \{[\s\S]{0,120}queryKeys: \[grantsQueryKey\],[\s\S]{0,80}refetchType: "none"/,
         "break-glass invalidation must not refetch through a stale actor callback",
       ],
     ],

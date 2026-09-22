@@ -14,7 +14,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
-import { formatInstanceType, formatLabel } from "@/lib/utils";
+import { formatBytes, formatInstanceType, formatLabel } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -85,7 +85,7 @@ const IMAGES = defineTable<ImageInfo>()({
     { field: "size", label: "Size", sort: (i) => i.size ?? 0, filter: fromSort("number", { unit: "bytes" }) },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (i) => i.node,
       facet: (i) => i.node,
       facetSpec: { role: "node", primary: true } },
@@ -236,14 +236,6 @@ function ImagesContent() {
       onDelete: setDeleteTarget,
     });
 
-  const formatSize = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
-  };
-
   if (isLoading) {
     return <LoadingLottiePage />;
   }
@@ -312,7 +304,7 @@ function ImagesContent() {
                 <SortableTableHead label="Architecture" field="architecture" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Size" field="size" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                {nodes.length > 0 && <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
+                {nodes.length > 0 && <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Flags" field="flags" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {/* Not sortable and not a value, so it carries its name for a screen reader
@@ -392,7 +384,7 @@ function ImagesContent() {
                       {formatInstanceType(image.type)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
-                      {formatSize(image.size)}
+                      {formatBytes(image.size)}
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell><NodeLink clusterId={image.node} /></TableCell>

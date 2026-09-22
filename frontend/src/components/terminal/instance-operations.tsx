@@ -34,12 +34,16 @@ import {
 import { cn } from "@/lib/utils";
 import { LXDInstanceStatus, useTerminalStore } from "@/lib/terminal-store";
 import { toast } from "@/hooks/use-toast";
-import { API_URL, getAccessToken } from "@/lib/api";
+import {
+  isActorScopeChangedError,
+  useInstancePowerAction,
+} from "@/hooks/use-instance-power-action";
 
 interface InstanceOperationsProps {
   terminalId: string;
   instanceName: string;
   host: string;
+  project: string;
   instanceStatus: LXDInstanceStatus;
 }
 
@@ -56,10 +60,12 @@ export function InstanceOperations({
   terminalId,
   instanceName,
   host,
+  project,
   instanceStatus,
 }: InstanceOperationsProps) {
   const updateInstanceStatus = useTerminalStore(s => s.updateInstanceStatus);
   const updateTerminalStatus = useTerminalStore(s => s.updateTerminalStatus);
+  const executePowerAction = useInstancePowerAction();
   
   const [loading, setLoading] = useState<OperationType | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
@@ -82,25 +88,13 @@ export function InstanceOperations({
     updateInstanceStatus(terminalId, transitionStatus[operation]);
 
     try {
-      const response = await fetch(`${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-        },
-        body: JSON.stringify({
-          host,
-          force: false,
-          timeout: 30,
-        }),
+      const result = await executePowerAction(operation, {
+        name: instanceName,
+        host,
+        project,
+        force: false,
+        timeout: 30,
       });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(error.detail || `Failed to ${operation} instance`);
-      }
-
-      const result = await response.json();
       
       // Update instance status based on operation result
       // Backend returns new_status as string like "Running", "Stopped", etc.
@@ -138,6 +132,7 @@ export function InstanceOperations({
       });
       
     } catch (error) {
+      if (isActorScopeChangedError(error)) return;
       console.error(`Failed to ${operation} instance:`, error);
       updateInstanceStatus(terminalId, 'Error');
       toast({
@@ -148,7 +143,7 @@ export function InstanceOperations({
     } finally {
       setLoading(null);
     }
-  }, [terminalId, instanceName, host, updateInstanceStatus, updateTerminalStatus]);
+  }, [executePowerAction, host, instanceName, project, terminalId, updateInstanceStatus, updateTerminalStatus]);
 
   // Show confirmation dialog for destructive operations
   const requestOperation = useCallback((operation: OperationType) => {

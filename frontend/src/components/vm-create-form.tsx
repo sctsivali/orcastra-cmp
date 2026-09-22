@@ -27,7 +27,7 @@ import { useCreateVM, useImages } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
-import { formatBytes} from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import { ImageInfo, ImageListResponse } from "@/types";
 
 const vmCreateSchema = z.object({
@@ -39,7 +39,7 @@ const vmCreateSchema = z.object({
       /^[a-zA-Z][a-zA-Z0-9-]*$/,
       "Name must start with a letter and contain only letters, numbers, and hyphens"
     ),
-  host: z.string().min(1, "Host is required"),
+  host: z.string().min(1, "Cluster is required"),
   image: z.string().min(1, "Image is required"),
   instance_type: z.enum(["virtual-machine", "container"]),
   cloud_init: z.string().optional(),
@@ -87,7 +87,7 @@ function ImageSelector({
     return (
       <Select disabled>
         <SelectTrigger>
-          <SelectValue placeholder="Select a host first" />
+          <SelectValue placeholder="Select a cluster first" />
         </SelectTrigger>
       </Select>
     );
@@ -114,7 +114,7 @@ function ImageSelector({
           <div className="p-4 text-center text-sm text-muted-foreground">
             {hostUnreachable
               ? `Could not reach ${host}, so its images cannot be listed`
-              : "No images available on this host"}
+              : "No images available on this cluster"}
           </div>
         ) : (
           hostImages.map((image) => (
@@ -220,10 +220,10 @@ export function VMCreateForm() {
         </Button>
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            Create New Project
+            Create New Instance
           </h1>
           <p className="text-muted-foreground">
-            Create a new project to organize your instances
+            Create a virtual machine or container in a cluster
           </p>
         </div>
       </div>
@@ -288,9 +288,9 @@ export function VMCreateForm() {
                 </div>
               </div>
 
-              {/* Host Selection */}
+              {/* Cluster Selection */}
               <div className="space-y-2">
-                <Label>Target Host</Label>
+                <Label>Target Cluster</Label>
                 {nodesLoading ? (
                   <Skeleton className="h-10 w-full" />
                 ) : (
@@ -301,9 +301,9 @@ export function VMCreateForm() {
                       setValue("image", ""); // Reset image when host changes
                     }}
                     className={errors.host ? "border-red-500" : ""}
-                    placeholder="Select a host"
-                    searchPlaceholder="Search hosts..."
-                    emptyText="No hosts available"
+                    placeholder="Select a cluster"
+                    searchPlaceholder="Search clusters..."
+                    emptyText="No clusters available"
                     options={nodeOptions}
                   />
                 )}

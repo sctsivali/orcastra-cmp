@@ -4,6 +4,8 @@
  * cpu_allocation.py and project_usage.py so both ends count the same way.
  */
 
+import { formatLxdLimit } from "@/lib/utils";
+
 const SIZE_UNITS: Record<string, number> = {
   "": 1,
   b: 1,
@@ -20,6 +22,60 @@ const SIZE_UNITS: Record<string, number> = {
   pib: 1024 ** 5,
   eib: 1024 ** 6,
 };
+
+export type LxdLimitUnit = "GiB" | "MiB";
+export type StorageLimitUnit = "GB" | "MB";
+
+/**
+ * Convert any absolute LXD size spelling into the edit control's binary units.
+ * `preservedRaw` remains set until the operator changes the control, so a valid SI/raw-byte
+ * limit is not rounded or cleared by an unrelated project edit. Unsupported values such as a
+ * percentage are also preserved and identified instead of being misreported as unlimited.
+ */
+export function editableLxdLimit(raw: string | undefined): {
+  value: number;
+  unit: LxdLimitUnit;
+  preservedRaw: string | null;
+} {
+  const text = raw?.trim() ?? "";
+  if (!text || text === "0") return { value: 0, unit: "GiB", preservedRaw: null };
+  const bytes = parseLxdSize(text);
+  if (bytes === null || bytes <= 0) {
+    return { value: 0, unit: "GiB", preservedRaw: text };
+  }
+  const unit: LxdLimitUnit = bytes >= 1024 ** 3 ? "GiB" : "MiB";
+  const divisor = unit === "GiB" ? 1024 ** 3 : 1024 ** 2;
+  return {
+    value: Number((bytes / divisor).toPrecision(12)),
+    unit,
+    preservedRaw: text,
+  };
+}
+
+/**
+ * Convert an absolute LXD size into the project storage editor's decimal units.
+ * The original spelling is preserved until the operator changes this field, matching
+ * `editableLxdLimit` without presenting storage capacity as binary memory.
+ */
+export function editableStorageLimit(raw: string | undefined): {
+  value: number;
+  unit: StorageLimitUnit;
+  preservedRaw: string | null;
+} {
+  const text = raw?.trim() ?? "";
+  if (!text || text === "0") return { value: 0, unit: "GB", preservedRaw: null };
+  const bytes = parseLxdSize(text);
+  if (bytes === null || bytes <= 0) {
+    return { value: 0, unit: "GB", preservedRaw: text };
+  }
+  const unit: StorageLimitUnit = bytes >= 1_000_000_000 ? "GB" : "MB";
+  const divisor = unit === "GB" ? 1_000_000_000 : 1_000_000;
+  return {
+    value: Number((bytes / divisor).toPrecision(12)),
+    unit,
+    preservedRaw: text,
+  };
+}
 
 /** Cores a `limits.cpu` value pins or counts; `fallback` for unset or unparseable. */
 export function parseLimitsCpu(value: unknown, fallback = 1): number {
@@ -61,19 +117,7 @@ export function parseLxdSize(value: unknown): number | null {
 
 /** A byte count in the unit an operator types, ex; "8 GiB", "512 MiB". */
 export function formatLimitBytes(bytes: number): string {
-  const units: Array<[string, number]> = [
-    ["TiB", 1024 ** 4],
-    ["GiB", 1024 ** 3],
-    ["MiB", 1024 ** 2],
-    ["KiB", 1024],
-  ];
-  for (const [label, size] of units) {
-    if (bytes >= size) {
-      const value = bytes / size;
-      return `${Number.isInteger(value) ? value : value.toFixed(1)} ${label}`;
-    }
-  }
-  return `${bytes} B`;
+  return formatLxdLimit(bytes, { decimals: 1 });
 }
 
 export interface ProjectLimits {

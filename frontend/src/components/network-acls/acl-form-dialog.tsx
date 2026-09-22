@@ -299,15 +299,15 @@ export function AclFormDialog({
         <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-1">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label htmlFor="acl-node">Node *</Label>
+              <Label htmlFor="acl-node">Cluster *</Label>
               <SearchableSelect
                 id="acl-node"
                 value={host}
                 onValueChange={setHost}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select a node"}
-                searchPlaceholder="Search nodes..."
-                emptyText="No nodes found."
+                placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
+                searchPlaceholder="Search clusters..."
+                emptyText="No clusters found."
                 disabled={isEdit || loadingNodes}
               />
               <NodeStatusNotice

@@ -49,7 +49,7 @@ export const INSTANCES = defineTable<any>()({
     },
     {
       field: "host",
-      label: "Node",
+      label: "Cluster",
       sort: (i) => i.host,
       search: (i) => i.host,
       facet: (i) => i.host,
@@ -120,7 +120,7 @@ export function InstancesTable(props: InstancesTableProps) {
           <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
           <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
           <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-          <SortableTableHead label="Node" field="host" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+          <SortableTableHead label="Cluster" field="host" currentField={sortField} direction={sortDirection} onSort={handleSort} />
           <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
           <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
           <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />

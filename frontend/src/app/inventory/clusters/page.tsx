@@ -389,7 +389,7 @@ function ClustersContent() {
             title={isReadOnly ? "Disabled in read-only mode" : undefined}
           >
             <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">Register Node</span>
+            <span className="hidden sm:inline">Register Cluster</span>
             <span className="sm:hidden">Register</span>
           </Button>
         </div>
@@ -418,7 +418,7 @@ function ClustersContent() {
               <Button asChild className="gap-2">
                 <IntentLink href="/register-node">
                   <Plus className="h-4 w-4" />
-                  Register Node
+                  Register Cluster
                 </IntentLink>
               </Button>
             </div>

@@ -89,14 +89,14 @@ export function MemberResourcePanels({
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Cpu className="h-4 w-4 text-muted-foreground" />
-              CPU Allocated
+              vCPU Allocation
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2" data-partial={instancesLost ? "true" : undefined}>
               <div className="flex items-baseline justify-center gap-1">
                 <span className="text-2xl font-bold">{instancesLost ? "?" : cpu.allocated}</span>
-                <span className="text-sm text-muted-foreground">vCPU on {cpu.threads} threads</span>
+                <span className="text-sm text-muted-foreground">vCPU on {cpu.threads} hardware threads</span>
               </div>
               <Progress
                 value={instancesLost ? 0 : cpu.percentClamped}
@@ -299,13 +299,13 @@ export function MemberResourcePanels({
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
             <div>
-              <p className="text-muted-foreground mb-1">{cpu.over > 0 ? "CPU over-commit" : "Unallocated CPU"}</p>
+              <p className="text-muted-foreground mb-1">{cpu.over > 0 ? "vCPU Over-Commit" : "Unallocated Hardware Threads"}</p>
               <p className="font-medium">
                 {instancesLost
                   ? "unknown"
                   : cpu.over > 0
                     ? `${cpu.over} vCPU beyond capacity (${cpu.ratioLabel})`
-                    : `${cpu.unallocated} threads`}
+                    : `${cpu.unallocated} hardware threads`}
               </p>
             </div>
             <div>

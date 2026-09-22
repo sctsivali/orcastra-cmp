@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Cpu, Database, HardDrive, Sparkles, type LucideIcon } from "lucide-react";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
+import { formatMemory } from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import { HardwareDetailDialog } from "./hardware-detail-dialog";
 import {
@@ -32,10 +33,10 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
   const reportingNodeCount = reportingNodes.length;
   const coverageDetail =
     reportingNodeCount === 0
-      ? "No node reported this value"
+      ? "No cluster reported this value"
       : reportingNodeCount < nodes.length
-        ? `Reported by ${reportingNodeCount} of ${nodes.length} nodes`
-        : "Aggregate across all reporting nodes";
+        ? `Reported by ${reportingNodeCount} of ${nodes.length} clusters`
+        : "Aggregate across all reporting clusters";
 
   const totalThreads = reportingNodes.reduce((sum: number, node: NodeStatus) => {
     return sum + (node.resources?.cpu_total || 0);
@@ -95,10 +96,10 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
       id: "cpu",
       icon: Cpu,
       title: "CPU Resources",
-      description: "Processor information across all nodes",
+      description: "Processor information across all clusters",
       items: [
         {
-          label: "Total Threads",
+          label: "Hardware Threads",
           value: reportingNodeCount > 0 ? totalThreads.toString() : EMPTY_VALUE,
           detail:
             reportingNodeCount > 0
@@ -111,9 +112,9 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
           detail: "Supported CPU architectures",
         },
         {
-          label: "Reporting Nodes",
+          label: "Reporting Clusters",
           value: `${reportingNodeCount} of ${nodes.length}`,
-          detail: "Nodes included in these totals",
+          detail: "Clusters included in these totals",
         },
       ],
     },
@@ -121,26 +122,26 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
       id: "memory",
       icon: HardDrive,
       title: "Memory",
-      description: "RAM resources available in the cluster",
+      description: "Memory resources available across the fleet",
       items: [
         {
           label: "Total Memory",
           value:
             reportingNodeCount > 0
-              ? `${(totalMemory / 1024 ** 3).toFixed(2)} GiB`
+              ? formatMemory(totalMemory)
               : EMPTY_VALUE,
           detail: coverageDetail,
         },
         {
-          label: "Memory per Node",
+          label: "Memory per Cluster",
           value:
             reportingNodeCount > 0
-              ? `~${(totalMemory / reportingNodeCount / 1024 ** 3).toFixed(2)} GiB`
+              ? `~${formatMemory(totalMemory / reportingNodeCount)}`
               : EMPTY_VALUE,
           detail:
             reportingNodeCount > 0
-              ? `Average across ${reportingNodeCount} reporting node${reportingNodeCount === 1 ? "" : "s"}`
-              : "No node reported memory",
+              ? `Average across ${reportingNodeCount} reporting cluster${reportingNodeCount === 1 ? "" : "s"}`
+              : "No cluster reported memory",
         },
       ],
     },
@@ -195,12 +196,12 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
       {
         label: "Vendors",
         value: gpuVendors.length > 0 ? gpuVendors.join(", ") : EMPTY_VALUE,
-        detail: "Reported by the nodes",
+        detail: "Reported by the clusters",
       },
       {
         label: "Models",
         value: gpuModels.length > 0 ? gpuModels.join(", ") : EMPTY_VALUE,
-        detail: "Reported by the nodes",
+        detail: "Reported by the clusters",
       },
     ],
   });
@@ -233,9 +234,9 @@ export function HardwareAggregate({
               in the contrast sweep. One exception is enough. */}
           <p className="text-sm text-foreground">
             {reportingNodeCount === nodes.length
-              ? `Summed across all ${nodes.length} reporting node${nodes.length === 1 ? "" : "s"}.`
-              : `Partial totals from ${reportingNodeCount} of ${nodes.length} nodes.`}{" "}
-            Open a category for node detail.
+              ? `Summed across all ${nodes.length} reporting cluster${nodes.length === 1 ? "" : "s"}.`
+              : `Partial totals from ${reportingNodeCount} of ${nodes.length} clusters.`}{" "}
+            Open a category for cluster detail.
           </p>
         </div>
         <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2">

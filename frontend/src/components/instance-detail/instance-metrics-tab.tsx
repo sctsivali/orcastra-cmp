@@ -214,7 +214,7 @@ export function InstanceMetricsTab({
               ? "waiting for a second live sample"
               : cpuUnavailable
                 ? "not reported by the cluster"
-                : "across all cores"}
+                : "across all vCPUs"}
           </span>
         </div>
       </Card>

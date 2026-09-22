@@ -40,5 +40,5 @@ export function imageStoreEmptyHint(input: Pick<ImageStoreCopyInput, "project" |
   if (input.store && input.store === project && project !== "default") {
     return `Widen the filters, pull an image from a catalogue, or upload one into ${project}.`;
   }
-  return "Widen the filters, or pick a different node.";
+  return "Widen the filters, or pick a different cluster.";
 }

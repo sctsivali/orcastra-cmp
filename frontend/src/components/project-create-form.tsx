@@ -26,6 +26,7 @@ import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
 import { projectRowKey, requestRowFocus } from "@/lib/row-focus";
+import { formatBytes, formatMemory } from "@/lib/utils";
 
 const projectCreateSchema = z.object({
   name: z
@@ -36,15 +37,15 @@ const projectCreateSchema = z.object({
       /^[a-zA-Z][a-zA-Z0-9-]*$/,
       "Name must start with a letter and contain only letters, numbers, and hyphens"
     ),
-  host: z.string().min(1, "Host is required"),
+  host: z.string().min(1, "Cluster is required"),
   description: z.string().optional(),
   enableImages: z.boolean(),
   enableProfiles: z.boolean(),
   enableStorageVolumes: z.boolean(),
   enableNetworks: z.boolean(),
-  maxCpu: z.string().min(1, "Max CPU is required"),
-  maxRamValue: z.string().min(1, "Max RAM value is required"),
-  maxRamUnit: z.string().min(1, "Max RAM unit is required"),
+  maxCpu: z.string().min(1, "Max vCPU is required"),
+  maxRamValue: z.string().min(1, "Max memory value is required"),
+  maxRamUnit: z.string().min(1, "Max memory unit is required"),
   maxStorageValue: z.string().min(1, "Max Storage value is required"),
   maxStorageUnit: z.string().min(1, "Max Storage unit is required"),
 });
@@ -75,8 +76,8 @@ export function ProjectCreateForm() {
   React.useEffect(() => {
     if (error) {
       toast({
-        title: "Failed to load nodes",
-        description: "Could not fetch available nodes. Please refresh the page.",
+        title: "Failed to load clusters",
+        description: "Could not fetch available clusters. Please refresh the page.",
         variant: "destructive",
       });
     }
@@ -102,7 +103,7 @@ export function ProjectCreateForm() {
       maxRamValue: "",
       maxRamUnit: "GiB",
       maxStorageValue: "",
-      maxStorageUnit: "GiB",
+      maxStorageUnit: "GB",
     },
   });
 
@@ -122,7 +123,7 @@ export function ProjectCreateForm() {
       setValue("maxCpu", nodeResources.cpu_available.toString());
       toast({
         title: "Value exceeded",
-        description: `Max CPU limited to ${nodeResources.cpu_available} cores available`,
+        description: `Max vCPU limited to ${nodeResources.cpu_available} available hardware threads`,
         variant: "destructive",
       });
     }
@@ -140,7 +141,7 @@ export function ProjectCreateForm() {
       setValue("maxRamValue", maxAllowed.toString());
       toast({
         title: "Value exceeded",
-        description: `Max RAM limited to ${maxAllowed} ${maxRamUnitInput} available`,
+        description: `Max memory limited to ${maxAllowed} ${maxRamUnitInput} available`,
         variant: "destructive",
       });
     }
@@ -151,7 +152,7 @@ export function ProjectCreateForm() {
     if (!maxStorageValueInput || !maxStorageInBytes || !maxStorageUnitInput) return;
     
     const storageNum = parseInt(maxStorageValueInput);
-    const multiplier = maxStorageUnitInput === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024;
+    const multiplier = maxStorageUnitInput === "MB" ? 1_000_000 : 1_000_000_000;
     const maxAllowed = Math.floor(maxStorageInBytes / multiplier);
     
     if (storageNum > maxAllowed) {
@@ -354,20 +355,20 @@ export function ProjectCreateForm() {
                   <div className="p-3 bg-muted/50 rounded-md space-y-1 text-xs">
                     <div className="font-medium text-foreground mb-1">Available Resources on {selectedHost}:</div>
                     <div className="text-muted-foreground">
-                      CPU: {nodeResources.cpu_available} cores available (of {nodeResources.cpu_total})
+                      Hardware threads: {nodeResources.cpu_available} available (of {nodeResources.cpu_total})
                     </div>
                     <div className="text-muted-foreground">
-                      RAM: {(nodeResources.memory_available / 1024 / 1024 / 1024).toFixed(1)} GiB available (of {(nodeResources.memory_total / 1024 / 1024 / 1024).toFixed(1)} GiB)
+                      Memory: {formatMemory(nodeResources.memory_available, 1)} available (of {formatMemory(nodeResources.memory_total, 1)})
                     </div>
                     <div className="text-muted-foreground">
-                      Storage: {(nodeResources.storage_available / 1024 / 1024 / 1024).toFixed(1)} GiB available (of {(nodeResources.storage_total / 1024 / 1024 / 1024).toFixed(1)} GiB)
+                      Storage: {formatBytes(nodeResources.storage_available, 1)} available (of {formatBytes(nodeResources.storage_total, 1)})
                     </div>
                   </div>
                 )}
                 
                 {/* Max CPU */}
                 <div className="space-y-2">
-                  <Label htmlFor="maxCpu">Max CPU Cores *</Label>
+                  <Label htmlFor="maxCpu">Max vCPUs *</Label>
                   <Input
                     id="maxCpu"
                     type="number"
@@ -382,13 +383,13 @@ export function ProjectCreateForm() {
                     <p className="text-sm text-red-500">{errors.maxCpu.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Maximum CPU cores for this project
+                    Maximum vCPU allocation for this project
                   </p>
                 </div>
 
-                {/* Max RAM */}
+                {/* Max memory */}
                 <div className="space-y-2">
-                  <Label htmlFor="maxRamValue">Max RAM *</Label>
+                  <Label htmlFor="maxRamValue">Max Memory *</Label>
                   <div className="flex gap-2">
                     <Input
                       id="maxRamValue"
@@ -417,7 +418,7 @@ export function ProjectCreateForm() {
                     <p className="text-sm text-red-500">{errors.maxRamValue.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Maximum RAM for this project
+                    Maximum memory for this project
                   </p>
                 </div>
 
@@ -429,7 +430,7 @@ export function ProjectCreateForm() {
                       id="maxStorageValue"
                       type="number"
                       min="1"
-                      max={maxStorageInBytes ? Math.floor(maxStorageInBytes / (watch("maxStorageUnit") === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024)) : undefined}
+                      max={maxStorageInBytes ? Math.floor(maxStorageInBytes / (watch("maxStorageUnit") === "MB" ? 1_000_000 : 1_000_000_000)) : undefined}
                       placeholder="e.g., 10"
                       className={errors.maxStorageValue ? "flex-1 border-red-500" : "flex-1"}
                       onKeyDown={blockNonNumeric}
@@ -443,8 +444,8 @@ export function ProjectCreateForm() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="MiB">MiB</SelectItem>
-                        <SelectItem value="GiB">GiB</SelectItem>
+                        <SelectItem value="MB">MB</SelectItem>
+                        <SelectItem value="GB">GB</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -452,7 +453,7 @@ export function ProjectCreateForm() {
                     <p className="text-sm text-red-500">{errors.maxStorageValue.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Maximum disk space for this project
+                    Maximum storage for this project
                   </p>
                 </div>
               </div>

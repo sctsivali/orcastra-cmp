@@ -40,6 +40,8 @@ export interface UseNodePickerOptionsResult {
   options: SearchableSelectOption[];
   isLoading: boolean;
   isError: boolean;
+  /** True only after the authoritative cluster-name read completed successfully. */
+  namesLoaded: boolean;
   /** Status for one cluster, for the consequence line under the field. */
   statusOf: (nodeName: string) => ClusterStatusMeta | undefined;
   /** The raw availability row, when the caller wants the reason text. */
@@ -185,6 +187,7 @@ export function useNodePickerOptions(
     options,
     isLoading: names.isLoading,
     isError: names.isError,
+    namesLoaded: names.isSuccess,
     statusOf,
     availabilityOf,
     labelOf,

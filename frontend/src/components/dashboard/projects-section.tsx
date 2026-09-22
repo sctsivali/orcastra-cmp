@@ -41,13 +41,13 @@ interface ProjectsContext {
 // plumbing. Tags stay behind TagFilter rather than the generic facet popover: getTagColor
 // derives a tag's colour from its prefix, so the colour is data here, not decoration.
 const PROJECTS = defineTable<ProjectInfo, ProjectsContext>()({
-  searchPlaceholder: "Search projects by name, host, description, or instance",
+  searchPlaceholder: "Search projects by name, cluster, description, or instance",
   defaultSort: { field: "name", direction: "asc" },
   columns: [
     { field: "name", label: "Project", sort: (p) => p.name, search: (p) => p.name, filter: fromSort("text") },
     {
       field: "host",
-      label: "Node",
+      label: "Cluster",
       sort: (p) => p.host,
       search: (p) => p.host,
       facet: (p) => p.host,
@@ -436,14 +436,14 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
                   ) : allNodesUnreachable ? (
                     <EmptyState
                       icon={AlertTriangle}
-                      title="No node answered"
-                      description="Every node in scope failed to report its projects, so this list is unknown rather than empty."
+                      title="No cluster answered"
+                      description="Every cluster in scope failed to report its projects, so this list is unknown rather than empty."
                     />
                   ) : (
                     <EmptyState
                       icon={FolderKanban}
                       title="No projects yet"
-                      description="Projects appear here once a node reports one."
+                      description="Projects appear here once a cluster reports one."
                     />
                   )}
                 </div>

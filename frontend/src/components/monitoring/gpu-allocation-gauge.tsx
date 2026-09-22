@@ -44,7 +44,7 @@ export function GpuAllocationGauge({ stats, scope, color }: GpuAllocationGaugePr
           {gpu.hasCards
             ? `${cardsCaption ?? `${gpu.cardsTotal} detected`}, none allocatable`
             : scope === "all"
-              ? "No GPU on any node"
+              ? "No GPU on any cluster"
               : `No GPU on ${scope}`}
         </p>
       </div>

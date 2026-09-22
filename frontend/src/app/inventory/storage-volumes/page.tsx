@@ -82,7 +82,7 @@ const VOLUMES = defineTable<VolumeInfo>()({
     },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (v) => v.node,
       facet: (v) => v.node,
       facetSpec: { role: "node", primary: true },
@@ -241,7 +241,7 @@ function StorageVolumesContent() {
                 <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Content Type" field="content_type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && (
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 {locations.length > 0 && (
                   <SortableTableHead label="Location" field="location" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -350,7 +350,7 @@ function volumeSubject(volume: StorageVolumeInfo): UsedBySubject {
       { label: "Pool", value: volume.pool },
       { label: "Type", value: formatLabel(volume.type) },
       { label: "Content Type", value: volume.content_type },
-      { label: "Node", value: <NodeLink clusterId={volume.node} /> },
+      { label: "Cluster", value: <NodeLink clusterId={volume.node} /> },
     ],
     panels: Object.keys(config).length
       ? [{ id: "config", label: "Configuration", kind: "config", entries: config }]

@@ -45,7 +45,7 @@ const PERMISSIONS = ["read", "write", "admin"] as const;
 const BREADTHS = ["selected", "all"] as const;
 
 /** 16 KB on the server. Refusing here saves a round trip and says the same number. */
-const MAX_MANIFEST_BYTES = 16 * 1024;
+const MAX_MANIFEST_BYTES = 16_000;
 
 /**
  * Registering an add-on, which until now had no surface at all.

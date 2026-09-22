@@ -7,6 +7,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Draggable from "react-draggable";
 import { Resizable } from "react-resizable";
 import {
@@ -37,7 +38,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useConsoleStore, ConsoleTab } from "@/lib/console-store";
-import { API_URL, getAccessToken } from "@/lib/api";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { API_URL, getAccessToken, isAuthActorSynchronized } from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import { tasksAPI } from "@/lib/tasks-api";
 import { ConsoleTabs } from "./console-tabs";
 import { ConsoleToolbar } from "./console-toolbar";
 import { TextConsole, TextConsoleHandle } from "./text-console";
@@ -87,6 +91,8 @@ export function ConsoleWindow({
     closeConsole,
     updateInstanceStatus,
   } = useConsoleStore();
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
 
   const consoleInstance = consoles.find((c) => c.id === consoleId);
   
@@ -125,22 +131,24 @@ export function ConsoleWindow({
     
     setKillingSession(true);
     try {
-      const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/active-sessions/${encodeURIComponent(operationId)}` +
-          `?host=${encodeURIComponent(consoleInstance.host)}` +
-          `&project=${encodeURIComponent(consoleInstance.project || "default")}`,
-        { method: "DELETE", headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
+      const actorScope = scopeKey;
+      await tasksAPI.killConsoleSession(
+        consoleInstance.instanceName,
+        operationId,
+        consoleInstance.host,
+        consoleInstance.project || "default",
       );
-      
-      if (response.ok) {
-        // Remove killed session from list
-        setSessionConflict((prev) => ({
-          ...prev,
-          sessions: prev.sessions.filter((s) => s.operation_id !== operationId),
-          show: prev.sessions.length > 1,
-        }));
-      }
+      if (!isAuthActorSynchronized(actorScope)) return;
+      await reconcileMutationImpact(queryClient, "task.session");
+      if (!isAuthActorSynchronized(actorScope)) return;
+      // Remove killed session from list
+      setSessionConflict((prev) => ({
+        ...prev,
+        sessions: prev.sessions.filter((s) => s.operation_id !== operationId),
+        show: prev.sessions.length > 1,
+      }));
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error("[Console] Failed to kill session:", err);
     } finally {
       setKillingSession(false);
@@ -507,12 +515,15 @@ export function ConsoleWindow({
               
               // 3. Kill all sessions for this instance
               try {
-                await fetch(
-                  `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/kill-all-sessions` +
-                    `?host=${encodeURIComponent(consoleInstance.host)}` +
-                    `&project=${encodeURIComponent(consoleInstance.project || "default")}`,
-                  { method: 'POST', headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
+                const actorScope = scopeKey;
+                await tasksAPI.killAllConsoleSessions(
+                  consoleInstance.instanceName,
+                  consoleInstance.host,
+                  consoleInstance.project || "default",
                 );
+                if (isAuthActorSynchronized(actorScope)) {
+                  await reconcileMutationImpact(queryClient, "task.session");
+                }
               } catch (err) {
                 // Ignore - sessions might already be closed
               }

@@ -240,11 +240,11 @@ function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
           <EmptyState
             icon={Server}
             title="No clusters yet"
-            description="Clusters appear here once a node is registered and authenticated."
+            description="Clusters appear here once one is registered and authenticated."
             action={
               isPartner ? (
                 <Button size="sm" variant="outline" onClick={() => navigate("/register-node")}>
-                  Register Node
+                  Register Cluster
                 </Button>
               ) : undefined
             }

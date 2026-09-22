@@ -74,7 +74,7 @@ const ACLS = defineTable<NetworkACLInfo>()({
       search: (a) => a.description, filter: fromSort("text") },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (a) => a.node,
       facet: (a) => a.node,
       facetSpec: { role: "node", primary: true } },
@@ -252,7 +252,7 @@ function NetworkACLsContent() {
               <TableRow>
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                {nodes.length > 0 && <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
+                {nodes.length > 0 && <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
                 <SortableTableHead label="Ingress Rules" field="ingress" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Egress Rules" field="egress" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -464,7 +464,7 @@ function aclSubject(acl: NetworkACLInfo): UsedBySubject {
     description: acl.description || undefined,
     usedBy: acl.used_by ?? [],
     facts: [
-      { label: "Node", value: <NodeLink clusterId={acl.node} /> },
+      { label: "Cluster", value: <NodeLink clusterId={acl.node} /> },
       { label: "Ingress Rules", value: ingress.length },
       { label: "Egress Rules", value: egress.length },
     ],

@@ -67,8 +67,8 @@ function PlatformTechnologies() {
           <CardContent className="pt-6">
             <EmptyState
               icon={AlertTriangle}
-              title="Could not load node data"
-              description="The dashboard did not get an answer for this page. This says nothing about whether your nodes are running."
+              title="Could not load cluster data"
+              description="The dashboard did not get an answer for this page. This says nothing about whether your clusters are running."
               action={
                 <Button variant="outline" size="sm" onClick={() => void refetch()}>
                   Retry
@@ -115,8 +115,8 @@ function PlatformTechnologies() {
               <CardContent className="pt-6">
                 <EmptyState
                   icon={Server}
-                  title="No node data yet"
-                  description="Hardware figures appear here once a node is connected and reporting its resources."
+                  title="No cluster data yet"
+                  description="Hardware figures appear here once a cluster is connected and reporting its resources."
                 />
               </CardContent>
             </Card>

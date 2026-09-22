@@ -7,6 +7,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Disc,
   Loader2,
@@ -43,8 +44,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
-import { API_URL, getAccessToken } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { isAuthActorSynchronized } from "@/lib/api";
+import { consoleAPI } from "@/lib/console-api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import { cn, formatBytes } from "@/lib/utils";
 import { useConsoleStore, AttachedISO } from "@/lib/console-store";
 import { OverflowText } from "@/components/ui/overflow-text";
 
@@ -78,14 +82,6 @@ interface ISOManagerPanelProps {
   className?: string;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
 export function ISOManagerPanel({
   consoleId,
   instanceName,
@@ -106,24 +102,21 @@ export function ISOManagerPanel({
   const [searchQuery, setSearchQuery] = useState('');
 
   const { setAttachedISO } = useConsoleStore();
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
 
   // Fetch attached ISO
   const fetchAttachedISO = useCallback(async () => {
     try {
-      const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
-        { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
-      );
-
-      if (!response.ok) throw new Error('Failed to fetch attached ISO');
-
-      const data = await response.json();
+      const actorScope = scopeKey;
+      const data = await consoleAPI.getAttachedISO(instanceName, host, project);
+      if (!isAuthActorSynchronized(actorScope)) return;
       
       if (data.success && data.attached) {
         const iso: AttachedISO = {
-          deviceName: data.device_name,
-          source: data.source,
-          pool: data.pool,
+          deviceName: data.device_name || "cdrom",
+          source: data.source || "",
+          pool: data.pool || "",
           bootPriority: data.boot_priority,
         };
         setAttachedISOState(iso);
@@ -133,32 +126,32 @@ export function ISOManagerPanel({
         setAttachedISO(consoleId, undefined);
       }
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error fetching attached ISO:', err);
     }
-  }, [consoleId, instanceName, host, project, setAttachedISO]);
+  }, [consoleId, host, instanceName, project, scopeKey, setAttachedISO]);
 
   // Fetch available ISOs
   const fetchAvailableISOs = useCallback(async () => {
     try {
-      const response = await fetch(
-        `${API_URL}/console/isos?host=${encodeURIComponent(host)}`,
-        { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
-      );
-
-      if (!response.ok) throw new Error('Failed to fetch available ISOs');
-
-      const data = await response.json();
+      const actorScope = scopeKey;
+      const data = await consoleAPI.listISOs(host);
+      if (!isAuthActorSynchronized(actorScope)) return;
       
       if (data.success) {
-        setAvailableISOs(data.isos || []);
+        setAvailableISOs((data.isos || []).map((iso) => ({
+          ...iso,
+          createdAt: iso.created_at ?? undefined,
+        })));
       }
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       // important: rethrow. Swallowing this made a failed fetch render as an
       // empty ISO library, which reads as "this pool has no ISOs".
       console.error('Error fetching ISOs:', err);
       throw err;
     }
-  }, [host]);
+  }, [host, scopeKey]);
 
   const loadPanel = useCallback(async () => {
     setLoading(true);
@@ -186,26 +179,16 @@ export function ISOManagerPanel({
 
     setSavingPriority(true);
     try {
-      const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso/attach?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
-          body: JSON.stringify({
-            pool: attachedISO.pool,
-            volume: attachedISO.source,
-            device_name: attachedISO.deviceName,
-            boot_priority: priority,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(err.detail || 'Failed to change boot priority');
-      }
-      const data = await response.json();
-      if (!data.success) throw new Error(data.error || 'Failed to change boot priority');
+      const actorScope = scopeKey;
+      await consoleAPI.attachISO(instanceName, host, project, {
+        pool: attachedISO.pool,
+        volume: attachedISO.source,
+        device_name: attachedISO.deviceName,
+        boot_priority: priority,
+      });
+      if (!isAuthActorSynchronized(actorScope)) return;
+      await reconcileMutationImpact(queryClient, "instance.media");
+      if (!isAuthActorSynchronized(actorScope)) return;
 
       toast({
         title: "Boot priority updated",
@@ -216,6 +199,7 @@ export function ISOManagerPanel({
       });
       await fetchAttachedISO();
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       toast({
         title: "Error",
         description: err instanceof Error ? err.message : 'Failed to change boot priority',
@@ -232,35 +216,25 @@ export function ISOManagerPanel({
 
     setAttaching(true);
     try {
-      const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso/attach?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
-          body: JSON.stringify({
-            pool: selectedISO.pool,
-            volume: selectedISO.volume,
-            device_name: 'cdrom',
-            boot_priority: bootPriority,
-          }),
-        }
-      );
-
-      if (!response.ok) throw new Error('Failed to attach ISO');
-
-      const data = await response.json();
-      
-      if (data.success) {
-        toast({
-          title: "ISO Attached",
-          description: data.message || `${selectedISO.name} attached successfully`,
-        });
-        await fetchAttachedISO();
-        setSelectedISO(null);
-      } else {
-        throw new Error(data.error || 'Failed to attach');
-      }
+      const actorScope = scopeKey;
+      const data = await consoleAPI.attachISO(instanceName, host, project, {
+        pool: selectedISO.pool,
+        volume: selectedISO.volume,
+        device_name: 'cdrom',
+        boot_priority: bootPriority,
+      });
+      if (!isAuthActorSynchronized(actorScope)) return;
+      await reconcileMutationImpact(queryClient, "instance.media");
+      if (!isAuthActorSynchronized(actorScope)) return;
+      toast({
+        title: "ISO Attached",
+        description: data.message || `${selectedISO.name} attached successfully`,
+      });
+      await fetchAttachedISO();
+      if (!isAuthActorSynchronized(actorScope)) return;
+      setSelectedISO(null);
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error attaching ISO:', err);
       toast({
         title: "Error",
@@ -280,26 +254,24 @@ export function ISOManagerPanel({
     setConfirmEject(false);
 
     try {
-      const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso/eject?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}&device_name=${encodeURIComponent(attachedISO.deviceName)}`,
-        { method: 'POST', headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
+      const actorScope = scopeKey;
+      const data = await consoleAPI.ejectISO(
+        instanceName,
+        host,
+        project,
+        attachedISO.deviceName,
       );
-
-      if (!response.ok) throw new Error('Failed to eject ISO');
-
-      const data = await response.json();
-      
-      if (data.success) {
-        toast({
-          title: "ISO Ejected",
-          description: data.message || "ISO ejected successfully",
-        });
-        setAttachedISOState(null);
-        setAttachedISO(consoleId, undefined);
-      } else {
-        throw new Error(data.error || 'Failed to eject');
-      }
+      if (!isAuthActorSynchronized(actorScope)) return;
+      await reconcileMutationImpact(queryClient, "instance.media");
+      if (!isAuthActorSynchronized(actorScope)) return;
+      toast({
+        title: "ISO Ejected",
+        description: data.message || "ISO ejected successfully",
+      });
+      setAttachedISOState(null);
+      setAttachedISO(consoleId, undefined);
     } catch (err) {
+      if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error ejecting ISO:', err);
       toast({
         title: "Error",
@@ -448,7 +420,7 @@ export function ISOManagerPanel({
                       </Badge>
                       {iso.size > 0 && (
                         <span className="text-xs text-muted-foreground">
-                          {formatSize(iso.size)}
+                          {formatBytes(iso.size, 1)}
                         </span>
                       )}
                     </div>

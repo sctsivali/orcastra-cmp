@@ -22,8 +22,9 @@ import {
   limitSessionCount,
   STORAGE_KEYS,
 } from './storage-utils';
-import { getAccessToken } from './api';
 import { useBreakGlassStore } from './break-glass-store';
+import { reconcileExternalMutation } from './mutation-coherence';
+import { tasksAPI } from './tasks-api';
 
 // Console window position and size
 export interface ConsolePosition {
@@ -298,19 +299,12 @@ export const useConsoleStore = create<ConsoleState>()(
         
         // Kill all sessions for this instance if requested
         if (cancelOperation && consoleToClose?.instanceName && consoleToClose?.host) {
-          const query = new URLSearchParams({
-            host: consoleToClose.host,
-            project: consoleToClose.project || "default",
-          });
-          fetch(`/api/v1/console/${encodeURIComponent(consoleToClose.instanceName)}/kill-all-sessions?${query.toString()}`, {
-            method: 'POST',
-            headers: {
-              ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-            },
-          }).then((res) => res.json()).then(() => {
-            // Silent
-          }).catch(() => {
-            // Silent fail - sessions might already be closed
+          void tasksAPI.killAllConsoleSessions(
+            consoleToClose.instanceName,
+            consoleToClose.host,
+            consoleToClose.project || "default",
+          ).then(() => reconcileExternalMutation("task.session")).catch(() => {
+            // Silent fail - sessions might already be closed.
           });
         }
         

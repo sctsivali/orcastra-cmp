@@ -272,7 +272,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
         : stale
           ? "Reload before saving"
           : !node
-            ? "Select a node"
+            ? "Select a cluster"
             : !isEdit && name === ""
               ? "Enter a name"
               : firstProblem;
@@ -289,7 +289,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
                 <dd className="font-mono">{existing!.name}</dd>
               </div>
               <div>
-                <dt className="text-xs text-muted-foreground">Node</dt>
+                <dt className="text-xs text-muted-foreground">Cluster</dt>
                 <dd>{existing!.node}</dd>
               </div>
               <div>
@@ -300,7 +300,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="profile-node">Node *</Label>
+                <Label htmlFor="profile-node">Cluster *</Label>
                 <SearchableSelect
                   id="profile-node"
                   value={node}
@@ -310,9 +310,9 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
                     setProject("default");
                   }}
                   options={nodeOptions}
-                  placeholder={loadingNodes ? "Loading..." : "Select a node"}
-                  searchPlaceholder="Search nodes..."
-                  emptyText="No nodes found."
+                  placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
+                  searchPlaceholder="Search clusters..."
+                  emptyText="No clusters found."
                   disabled={loadingNodes}
                 />
                 <NodeStatusNotice

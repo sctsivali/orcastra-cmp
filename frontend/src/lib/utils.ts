@@ -9,11 +9,69 @@ export function cn(...inputs: ClassValue[]) {
 // it from there would point lib/ at components/, which nothing else in lib/ does.
 const EMPTY_VALUE = "\u2014";
 
-function scaleBytes(bytes: number, base: number, units: string[], decimals: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return `0 ${units[0]}`;
-  const dm = decimals < 0 ? 0 : decimals;
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(base)), units.length - 1);
-  return `${parseFloat((bytes / Math.pow(base, i)).toFixed(dm))} ${units[i]}`;
+const SI_BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
+const IEC_BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] as const;
+
+export type FormattedByteValue = { value: string; unit: string };
+export type FormattedByteQuota = { value: string; unit: string };
+
+export interface ByteFormatOptions {
+  /** Digits after the decimal point before insignificant trailing zeroes are removed. */
+  decimals?: number;
+  /** Whether a zero or invalid reading is explicit or rendered as the shared empty value. */
+  zeroDisplay?: "zero" | "empty";
+  /** Return value and unit separately for dense cards that style them independently. */
+  split?: boolean;
+}
+
+type SplitByteFormatOptions = ByteFormatOptions & { split: true };
+
+function scaleBytes(
+  bytes: number,
+  base: number,
+  units: readonly string[],
+  options: number | ByteFormatOptions = {},
+): FormattedByteValue {
+  const normalized = typeof options === "number" ? { decimals: options } : options;
+  const decimals = Math.max(0, normalized.decimals ?? 2);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return normalized.zeroDisplay === "empty"
+      ? { value: EMPTY_VALUE, unit: "" }
+      : { value: "0", unit: units[0] };
+  }
+
+  const index = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(base)),
+    units.length - 1,
+  );
+  return {
+    value: String(parseFloat((bytes / Math.pow(base, index)).toFixed(decimals))),
+    unit: units[index],
+  };
+}
+
+function scaleByteQuota(
+  usedBytes: number,
+  limitBytes: number,
+  base: number,
+  units: readonly string[],
+  decimals = 1,
+): FormattedByteQuota {
+  const limit = scaleBytes(limitBytes, base, units, { decimals, split: true });
+  const index = Math.max(0, units.indexOf(limit.unit));
+  const divisor = Math.pow(base, index);
+  const usedValue = Number.isFinite(usedBytes) && usedBytes > 0
+    ? String(parseFloat((usedBytes / divisor).toFixed(Math.max(0, decimals))))
+    : "0";
+
+  return {
+    value: `${usedValue} of ${limit.value}`,
+    unit: limit.unit,
+  };
+}
+
+function joinByteValue(value: FormattedByteValue): string {
+  return value.unit ? `${value.value} ${value.unit}` : value.value;
 }
 
 /**
@@ -24,8 +82,14 @@ function scaleBytes(bytes: number, base: number, units: string[], decimals: numb
  * vendor or `lxc storage info` says the hardware holds. Memory is the exception and has its
  * own formatter: see formatMemory.
  */
-export function formatBytes(bytes: number, decimals = 2): string {
-  return scaleBytes(bytes, 1000, ["Bytes", "KB", "MB", "GB", "TB", "PB"], decimals);
+export function formatBytes(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
+export function formatBytes(bytes: number, options?: number | ByteFormatOptions): string;
+export function formatBytes(
+  bytes: number,
+  options: number | ByteFormatOptions = {},
+): string | FormattedByteValue {
+  const formatted = scaleBytes(bytes, 1000, SI_BYTE_UNITS, options);
+  return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
 }
 
 /**
@@ -36,8 +100,54 @@ export function formatBytes(bytes: number, decimals = 2): string {
  * host that the kernel, `free -h` and the hypervisor all call 66 GiB is a legibility
  * regression, not a unit fix. Storage keeps the decimal formatter above.
  */
-export function formatMemory(bytes: number, decimals = 2): string {
-  return scaleBytes(bytes, 1024, ["Bytes", "KiB", "MiB", "GiB", "TiB", "PiB"], decimals);
+export function formatMemory(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
+export function formatMemory(bytes: number, options?: number | ByteFormatOptions): string;
+export function formatMemory(
+  bytes: number,
+  options: number | ByteFormatOptions = {},
+): string | FormattedByteValue {
+  const formatted = scaleBytes(bytes, 1024, IEC_BYTE_UNITS, options);
+  return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
+}
+
+/**
+ * An explicit LXD/Incus size limit entered as MiB or GiB.
+ *
+ * This is intentionally separate from storage capacity. Pools, images, files, and counters are
+ * decimal; daemon configuration limits preserve the binary unit the operator selected.
+ */
+export function formatLxdLimit(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
+export function formatLxdLimit(bytes: number, options?: number | ByteFormatOptions): string;
+export function formatLxdLimit(
+  bytes: number,
+  options: number | ByteFormatOptions = {},
+): string | FormattedByteValue {
+  const formatted = scaleBytes(bytes, 1024, IEC_BYTE_UNITS, options);
+  return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
+}
+
+/** Storage usage and its limit, kept on one decimal SI scale for compact quota cards. */
+export function formatByteQuota(
+  usedBytes: number,
+  limitBytes: number,
+  decimals = 1,
+): FormattedByteQuota {
+  return scaleByteQuota(usedBytes, limitBytes, 1000, SI_BYTE_UNITS, decimals);
+}
+
+/** Memory usage and its limit, kept on one binary IEC scale for compact quota cards. */
+export function formatMemoryQuota(
+  usedBytes: number,
+  limitBytes: number,
+  decimals = 1,
+): FormattedByteQuota {
+  return scaleByteQuota(usedBytes, limitBytes, 1024, IEC_BYTE_UNITS, decimals);
+}
+
+/** Network throughput in bytes per second, scaled with decimal SI units. */
+export function formatNetworkRate(bytesPerSecond: number, decimals = 2): string {
+  const formatted = scaleBytes(bytesPerSecond, 1000, SI_BYTE_UNITS, { decimals });
+  return `${formatted.value} ${formatted.unit}/s`;
 }
 
 /**

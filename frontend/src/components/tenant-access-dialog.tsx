@@ -30,6 +30,7 @@ import {
   ChevronRight, Edit, X, Check,
 } from "lucide-react";
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { queryKeys, useClusters } from "@/hooks/use-lxd";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useToast } from "@/hooks/use-toast";
@@ -624,7 +625,7 @@ export function TenantAccessDialog({
   const assignMutation = useMutation({
     mutationFn: (data: AssignmentCreateRequest) => api.tenantAccess.createAssignment(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-assignments"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       toast({ title: "Policy Assigned", description: `Access policy assigned to ${userEmail}.` });
     },
     onError: (err: Error) => {
@@ -635,7 +636,7 @@ export function TenantAccessDialog({
   const revokeMutation = useMutation({
     mutationFn: (id: number) => api.tenantAccess.deleteAssignment(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-assignments"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setRevokeId(null);
       toast({ title: "Access Revoked", description: `Policy revoked from ${userEmail}.` });
     },
@@ -647,7 +648,7 @@ export function TenantAccessDialog({
   const createPolicyMutation = useMutation({
     mutationFn: (data: PolicyCreateRequest) => api.tenantAccess.createPolicy(data),
     onSuccess: (policy) => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-policies"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setCreatePolicyOpen(false);
       toast({ title: "Policy Created", description: `"${policy.name}" is ready to assign.` });
     },
@@ -660,8 +661,7 @@ export function TenantAccessDialog({
     mutationFn: ({ id, data }: { id: number; data: PolicyUpdateRequest }) =>
       api.tenantAccess.updatePolicy(id, data),
     onSuccess: (policy) => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-policies"] });
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-assignments"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setEditPolicyObj(null);
       toast({ title: "Policy Updated", description: `"${policy.name}" updated.` });
     },
@@ -673,8 +673,7 @@ export function TenantAccessDialog({
   const deletePolicyMutation = useMutation({
     mutationFn: (id: number) => api.tenantAccess.deletePolicy(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-policies"] });
-      queryClient.invalidateQueries({ queryKey: ["tenant-access-assignments"] });
+      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setDeletePolicyId(null);
       toast({ title: "Policy Deleted" });
     },
@@ -1054,7 +1053,7 @@ function AssignedPolicyCard({
 
       {/* meta */}
       <div className="px-3 py-1.5 border-t flex items-center gap-4 text-[10px] text-muted-foreground bg-muted/10">
-        <span>Org: <strong className="text-foreground">{assignment.organization_name}</strong></span>
+        <span>Organization: <strong className="text-foreground">{assignment.organization_name}</strong></span>
         <span>Assigned by: {assignment.assigned_by}</span>
         <span>{new Date(assignment.assigned_at).toLocaleDateString()}</span>
         {assignment.expires_at && (

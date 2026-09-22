@@ -56,7 +56,7 @@ import {
   History,
   ShieldAlert,
   AlertTriangle } from "lucide-react";
-import { cn, formatLabel } from "@/lib/utils";
+import { cn, formatBytes, formatLabel, formatNetworkRate } from "@/lib/utils";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -114,22 +114,6 @@ interface AuditLogEntry {
 }
 
 // ============ Utility functions ============
-
-function formatBytes(bytes: number, decimals = 1): string {
-  if (!bytes || bytes === 0) return "0 B";
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(decimals)} ${sizes[i]}`;
-}
-
-function formatRate(bytesPerSec: number): string {
-  if (!bytesPerSec || bytesPerSec === 0) return "0 B/s";
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B/s", "KB/s", "MB/s", "GB/s"];
-  const i = Math.floor(Math.log(Math.abs(bytesPerSec)) / Math.log(k));
-  return `${(bytesPerSec / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
 
 function formatDuration(seconds: number | null): string {
   if (!seconds || seconds === 0) return "—";
@@ -255,7 +239,7 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
         primary: true,
         format: (status) => sessionConnectionStatusDisplay(status).label,
       } },
-    { field: "node", label: "Node", facet: (s) => s.host, facetSpec: { role: "node",} },
+    { field: "node", label: "Cluster", facet: (s) => s.host, facetSpec: { role: "node",} },
   ] });
 
 function ActiveSessionsTab() {
@@ -423,7 +407,7 @@ function ActiveSessionsTab() {
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Download</p>
-              <p className="text-lg font-bold mt-1 font-mono">↓{formatRate(totalDlRate)}</p>
+              <p className="text-lg font-bold mt-1 font-mono">↓{formatNetworkRate(totalDlRate, 1)}</p>
             </div>
             <ArrowDownToLine className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
@@ -433,7 +417,7 @@ function ActiveSessionsTab() {
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Upload</p>
-              <p className="text-lg font-bold mt-1 font-mono">↑{formatRate(totalUlRate)}</p>
+              <p className="text-lg font-bold mt-1 font-mono">↑{formatNetworkRate(totalUlRate, 1)}</p>
             </div>
             <ArrowUpFromLine className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
@@ -606,7 +590,7 @@ const SESSION_HISTORY = defineTable<AuditLogEntry>()({
     { field: "duration", label: "Duration", sort: (l) => l.duration_seconds ?? 0, filter: fromSort("number", { unit: "seconds" }) },
     { field: "transfer", label: "Transfer", sort: (l) => (l.download_bytes ?? 0) + (l.upload_bytes ?? 0), filter: fromSort("number", { unit: "bytes" }) },
     { field: "time", label: "Time", sort: (l) => (l.created_at ? new Date(l.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
-    { field: "node", label: "Node", facet: (l) => l.host, facetSpec: { role: "node",} },
+    { field: "node", label: "Cluster", facet: (l) => l.host, facetSpec: { role: "node",} },
   ] });
 
 /**
@@ -1011,8 +995,8 @@ function ActiveRow({ session, onSelect, scope }: {
       </TableCell>
       <TableCell>
         <div className="flex flex-col text-xs font-mono">
-          <span className="text-green-600 dark:text-green-400">↓{formatRate(session.bandwidth.download_rate_bps)}</span>
-          <span className="text-blue-600 dark:text-blue-400">↑{formatRate(session.bandwidth.upload_rate_bps)}</span>
+          <span className="text-green-600 dark:text-green-400">↓{formatNetworkRate(session.bandwidth.download_rate_bps, 1)}</span>
+          <span className="text-blue-600 dark:text-blue-400">↑{formatNetworkRate(session.bandwidth.upload_rate_bps, 1)}</span>
         </div>
       </TableCell>
       <TableCell>

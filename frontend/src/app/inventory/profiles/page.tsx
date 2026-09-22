@@ -64,7 +64,7 @@ const PROFILES = defineTable<ProfileInfo>()({
       search: (p) => p.description, filter: fromSort("text") },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (p) => p.node,
       facet: (p) => p.node,
       facetSpec: { role: "node", primary: true },
@@ -286,7 +286,7 @@ function ProfilesContent() {
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && (
-                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="Devices" field="devices" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -448,7 +448,7 @@ function profileSubject(profile: ProfileInfo): UsedBySubject {
     description: profile.description || undefined,
     usedBy: profile.used_by ?? [],
     facts: [
-      { label: "Node", value: <NodeLink clusterId={profile.node} /> },
+      { label: "Cluster", value: <NodeLink clusterId={profile.node} /> },
       { label: "Devices", value: Object.keys(devices).length },
       { label: "Config Keys", value: Object.keys(config).length },
     ],

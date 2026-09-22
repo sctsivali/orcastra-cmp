@@ -35,7 +35,7 @@ export interface NodeLinkProps {
   wrap?: boolean;
 }
 
-export function NodeLink({ clusterId, label, emptyLabel = "No node", className, wrap }: NodeLinkProps) {
+export function NodeLink({ clusterId, label, emptyLabel = "No cluster", className, wrap }: NodeLinkProps) {
   const { hasRole } = usePermissions();
   if (!clusterId) return <TableEmptyValue label={emptyLabel} />;
   const text = label ?? clusterId;

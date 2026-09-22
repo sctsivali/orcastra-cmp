@@ -19,6 +19,7 @@
 
 import * as React from "react";
 import { useSession } from "next-auth/react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   PersonalizationSettings,
   PersonalizationContextType,
@@ -36,6 +37,16 @@ import {
   toPersonalizationHint,
 } from "@/lib/personalization-cookie";
 import { toast } from "@/hooks/use-toast";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { onAuthActorChanged } from "@/lib/api";
+import {
+  ActorMutationFence,
+  captureActorMutationFence,
+  dispatchActorMutation,
+  isActorMutationFenceCurrent,
+} from "@/lib/actor-mutation-fence";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
+import { personalizationAPI } from "@/lib/personalization-api";
 
 // API configuration - use relative URLs (Next.js rewrites proxy to backend)
 const API_BASE = "";
@@ -140,6 +151,8 @@ export function PersonalizationProvider({
   initialSettings?: PersonalizationSettings | null;
 }) {
   const { data: session, status } = useSession();
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   // note: next-auth builds a fresh session object on every refresh, so depending on
   // `session` itself tears down and rebuilds the org-pref timer and listener below
   // on each one. The token is the only part those effects actually read.
@@ -196,6 +209,28 @@ export function PersonalizationProvider({
     settingsRef.current = settings;
   }, [settings]);
 
+  const clearPendingSave = React.useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    pendingSettingsRef.current = null;
+  }, []);
+
+  // Retire debounced work synchronously at the auth boundary. The fence checked immediately
+  // before dispatch is still required: a timer can already be runnable, and A -> B -> A must
+  // not make an old A callback current again merely because its actor label matches.
+  React.useEffect(() => {
+    const unsubscribe = onAuthActorChanged(() => {
+      clearPendingSave();
+      setIsSaving(false);
+    });
+    return () => {
+      unsubscribe();
+      clearPendingSave();
+    };
+  }, [clearPendingSave]);
+
   /**
    * Fetch settings from API with retry mechanism
    */
@@ -234,63 +269,51 @@ export function PersonalizationProvider({
     return null;
   }, []);
 
-  /**
-   * Save settings to API with retry mechanism
-   */
+  /** Save settings once. An unknown write outcome is surfaced instead of replayed. */
   const saveToAPI = React.useCallback(async (
-    userId: string, 
-    userEmail: string | undefined,
+    _userId: string,
+    _userEmail: string | undefined,
     newSettings: PersonalizationSettings,
-    accessToken?: string
+    accessToken: string | undefined,
+    actorFence: ActorMutationFence,
   ): Promise<boolean> => {
-    for (let attempt = 0; attempt <= API_RETRY_COUNT; attempt++) {
-      try {
-        if (attempt > 0) {
-          await delay(API_RETRY_DELAY_MS * attempt);
-        }
-        
-        const response = await fetch(`${API_BASE}/api/v1/user-preferences`, {
-          method: "PUT",
-          headers: buildHeaders(userId, userEmail, accessToken),
-          credentials: "include",
-          body: JSON.stringify(newSettings),
-        });
-        
-        if (response.ok) {
-          return true;
-        }
-        
-        // Don't retry on client errors (4xx)
-        if (response.status >= 400 && response.status < 500) {
-          return false;
-        }
-      } catch {
-        // Network error - will retry
-      }
+    try {
+      const outcome = await dispatchActorMutation(
+        actorFence,
+        () => personalizationAPI.update(newSettings, accessToken),
+      );
+      if (outcome.retired) return true;
+      await reconcileMutationImpact(queryClient, "personalization.write");
+      return true;
+    } catch {
+      if (!isActorMutationFenceCurrent(actorFence)) return true;
+      // A write whose outcome is unknown must not be repeated automatically.
+      return false;
     }
-    
-    return false;
-  }, []);
+  }, [queryClient]);
 
   /**
    * Delete settings from API (reset to defaults)
    */
   const deleteFromAPI = React.useCallback(async (
-    userId: string, 
-    userEmail?: string,
-    accessToken?: string
+    _userId: string,
+    _userEmail: string | undefined,
+    accessToken: string | undefined,
+    actorFence: ActorMutationFence,
   ): Promise<boolean> => {
     try {
-      const response = await fetch(`${API_BASE}/api/v1/user-preferences`, {
-        method: "DELETE",
-        headers: buildHeaders(userId, userEmail, accessToken),
-        credentials: "include",
-      });
-      return response.ok;
+      const outcome = await dispatchActorMutation(
+        actorFence,
+        () => personalizationAPI.delete(accessToken),
+      );
+      if (outcome.retired) return true;
+      await reconcileMutationImpact(queryClient, "personalization.write");
+      return true;
     } catch {
+      if (!isActorMutationFenceCurrent(actorFence)) return true;
       return false;
     }
-  }, []);
+  }, [queryClient]);
 
   /**
    * Fetch org-level preferences for tenant auto-inherit
@@ -435,6 +458,7 @@ export function PersonalizationProvider({
   ) => {
     const userId = session?.user?.id;
     const userEmail = session?.user?.email ?? undefined;
+    const actorFence = captureActorMutationFence(scopeKey);
     
     if (!userId) {
       toast({
@@ -478,8 +502,16 @@ export function PersonalizationProvider({
 
     // flush function that persists to API
     const flush = async (toSave: PersonalizationSettings) => {
+      if (!isActorMutationFenceCurrent(actorFence)) return;
       setIsSaving(true);
-      const success = await saveToAPI(userId, userEmail, toSave, (session as any)?.accessToken);
+      const success = await saveToAPI(
+        userId,
+        userEmail,
+        toSave,
+        sessionAccessToken,
+        actorFence,
+      );
+      if (!isActorMutationFenceCurrent(actorFence)) return;
       setIsSaving(false);
       if (!success) {
         toast({
@@ -505,7 +537,7 @@ export function PersonalizationProvider({
         await flush(toSave);
       }, 800);
     }
-  }, [session?.user?.id, session?.user?.email, saveToAPI]);
+  }, [session?.user?.id, session?.user?.email, sessionAccessToken, scopeKey, saveToAPI]);
 
   const updateLogo = React.useCallback((logo: Partial<LogoSettings>) => {
     saveSettings({
@@ -547,6 +579,7 @@ export function PersonalizationProvider({
    */
   const persistPersonalTheme = React.useCallback(async (theme: ThemePreference) => {
     const userId = session?.user?.id;
+    const actorFence = captureActorMutationFence(scopeKey);
     if (!userId) {
       toast({
         title: "Cannot save settings",
@@ -565,8 +598,16 @@ export function PersonalizationProvider({
     };
     personalRowRef.current = personal;
     lastLocalEditRef.current = Date.now();
+    if (!isActorMutationFenceCurrent(actorFence)) return;
     setIsSaving(true);
-    const ok = await saveToAPI(userId, session?.user?.email ?? undefined, personal, sessionAccessToken);
+    const ok = await saveToAPI(
+      userId,
+      session?.user?.email ?? undefined,
+      personal,
+      sessionAccessToken,
+      actorFence,
+    );
+    if (!isActorMutationFenceCurrent(actorFence)) return;
     setIsSaving(false);
     if (!ok) {
       toast({
@@ -575,7 +616,7 @@ export function PersonalizationProvider({
         variant: "destructive",
       });
     }
-  }, [session?.user?.id, session?.user?.email, sessionAccessToken, saveToAPI]);
+  }, [session?.user?.id, session?.user?.email, sessionAccessToken, scopeKey, saveToAPI]);
 
   const updateTheme = React.useCallback((theme: ThemePreference) => {
     if (!orgBackedRef.current) {
@@ -597,6 +638,7 @@ export function PersonalizationProvider({
   const resetToDefaults = React.useCallback(async () => {
     const userId = session?.user?.id;
     const userEmail = session?.user?.email ?? undefined;
+    const actorFence = captureActorMutationFence(scopeKey);
     
     // Push current settings onto undo stack so user can undo the reset
     undoStackRef.current = [...undoStackRef.current, { ...settingsRef.current }];
@@ -615,7 +657,13 @@ export function PersonalizationProvider({
     personalRowRef.current = null;
     
     if (userId) {
-      const success = await deleteFromAPI(userId, userEmail, (session as any)?.accessToken);
+      const success = await deleteFromAPI(
+        userId,
+        userEmail,
+        sessionAccessToken,
+        actorFence,
+      );
+      if (!isActorMutationFenceCurrent(actorFence)) return;
       if (success) {
         toast({
           title: "Settings reset",
@@ -629,7 +677,7 @@ export function PersonalizationProvider({
         });
       }
     }
-  }, [session?.user?.id, session?.user?.email, deleteFromAPI]);
+  }, [session?.user?.id, session?.user?.email, sessionAccessToken, scopeKey, deleteFromAPI]);
 
   // Undo: pop from undo stack, push current onto redo stack
   const undoSettings = React.useCallback(() => {
@@ -998,4 +1046,3 @@ export function useCurrentLogo(theme: "light" | "dark" | "system") {
     return settings.logo.darkModeLogo || "/orca-logo-white.png";
   }, [effectiveTheme, settings.logo, settings.colors.sidebarLogoColor, settings.colors.useCustomSidebarBg, settings.colors.sidebarBgColor]);
 }
-

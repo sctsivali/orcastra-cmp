@@ -126,6 +126,16 @@ jobs:
       - name: Install dependencies for typed guards
         working-directory: frontend
         run: npm ci
+      - name: Mutation coherence registry
+        run: node scripts/checks/check-mutation-coherence.mjs .
+      - name: Instance inventory freshness
+        run: node scripts/checks/check-instance-freshness.mjs .
+      - name: Instance create orchestration
+        run: node scripts/checks/check-instance-create-orchestration.mjs .
+      - name: Image and ISO upload terminal durability
+        run: node scripts/checks/check-upload-terminal-durability.mjs .
+      - name: Instance specification workflow
+        run: node scripts/checks/check-instance-specification-workflow.mjs .
       # Pure filesystem AST walk over frontend/src, no install needed. Catches a mutation form
       # shipping without a synchronous double-submit guard.
       - name: Submit guards
@@ -288,6 +298,9 @@ jobs:
 
       - name: Byte units
         run: node scripts/checks/check-byte-units.mjs .
+
+      - name: Operator UI terminology
+        run: node scripts/checks/check-ui-glossary.mjs .
 
       - name: Documentation index
         run: node scripts/checks/check-doc-index.mjs .

@@ -45,10 +45,10 @@ const LOG = defineTable<ClusterLogEntry>()({
     { field: "kind", label: "Kind", sort: (e) => e.kind, facet: (e) => e.kind, facetSpec: { format: formatLabel } },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (e) => e.cluster_id,
       facet: (e) => e.cluster_id,
-      facetSpec: { role: "node", primary: true, emptyLabel: "No node" },
+      facetSpec: { role: "node", primary: true, emptyLabel: "No cluster" },
     },
     {
       field: "project",
@@ -207,7 +207,7 @@ function LogTabInner({ feed, height, onOpenTask, registerRefresh }: LogTabProps)
             <SortableTableHead label="Time" field="time" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Severity" field="severity" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Kind" field="kind" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-            <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Actor" field="actor" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Message" field="message" currentField={sortField} direction={sortDirection} onSort={handleSort} />

@@ -13,6 +13,7 @@ import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
 import { POLL_MS } from "@/lib/query-config";
 import { onAuthActorChanged, onTokenRefreshed } from "@/lib/api";
+import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
 import type { PersonalizationSettings } from "@/types/personalization";
 
 /**
@@ -22,6 +23,10 @@ import type { PersonalizationSettings } from "@/types/personalization";
  */
 function QueryInvalidationBridge() {
   const queryClient = useQueryClient();
+  React.useEffect(
+    () => registerExternalMutationQueryClient(queryClient),
+    [queryClient],
+  );
   React.useEffect(() => {
     onTokenRefreshed(() => {
       // important: only the queries that actually failed under the old token.

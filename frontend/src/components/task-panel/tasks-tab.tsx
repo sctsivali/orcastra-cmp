@@ -53,7 +53,7 @@ const TASKS = defineTable<TaskRecord>()({
     { field: "id", label: "Task", sort: (t) => t.id, search: (t) => t.id, filter: fromSort("text") },
     { field: "description", label: "Description", sort: (t) => t.description, search: (t) => t.description, filter: fromSort("text") },
     { field: "resource", label: "Resource", sort: (t) => t.resource_name, search: (t) => t.resource_name, filter: fromSort("text") },
-    { field: "node", label: "Node", sort: (t) => t.cluster_id, facet: (t) => t.cluster_id, facetSpec: { role: "node", primary: true } },
+    { field: "node", label: "Cluster", sort: (t) => t.cluster_id, facet: (t) => t.cluster_id, facetSpec: { role: "node", primary: true } },
     { field: "project", label: "Project", sort: (t) => t.project, facet: (t) => t.project, facetSpec: { role: "project" } },
     {
       field: "status",
@@ -127,7 +127,7 @@ function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel
             <SortableTableHead label="Task" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Resource" field="resource" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-            <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
             <SortableTableHead label="Actor" field="actor" currentField={sortField} direction={sortDirection} onSort={handleSort} />

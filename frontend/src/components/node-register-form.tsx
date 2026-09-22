@@ -156,12 +156,12 @@ export function NodeRegisterForm() {
       if (response.authenticated) {
         toast({
           title: "Authentication Successful",
-          description: "Node is now online and ready to use!",
+          description: "Cluster is now online and ready to use!",
         });
         setRegistrationResult(prev => prev ? {
           ...prev,
           status: ClusterStatus.ONLINE,
-          message: "Node authenticated successfully",
+          message: "Cluster authenticated successfully",
           ...(response.cluster_type && { cluster_type: response.cluster_type }),
         } : null);
         
@@ -171,7 +171,7 @@ export function NodeRegisterForm() {
       } else {
         toast({
           title: "Not Authenticated",
-          description: response.message || "Certificate not yet trusted by hypervisor node. Please run the trust command first.",
+          description: response.message || "Certificate not yet trusted by the cluster endpoint. Please run the trust command first.",
           variant: "destructive",
         });
       }
@@ -181,7 +181,7 @@ export function NodeRegisterForm() {
       toast({
         title: isTimeout ? "Connection Timed Out" : "Check Failed",
         description: isTimeout
-          ? "The node did not respond in time. Please verify the trust certificate command has been executed on the node, then try again."
+          ? "The cluster did not respond in time. Please verify the trust certificate command has been executed on the cluster endpoint, then try again."
           : (error.message || "Failed to check authentication"),
         variant: "destructive",
       });
@@ -243,7 +243,7 @@ export function NodeRegisterForm() {
 
       if (response.success && response.certificate) {
         toast({
-          title: "Node Registered",
+          title: "Cluster Registered",
           description: "Certificate generated successfully. Follow the steps below to complete setup.",
         });
         
@@ -261,7 +261,7 @@ export function NodeRegisterForm() {
       }
     } catch (error: any) {
       console.error("Registration error:", error);
-      const errorMessage = error.message || "Failed to register node. Please check your connection and try again.";
+      const errorMessage = error.message || "Failed to register cluster. Please check your connection and try again.";
       toast({
         title: "Registration Failed",
         description: errorMessage,
@@ -298,10 +298,10 @@ export function NodeRegisterForm() {
           Back
         </Button>
         <div className="mb-2">
-          <h1 className="text-3xl font-bold">Register Node</h1>
+          <h1 className="text-3xl font-bold">Register Cluster</h1>
         </div>
         <p className="text-muted-foreground">
-          Add a new hypervisor node to your Orcastra cluster
+          Register an LXD or Incus endpoint as an Orcastra cluster
         </p>
       </div>
 
@@ -387,9 +387,9 @@ export function NodeRegisterForm() {
       {/* Registration Form */}
       <Card>
         <CardHeader>
-          <CardTitle>Node Information</CardTitle>
+          <CardTitle>Cluster Information</CardTitle>
           <CardDescription>
-            Provide the details of the hypervisor node you want to register. 
+            Provide the details of the hypervisor endpoint you want to register.
             Type will be detected automatically.
           </CardDescription>
         </CardHeader>
@@ -402,7 +402,7 @@ export function NodeRegisterForm() {
               </Label>
               <Input
                 id="cluster_id"
-                placeholder="e.g., mc10, node-jakarta-1"
+                placeholder="mc10 or cluster-jakarta-1"
                 disabled={isSubmitting}
                 {...register("cluster_id")}
               />
@@ -410,7 +410,7 @@ export function NodeRegisterForm() {
                 <p className="text-sm text-destructive">{errors.cluster_id.message}</p>
               )}
               <p className="text-xs text-muted-foreground">
-                Unique identifier for this cluster/node
+                Unique identifier for this cluster
               </p>
             </div>
 
@@ -421,7 +421,7 @@ export function NodeRegisterForm() {
               </Label>
               <Input
                 id="display_name"
-                placeholder="e.g., Jakarta DC1, Production Node 1"
+                placeholder="Jakarta DC1 or Production Cluster 1"
                 disabled={isSubmitting}
                 {...register("display_name")}
               />
@@ -429,7 +429,7 @@ export function NodeRegisterForm() {
                 <p className="text-sm text-destructive">{errors.display_name.message}</p>
               )}
               <p className="text-xs text-muted-foreground">
-                Human-readable name for this node
+                Human-readable name for this cluster
               </p>
             </div>
 
@@ -524,7 +524,7 @@ export function NodeRegisterForm() {
                   <p className="text-sm text-destructive">{errors.region_id.message}</p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Select the geographical location of this node for the regions map
+                  Select the geographical location of this cluster for the regions map
                 </p>
               </div>
 
@@ -569,7 +569,7 @@ export function NodeRegisterForm() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Name and provider of the data center where this node is hosted. Start typing to see suggestions from existing nodes.
+                  Name and provider of the data center where this cluster is hosted. Start typing to see suggestions from existing clusters.
                 </p>
               </div>
             </div>
@@ -591,10 +591,10 @@ export function NodeRegisterForm() {
                 {isSubmitting ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Registering Node...
+                    Registering Cluster...
                   </>
                 ) : (
-                  "Register Node"
+                  "Register Cluster"
                 )}
               </Button>
               <Button

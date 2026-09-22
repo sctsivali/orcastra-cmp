@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Cpu, HardDrive, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { formatBytes, formatMemory} from "@/lib/utils";
+import { formatBytes, formatMemory } from "@/lib/utils";
 import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE } from "@/lib/gpu";
 import { ExtendedHardwareInfo } from "@/types/api";
 
@@ -21,7 +21,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="outline" className="gap-1">
           <Cpu className="h-3 w-3 text-foreground" />
-          {hardware.cpu_total} cores
+          {hardware.cpu_total} hardware threads
         </Badge>
         <Badge variant="outline" className="gap-1">
           <MemoryStick className="h-3 w-3 text-foreground" />
@@ -50,7 +50,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
           CPU
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
-          <p>{hardware.cpu_total} cores ({hardware.cpu_sockets} sockets)</p>
+          <p>{hardware.cpu_total} hardware threads ({hardware.cpu_sockets} sockets)</p>
           <p>{hardware.cpu_architecture}</p>
           {hardware.cpu_vendor && <p>{hardware.cpu_vendor}</p>}
         </div>

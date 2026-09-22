@@ -91,7 +91,7 @@ const IPAM = defineTable<IPAMAllocation>()({
     },
     {
       field: "node",
-      label: "Node",
+      label: "Cluster",
       sort: (a) => a.node,
       facet: (a) => a.node,
       facetSpec: { role: "node", primary: true },
@@ -193,7 +193,7 @@ function IPAMContent() {
                 <SortableTableHead label="Subnet" field="subnet" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="MAC Address" field="hardware_address" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>

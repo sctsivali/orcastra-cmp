@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
 import { Tile, UsageProgress, formatUptime } from "@/components/system-resources/primitives";
 import { ratePerSecond } from "@/components/system-resources/rates";
 
@@ -111,7 +111,7 @@ function ContainerCpuCard({ container }: { container: ContainerInfo }) {
   const headline =
     percent !== null
       ? limit
-        ? `${percent.toFixed(1)}% of ${limit} CPU${limit === 1 ? "" : "s"}`
+        ? `${percent.toFixed(1)}% of a ${limit}-vCPU quota`
         : `${percent.toFixed(1)}% of the host`
       : EMPTY_VALUE;
   return (
@@ -134,7 +134,7 @@ function ContainerCpuCard({ container }: { container: ContainerInfo }) {
           </p>
         </div>
         <div className="grid grid-cols-3 gap-4 pt-2">
-          <Tile label="Quota" value={limit ? `${limit} CPU${limit === 1 ? "" : "s"}` : "No quota set"} />
+          <Tile label="vCPU Quota" value={limit ? `${limit} vCPU` : "No quota set"} />
           <Tile label="Throttled Periods" value={c?.nr_throttled ?? EMPTY_VALUE} />
           <Tile
             label="Throttled Time"
@@ -236,7 +236,7 @@ function NetworkCard({
                     <div>
                       <p className="text-muted-foreground">Received</p>
                       <p className="font-medium">{formatBytes(iface.bytes_recv)}</p>
-                      {rx !== null && <p className="text-xs text-muted-foreground">{formatBytes(rx)}/s</p>}
+                      {rx !== null && <p className="text-xs text-muted-foreground">{formatNetworkRate(rx)}</p>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -244,7 +244,7 @@ function NetworkCard({
                     <div>
                       <p className="text-muted-foreground">Sent</p>
                       <p className="font-medium">{formatBytes(iface.bytes_sent)}</p>
-                      {tx !== null && <p className="text-xs text-muted-foreground">{formatBytes(tx)}/s</p>}
+                      {tx !== null && <p className="text-xs text-muted-foreground">{formatNetworkRate(tx)}</p>}
                     </div>
                   </div>
                 </div>

@@ -81,7 +81,7 @@ export function ProjectQuotaLine({ id, project, limits, used, check }: ProjectQu
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>
             This instance would take {project} past its{" "}
-            {[check.cpuOverWithUsage && "CPU", check.memoryOverWithUsage && "memory"].filter(Boolean).join(" and ")}{" "}
+            {[check.cpuOverWithUsage && "vCPU", check.memoryOverWithUsage && "memory"].filter(Boolean).join(" and ")}{" "}
             limit. The cluster will refuse the create unless capacity is freed first.
           </span>
         </p>

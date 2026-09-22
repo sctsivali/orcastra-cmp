@@ -864,7 +864,8 @@ export class APIError extends Error {
   constructor(
     message: string,
     public status: number,
-    public detail?: string | null,
+    /** FastAPI may return a string, validation array, or structured refusal object. */
+    public detail?: unknown,
     retryAfter?: number
   ) {
     super(message);

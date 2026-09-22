@@ -49,6 +49,10 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
+import {
+  isActorScopeChangedError,
+  useInstancePowerAction,
+} from "@/hooks/use-instance-power-action";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { ConsoleResourceBar } from "@/components/console/resource-bar";
 import "@xterm/xterm/css/xterm.css";
@@ -101,6 +105,7 @@ function TerminalContent() {
     title: string;
     description: string;
   }>({ open: false, operation: null, title: "", description: "" });
+  const executePowerAction = useInstancePowerAction();
 
   // Initialize terminal
   const initTerminal = useCallback(() => {
@@ -272,22 +277,13 @@ function TerminalContent() {
     setInstanceStatus(transitionStatus[operation]);
 
     try {
-      const response = await fetch(`${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
-        body: JSON.stringify({
-          host,
-          force: false,
-          timeout: 30,
-        }),
+      const result = await executePowerAction(operation, {
+        name: instanceName,
+        host,
+        project,
+        force: false,
+        timeout: 30,
       });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(error.detail || `Failed to ${operation} instance`);
-      }
-
-      const result = await response.json();
       
       const statusMap: Record<string, InstanceStatus> = {
         'running': 'Running',
@@ -295,7 +291,7 @@ function TerminalContent() {
         'Running': 'Running',
         'Stopped': 'Stopped',
       };
-      const newStatus = statusMap[result.new_status] || 'Unknown';
+      const newStatus = result.new_status ? statusMap[result.new_status] || 'Unknown' : 'Unknown';
       setInstanceStatus(newStatus);
       
       toast({
@@ -308,6 +304,7 @@ function TerminalContent() {
         setTimeout(() => handleReconnect(), 2000);
       }
     } catch (error) {
+      if (isActorScopeChangedError(error)) return;
       setInstanceStatus('Error');
       toast({
         title: `Failed to ${operation} instance`,
@@ -317,7 +314,7 @@ function TerminalContent() {
     } finally {
       setOperationLoading(null);
     }
-  }, [instanceName, host, handleReconnect]);
+  }, [executePowerAction, handleReconnect, host, instanceName, project]);
 
   // Request operation with confirmation
   const requestOperation = useCallback((operation: OperationType) => {

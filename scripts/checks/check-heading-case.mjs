@@ -116,6 +116,7 @@ function badTitleWord(s) {
   for (let i = 1; i < words.length; i += 1) {
     const w = words[i].replace(/[^A-Za-z0-9-]/g, '');
     if (!w || !/^[a-z]/.test(w)) continue;
+    if (/^vCPUs?$/.test(w)) continue;
     if (SMALL.has(w.toLowerCase())) continue;
     return w;
   }
@@ -125,6 +126,7 @@ function badTitleWord(s) {
 // An initialism, including a pluralised one. "ACLs", "ISOs" and "CPUs" are single upper case
 // tokens carrying a lower case plural, not Title Case words.
 function isAcronym(w) {
+  if (/^vCPUs?$/.test(w)) return true;
   if (w === w.toUpperCase()) return true;
   return w.length > 2 && w.endsWith('s') && w.slice(0, -1) === w.slice(0, -1).toUpperCase();
 }

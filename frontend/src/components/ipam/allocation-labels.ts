@@ -32,7 +32,7 @@ export function allocationLabel(kind: string | undefined): string {
 }
 
 export const UNKNOWN_ALLOCATION_REASON =
-  "The instances of this node could not be read, so whether this address is pinned is not known.";
+  "The instances of this cluster could not be read, so whether this address is pinned is not known.";
 
 /** Which subnet to print first, and which underneath. */
 export function subnetText(row: IPAMAllocation): { primary: string; secondary?: string } {

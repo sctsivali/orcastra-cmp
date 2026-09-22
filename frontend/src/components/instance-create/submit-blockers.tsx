@@ -28,7 +28,7 @@ export interface SubmitBlocker {
 export function submitBlockers(input: SubmitBlockerInput): SubmitBlocker[] {
   const out: SubmitBlocker[] = [];
   if (!input.nameValid) out.push({ id: "name", reason: "a valid name" });
-  if (!input.hasNode) out.push({ id: "node", reason: "a node" });
+  if (!input.hasNode) out.push({ id: "node", reason: "a cluster" });
   if (input.bootFromIso ? !input.hasIso : !input.hasImage) {
     out.push({ id: "source", reason: input.bootFromIso ? "a boot ISO" : "a base image" });
   } else if (!input.bootFromIso && input.imageStoreLoading) {
@@ -38,9 +38,9 @@ export function submitBlockers(input: SubmitBlockerInput): SubmitBlocker[] {
     out.push({ id: "image-store", reason: "the project's image store to finish loading" });
   }
   if (!input.resourcesValid) {
-    out.push({ id: "resources", reason: "CPU, memory and storage as positive whole numbers" });
+    out.push({ id: "resources", reason: "vCPU, memory and storage as positive whole numbers" });
   }
-  if (!input.cpuWithinLimit) out.push({ id: "cpu-limit", reason: "CPU within the project limit" });
+  if (!input.cpuWithinLimit) out.push({ id: "cpu-limit", reason: "vCPU within the project limit" });
   if (!input.memoryWithinLimit) out.push({ id: "memory-limit", reason: "memory within the project limit" });
   if (input.hasNode && !input.hasPool) out.push({ id: "pool", reason: "a storage pool" });
   if (!input.disksValid) out.push({ id: "disks", reason: "every additional disk completed" });

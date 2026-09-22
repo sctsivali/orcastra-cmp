@@ -276,8 +276,16 @@ test-backend-docker: ## Run backend tests against the deployed image's dependenc
 test-frontend: ## Run the frontend checks that exist (typecheck + structural guards)
 	@echo "$(COLOR_GREEN)Typechecking frontend...$(COLOR_RESET)"
 	@cd frontend && npx tsc --noEmit
+	@echo "$(COLOR_GREEN)Checking mutation coherence registry...$(COLOR_RESET)"
+	@node scripts/checks/check-mutation-coherence.mjs
+	@echo "$(COLOR_GREEN)Checking instance inventory freshness...$(COLOR_RESET)"
+	@node scripts/checks/check-instance-freshness.mjs
 	@echo "$(COLOR_GREEN)Checking instance specification and create workflows...$(COLOR_RESET)"
 	@node scripts/checks/check-instance-specification-workflow.mjs
+	@echo "$(COLOR_GREEN)Checking create request staging and cancellation...$(COLOR_RESET)"
+	@node scripts/checks/check-instance-create-orchestration.mjs
+	@echo "$(COLOR_GREEN)Checking durable image and ISO upload completion...$(COLOR_RESET)"
+	@node scripts/checks/check-upload-terminal-durability.mjs
 	@echo "$(COLOR_GREEN)Checking submit guards...$(COLOR_RESET)"
 	@node scripts/checks/check-submit-guards.mjs
 	@echo "$(COLOR_GREEN)Checking table scroll containers...$(COLOR_RESET)"
@@ -342,6 +350,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-prose-typography.mjs
 	@echo "$(COLOR_GREEN)Checking byte units...$(COLOR_RESET)"
 	@node scripts/checks/check-byte-units.mjs
+	@echo "$(COLOR_GREEN)Checking operator UI terminology...$(COLOR_RESET)"
+	@node scripts/checks/check-ui-glossary.mjs
 	@echo "$(COLOR_GREEN)Checking the documentation index...$(COLOR_RESET)"
 	@node scripts/checks/check-doc-index.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"

@@ -38,7 +38,7 @@ export function GpuPanel({ src, dense = false, allocationUnknown = false, classN
       <EmptyState
         icon={Sparkles}
         title={GPU_EMPTY_TITLE}
-        description="This node reports no GPU or display card."
+        description="This cluster reports no GPU or display card."
       />
     );
   }
@@ -59,7 +59,7 @@ export function GpuPanel({ src, dense = false, allocationUnknown = false, classN
 
       {cards.length > 0 && (
         <div className="space-y-3 border-t pt-4">
-          <h3 className="text-sm font-semibold">Cards on This Node ({summary.cardsTotal})</h3>
+          <h3 className="text-sm font-semibold">Cards on This Cluster ({summary.cardsTotal})</h3>
           {cards.map((card) => (
             <GpuCardDetails key={card.id ?? card.index} card={card} dense={dense} />
           ))}

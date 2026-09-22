@@ -36,7 +36,7 @@ export function SystemResourceUsagePanel() {
 
   const { data, isLoading, isError, error, refreshNow, dataUpdatedAt } = useRefreshableQuery({
     queryKey: ["systemResourceUsage"],
-    queryFn: () => api.system.getResourceUsage(),
+    queryFn: ({ fresh, signal }) => api.system.getResourceUsage({ fresh, signal }),
     refetchInterval: 5000,
     staleTime: 3000,
     gcTime: 60000,

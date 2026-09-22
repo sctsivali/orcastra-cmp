@@ -10,6 +10,8 @@ import {
 export interface RefreshableQueryContext {
   /** True only for a fetch started by an explicit user action. */
   fresh: boolean;
+  /** Cancels transport work when the observer or query key is retired. */
+  signal: AbortSignal;
 }
 
 export type RefreshableQueryOptions<TData, TError = Error> = Omit<
@@ -27,6 +29,28 @@ export type RefreshableQueryResult<TData, TError = Error> = UseQueryResult<
   refreshNow: () => Promise<void>;
 };
 
+export interface RefreshIntentTracker {
+  isFresh: () => boolean;
+  acquire: () => () => void;
+}
+
+/** Reference-count overlapping manual refreshes so one completion cannot retire another's intent. */
+export function createRefreshIntentTracker(): RefreshIntentTracker {
+  let active = 0;
+  return {
+    isFresh: () => active > 0,
+    acquire: () => {
+      active += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        active = Math.max(0, active - 1);
+      };
+    },
+  };
+}
+
 /**
  * A useQuery whose queryFn knows whether this particular fetch came from a
  * person clicking refresh or from background polling.
@@ -41,7 +65,8 @@ export function useRefreshableQuery<TData, TError = Error>(
   options: RefreshableQueryOptions<TData, TError>,
 ): RefreshableQueryResult<TData, TError> {
   const { queryFn, ...rest } = options;
-  const freshRef = useRef(false);
+  const intentRef = useRef<RefreshIntentTracker | null>(null);
+  if (!intentRef.current) intentRef.current = createRefreshIntentTracker();
 
   const query = useQuery({
     ...rest,
@@ -55,19 +80,19 @@ export function useRefreshableQuery<TData, TError = Error>(
     // fresh=true, hit the cache, succeeded, and the button reported success: a forced refresh
     // silently degrading into a cached read, which is the exact defect this whole hook exists
     // to prevent. Caught by refresh-affordances.spec.ts "a failed refresh reports failure".
-    queryFn: () => queryFn({ fresh: freshRef.current }),
+    queryFn: ({ signal }) => queryFn({ fresh: intentRef.current?.isFresh() === true, signal }),
   } as UseQueryOptions<TData, TError, TData>) as UseQueryResult<TData, TError>;
 
   const { refetch } = query;
 
   const refreshNow = useCallback(async () => {
-    freshRef.current = true;
+    const release = intentRef.current?.acquire() ?? (() => undefined);
     try {
       // throwOnError so a failed refresh rejects here instead of being absorbed
       // into query.error, where every current call site ignores it
       await refetch({ throwOnError: true });
     } finally {
-      freshRef.current = false;
+      release();
     }
   }, [refetch]);
 

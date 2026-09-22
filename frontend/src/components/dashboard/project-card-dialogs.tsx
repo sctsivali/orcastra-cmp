@@ -30,6 +30,12 @@ import {
   SelectValue } from "@/components/ui/select";
 import { useDeleteProject, useUpdateProject } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
+import {
+  editableLxdLimit,
+  editableStorageLimit,
+  type LxdLimitUnit,
+  type StorageLimitUnit,
+} from "@/lib/lxd-limits";
 import { ProjectInfo } from "@/types";
 
 interface ProjectDialogProps {
@@ -120,48 +126,37 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
   const [editDescription, setEditDescription] = React.useState(project.description || "");
   const [editMaxCpu, setEditMaxCpu] = React.useState(0);
   const [editMaxRamValue, setEditMaxRamValue] = React.useState(0);
-  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<"GiB" | "MiB">("GiB");
+  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<LxdLimitUnit>("GiB");
+  const [editMaxRamSource, setEditMaxRamSource] = React.useState<string | null>(null);
+  const [ramLimitDirty, setRamLimitDirty] = React.useState(false);
   const [editMaxStorageValue, setEditMaxStorageValue] = React.useState(0);
-  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<"GiB" | "MiB">("GiB");
+  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<StorageLimitUnit>("GB");
+  const [editMaxStorageSource, setEditMaxStorageSource] = React.useState<string | null>(null);
+  const [storageLimitDirty, setStorageLimitDirty] = React.useState(false);
 
   // Parse existing resource limits when dialog opens
   React.useEffect(() => {
-    if (open && project.config) {
+    if (open) {
+      const config = project.config ?? {};
       // Set name and description
       setEditName(project.name);
       setEditDescription(project.description || "");
 
       // Parse CPU limit (0 = unlimited/no limit set)
-      const cpuLimitStr = project.config["limits.cpu"];
+      const cpuLimitStr = config["limits.cpu"];
       setEditMaxCpu(cpuLimitStr ? parseInt(cpuLimitStr) || 0 : 0);
 
-      // Parse RAM limit (0 = unlimited/no limit set)
-      const ramLimitStr = project.config["limits.memory"];
-      if (ramLimitStr) {
-        const ramMatch = ramLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB)$/i);
-        if (ramMatch) {
-          setEditMaxRamValue(parseFloat(ramMatch[1]));
-          setEditMaxRamUnit(ramMatch[2] as "GiB" | "MiB");
-        } else {
-          setEditMaxRamValue(0);
-        }
-      } else {
-        setEditMaxRamValue(0);
-      }
+      const ram = editableLxdLimit(config["limits.memory"]);
+      setEditMaxRamValue(ram.value);
+      setEditMaxRamUnit(ram.unit);
+      setEditMaxRamSource(ram.preservedRaw);
+      setRamLimitDirty(false);
 
-      // Parse Storage limit (0 = unlimited/no limit set)
-      const storageLimitStr = project.config["limits.disk"];
-      if (storageLimitStr) {
-        const storageMatch = storageLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB)$/i);
-        if (storageMatch) {
-          setEditMaxStorageValue(parseFloat(storageMatch[1]));
-          setEditMaxStorageUnit(storageMatch[2] as "GiB" | "MiB");
-        } else {
-          setEditMaxStorageValue(0);
-        }
-      } else {
-        setEditMaxStorageValue(0);
-      }
+      const storage = editableStorageLimit(config["limits.disk"]);
+      setEditMaxStorageValue(storage.value);
+      setEditMaxStorageUnit(storage.unit);
+      setEditMaxStorageSource(storage.preservedRaw);
+      setStorageLimitDirty(false);
     }
   }, [open, project.config, project.description, project.name]);
 
@@ -195,15 +190,17 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
       // null/undefined = no change (field omitted)
       updateData.max_cpu = editMaxCpu; // always send - 0 clears the limit
 
-      // RAM: 0 = unlimited (send "0" to clear limit), >0 = set limit
-      updateData.max_ram = editMaxRamValue > 0
-        ? `${editMaxRamValue}${editMaxRamUnit}`
-        : "0";
-
-      // Storage: 0 = unlimited (send "0" to clear limit), >0 = set limit
-      updateData.max_storage = editMaxStorageValue > 0
-        ? `${editMaxStorageValue}${editMaxStorageUnit}`
-        : "0";
+      // Omit untouched limits so a valid legacy SI/raw-byte value keeps its exact meaning.
+      if (ramLimitDirty) {
+        updateData.max_ram = editMaxRamValue > 0
+          ? `${editMaxRamValue}${editMaxRamUnit}`
+          : "0";
+      }
+      if (storageLimitDirty) {
+        updateData.max_storage = editMaxStorageValue > 0
+          ? `${editMaxStorageValue}${editMaxStorageUnit}`
+          : "0";
+      }
 
       await updateProject.mutateAsync({ host: project.host, projectName: project.name, data: updateData });
 
@@ -266,7 +263,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
           {/* Max CPU */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="edit-max-cpu">Max CPU Cores</Label>
+              <Label htmlFor="edit-max-cpu">Max vCPUs</Label>
               {editMaxCpu === 0 && <span className="text-xs text-muted-foreground">Unlimited</span>}
             </div>
             <Input
@@ -279,11 +276,13 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
             />
           </div>
 
-          {/* Max RAM */}
+          {/* Max Memory */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="edit-max-ram">Max RAM</Label>
-              {editMaxRamValue === 0 && <span className="text-xs text-muted-foreground">Unlimited</span>}
+              <Label htmlFor="edit-max-ram">Max Memory</Label>
+              {editMaxRamValue === 0 && !editMaxRamSource && (
+                <span className="text-xs text-muted-foreground">Unlimited</span>
+              )}
             </div>
             <div className="flex gap-2">
               <Input
@@ -291,11 +290,19 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 type="number"
                 min="0"
                 value={editMaxRamValue}
-                onChange={(e) => setEditMaxRamValue(Number(e.target.value))}
+                onChange={(e) => {
+                  setEditMaxRamValue(Number(e.target.value));
+                  setEditMaxRamSource(null);
+                  setRamLimitDirty(true);
+                }}
                 placeholder="0 = Unlimited"
                 className="flex-1"
               />
-              <Select value={editMaxRamUnit} onValueChange={(v) => setEditMaxRamUnit(v as "GiB" | "MiB")}>
+              <Select value={editMaxRamUnit} onValueChange={(v) => {
+                setEditMaxRamUnit(v as LxdLimitUnit);
+                setEditMaxRamSource(null);
+                setRamLimitDirty(true);
+              }}>
                 <SelectTrigger className="w-[100px]">
                   <SelectValue />
                 </SelectTrigger>
@@ -305,13 +312,20 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 </SelectContent>
               </Select>
             </div>
+            {editMaxRamSource && !ramLimitDirty && (
+              <p className="text-xs text-muted-foreground">
+                Current daemon value: {editMaxRamSource}. It remains unchanged until you edit this limit.
+              </p>
+            )}
           </div>
 
           {/* Max Storage */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="edit-max-storage">Max Storage</Label>
-              {editMaxStorageValue === 0 && <span className="text-xs text-muted-foreground">Unlimited</span>}
+              {editMaxStorageValue === 0 && !editMaxStorageSource && (
+                <span className="text-xs text-muted-foreground">Unlimited</span>
+              )}
             </div>
             <div className="flex gap-2">
               <Input
@@ -319,20 +333,33 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 type="number"
                 min="0"
                 value={editMaxStorageValue}
-                onChange={(e) => setEditMaxStorageValue(Number(e.target.value))}
+                onChange={(e) => {
+                  setEditMaxStorageValue(Number(e.target.value));
+                  setEditMaxStorageSource(null);
+                  setStorageLimitDirty(true);
+                }}
                 placeholder="0 = Unlimited"
                 className="flex-1"
               />
-              <Select value={editMaxStorageUnit} onValueChange={(v) => setEditMaxStorageUnit(v as "GiB" | "MiB")}>
+              <Select value={editMaxStorageUnit} onValueChange={(v) => {
+                setEditMaxStorageUnit(v as StorageLimitUnit);
+                setEditMaxStorageSource(null);
+                setStorageLimitDirty(true);
+              }}>
                 <SelectTrigger className="w-[100px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MiB">MiB</SelectItem>
-                  <SelectItem value="GiB">GiB</SelectItem>
+                  <SelectItem value="MB">MB</SelectItem>
+                  <SelectItem value="GB">GB</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {editMaxStorageSource && !storageLimitDirty && (
+              <p className="text-xs text-muted-foreground">
+                Current daemon value: {editMaxStorageSource}. It remains unchanged until you edit this limit.
+              </p>
+            )}
           </div>
         </div>
 

@@ -5,7 +5,7 @@
  * - Connection status & duration (live counter)
  * - User info & access role
  * - Session bandwidth (download/upload rates + totals)
- * - Instance resource usage (CPU, RAM, disk, network)
+ * - Instance resource usage (CPU, memory, storage, network)
  *
  * Two modes:
  * - Compact (40px): Single-line summary with key metrics
@@ -32,7 +32,7 @@ import {
   Activity,
   Loader2,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
 import { InstanceMetrics } from "@/types";
 import { useSession } from "next-auth/react";
 import { useInstanceMetrics } from "@/hooks";
@@ -83,24 +83,6 @@ interface ConsoleResourceBarProps {
 const PANEL_EXPANDED_KEY = "orcastra-resource-bar-expanded";
 
 // ============ Utility functions ============
-
-/** Format bytes to human-readable with auto unit selection */
-function formatBytes(bytes: number, decimals = 1): string {
-  if (bytes === 0) return "0 B";
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(decimals)} ${sizes[i]}`;
-}
-
-/** Format bytes per second to human-readable rate */
-function formatRate(bytesPerSec: number): string {
-  if (bytesPerSec === 0) return "0 B/s";
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B/s", "KB/s", "MB/s", "GB/s"];
-  const i = Math.floor(Math.log(Math.abs(bytesPerSec)) / Math.log(k));
-  return `${(bytesPerSec / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
 
 /** Format seconds as live duration string (00h 15m 32s) */
 function formatDuration(seconds: number): string {
@@ -376,14 +358,14 @@ export function ConsoleResourceBar({
 
             <div className="h-3 w-px bg-terminal-border" />
 
-            {/* RAM */}
+            {/* Memory */}
             <div className="flex items-center gap-1 text-xs">
               <Activity className="h-3 w-3 text-green-400" />
               <span className={cn(
                 "font-mono",
                 memPercent > 80 ? "text-red-400" : memPercent > 60 ? "text-yellow-400" : "text-gray-300"
               )}>
-                {formatBytes(memUsed, 0)}/{formatBytes(memTotal, 0)}
+                {formatMemory(memUsed, 0)}/{formatMemory(memTotal, 0)}
               </span>
             </div>
 
@@ -394,8 +376,8 @@ export function ConsoleResourceBar({
         {/* Network bandwidth */}
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <Network className="h-3 w-3 text-purple-400" />
-          <span className="text-green-400 font-mono">↓{formatRate(dlRate)}</span>
-          <span className="text-blue-400 font-mono">↑{formatRate(ulRate)}</span>
+          <span className="text-green-400 font-mono">↓{formatNetworkRate(dlRate, 1)}</span>
+          <span className="text-blue-400 font-mono">↑{formatNetworkRate(ulRate, 1)}</span>
         </div>
 
         <div className="flex-1" />
@@ -426,12 +408,12 @@ export function ConsoleResourceBar({
               <div className="border-t border-terminal-border my-1.5 pt-1.5">
                 <InfoRow
                   label="Download"
-                  value={`${formatRate(dlRate)} (${formatBytes(dlTotal)} total)`}
+                  value={`${formatNetworkRate(dlRate, 1)} (${formatBytes(dlTotal, 1)} total)`}
                   valueClass="text-green-400"
                 />
                 <InfoRow
                   label="Upload"
-                  value={`${formatRate(ulRate)} (${formatBytes(ulTotal)} total)`}
+                  value={`${formatNetworkRate(ulRate, 1)} (${formatBytes(ulTotal, 1)} total)`}
                   valueClass="text-blue-400"
                 />
               </div>
@@ -447,7 +429,7 @@ export function ConsoleResourceBar({
               <InfoRow label="Email" value={displayEmail || "—"} />
               <InfoRow label="Role" value={displayRole} />
               <InfoRow label="Instance" value={instanceName} mono />
-              <InfoRow label="Host" value={host} mono />
+              <InfoRow label="Cluster" value={host} mono />
               <InfoRow label="Project" value={project} />
             </div>
           </div>
@@ -492,10 +474,10 @@ export function ConsoleResourceBar({
                   <div>
                     <div className="flex justify-between mb-1">
                       <span className="text-gray-400 flex items-center gap-1">
-                        <Activity className="h-3 w-3 text-green-400" /> RAM
+                        <Activity className="h-3 w-3 text-green-400" /> Memory
                       </span>
                       <span className="text-gray-300 font-mono">
-                        {formatBytes(memUsed, 0)} / {formatBytes(memTotal, 0)}
+                        {formatMemory(memUsed, 0)} / {formatMemory(memTotal, 0)}
                       </span>
                     </div>
                     <ProgressBar

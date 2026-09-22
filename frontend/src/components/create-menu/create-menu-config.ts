@@ -46,7 +46,7 @@ export const CREATE_ACTIONS: readonly CreateAction[] = [
   },
   {
     id: "node",
-    label: "Register Node",
+    label: "Register Cluster",
     icon: Server,
     href: "/register-node",
     section: "cluster",

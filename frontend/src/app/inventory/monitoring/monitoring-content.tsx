@@ -29,12 +29,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
-import { queryKeys, useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { cn, formatMemory } from "@/lib/utils";
+import { cn, formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 import { InstanceMonitoringSummary, VMInfo } from "@/types";
 import type {
@@ -42,7 +42,7 @@ import type {
   MonitoringDashboardResponse,
   SystemWarningsResponse,
 } from "@/types/api";
-import { vmAPI } from "@/lib/api";
+import { api } from "@/lib/api";
 
 type MonitoringDisplaySnapshot = {
   actorScope: string;
@@ -56,28 +56,11 @@ type MonitoringDisplaySnapshot = {
   updatedAt: number;
 };
 
-// Format CPU time from nanoseconds to readable format
-const formatCpuTime = (nanoseconds: number): string => {
-  if (nanoseconds === 0) return "0s";
-  const seconds = nanoseconds / 1e9;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = seconds / 60;
-  if (minutes < 60) return `${minutes.toFixed(1)}m`;
-  const hours = minutes / 60;
-  if (hours < 24) return `${hours.toFixed(1)}h`;
-  const days = hours / 24;
-  if (days < 365) return `${days.toFixed(0)}d`;
-  const years = days / 365;
-  return `${years.toFixed(1)}y`;
-};
-
-// Format bytes to human readable
-const formatBytes = (bytes: number, decimals = 2): string => {
-  if (bytes === 0) return "0 B";
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
+type MonitoringInstanceRequest = {
+  actorScope: string;
+  project: string;
+  epoch: number;
+  controller: AbortController;
 };
 
 const toVmInfoFromMonitoringSummary = (instance: InstanceMonitoringSummary): VMInfo => ({
@@ -98,38 +81,6 @@ const toVmInfoFromMonitoringSummary = (instance: InstanceMonitoringSummary): VMI
   profiles: [],
   tags: [],
 });
-
-// Format bytes per second
-const formatBytesPerSec = (bytes: number): string => {
-  return `${formatBytes(bytes)}/s`;
-};
-
-// Format network speed (MB/s) to human readable with auto-scaling
-const formatNetworkSpeed = (mbps: number, decimals = 2): string => {
-  if (mbps === 0) return "0 B/s";
-  if (mbps < 0.001) return `${(mbps * 1024 * 1024).toFixed(decimals)} B/s`;
-  if (mbps < 1) return `${(mbps * 1024).toFixed(decimals)} KB/s`;
-  if (mbps < 1024) return `${mbps.toFixed(decimals)} MB/s`;
-  if (mbps < 1024 * 1024) return `${(mbps / 1024).toFixed(decimals)} GB/s`;
-  return `${(mbps / 1024 / 1024).toFixed(decimals)} TB/s`;
-};
-
-// Smart format bytes - automatically chooses best unit
-const formatBytesAuto = (bytes: number): { value: string; unit: string; rawValue: number } => {
-  if (bytes === 0) return { value: "0", unit: "B", rawValue: 0 };
-  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-  const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  const value = bytes / Math.pow(k, i);
-  return { value: value.toFixed(2), unit: sizes[i], rawValue: value };
-};
-
-// Convert bytes to specific unit
-const bytesToUnit = (bytes: number, unit: "B" | "KB" | "MB" | "GB" | "TB"): number => {
-  const units = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 };
-  // decimal, to match the axis labels this feeds and the rest of the page
-  return bytes / Math.pow(1000, units[unit]);
-};
 
 // Metric Card Component
 interface MetricCardProps {
@@ -759,6 +710,8 @@ export default function MonitoringContent() {
   const [monitoringUiActorScope, setMonitoringUiActorScope] = useState(actorScope);
   const previousActorScopeRef = useRef(actorScope);
   const activeActorScopeRef = useRef(actorScope);
+  const instanceRequestEpochRef = useRef(0);
+  const activeInstanceRequestRef = useRef<MonitoringInstanceRequest | null>(null);
   activeActorScopeRef.current = actorScope;
 
   // This route can survive a sign-out/sign-in transition without unmounting. Actor-owned UI
@@ -797,6 +750,8 @@ export default function MonitoringContent() {
 
   useEffect(() => {
     if (previousActorScopeRef.current === actorScope) return;
+    activeInstanceRequestRef.current?.controller.abort();
+    activeInstanceRequestRef.current = null;
     previousActorScopeRef.current = actorScope;
     setMonitoringUiActorScope(actorScope);
     setInstanceDialogOpen(false);
@@ -814,6 +769,11 @@ export default function MonitoringContent() {
     setIsPaused(false);
     setPausedSnapshot(null);
   }, [actorScope]);
+
+  useEffect(() => () => {
+    activeInstanceRequestRef.current?.controller.abort();
+    activeInstanceRequestRef.current = null;
+  }, []);
   
   // Transition for non-blocking time range switches
   const [isTimeRangePending, startTimeRangeTransition] = useTransition();
@@ -1052,41 +1012,72 @@ export default function MonitoringContent() {
     [nodeWarnings, selectedNode],
   );
 
-  // Fetch instances for dialog - uses React Query cache for instant results
-  const fetchInstances = async (filterType: "running" | "stopped" | "other" | "container" | "vm") => {
+  // The distribution is fleet-wide, so project "*" is an explicit part of the request
+  // identity. Always force an authoritative read: the retired VM cache is not patched by the
+  // instance event stream and could otherwise survive indefinitely. The identity object, not
+  // actor scope alone, also fences a rapid A -> B -> A transition.
+  const fetchInstances = async (
+    filterType: "running" | "stopped" | "other" | "container" | "vm",
+    project?: string,
+  ) => {
     const requestActorScope = actorScope;
+    const requestProject = project || "*";
+    const controller = new AbortController();
+    const request: MonitoringInstanceRequest = {
+      actorScope: requestActorScope,
+      project: requestProject,
+      epoch: ++instanceRequestEpochRef.current,
+      controller,
+    };
+    activeInstanceRequestRef.current?.controller.abort();
+    activeInstanceRequestRef.current = request;
     setMonitoringUiActorScope(requestActorScope);
     setInstanceFilterType(filterType);
     setInstanceDialogOpen(true);
-
-    // Try cached data first for instant display
-    const allVmsQueryKey = queryKeys.vmsFor(actorScope, undefined, undefined);
-    const cached = queryClient.getQueryData<{ vms: VMInfo[] }>(allVmsQueryKey);
-    if (cached?.vms) {
-      setAllInstances(filterInstanceList(cached.vms, filterType));
-      setInstancesLoading(false);
-      return;
-    }
-
-    // Fallback: fetch via React Query (reuses cache if available)
+    setAllInstances([]);
     setInstancesLoading(true);
     try {
-      const response = await queryClient.fetchQuery({
-        queryKey: allVmsQueryKey,
-        queryFn: () => vmAPI.list(),
-        staleTime: 30_000,
-      });
-      if (activeActorScopeRef.current !== requestActorScope) return;
+      const response = await api.instances.list(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          fresh: true,
+          signal: controller.signal,
+          ...(project ? { project } : {}),
+        },
+      );
+      if (
+        activeActorScopeRef.current !== requestActorScope ||
+        activeInstanceRequestRef.current !== request
+      ) return;
       setAllInstances(filterInstanceList(response.vms, filterType));
     } catch (error) {
-      if (activeActorScopeRef.current !== requestActorScope) return;
+      if (
+        controller.signal.aborted ||
+        activeActorScopeRef.current !== requestActorScope ||
+        activeInstanceRequestRef.current !== request
+      ) return;
       console.error("Failed to fetch instances:", error);
       setAllInstances([]);
     } finally {
-      if (activeActorScopeRef.current === requestActorScope) {
+      if (
+        activeActorScopeRef.current === requestActorScope &&
+        activeInstanceRequestRef.current === request
+      ) {
+        activeInstanceRequestRef.current = null;
         setInstancesLoading(false);
       }
     }
+  };
+
+  const closeInstanceList = () => {
+    activeInstanceRequestRef.current?.controller.abort();
+    activeInstanceRequestRef.current = null;
+    setInstancesLoading(false);
+    setInstanceDialogOpen(false);
   };
 
   // Helper to filter instance list by type
@@ -1390,10 +1381,8 @@ export default function MonitoringContent() {
           storage: storagePercent,
           storageUsedBytes,
           diskIoBytes: point.disk_io_bytes || 0,
-          networkRxRate: nodeNetworkRxRate / (1024 * 1024),
-          networkTxRate: nodeNetworkTxRate / (1024 * 1024),
-          networkRxTotal: networkRxBytes / (1024 * 1024 * 1024),
-          networkTxTotal: networkTxBytes / (1024 * 1024 * 1024),
+          networkRxRate: nodeNetworkRxRate,
+          networkTxRate: nodeNetworkTxRate,
           instances: runningInstances,
         };
       }
@@ -1435,13 +1424,9 @@ export default function MonitoringContent() {
         memoryUsedBytes,
         storage: point.storage_usage_percent || 0,
         storageUsedBytes,
-        diskIoBytes: point.disk_io_bytes || 0, // Disk I/O for storage chart
-        // Network in GB for display
-        networkRxRate: networkRxRate / (1024 * 1024), // MB/s
-        networkTxRate: networkTxRate / (1024 * 1024), // MB/s
-        // Cumulative network in GB for total display
-        networkRxTotal: point.network_rx_bytes / (1024 * 1024 * 1024), // GB
-        networkTxTotal: point.network_tx_bytes / (1024 * 1024 * 1024), // GB
+        diskIoBytes: point.disk_io_bytes || 0, // Storage I/O for the storage chart
+        networkRxRate,
+        networkTxRate,
         instances: point.running_instances,
         // Per-node data for multi-line chart
         ...perNodeData,
@@ -1594,19 +1579,30 @@ export default function MonitoringContent() {
   }, [chartData]);
 
   const networkDomain = useMemo((): [number, number] => {
-    if (!chartData.length) return [0, 10];
+    if (!chartData.length) return [0, 10_000_000];
     const rxValues = chartData.map(d => d.networkRxRate).filter(v => typeof v === 'number');
     const txValues = chartData.map(d => d.networkTxRate).filter(v => typeof v === 'number');
     const allValues = [...rxValues, ...txValues];
     
-    if (allValues.length === 0) return [0, 10];
+    if (allValues.length === 0) return [0, 10_000_000];
     
     const maxValue = Math.max(...allValues);
     const paddedMax = maxValue * 1.2;
     
-    // Nice network thresholds in MB/s
-    const thresholds = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
-    let niceCeiling = 10;
+    // Decimal byte-per-second thresholds, matching the SI labels printed on the axis.
+    const thresholds = [
+      1_000_000,
+      2_000_000,
+      5_000_000,
+      10_000_000,
+      20_000_000,
+      50_000_000,
+      100_000_000,
+      200_000_000,
+      500_000_000,
+      1_000_000_000,
+    ];
+    let niceCeiling = 10_000_000;
     for (const threshold of thresholds) {
       if (paddedMax <= threshold) {
         niceCeiling = threshold;
@@ -1614,9 +1610,9 @@ export default function MonitoringContent() {
       }
     }
     
-    // For very small values, show at least 1 MB/s
-    if (maxValue < 0.1) {
-      niceCeiling = 1;
+    // For very small values, show at least 1 MB/s.
+    if (maxValue < 100_000) {
+      niceCeiling = 1_000_000;
     }
     
     return [0, niceCeiling];
@@ -1625,11 +1621,11 @@ export default function MonitoringContent() {
   // Stable tick formatters to avoid Recharts re-renders from new function refs
   const percentTickFormatter = useCallback((v: number) => `${v}%`, []);
   const identityTickFormatter = useCallback((value: string) => value, []);
-  const networkTickFormatter = useCallback((v: number) => `${v.toFixed(1)} MB/s`, []);
+  const networkTickFormatter = useCallback((v: number) => formatNetworkRate(v, 1), []);
   const networkTooltipFormatter = useCallback((value: number | string | undefined, name?: string) => {
     const numValue = typeof value === 'number' ? value : 0;
     const label = name === "networkRxRate" ? "↓ Inbound" : "↑ Outbound";
-    return [`${numValue.toFixed(2)} MB/s`, label];
+    return [formatNetworkRate(numValue), label];
   }, []);
   // Stable object ref for tooltip contentStyle
   const tooltipContentStyle = useMemo(() => ({
@@ -1753,7 +1749,7 @@ export default function MonitoringContent() {
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Monitoring</h1>
           <p className="text-muted-foreground">
-            Real-time resource metrics across all nodes
+            Real-time resource metrics across all clusters
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1804,9 +1800,9 @@ export default function MonitoringContent() {
           progress={(filteredStats.running_instances / Math.max(filteredStats.total_instances, 1)) * 100}
         />
         <MetricCard
-          title="Nodes Online"
+          title="Clusters Online"
           value={`${filteredStats.online_nodes} / ${filteredStats.total_nodes}`}
-          subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All nodes healthy"}
+          subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All clusters healthy"}
           trend={filteredStats.inactive_nodes > 0 ? "down" : "neutral"}
         />
         <MetricCard
@@ -1827,7 +1823,7 @@ export default function MonitoringContent() {
               Resource Utilization
             </CardTitle>
             <CardDescription>
-              {selectedNode === "all" ? "Overall resource allocation and usage across all nodes" : `Resource usage for ${selectedNode}`}
+              {selectedNode === "all" ? "Overall resource allocation and usage across all clusters" : `Resource usage for ${selectedNode}`}
             </CardDescription>
           </div>
         </CardHeader>
@@ -1841,7 +1837,7 @@ export default function MonitoringContent() {
                 statusMessage={isPartner && filteredStats.realtime_cpu_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
-                Allocated: {filteredStats.used_cpu} / {filteredStats.total_cpu} threads (
+                Allocated: {filteredStats.used_cpu} vCPU / {filteredStats.total_cpu} hardware threads (
                 {cpuAllocation({ cpu_total: filteredStats.total_cpu, cpu_used: filteredStats.used_cpu }).ratioLabel})
               </p>
             </div>
@@ -1853,7 +1849,7 @@ export default function MonitoringContent() {
                 statusMessage={isPartner && filteredStats.memory_usage_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
-                {formatBytes(filteredStats.used_memory_bytes)} / {formatBytes(filteredStats.total_memory_bytes)}
+                {formatMemory(filteredStats.used_memory_bytes)} / {formatMemory(filteredStats.total_memory_bytes)}
               </p>
             </div>
             <div className="text-center">
@@ -2417,15 +2413,15 @@ export default function MonitoringContent() {
                   <span className="text-[10px] sm:text-xs font-medium" style={{ color: CHART_COLORS.network }}>↓ Inbound (RX)</span>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] sm:text-xs text-muted-foreground">Min:</span>
-                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.network }}>{formatNetworkSpeed(chartStats.networkRx.min)}</span>
+                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.network }}>{formatNetworkRate(chartStats.networkRx.min)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] sm:text-xs text-muted-foreground">Avg:</span>
-                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.network }}>{formatNetworkSpeed(chartStats.networkRx.avg)}</span>
+                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.network }}>{formatNetworkRate(chartStats.networkRx.avg)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] sm:text-xs text-muted-foreground">Max:</span>
-                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.network }}>{formatNetworkSpeed(chartStats.networkRx.max)}</span>
+                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.network }}>{formatNetworkRate(chartStats.networkRx.max)}</span>
                   </div>
                 </div>
                 <div className="hidden sm:block w-px h-6 bg-border" />
@@ -2433,15 +2429,15 @@ export default function MonitoringContent() {
                   <span className="text-[10px] sm:text-xs font-medium" style={{ color: CHART_COLORS.networkTx }}>↑ Outbound (TX)</span>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] sm:text-xs text-muted-foreground">Min:</span>
-                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.networkTx }}>{formatNetworkSpeed(chartStats.networkTx.min)}</span>
+                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.networkTx }}>{formatNetworkRate(chartStats.networkTx.min)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] sm:text-xs text-muted-foreground">Avg:</span>
-                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.networkTx }}>{formatNetworkSpeed(chartStats.networkTx.avg)}</span>
+                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.networkTx }}>{formatNetworkRate(chartStats.networkTx.avg)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] sm:text-xs text-muted-foreground">Max:</span>
-                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.networkTx }}>{formatNetworkSpeed(chartStats.networkTx.max)}</span>
+                    <span className="text-[10px] sm:text-sm font-semibold" style={{ color: CHART_COLORS.networkTx }}>{formatNetworkRate(chartStats.networkTx.max)}</span>
                   </div>
                 </div>
               </div>
@@ -2820,7 +2816,7 @@ export default function MonitoringContent() {
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-rose-600">{warningsCounts.inactiveNodes}</p>
-                      <p className="text-xs text-muted-foreground">Inactive Nodes</p>
+                      <p className="text-xs text-muted-foreground">Inactive Clusters</p>
                     </div>
                   </Link>
                 )}
@@ -2841,14 +2837,14 @@ export default function MonitoringContent() {
         </Card>
       )}
 
-      {/* Node Status Cards */}
+      {/* Cluster status cards */}
       <Card>
         <CardHeader>
           <CardTitle>
-            Node Status
+            Cluster Status
           </CardTitle>
           <CardDescription>
-            Detailed metrics for each connected node
+            Detailed metrics for each connected cluster
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -2859,7 +2855,7 @@ export default function MonitoringContent() {
             {filteredNodes.length === 0 && (
               <div className="col-span-full text-center py-8 text-muted-foreground">
                 <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No nodes connected</p>
+                <p>No clusters connected</p>
               </div>
             )}
           </div>
@@ -2876,7 +2872,7 @@ export default function MonitoringContent() {
                   Storage Pools
                 </CardTitle>
                 <CardDescription>
-                  Storage pool utilization across all nodes
+                  Storage pool utilization across all clusters
                 </CardDescription>
               </div>
               <Button
@@ -2953,14 +2949,14 @@ export default function MonitoringContent() {
       {/* Instance Details Dialog */}
       <InstanceDetailsDialog
         open={monitoringUiIsCurrent && instanceDialogOpen}
-        onClose={() => setInstanceDialogOpen(false)}
+        onClose={closeInstanceList}
         filterType={instanceFilterType}
         instances={monitoringUiIsCurrent ? allInstances : []}
         isLoading={monitoringUiIsCurrent && instancesLoading}
         onSelectInstance={(instance) => {
           // Close the list before opening the detail. Stacking one modal on another is the
           // pattern being removed from member-resource-modal, not one to copy.
-          setInstanceDialogOpen(false);
+          closeInstanceList();
           setMonitoringUiActorScope(actorScope);
           setSelectedListInstance(instance);
         }}

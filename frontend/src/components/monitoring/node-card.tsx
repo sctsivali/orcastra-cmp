@@ -22,7 +22,7 @@ import {
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { cn, formatBytes, formatHypervisorType, formatMemory} from "@/lib/utils";
+import { cn, formatBytes, formatHypervisorType, formatMemory } from "@/lib/utils";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
 // Node Card Component
@@ -90,8 +90,8 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
             {/* CPU */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">CPU</span>
-                <span className="font-medium">{cpu.allocated} / {cpu.threads} threads</span>
+                <span className="text-muted-foreground">vCPU Allocation</span>
+                <span className="font-medium">{cpu.allocated} vCPU / {cpu.threads} hardware threads</span>
               </div>
               <Progress value={cpu.percentClamped} className={`h-2 ${cpu.meterClassName}`} />
               <p className={`text-xs text-right ${cpu.textClassName}`}>{cpuAllocationText(cpu)}</p>
@@ -157,7 +157,7 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
                 backend no longer emits. Kept as a sentence: the badge is the label, this is the
                 card's empty state and reads better saying what it means. */}
             <p className="text-sm font-medium">
-              Node is {statusMeta.label.toLowerCase()}
+              Cluster is {statusMeta.label.toLowerCase()}
             </p>
             {isPartner && node.status_message && (
               <p className="text-xs mt-1 max-w-[200px] mx-auto">{node.status_message}</p>
