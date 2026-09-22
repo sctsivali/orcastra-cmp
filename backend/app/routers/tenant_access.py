@@ -60,9 +60,10 @@ def _invalidate_acl_caches():
     """
     try:
         cache = get_cache_manager()
-        cache.delete_pattern("api_responses", "instances:*")
-        cache.delete_pattern("api_responses", "projects:*")
-        cache.delete_pattern("api_responses", "monitoring:*")
+        # ACL changes are mutations of the visible inventory. Use the generation-aware helpers
+        # so an older in-flight tenant read cannot restore its pre-change projection afterwards.
+        cache.invalidate_instance_cache()
+        cache.invalidate_resource_cache("projects")
         logger.info("Invalidated ACL-dependent API response caches")
     except Exception as e:
         logger.warning(f"Cache invalidation failed (non-fatal): {e}")

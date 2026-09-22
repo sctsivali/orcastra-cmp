@@ -40,7 +40,7 @@ from app.core.tenant_visibility import (
     tenant_may_see_project,
 )
 from app.core.single_flight import single_flight
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.activity_logger import get_activity_logger
@@ -82,7 +82,7 @@ class NetworkInfo(BaseModel):
     config: Dict[str, str] = Field(default_factory=dict, description="Network configuration")
     used_by: List[str] = Field(default_factory=list, description="Instances using this network")
     status: str = Field("", description="Network status")
-    node: str = Field("", description="Node name where network is defined")
+    node: str = Field("", description="Cluster where the network is defined")
     project: str = Field(
         DEFAULT_PROJECT,
         description="LXD project that holds this network",
@@ -183,9 +183,9 @@ def validate_uplink(
 
     def _offer() -> str:
         return (
-            f" Usable uplinks on this node: {', '.join(usable)}."
+            f" Usable uplinks in this cluster: {', '.join(usable)}."
             if usable
-            else " No network on this node can serve as an uplink; create a managed bridge or"
+            else " No network in this cluster can serve as an uplink; create a managed bridge or"
             " physical network first."
         )
 
@@ -199,7 +199,7 @@ def validate_uplink(
     if row is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Uplink network '{uplink}' does not exist on this node." + _offer(),
+            detail=f"Uplink network '{uplink}' does not exist in this cluster." + _offer(),
         )
     if row.get("type") not in OVN_UPLINK_TYPES:
         raise HTTPException(
@@ -297,18 +297,18 @@ class NetworkListResponse(BaseModel):
     """Response for listing networks."""
     total: int = Field(..., description="Total number of networks")
     networks: List[NetworkInfo] = Field(..., description="List of networks")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
     unreachable_nodes: List[str] = Field(
         default_factory=list,
         description=(
-            "Nodes that could not be reached. Their networks are missing from this "
-            "list, so an unreachable node is distinguishable from one with none."
+            "Clusters that could not be reached. Their networks are missing from this "
+            "list, so an unreachable cluster is distinguishable from one with none."
         ),
     )
     partial_nodes: List[str] = Field(
         default_factory=list,
         description=(
-            "Nodes that answered but could not be read for every project, so their networks "
+            "Clusters that answered but could not be read for every project, so their networks "
             "may be incomplete. A short list is never presented as the whole truth."
         ),
     )
@@ -366,11 +366,11 @@ def _fetch_networks_for_node(
     "",
     response_model=NetworkListResponse,
     summary="List all networks",
-    description="Get a list of all networks from LXD nodes.",
+    description="Get a list of all networks from connected clusters.",
 )
 @single_flight("networks:list")
 async def list_networks(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     project: Optional[str] = Query(
         None,
         description=(
@@ -395,6 +395,7 @@ async def list_networks(
         logger.debug(f"Returning cached networks for host={host}")
         # Reconstruct Pydantic model from cached dict
         return NetworkListResponse(**cached_data)
+    list_generation = get_resource_list_generation(cache, "networks")
     
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
@@ -465,8 +466,11 @@ async def list_networks(
         
         # important: an outage must not be remembered as the answer. See instances.py.
         if answered:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug("Cached networks list for 180 seconds")
+            if get_resource_list_generation(cache, "networks") == list_generation:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+                logger.debug("Cached networks list for 180 seconds")
+            else:
+                logger.info("Not caching networks list: a dependent mutation completed during the read")
         else:
             logger.warning("Not caching networks list: no node answered")
 
@@ -484,7 +488,7 @@ async def list_networks(
 )
 async def get_network(
     network_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the network (default project when omitted)"
     ),
@@ -495,7 +499,10 @@ async def get_network(
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
@@ -527,7 +534,7 @@ async def get_network(
         raise _lxd_http_error(e, network_name)
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error getting network {network_name}: {e}")
-        raise HTTPException(status_code=503, detail=f"Could not reach LXD host '{host}'")
+        raise HTTPException(status_code=503, detail=f"Could not reach cluster '{host}'")
     except Exception as e:
         logger.error(f"Unexpected error getting network {network_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get network")
@@ -541,7 +548,7 @@ async def get_network(
 )
 async def create_network(
     request: NetworkCreateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project to create the network in"
     ),
@@ -562,7 +569,10 @@ async def create_network(
         """
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
 
         # important: resolved, not taken as given. A project that does not set
         # features.networks holds no networks of its own and LXD stores this in default;
@@ -690,7 +700,7 @@ async def create_network(
         # Invalidate the (180s) networks list cache so the new network shows
         # immediately instead of after the TTL. Scope-aware keys look like
         # "networks:list:host=...:scope=...", so clear by prefix.
-        get_cache_manager().delete_pattern("api_responses", "networks:*")
+        get_cache_manager().invalidate_resource_cache("networks")
 
         return {
             "success": True,
@@ -742,7 +752,7 @@ async def create_network(
 )
 async def update_network(
     network_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the network (default project when omitted)"
     ),
@@ -763,7 +773,10 @@ async def update_network(
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
@@ -800,7 +813,7 @@ async def update_network(
             timeout=NETWORK_WRITE_WAIT_SECONDS,
         )
 
-        get_cache_manager().delete_pattern("api_responses", "networks:*")
+        get_cache_manager().invalidate_resource_cache("networks")
 
         return {
             "success": True,
@@ -824,7 +837,7 @@ async def update_network(
 )
 async def delete_network(
     network_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the network (default project when omitted)"
     ),
@@ -837,7 +850,10 @@ async def delete_network(
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
@@ -849,7 +865,7 @@ async def delete_network(
             timeout=NETWORK_WRITE_WAIT_SECONDS,
         )
 
-        get_cache_manager().delete_pattern("api_responses", "networks:*")
+        get_cache_manager().invalidate_resource_cache("networks")
 
         # Log activity: network deletion success
         activity_logger.log_activity(
@@ -899,7 +915,7 @@ async def delete_network(
 )
 async def get_network_state(
     network_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the network (default project when omitted)"
     ),
@@ -910,7 +926,10 @@ async def get_network_state(
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")

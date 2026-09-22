@@ -21,7 +21,7 @@ from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
@@ -81,7 +81,7 @@ class StoragePoolInfo(BaseModel):
     config: Dict[str, str] = Field(default_factory=dict, description="Pool configuration")
     used_by: List[str] = Field(default_factory=list, description="Resources using this pool")
     status: str = Field("", description="Pool status")
-    node: str = Field("", description="Node name where pool is defined")
+    node: str = Field("", description="Cluster where the pool is defined")
 
 
 class StoragePoolCreateRequest(BaseModel):
@@ -96,7 +96,7 @@ class StoragePoolListResponse(FanoutReachability):
     """Response for listing storage pools."""
     total: int = Field(..., description="Total number of pools")
     pools: List[StoragePoolInfo] = Field(..., description="List of storage pools")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[StoragePoolInfo]:
@@ -138,11 +138,11 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[S
     "",
     response_model=StoragePoolListResponse,
     summary="List all storage pools",
-    description="Get a list of all storage pools from LXD nodes.",
+    description="Get a list of all storage pools from connected clusters.",
 )
 @single_flight("storage_pools:list")
 async def list_storage_pools(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
@@ -156,6 +156,7 @@ async def list_storage_pools(
     if cached_data is not None:
         logger.debug(f"Returning cached storage pools for host={host}")
         return StoragePoolListResponse(**cached_data)
+    list_generation = get_resource_list_generation(cache, "storage_pools")
     
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
@@ -211,8 +212,11 @@ async def list_storage_pools(
         # partial one: a cluster that failed its listing was cached as "no pools" for
         # 180 seconds. See instances.py.
         if cacheable:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
-            logger.debug("Cached storage pools list for %s seconds", ttl)
+            if get_resource_list_generation(cache, "storage_pools") == list_generation:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
+                logger.debug("Cached storage pools list for %s seconds", ttl)
+            else:
+                logger.info("Not caching storage pools list: a dependent mutation completed during the read")
         else:
             logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
 
@@ -225,7 +229,7 @@ async def list_storage_pools(
 @router.get(
     "/resources-all",
     summary="Get all storage pool resources",
-    description="Get resources (space, inodes) for all storage pools across all nodes.",
+    description="Get resources (space, inodes) for all storage pools across all clusters.",
 )
 @single_flight("storage_pool_resources")
 async def get_all_storage_pool_resources(
@@ -239,6 +243,7 @@ async def get_all_storage_pool_resources(
         cached = None if fresh else cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
+        list_generation = get_resource_list_generation(cache, "storage_pool_resources")
 
         nodes = lxd_service.connection_manager.get_node_names()
         tenant_acl = get_tenant_acl()
@@ -292,7 +297,13 @@ async def get_all_storage_pool_resources(
         # Counting answers, not entries: a reachable fleet with no pools is legitimately
         # empty, a fleet that is down is not.
         if answered:
-            cache.set("api_responses", cache_key, response, ttl=60)
+            if (
+                get_resource_list_generation(cache, "storage_pool_resources")
+                == list_generation
+            ):
+                cache.set("api_responses", cache_key, response, ttl=60)
+            else:
+                logger.info("Not caching storage pool resources: capacity changed during the read")
         else:
             logger.warning("Not caching storage pool resources: no node answered")
         return response
@@ -309,7 +320,7 @@ async def get_all_storage_pool_resources(
 )
 async def get_storage_pool(
     pool_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific storage pool."""
@@ -358,7 +369,7 @@ async def get_storage_pool(
 )
 async def create_storage_pool(
     request: StoragePoolCreateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -469,7 +480,7 @@ async def create_storage_pool(
 )
 async def update_storage_pool(
     pool_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     config: Optional[Dict[str, str]] = Body(None),
     description: Optional[str] = Body(None),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -516,7 +527,7 @@ async def update_storage_pool(
 )
 async def delete_storage_pool(
     pool_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -573,7 +584,7 @@ async def delete_storage_pool(
     "-resources",
     response_model=dict,
     summary="Get all storage pool resources",
-    description="Get resource usage information for all storage pools across all nodes.",
+    description="Get resource usage information for all storage pools across all clusters.",
 )
 @single_flight("storage_pool_resources:all_v2")
 async def get_all_storage_pool_resources_legacy_path(
@@ -587,6 +598,7 @@ async def get_all_storage_pool_resources_legacy_path(
         cached = None if fresh else cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
+        list_generation = get_resource_list_generation(cache, "storage_pool_resources")
 
         nodes = lxd_service.connection_manager.get_node_names()
         tenant_acl = get_tenant_acl()
@@ -635,7 +647,13 @@ async def get_all_storage_pool_resources_legacy_path(
         response = {"resources": all_resources}
         # important: an outage must not be remembered as the answer. See instances.py.
         if answered:
-            cache.set("api_responses", cache_key, response, ttl=60)
+            if (
+                get_resource_list_generation(cache, "storage_pool_resources")
+                == list_generation
+            ):
+                cache.set("api_responses", cache_key, response, ttl=60)
+            else:
+                logger.info("Not caching storage pool resources: capacity changed during the read")
         else:
             logger.warning("Not caching storage pool resources: no node answered")
         return response
@@ -652,7 +670,7 @@ async def get_all_storage_pool_resources_legacy_path(
 )
 async def get_storage_pool_resources(
     pool_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get storage pool resources."""

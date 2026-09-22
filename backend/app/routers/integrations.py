@@ -5247,9 +5247,8 @@ async def provision_tenant_access(
     # invalidate caches so tenants see access immediately
     try:
         cache = get_cache_manager()
-        cache.delete_pattern("api_responses", "instances:*")
-        cache.delete_pattern("api_responses", "projects:*")
-        cache.delete_pattern("api_responses", "monitoring:*")
+        cache.invalidate_instance_cache()
+        cache.invalidate_resource_cache("projects")
     except Exception:
         pass
 
@@ -5325,9 +5324,8 @@ async def revoke_tenant_access(
     def _invalidate_tenant_caches():
         try:
             cache = get_cache_manager()
-            cache.delete_pattern("api_responses", "instances:*")
-            cache.delete_pattern("api_responses", "projects:*")
-            cache.delete_pattern("api_responses", "monitoring:*")
+            cache.invalidate_instance_cache()
+            cache.invalidate_resource_cache("projects")
         except Exception:
             pass
 

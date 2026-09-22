@@ -54,7 +54,7 @@ class ResourceUsage(BaseModel):
 class InstanceMetrics(BaseModel):
     """Real-time instance metrics for monitoring."""
     instance_name: str = Field(..., description="Instance name")
-    host: str = Field(..., description="Host node name")
+    host: str = Field(..., description="Registered Cluster identifier")
     status: VMStatus = Field(..., description="Current instance status")
     cpu_usage_percent: float = Field(0.0, description="CPU usage percentage")
     memory_used_bytes: int = Field(0, description="Memory currently used in bytes")
@@ -142,7 +142,7 @@ class VMInfo(BaseModel):
     status: VMStatus = Field(..., description="Current VM status")
     status_code: int = Field(..., description="LXD status code")
     ip_addresses: List[str] = Field(default_factory=list, description="List of IP addresses")
-    host: str = Field(..., description="LXD host node name")
+    host: str = Field(..., description="Registered Cluster identifier")
     host_endpoint: str = Field(..., description="LXD host endpoint URL")
     # note: LXD reports which cluster member an instance sits on, and this model dropped it, so
     # the members page could count instances per member and never list them. That is why its
@@ -219,14 +219,14 @@ class VMListResponse(BaseModel):
     """Response for listing all VMs."""
     total: int = Field(..., description="Total number of VMs (before pagination)")
     vms: List[VMInfo] = Field(..., description="List of VMs")
-    nodes: List[str] = Field(..., description="List of connected node names")
+    nodes: List[str] = Field(..., description="List of connected Cluster identifiers")
     unreachable_nodes: List[str] = Field(
         default_factory=list,
         description="Registered clusters that did not answer, so their instances are absent",
     )
-    lxd_count: int = Field(0, description="Number of LXD nodes online")
-    microcloud_count: int = Field(0, description="Number of MicroCloud nodes online")
-    incus_count: int = Field(0, description="Number of Incus nodes online")
+    lxd_count: int = Field(0, description="Number of LXD Clusters online")
+    microcloud_count: int = Field(0, description="Number of MicroCloud Clusters online")
+    incus_count: int = Field(0, description="Number of Incus Clusters online")
     # Pagination metadata (optional - present when limit > 0)
     offset: int = Field(0, description="Offset of the returned page")
     limit: int = Field(0, description="Page size (0 = all)")
@@ -241,7 +241,7 @@ class VMCreateRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "name": "my-vm",
-                "host": "node1",
+                "host": "cluster-a",
                 "image": "ubuntu:22.04",
                 "instance_type": "virtual-machine",
                 "profiles": ["default"],
@@ -259,11 +259,11 @@ class VMCreateRequest(BaseModel):
         description="VM hostname",
     )
     description: Optional[str] = Field(None, description="Instance description")
-    host: str = Field(..., description="Target LXD host (node1 or node2)")
+    host: str = Field(..., description="Target Cluster identifier")
     image: str = Field(..., description="Image alias or fingerprint")
     image_server: Optional[str] = Field(
         None,
-        description="Remote image server URL to pull from (e.g. https://images.lxd.canonical.com). "
+        description="Remote image server URL to pull from (for example, https://images.lxd.canonical.com). "
                     "When set, `image` is treated as a remote alias and pulled. Omit for local images."
     )
     image_protocol: Optional[Literal["simplestreams", "lxd"]] = Field(
@@ -538,11 +538,11 @@ class RemoteImageListResponse(BaseModel):
 class GPUDRMInfo(BaseModel):
     """Direct Rendering Manager (DRM) info for GPU."""
     id: Optional[int] = Field(None, description="DRM card ID")
-    card_name: Optional[str] = Field(None, description="Card device name (ex;, 'card0')")
+    card_name: Optional[str] = Field(None, description="Card device name (for example, 'card0')")
     card_device: Optional[str] = Field(None, description="Card device number")
     control_name: Optional[str] = Field(None, description="Control device name")
     control_device: Optional[str] = Field(None, description="Control device number")
-    render_name: Optional[str] = Field(None, description="Render device name (ex;, 'renderD128')")
+    render_name: Optional[str] = Field(None, description="Render device name (for example, 'renderD128')")
     render_device: Optional[str] = Field(None, description="Render device number")
 
 
@@ -550,7 +550,7 @@ class GPUNvidiaInfo(BaseModel):
     """NVIDIA-specific GPU information."""
     cuda_version: Optional[str] = Field(None, description="CUDA API version")
     nvrm_version: Optional[str] = Field(None, description="NVRM driver version")
-    brand: Optional[str] = Field(None, description="Brand name (ex;, 'GeForce', 'Quadro')")
+    brand: Optional[str] = Field(None, description="Brand name (for example, 'GeForce', 'Quadro')")
     model: Optional[str] = Field(None, description="Model name")
     # important: exclude=True, not deleted. A GPU UUID is a per-device serial and this model
     # rides GET /nodes, which the ungated Technologies page reads, so it must not reach a
@@ -558,7 +558,7 @@ class GPUNvidiaInfo(BaseModel):
     # than from this model, so dropping it from the response costs the matcher nothing.
     uuid: Optional[str] = Field(None, description="GPU UUID; internal only, never serialized", exclude=True)
     architecture: Optional[str] = Field(None, description="Architecture generation")
-    card_name: Optional[str] = Field(None, description="Card device name (ex;, 'nvidia0')")
+    card_name: Optional[str] = Field(None, description="Card device name (for example, 'nvidia0')")
     card_device: Optional[str] = Field(None, description="Card device number")
 
 
@@ -572,7 +572,7 @@ class GPUSRIOVInfo(BaseModel):
 class GPUMdevProfile(BaseModel):
     """Mediated device (mdev) profile for vGPU."""
     name: str = Field(..., description="Profile name")
-    api: Optional[str] = Field(None, description="Mechanism used (ex;, 'vfio-pci')")
+    api: Optional[str] = Field(None, description="Mechanism used (for example, 'vfio-pci')")
     available: int = Field(0, description="Number of available devices")
     description: Optional[str] = Field(None, description="Profile description")
     devices: List[str] = Field(default_factory=list, description="List of existing device UUIDs")
@@ -583,15 +583,15 @@ class GPUCardInfo(BaseModel):
     # Core identification
     index: int = Field(0, description="Position in the reported card list, not a device selector")
     id: Optional[int] = Field(None, description="DRM card id: the value LXD accepts as a gpu device 'id'")
-    driver: Optional[str] = Field(None, description="Kernel driver (ex;, 'nvidia', 'i915', 'amdgpu')")
+    driver: Optional[str] = Field(None, description="Kernel driver (for example, 'nvidia', 'i915', 'amdgpu')")
     driver_version: Optional[str] = Field(None, description="Driver version")
-    pci_address: Optional[str] = Field(None, description="PCI address (ex;, '0000:00:02.0')")
+    pci_address: Optional[str] = Field(None, description="PCI address (for example, '0000:00:02.0')")
     usb_address: Optional[str] = Field(None, description="USB address for USB GPUs")
     
     # Vendor/Product info
-    vendor: Optional[str] = Field(None, description="Vendor name (ex;, 'NVIDIA Corporation')")
-    vendor_id: Optional[str] = Field(None, description="PCI vendor ID (ex;, '10de')")
-    product: Optional[str] = Field(None, description="Product name (ex;, 'GeForce RTX 3080')")
+    vendor: Optional[str] = Field(None, description="Vendor name (for example, 'NVIDIA Corporation')")
+    vendor_id: Optional[str] = Field(None, description="PCI vendor ID (for example, '10de')")
+    product: Optional[str] = Field(None, description="Product name (for example, 'GeForce RTX 3080')")
     product_id: Optional[str] = Field(None, description="PCI product ID")
     
     # System topology
@@ -606,11 +606,11 @@ class GPUCardInfo(BaseModel):
     # compute card is allocatable capacity.
     gpu_class: str = Field("unknown", description="'compute' | 'integrated' | 'display' | 'unknown'")
     is_compute: bool = Field(False, description="True for a compute-capable (sellable) GPU")
-    is_integrated: bool = Field(False, description="True when the GPU shares system RAM; orthogonal to gpu_class")
+    is_integrated: bool = Field(False, description="True when the GPU shares system Memory; orthogonal to gpu_class")
     attachable: bool = Field(False, description="True when an operator may pass this card into an instance")
     model_name: Optional[str] = Field(None, description="Human GPU model (ex; 'NVIDIA Jetson Orin NX')")
-    memory_total: Optional[int] = Field(None, description="GPU memory in bytes (for integrated GPUs, equals system RAM)")
-    memory_shared: bool = Field(False, description="True when GPU memory is unified/shared with system RAM")
+    memory_total: Optional[int] = Field(None, description="GPU memory in bytes (for integrated GPUs, equals system Memory)")
+    memory_shared: bool = Field(False, description="True when GPU memory is unified/shared with system Memory")
 
     # DRM info
     drm: Optional[GPUDRMInfo] = Field(None, description="Direct Rendering Manager info")
@@ -705,7 +705,7 @@ class CPUTopology(BaseModel):
     """Counted by walking sockets, cores and threads. cpu.total is not a core count."""
     model_config = ConfigDict(extra="forbid")
     architectures: List[str] = Field(default_factory=list, description="Distinct detected architectures; empty when none was reported, never defaulted")
-    total: int = Field(0, description="Logical CPUs the node reports")
+    total: int = Field(0, description="Hardware threads reported by the Cluster or Cluster member")
     cores: int = Field(0, description="Physical cores summed over every socket; 0 when no topology was reported")
     threads: int = Field(0, description="Hardware threads summed over every core; 0 when no topology was reported")
     numa_nodes: int = Field(0, description="Distinct NUMA nodes seen on CPU threads; 0 when unreported")
@@ -795,8 +795,8 @@ class HardwareProfile(BaseModel):
 
 
 class NodeResources(BaseModel):
-    """Node available resources information."""
-    cpu_total: int = Field(0, description="Hardware CPU threads")
+    """Registered Cluster resource information."""
+    cpu_total: int = Field(0, description="Hardware threads")
     cpu_used: int = Field(0, description="vCPUs allocated to running instances (the sum of their limits.cpu); may exceed cpu_total")
     cpu_available: int = Field(0, description="Threads not yet allocated; 0 once the host is over-committed, never negative")
     cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
@@ -832,7 +832,7 @@ class NodeResources(BaseModel):
     # defect MemberResources gained the same pair for.
     degraded: bool = Field(False, description="At least one part of this read did not come back, so the affected numbers are floors rather than measurements")
     degraded_parts: List[str] = Field(default_factory=list, description="Which parts were lost: 'storage', 'storage:<pool>'")
-    hardware: Optional[HardwareProfile] = Field(None, description="Detected hardware, identifier-stripped. None when the node did not answer, which must not look like an empty profile")
+    hardware: Optional[HardwareProfile] = Field(None, description="Detected hardware, identifier-stripped. None when the Cluster did not answer, which must not look like an empty profile")
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
 
@@ -902,11 +902,11 @@ class MemberResources(BaseModel):
 
 
 class NodeStatus(BaseModel):
-    """LXD node status information."""
-    name: str
-    endpoint: str
-    connected: bool
-    node_type: Optional[str] = Field(None, description="Hypervisor family from the host")
+    """Registered LXD Cluster status information."""
+    name: str = Field(..., description="Registered Cluster identifier")
+    endpoint: str = Field(..., description="Cluster API endpoint")
+    connected: bool = Field(..., description="Whether the Cluster is authenticated and reachable")
+    node_type: Optional[str] = Field(None, description="Hypervisor family reported by the Cluster")
     clustered: Optional[bool] = Field(
         None,
         description=(
@@ -920,12 +920,12 @@ class NodeStatus(BaseModel):
     environment: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     resources: Optional[NodeResources] = None
-    tags: List[str] = Field(default_factory=list, description="Node tags for organization and filtering")
-    display_name: Optional[str] = Field(None, description="Custom display name for the node")
+    tags: List[str] = Field(default_factory=list, description="Cluster tags for organization and filtering")
+    display_name: Optional[str] = Field(None, description="Custom display name for the Cluster")
     reachable: Optional[bool] = Field(
         None,
         description=(
-            "Whether the host answered our probe. connected=False with reachable=True means it "
+            "Whether the Cluster answered our probe. connected=False with reachable=True means it "
             "answered and refused our certificate; reachable=False means it never answered."
         ),
     )
@@ -941,13 +941,13 @@ class NodeStatus(BaseModel):
     @computed_field
     @property
     def cpu_cores(self) -> Optional[int]:
-        """Total CPU cores (computed from resources)."""
+        """Hardware thread count; the legacy wire field name is retained for compatibility."""
         return self.resources.cpu_total if self.resources else None
     
     @computed_field
     @property
     def ram_total_gb(self) -> Optional[float]:
-        """Total RAM in GB (computed from resources)."""
+        """Memory in GiB; the legacy ``ram_total_gb`` wire name is retained for compatibility."""
         if self.resources and self.resources.memory_total:
             return round(self.resources.memory_total / 1024 / 1024 / 1024, 2)
         return None
@@ -961,7 +961,7 @@ class NodeStatus(BaseModel):
 
 
 class NodesStatusResponse(BaseModel):
-    """Response for node status check."""
+    """Response for registered Cluster status checks; wire names remain unchanged."""
     nodes: List[NodeStatus]
     all_connected: bool
     collected_at: Optional[datetime] = Field(None, description="When this fan-out was built. Per-node sample times live on NodeResources.collected_at; this one also covers nodes that never answered and so carry no resources at all")
@@ -1060,8 +1060,8 @@ class AvailableClustersResponse(BaseModel):
 
 
 class NodeUpdateRequest(BaseModel):
-    """Request body for updating node metadata."""
-    display_name: str = Field(..., min_length=1, description="Display name for the node")
+    """Request body for updating Cluster metadata; the legacy class name is retained."""
+    display_name: str = Field(..., min_length=1, description="Display name for the Cluster")
 
     class Config:
         json_schema_extra = {
@@ -1072,7 +1072,7 @@ class NodeUpdateRequest(BaseModel):
 
 
 class NodeUpdateResponse(BaseModel):
-    """Response after node update."""
+    """Response after a Cluster metadata update; wire names remain unchanged."""
     success: bool
     message: str
     node_name: str
@@ -1092,7 +1092,7 @@ class ProjectInfo(BaseModel):
     description: Optional[str] = Field(None, description="Project description")
     config: Optional[Dict[str, str]] = Field(None, description="Project configuration")
     used_by: List[str] = Field(default_factory=list, description="Resources using this project")
-    host: str = Field(..., description="LXD host node name")
+    host: str = Field(..., description="Registered Cluster identifier")
     tags: List[str] = Field(default_factory=list, description="Project tags for organization and filtering")
 
 
@@ -1160,21 +1160,21 @@ class ProjectCreateRequest(BaseModel):
                 },
                 "max_cpu": 2,
                 "max_ram": "1GiB",
-                "max_storage": "10GiB",
+                "max_storage": "10GB",
             }
         },
     )
 
     name: str = Field(..., min_length=1, max_length=63, description="Project name")
-    host: str = Field(..., description="Target LXD host")
+    host: str = Field(..., description="Target Cluster")
     description: Optional[str] = Field(None, description="Project description")
     config: Optional[Dict[str, str]] = Field(
         default_factory=dict,
-        description="Project configuration (ex;, features.images, features.profiles)"
+        description="Project configuration (for example, features.images and features.profiles)"
     )
-    max_cpu: int = Field(..., ge=1, description="Maximum CPU cores")
-    max_ram: str = Field(..., min_length=1, description="Maximum RAM (ex;, '2GiB', '512MiB')")
-    max_storage: str = Field(..., min_length=1, description="Maximum storage (ex;, '10GiB', '500MiB')")
+    max_cpu: int = Field(..., ge=1, description="Maximum vCPU allocation")
+    max_ram: str = Field(..., min_length=1, description="Maximum Memory (for example, '2GiB' or '512MiB')")
+    max_storage: str = Field(..., min_length=1, description="Maximum Storage (for example, '10GB' or '500MB')")
 
 class ProjectCreateResponse(BaseModel):
     """Response after project creation."""
@@ -1193,15 +1193,15 @@ class ProjectUpdateRequest(BaseModel):
                 "description": "Updated description",
                 "max_cpu": 4,
                 "max_ram": "2GiB",
-                "max_storage": "20GiB",
+                "max_storage": "20GB",
             }
         },
     )
 
     description: Optional[str] = Field(None, description="Project description")
-    max_cpu: Optional[int] = Field(None, ge=0, description="Maximum CPU cores (0 = unlimited/clear limit)")
-    max_ram: Optional[str] = Field(None, description="Maximum RAM (ex;, '2GiB', '512MiB', '0' = unlimited)")
-    max_storage: Optional[str] = Field(None, description="Maximum storage (ex;, '10GiB', '500MiB', '0' = unlimited)")
+    max_cpu: Optional[int] = Field(None, ge=0, description="Maximum vCPU allocation (0 = unlimited/clear limit)")
+    max_ram: Optional[str] = Field(None, description="Maximum Memory (for example, '2GiB' or '512MiB'; '0' clears the limit)")
+    max_storage: Optional[str] = Field(None, description="Maximum Storage (for example, '10GB' or '500MB'; '0' clears the limit)")
 
 class ProjectUpdateResponse(BaseModel):
     """Response after project update."""
@@ -1217,18 +1217,18 @@ class ProjectUpdateResponse(BaseModel):
 # ========== Geo Location Models ==========
 
 class GeoLocation(BaseModel):
-    """Geographic location information for a node/cluster."""
-    region_id: str = Field(..., description="Region identifier (ex;, 'id-jkt', 'us-iad')")
-    region_name: str = Field(..., description="Region display name (ex;, 'Jakarta')")
+    """Geographic location information for a registered Cluster."""
+    region_id: str = Field(..., description="Region identifier (for example, 'id-jkt' or 'us-iad')")
+    region_name: str = Field(..., description="Region display name (for example, 'Jakarta')")
     country_code: str = Field(..., min_length=2, max_length=2, description="ISO 3166-1 alpha-2 country code")
     country_name: str = Field(..., description="Country name")
     city: str = Field(..., description="City name")
     latitude: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
     longitude: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
-    timezone: str = Field(..., description="Timezone (ex;, 'Asia/Jakarta')")
-    continent: str = Field(..., description="Continent code (ex;, 'AS', 'EU', 'NA')")
-    facility_name: Optional[str] = Field(None, description="Data center or facility name (ex;, 'Main Data Center')")
-    facility_provider: Optional[str] = Field(None, description="Facility provider/operator (ex;, 'Acme Corporation')")
+    timezone: str = Field(..., description="Timezone (for example, 'Asia/Jakarta')")
+    continent: str = Field(..., description="Continent code (for example, 'AS', 'EU', or 'NA')")
+    facility_name: Optional[str] = Field(None, description="Data center or facility name (for example, 'Main Data Center')")
+    facility_provider: Optional[str] = Field(None, description="Facility provider/operator (for example, 'Acme Corporation')")
 
 
 class ClusterRegisterRequest(BaseModel):
@@ -1237,8 +1237,8 @@ class ClusterRegisterRequest(BaseModel):
         # important: the id is interpolated into Vault paths and into a Redis glob,
         # so "*" here would wipe every org's cached cluster-member list.
         pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", description="Unique cluster identifier")
-    display_name: str = Field(..., min_length=1, description="Human-readable display name for the node")
-    endpoint: str = Field(..., min_length=1, description="LXD API endpoint (ex;, https://192.168.10.187:8443)")
+    display_name: str = Field(..., min_length=1, description="Human-readable display name for the Cluster")
+    endpoint: str = Field(..., min_length=1, description="LXD API endpoint (for example, https://192.168.10.187:8443)")
     zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
     merchant_id: Optional[str] = Field(None, description="Merchant/organization identifier")
     # New geo location fields
@@ -1494,17 +1494,17 @@ class SystemWarningsResponse(BaseModel):
 # ========== Monitoring Dashboard Models ==========
 
 class ClusterMonitoringMetrics(BaseModel):
-    """Monitoring metrics for a single cluster/node."""
-    node_name: str = Field(..., description="Node name")
-    node_type: str = Field("lxd", description="Node type (lxd, microcloud)")
-    is_online: bool = Field(..., description="Whether node is online")
+    """Monitoring metrics for a single registered Cluster."""
+    node_name: str = Field(..., description="Registered Cluster identifier")
+    node_type: str = Field("lxd", description="Cluster implementation type (lxd or microcloud)")
+    is_online: bool = Field(..., description="Whether the Cluster is online")
     cluster_status: Optional[str] = Field(None, description="Cluster status, a ClusterStatus value. This endpoint derives it from a reachability probe, so it emits online, not_authorized or offline; pending and error are reserved for the registration flow")
     status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
     
     # CPU Metrics
-    cpu_total: int = Field(0, description="Hardware CPU threads")
+    cpu_total: int = Field(0, description="Hardware threads")
     cpu_used: int = Field(0, description="vCPUs allocated to running instances; may exceed cpu_total")
-    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the node is over-committed")
+    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the Cluster is over-committed")
     cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
     cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total")
     cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
@@ -1520,23 +1520,23 @@ class ClusterMonitoringMetrics(BaseModel):
     storage_usage_percent: float = Field(0.0, description="Storage usage percentage")
     
     # GPU Metrics
-    gpu_total: int = Field(0, description="Compute GPUs on this node")
+    gpu_total: int = Field(0, description="Compute GPUs on this Cluster")
     gpu_used: int = Field(0, description="Compute GPUs allocated to running instances")
-    gpu_available: int = Field(0, description="Compute GPUs free on this node")
+    gpu_available: int = Field(0, description="Compute GPUs free on this Cluster")
     gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not capacity")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
     
     # Instance counts
-    instance_count: int = Field(0, description="Total instances on this node")
-    running_instances: int = Field(0, description="Running instances on this node")
+    instance_count: int = Field(0, description="Total instances on this Cluster")
+    running_instances: int = Field(0, description="Running instances on this Cluster")
 
 
 class InstanceMonitoringSummary(BaseModel):
     """Summary metrics for an instance (for top consumers list)."""
     name: str = Field(..., description="Instance name")
-    host: str = Field(..., description="Host node")
+    host: str = Field(..., description="Registered Cluster identifier")
     project: str = Field("default", description="Project name")
     type: str = Field("container", description="Instance type")
     status: str = Field(..., description="Instance status")
@@ -1593,7 +1593,7 @@ class MetricsHistoryPoint(BaseModel):
     network_tx_bytes: int = Field(0, description="Network TX bytes at this time")
     disk_io_bytes: int = Field(0, description="Disk I/O at this time")
     running_instances: int = Field(0, description="Running instances at this time")
-    nodes: Optional[Dict[str, Any]] = Field(default=None, description="Per-node metrics breakdown")
+    nodes: Optional[Dict[str, Any]] = Field(default=None, description="Per-Cluster metrics breakdown")
 
 
 class MonitoringDashboardResponse(BaseModel):
@@ -1601,9 +1601,9 @@ class MonitoringDashboardResponse(BaseModel):
     timestamp: datetime = Field(..., description="Response timestamp")
     
     # Cluster Overview
-    total_nodes: int = Field(0, description="Total registered nodes")
-    online_nodes: int = Field(0, description="Online nodes count")
-    inactive_nodes: int = Field(0, description="Inactive nodes count")
+    total_nodes: int = Field(0, description="Total registered Clusters")
+    online_nodes: int = Field(0, description="Online Cluster count")
+    inactive_nodes: int = Field(0, description="Inactive Cluster count")
     
     # Instance Overview
     total_instances: int = Field(0, description="Total instances")
@@ -1614,14 +1614,14 @@ class MonitoringDashboardResponse(BaseModel):
     vm_count: int = Field(0, description="Virtual machine count")
     
     # Aggregated Resource Metrics
-    total_cpu: int = Field(0, description="Total CPU cores across all nodes")
-    used_cpu: int = Field(0, description="Used CPU cores (allocated)")
+    total_cpu: int = Field(0, description="Total hardware threads across all Clusters")
+    used_cpu: int = Field(0, description="vCPUs allocated across all Clusters")
     cpu_usage_percent: float = Field(0.0, description="CPU allocation percentage")
     
     # Real-time CPU usage (from instance metrics)
     realtime_cpu_percent: float = Field(0.0, description="Real-time average CPU usage from running instances")
     
-    total_memory_bytes: int = Field(0, description="Total memory across all nodes")
+    total_memory_bytes: int = Field(0, description="Total memory across all Clusters")
     used_memory_bytes: int = Field(0, description="Used memory bytes")
     memory_usage_percent: float = Field(0.0, description="Overall memory usage percentage")
     
@@ -1629,16 +1629,16 @@ class MonitoringDashboardResponse(BaseModel):
     realtime_memory_bytes: int = Field(0, description="Real-time memory usage from running instances")
     realtime_memory_percent: float = Field(0.0, description="Real-time memory usage percentage")
     
-    total_storage_bytes: int = Field(0, description="Total storage across all nodes")
+    total_storage_bytes: int = Field(0, description="Total storage across all Clusters")
     used_storage_bytes: int = Field(0, description="Used storage bytes")
     storage_usage_percent: float = Field(0.0, description="Overall storage usage percentage")
     
-    total_gpu: int = Field(0, description="Total compute GPUs across connected nodes")
+    total_gpu: int = Field(0, description="Total compute GPUs across connected Clusters")
     total_gpu_cards: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     used_gpu: int = Field(0, description="Used GPUs")
     
     # Detailed Per-Node Metrics
-    nodes: List[ClusterMonitoringMetrics] = Field(default_factory=list, description="Per-node metrics")
+    nodes: List[ClusterMonitoringMetrics] = Field(default_factory=list, description="Per-Cluster metrics")
     
     # Storage Pools
     storage_pools: List[StoragePoolMetrics] = Field(default_factory=list, description="Storage pool details")
@@ -1660,7 +1660,7 @@ class MonitoringDashboardResponse(BaseModel):
 
 class TagCategoryBase(BaseModel):
     """Base schema for tag category."""
-    prefix: str = Field(..., min_length=2, max_length=10, description="Category prefix (ex;, 'loc_', 'vend_')")
+    prefix: str = Field(..., min_length=2, max_length=10, description="Category prefix (for example, 'loc_' or 'vend_')")
     name: str = Field(..., min_length=1, max_length=50, description="Category display name")
     description: Optional[str] = Field(None, description="Category description")
     color: str = Field("#6b7280", description="Hex color for UI display")
@@ -1698,7 +1698,7 @@ class TagCategoryResponse(TagCategoryBase):
 
 class TagBase(BaseModel):
     """Base schema for tag."""
-    name: str = Field(..., min_length=1, max_length=100, description="Tag name (ex;, 'loc_jakarta')")
+    name: str = Field(..., min_length=1, max_length=100, description="Tag name (for example, 'loc_jakarta')")
     display_name: Optional[str] = Field(None, max_length=100, description="Human-readable name")
     description: Optional[str] = Field(None, description="Tag description")
     color: Optional[str] = Field(None, description="Override color (uses category color if not set)")
@@ -1842,7 +1842,7 @@ class TagStatsResponse(BaseModel):
 class ExtendedHardwareInfo(BaseModel):
     """Extended hardware information for regions summary."""
     # CPU details
-    cpu_total: int = Field(0, description="Total CPU cores")
+    cpu_total: int = Field(0, description="Total hardware threads")
     cpu_sockets: int = Field(0, description="Number of CPU sockets")
     cpu_architecture: str = Field("x86_64", description="CPU architecture")
     cpu_vendor: Optional[str] = Field(None, description="CPU vendor (Intel, AMD, Apple, ARM)")
@@ -1870,7 +1870,7 @@ class ExtendedHardwareInfo(BaseModel):
 
 
 class RegionNodeInfo(BaseModel):
-    """Node information within a region."""
+    """Registered Cluster information within a region; wire names remain unchanged."""
     cluster_id: str
     display_name: str
     status: ClusterStatus
@@ -1892,8 +1892,8 @@ class RegionSummary(BaseModel):
     facility_provider: Optional[str] = Field(None, description="Facility provider/operator")
     
     # Aggregated stats
-    node_count: int = Field(0, description="Number of nodes in this region")
-    instance_count: int = Field(0, description="Total instances across all nodes")
+    node_count: int = Field(0, description="Number of registered Clusters in this region")
+    instance_count: int = Field(0, description="Total instances across all Clusters")
     instance_running: int = Field(0, description="Running instances")
     
     # Hardware summary

@@ -366,7 +366,7 @@ class ConsoleSessionStats(BaseModel):
     """Real-time statistics for an active console/terminal session."""
     session_id: str = Field(..., description="Unique session identifier")
     instance_name: str = Field(..., description="Instance name")
-    host: str = Field(..., description="Host node")
+    host: str = Field(..., description="Cluster")
     project: str = Field("default", description="LXD project")
     protocol: str = Field(..., description="Protocol type (websocket-terminal / spice-graphics)")
     started_at: float = Field(..., description="Session start time (Unix timestamp)")
@@ -438,7 +438,7 @@ async def get_session_stats(
 async def list_active_tracked_sessions(
     response: Response,
     instance_name: Optional[str] = Query(None, description="Filter by instance name"),
-    host: Optional[str] = Query(None, description="Filter by host node"),
+    host: Optional[str] = Query(None, description="Filter by cluster"),
     scope: str = Query("self", description="self = your own sessions (default); org = every session on your organization's clusters"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
@@ -614,7 +614,7 @@ async def query_session_audit_logs(
 )
 async def get_capabilities(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
@@ -643,7 +643,7 @@ async def get_capabilities(
 )
 async def create_console_session(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     console_type: str = Query("vga", description="Console type: vga or console"),
     width: int = Query(1024, ge=640, le=4096, description="Console width"),
@@ -708,11 +708,11 @@ async def create_console_session(
     "/startup-order",
     response_model=StartupOrderResponse,
     summary="Get startup order",
-    description="Get startup order for all instances on a host/project.",
+    description="Get startup order for all instances in a cluster and project.",
     dependencies=[Depends(org_scope_dependency)],
 )
 async def get_startup_order(
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
@@ -760,7 +760,7 @@ async def get_startup_order(
 )
 async def update_startup_order(
     request: StartupOrderUpdateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -791,7 +791,7 @@ async def update_startup_order(
     dependencies=[Depends(org_scope_dependency)],
 )
 async def list_isos(
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """List available ISO files."""
@@ -818,7 +818,7 @@ async def list_isos(
 )
 async def get_attached_iso(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
@@ -858,7 +858,7 @@ async def get_attached_iso(
 async def attach_iso(
     instance_name: str,
     request: AttachISORequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -892,7 +892,7 @@ async def attach_iso(
 )
 async def eject_iso(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     device_name: str = Query("cdrom", description="Device name to eject"),
     _: None = Depends(check_read_only_mode),
@@ -926,7 +926,7 @@ async def eject_iso(
 )
 async def check_active_sessions(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
@@ -1004,7 +1004,7 @@ async def check_active_sessions(
 )
 async def kill_all_sessions(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -1022,7 +1022,10 @@ async def kill_all_sessions(
             label=f"console.operations.connect:{host}",
         )
         if not client:
-            return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
+            return ActionResponse(
+                success=False,
+                error=f"Cannot connect to cluster '{host}'",
+            )
         
         # Get running operations
         response = await _console_io(
@@ -1106,7 +1109,7 @@ async def kill_all_sessions(
 async def kill_active_session(
     instance_name: str,
     operation_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -1123,7 +1126,10 @@ async def kill_active_session(
             label=f"console.operations.connect:{host}",
         )
         if not client:
-            return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
+            return ActionResponse(
+                success=False,
+                error=f"Cannot connect to cluster '{host}'",
+            )
         
         # An operation id is opaque and cluster-wide. Read and verify its metadata before
         # cancellation so a caller cannot pair an allowed instance name with another project's
@@ -1557,7 +1563,7 @@ class ConsoleProxy:
 async def console_websocket(
     websocket: WebSocket,
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     console_type: str = Query("vga", description="Console type: vga or console"),
     user: Optional[AuthenticatedUser] = Depends(get_ws_user),

@@ -45,8 +45,8 @@ _executor = ThreadPoolExecutor(max_workers=5)
 
 class ServerInfo(BaseModel):
     """Server information."""
-    node: str = Field(..., description="Node name")
-    node_type: str = Field("LXD", description="Node type (LXD, Incus, MicroCloud)")
+    node: str = Field(..., description="Cluster name")
+    node_type: str = Field("LXD", description="Cluster type (LXD, Incus, MicroCloud)")
     api_version: str = Field("", description="API version")
     auth: str = Field("", description="Authentication method")
     config: Dict[str, Any] = Field(default_factory=dict, description="Server configuration")
@@ -108,10 +108,10 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Node
     "",
     response_model=ServerListResponse,
     summary="List all server information",
-    description="Get server information from all LXD nodes.",
+    description="Get server information from all connected clusters.",
 )
 async def list_servers(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all server information."""
@@ -162,8 +162,8 @@ async def list_servers(
 @router.get(
     "/{node_name}",
     response_model=ServerInfo,
-    summary="Get server information for a specific node",
-    description="Get detailed server information from a specific LXD node.",
+    summary="Get server information for a specific cluster",
+    description="Get detailed server information from a specific cluster.",
 )
 async def get_server_info(
     node_name: str,

@@ -32,7 +32,7 @@ from app.core.dependencies import check_read_only_mode, require_admin, require_p
 from app.core.cache import (
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
-    REGIONS_OVERVIEW_CACHE_KEY,
+    get_resource_list_generation,
 )
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.url_safety import normalize_endpoint
@@ -347,8 +347,8 @@ async def register_cluster(
         from app.core.cache import get_cache_manager
         cache = get_cache_manager()
         if cache:
-            cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
-            cache.delete("api_responses", "clusters:list:all:scope=all")
+            cache.invalidate_resource_cache("clusters", "regions")
+            cache.invalidate_capacity_cache()
             # CRITICAL: Also invalidate vault_list cache for cluster list
             vault_list_path = settings.vault_clusters_path.replace("/data/", "/metadata/")
             cache.delete("vault_list", vault_list_path)
@@ -614,15 +614,12 @@ async def check_cluster_authentication(
                 from app.core.cache import get_cache_manager
                 cache = get_cache_manager()
                 if cache:
-                    cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
-                    cache.delete("api_responses", "clusters:list:all:scope=all")
+                    cache.invalidate_resource_cache("clusters", "projects", "regions")
                     # CRITICAL: Also invalidate vault_list cache for cluster list
                     vault_list_path = settings.vault_clusters_path.replace("/data/", "/metadata/")
                     cache.delete("vault_list", vault_list_path)
                     # Invalidate instances and projects cache patterns
-                    cache.delete_pattern("api_responses", "instances:*")
-                    cache.delete_pattern("api_responses", "projects:*")
-                    cache.delete_pattern("api_responses", "vms:*")
+                    cache.invalidate_instance_cache()
                     cache.delete_pattern("api_responses", "nodes:*")
                     # Regions overview too so the inventory/monitoring overview updates immediately
                     cache.delete_pattern("api_responses", "regions:*")
@@ -845,6 +842,7 @@ async def list_clusters(
         if cached_response is not None:
             logger.debug("Returning cached clusters list")
             return ClusterListResponse(**cached_response)
+    list_generation = get_resource_list_generation(cache, "clusters") if cache else None
     
     try:
         # When fresh=True, bypass Vault list cache to get latest data
@@ -869,8 +867,10 @@ async def list_clusters(
         )
         
         # Cache the response for 120 seconds
-        if cache:
+        if cache and get_resource_list_generation(cache, "clusters") == list_generation:
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+        elif cache:
+            logger.info("Not caching clusters list: cluster metadata changed during the read")
         
         return response
         
@@ -901,12 +901,17 @@ async def get_facility_suggestions(
         cached = None if fresh else cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
+    list_generation = get_resource_list_generation(cache, "clusters") if cache else None
     
     facilities = []
     seen = set()
+    registry_answered = False
     
     try:
-        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=True)
+        cluster_ids = apply_cluster_filter(
+            await asyncio.to_thread(cert_manager.list_clusters, use_cache=not fresh)
+        )
+        registry_answered = True
         
         for cluster_id in cluster_ids:
             try:
@@ -928,9 +933,16 @@ async def get_facility_suggestions(
     except Exception as e:
         logger.warning(f"Error fetching facility suggestions: {e}")
     
-    # Cache for 5 minutes
-    if cache:
+    # Cache for 5 minutes only when the scoped registry answered and no cluster mutation raced
+    # this read. Otherwise an outage or pre-mutation result would become the next suggestion set.
+    if (
+        cache
+        and registry_answered
+        and get_resource_list_generation(cache, "clusters") == list_generation
+    ):
         cache.set("api_responses", cache_key, facilities, ttl=300)
+    elif cache and registry_answered:
+        logger.info("Not caching facility suggestions: cluster metadata changed during the read")
     
     return facilities
 
@@ -1149,12 +1161,14 @@ async def delete_cluster(
         try:
             cache = get_cache_manager()
             if cache:
-                # CRITICAL: Invalidate clusters list cache (scoped + admin)
-                cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
-                cache.delete("api_responses", "clusters:list:all:scope=all")
-                
                 # Use dedicated cache invalidation method for cluster-specific data
                 cache.invalidate_cluster_cache(cluster_id)
+
+                # Clear every scoped list shape, including versioned instance keys, and leave
+                # the instance-list generation token that prevents an in-flight fleet read
+                # from writing the deleted cluster back after this request completes.
+                cache.invalidate_instance_cache()
+                cache.invalidate_resource_cache("clusters", "projects", "regions")
                 
                 # Also invalidate the Vault list cache to remove from list immediately
                 list_path = cert_manager.clusters_path.replace("/data/", "/metadata/")
@@ -1166,14 +1180,6 @@ async def delete_cluster(
                 cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
                 cache.delete("api_responses", get_scope_cache_key("nodes:status"))
                 cache.delete("api_responses", "nodes:status:scope=all")
-                
-                # Clear instances, VMs, and projects cache
-                cache.delete("api_responses", get_scope_cache_key("instances:list:host=None:status=None:type=None"))
-                cache.delete("api_responses", "instances:list:host=None:status=None:type=None:scope=all")
-                cache.delete("api_responses", get_scope_cache_key("vms:list:host=None:status=None"))
-                cache.delete("api_responses", "vms:list:host=None:status=None:scope=all")
-                cache.delete("api_responses", get_scope_cache_key("projects:list:all"))
-                cache.delete("api_responses", "projects:list:all:scope=all")
                 
                 logger.info(f"Cleared all cache entries for cluster {cluster_id} including clusters/projects list cache")
         except Exception as e:
@@ -1394,10 +1400,7 @@ async def update_cluster_location(
         cache = get_cache_manager()
         if cache:
             # CRITICAL: Invalidate clusters list cache (scoped + admin)
-            cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
-            cache.delete("api_responses", "clusters:list:all:scope=all")
-            cache.delete("api_responses", get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY))
-            cache.delete("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}:scope=all")
+            cache.invalidate_resource_cache("clusters", "regions")
             # Also invalidate individual cluster cache if exists
             cache.invalidate_cluster_cache(cluster_id)
         

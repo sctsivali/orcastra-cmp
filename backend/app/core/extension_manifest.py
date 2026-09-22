@@ -50,7 +50,7 @@ SLUG_MAX_LENGTH = 64
 # the middleware stack, so the body has already been read by the time this refuses. Saying so
 # plainly, because the comment that used to sit here claimed the opposite and nothing enforced it
 # at all.
-MANIFEST_MAX_BYTES = 16 * 1024
+MANIFEST_MAX_BYTES = 16_000
 
 MAX_SETTINGS_FIELDS = 32
 MAX_ENUM_OPTIONS = 64

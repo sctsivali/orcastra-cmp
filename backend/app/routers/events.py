@@ -12,10 +12,11 @@ import time
 from functools import partial
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException
 
 from app.core.dependencies import AuthenticatedUser, get_ws_user
 from app.core.org_scope import (
+    get_current_allowed_clusters,
     project_is_visible,
     set_org_scope_for_ws,
     verify_cluster_access,
@@ -44,18 +45,28 @@ def frame_is_visible(host: str, payload: dict) -> bool:
 
     important: the hub subscribes with all-projects, so the node's stream carries every
     project's operation and lifecycle frames (instance names, image aliases, progress, error
-    text). Three gates, in the order the REST path applies them:
+    text). Four gates, in the order the REST path applies them:
 
-    1. The Partner project bound. `check_tenant_permission` is no bound for a Partner (it
+    1. Current cluster membership. A long-lived socket must stop when its organization binding
+       or tenant grant no longer includes this host.
+    2. The Partner project bound. `check_tenant_permission` is no bound for a Partner (it
        returns open for anyone without a tenant ACL), so without this a Partner on a cluster
        two organisations share would receive the other organisation's frames the moment the
        subscription widened. A frame with no project reads as the default project, the same
        reading the lists give a record with no project.
-    2. The tenant ACL, per instance, mirroring verify_tenant_permission on the REST path.
-    3. A tenant gets nothing this stream cannot attribute to an instance: a neighbour's
+    3. The tenant ACL, per instance, mirroring verify_tenant_permission on the REST path.
+    4. A tenant gets nothing this stream cannot attribute to an instance: a neighbour's
        storage-volume create or image download names nothing of theirs. Admin and Partner
        carry no ACL and still receive those cluster-wide frames, which are for them.
     """
+    # The project and tenant predicates below deliberately do not imply cluster access:
+    # a Partner has no tenant ACL, and an absent shared-project bound means unrestricted
+    # projects. Re-check the cluster context first so a subscriber whose organization binding
+    # or tenant grant was revoked cannot keep accepting frames under those permissive defaults.
+    allowed_clusters = get_current_allowed_clusters()
+    if allowed_clusters is not None and host not in allowed_clusters:
+        return False
+
     project = payload.get("project") or "default"
     if not project_is_visible(host, project):
         return False
@@ -68,7 +79,7 @@ def frame_is_visible(host: str, payload: dict) -> bool:
 @router.websocket("/ws")
 async def events_websocket(
     websocket: WebSocket,
-    host: str = Query(..., description="LXD host node to stream operation events from"),
+    host: str = Query(..., description="Cluster to stream operation events from"),
     user: Optional[AuthenticatedUser] = Depends(get_ws_user),
 ):
     """Stream a node's LXD operation events (incl. image-pull progress) to the
@@ -116,6 +127,15 @@ async def events_websocket(
                 payload = None
             if time.monotonic() - scope_read_at >= SCOPE_REFRESH_S:
                 await set_org_scope_for_ws(user)
+                try:
+                    # important: refreshing the context is not itself authorization. A
+                    # revoked Partner binding or Tenant grant removes `host` from the new
+                    # allowed set, so fail the socket closed before installing that context
+                    # in the hub or sending a frame that was queued under the old scope.
+                    verify_cluster_access(host)
+                except HTTPException:
+                    await websocket.close(code=1008, reason="Forbidden")
+                    return
                 hub.rescope(host, queue)
                 scope_read_at = time.monotonic()
             if payload is None:

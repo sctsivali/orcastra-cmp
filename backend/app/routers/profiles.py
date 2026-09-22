@@ -63,7 +63,7 @@ from app.core.tenant_visibility import (
     tenant_may_see_project,
 )
 from app.core.single_flight import single_flight
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.activity_logger import get_activity_logger
@@ -104,7 +104,7 @@ class ProfileInfo(BaseModel):
     config: Dict[str, str] = Field(default_factory=dict, description="Profile configuration")
     devices: Dict[str, Dict[str, str]] = Field(default_factory=dict, description="Profile devices")
     used_by: List[str] = Field(default_factory=list, description="Instances using this profile")
-    node: str = Field(..., description="Node name where profile is defined")
+    node: str = Field(..., description="Cluster where the profile is defined")
     project: str = Field(
         DEFAULT_PROJECT,
         description="LXD project that holds this profile",
@@ -230,7 +230,9 @@ async def _profile_write_target(
         if requested_project and requested_project != DEFAULT_PROJECT:
             raise HTTPException(
                 status_code=404,
-                detail=f"Project '{requested_project}' not found on {host}",
+                detail=(
+                    f"Project '{requested_project}' not found in cluster '{host}'"
+                ),
             )
         raise HTTPException(
             status_code=503,
@@ -316,18 +318,18 @@ class ProfileListResponse(BaseModel):
     """Response for listing profiles."""
     total: int = Field(..., description="Total number of profiles")
     profiles: List[ProfileInfo] = Field(..., description="List of profiles")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
     unreachable_nodes: List[str] = Field(
         default_factory=list,
         description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
+            "Clusters that could not be reached. Their entries are missing from this list, "
+            "so an unreachable cluster is distinguishable from one that has none."
         ),
     )
     partial_nodes: List[str] = Field(
         default_factory=list,
         description=(
-            "Nodes that answered but could not be read for every project, so their entries "
+            "Clusters that answered but could not be read for every project, so their entries "
             "may be incomplete. A short list is never presented as the whole truth."
         ),
     )
@@ -380,11 +382,11 @@ def _fetch_profiles_for_node(
     "",
     response_model=ProfileListResponse,
     summary="List all profiles",
-    description="Get a list of all profiles from LXD nodes.",
+    description="Get a list of all profiles from connected clusters.",
 )
 @single_flight("profiles:list")
 async def list_profiles(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     project: Optional[str] = Query(
         None,
         description=(
@@ -409,6 +411,7 @@ async def list_profiles(
         logger.debug(f"Returning cached profiles for host={host}")
         # Reconstruct Pydantic model from cached dict
         return ProfileListResponse(**cached_data)
+    list_generation = get_resource_list_generation(cache, "profiles")
     
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
@@ -479,8 +482,11 @@ async def list_profiles(
         
         # important: an outage must not be remembered as the answer. See instances.py.
         if answered:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug("Cached profiles list for 180 seconds")
+            if get_resource_list_generation(cache, "profiles") == list_generation:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+                logger.debug("Cached profiles list for 180 seconds")
+            else:
+                logger.info("Not caching profiles list: a dependent mutation completed during the read")
         else:
             logger.warning("Not caching profiles list: no node answered")
 
@@ -502,7 +508,7 @@ async def list_profiles(
 async def get_profile(
     profile_name: str,
     http_response: Response,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the profile (default project when omitted)"
     ),
@@ -514,7 +520,10 @@ async def get_profile(
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
@@ -544,7 +553,7 @@ async def get_profile(
 )
 async def create_profile(
     request: ProfileCreateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the profile (default project when omitted)"
     ),
@@ -641,7 +650,7 @@ async def create_profile(
 )
 async def update_profile(
     profile_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the profile (default project when omitted)"
     ),
@@ -788,7 +797,7 @@ async def update_profile(
 )
 async def delete_profile(
     profile_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the profile (default project when omitted)"
     ),
@@ -807,7 +816,10 @@ async def delete_profile(
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Could not connect to cluster '{host}'",
+            )
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")

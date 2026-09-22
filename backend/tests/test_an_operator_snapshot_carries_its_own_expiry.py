@@ -184,7 +184,7 @@ def test_a_pending_create_is_audited_invalidated_and_not_announced(monkeypatch):
     assert creates[0]["result"] == "accepted"
     assert creates[0]["details"]["status"] == "pending"
     assert emitted == [], "snapshot.created must assert existence, not mere acceptance"
-    assert invalidated == ["snapshots_fleet"]
+    assert invalidated == ["snapshots_fleet", "storage_pool_resources"]
 
 
 def test_a_completed_create_is_audited_and_announced(monkeypatch):

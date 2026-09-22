@@ -68,7 +68,7 @@ class IPAMAllocation(BaseModel):
     used_by: str = Field(..., description="Resource using this address")
     hardware_address: str = Field("", description="MAC address")
     network: str = Field(..., description="Network name")
-    node: str = Field(..., description="Node name")
+    node: str = Field(..., description="Cluster associated with this allocation")
     project: str = Field("default", description="Project name")
     allocation: AllocationKind = Field(
         "unknown",
@@ -77,7 +77,7 @@ class IPAMAllocation(BaseModel):
             "(its own or inherited from a profile); dhcp when the instance holds it without a "
             "pin, which covers dnsmasq leases, OVN dynamic addresses and SLAAC; gateway, "
             "forward and load_balancer for the network's own rows; unknown when the instances "
-            "of this node could not be read. A stale lease beside a fresh pin shows as one "
+            "of this cluster could not be read. A stale lease beside a fresh pin shows as one "
             "static and one dhcp row for the same instance, which is the truthful picture."
         ),
     )
@@ -91,7 +91,7 @@ class IPAMListResponse(FanoutReachability):
     """Response for listing IPAM allocations."""
     total: int = Field(..., description="Total number of allocations")
     allocations: List[IPAMAllocation] = Field(..., description="List of IP allocations")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 def _read_allocations(
@@ -290,7 +290,7 @@ def _fetch_ipam_for_node(
 )
 @single_flight("ipam:list")
 async def list_ipam_allocations(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     network: Optional[str] = Query(None, description="Filter by specific network"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

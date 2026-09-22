@@ -45,7 +45,7 @@ from app.core.tenant_visibility import (
     tenant_acl_active,
 )
 from app.core.single_flight import single_flight
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
@@ -92,7 +92,7 @@ class StorageVolumeInfo(BaseModel):
     description: str = Field("", description="Volume description")
     config: Dict[str, str] = Field(default_factory=dict, description="Volume configuration")
     used_by: List[str] = Field(default_factory=list, description="Resources using this volume")
-    node: str = Field("", description="Node name where volume is defined")
+    node: str = Field("", description="Cluster where the volume is defined")
     content_type: str = Field("", description="Content type")
     project: str = Field(DEFAULT_PROJECT, description="Project that holds the volume")
     location: str = Field(
@@ -119,7 +119,7 @@ class StorageVolumeListResponse(FanoutReachability):
     """Response for listing storage volumes."""
     total: int = Field(..., description="Total number of volumes")
     volumes: List[StorageVolumeInfo] = Field(..., description="List of storage volumes")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 def _volume_node(client, pool: str, volume_type: str, volume_name: str):
@@ -210,11 +210,15 @@ def _fetch_volumes_for_node(
     "",
     response_model=StorageVolumeListResponse,
     summary="List all storage volumes",
-    description="Get a list of all storage volumes from LXD nodes.",
+    description="Get a list of all storage volumes from connected clusters.",
 )
 @single_flight("storage_volumes:list")
 async def list_storage_volumes(
-    host: Optional[str] = Query(None, pattern=LXD_NAME_PATTERN, description="Filter by specific host node"),
+    host: Optional[str] = Query(
+        None,
+        pattern=LXD_NAME_PATTERN,
+        description="Filter by a specific cluster",
+    ),
     pool: Optional[str] = Query(None, pattern=LXD_VOLUME_NAME_PATTERN, description="Filter by storage pool"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -231,6 +235,8 @@ async def list_storage_volumes(
         # Reconstruct Pydantic model from cached dict
         return StorageVolumeListResponse(**cached_data)
     
+    list_generation = get_resource_list_generation(cache, "storage_volumes")
+
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
@@ -291,8 +297,13 @@ async def list_storage_volumes(
         # partial one: a cluster that failed its listing was cached as "no volumes" for
         # 180 seconds. See instances.py.
         if cacheable:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
-            logger.debug("Cached storage volumes list for %s seconds", ttl)
+            if get_resource_list_generation(cache, "storage_volumes") == list_generation:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
+                logger.debug("Cached storage volumes list for %s seconds", ttl)
+            else:
+                logger.info(
+                    "Not caching storage volumes list: a volume mutation completed during the read"
+                )
         else:
             logger.warning("Not caching storage volumes list: %s", fan.node_errors or "no node answered")
 
@@ -313,7 +324,7 @@ async def get_storage_volume(
     volume_name: str = Path(
         ..., pattern=LXD_VOLUME_NAME_PATTERN, description=LXD_VOLUME_NAME_DESCRIPTION
     ),
-    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target cluster"),
     pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     project: Optional[str] = Query(
         None, pattern=LXD_NAME_PATTERN, description="Project that holds the volume (the row's project)"
@@ -367,7 +378,7 @@ async def get_storage_volume(
 )
 async def create_storage_volume(
     request: StorageVolumeCreateRequest,
-    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -455,7 +466,7 @@ async def update_storage_volume(
     volume_name: str = Path(
         ..., pattern=LXD_VOLUME_NAME_PATTERN, description=LXD_VOLUME_NAME_DESCRIPTION
     ),
-    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target cluster"),
     pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     config: Optional[Dict[str, str]] = Body(None),
     description: Optional[str] = Body(None),
@@ -552,7 +563,7 @@ async def delete_storage_volume(
     volume_name: str = Path(
         ..., pattern=LXD_VOLUME_NAME_PATTERN, description=LXD_VOLUME_NAME_DESCRIPTION
     ),
-    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target cluster"),
     pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     project: Optional[str] = Query(
         None, pattern=LXD_NAME_PATTERN, description="Project that holds the volume (the row's project)"

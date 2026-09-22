@@ -149,7 +149,9 @@ def test_instance_lifecycle_clears_the_storage_volume_list() -> None:
     cleared: list[str] = []
 
     mgr = CacheManager.__new__(CacheManager)
-    mgr.delete_pattern = lambda ns, pattern: cleared.append(pattern)  # type: ignore[method-assign]
+    mgr.delete_pattern = (  # type: ignore[method-assign]
+        lambda ns, pattern, **_kwargs: cleared.append(pattern)
+    )
 
     CacheManager.invalidate_instance_cache(mgr)
 

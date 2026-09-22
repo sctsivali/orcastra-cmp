@@ -105,12 +105,11 @@ class TestFiltering:
 def test_the_form_still_sends_it():
     """Regression guard for the wrong fix. If this goes back to "" every community VM image
     stops booting on LXD 5.x, which is the common case on this fleet."""
-    form = (
-        Path(__file__).resolve().parents[2]
-        / "frontend/src/components/instance-create-form.tsx"
-    )
-    src = form.read_text(encoding="utf-8")
-    assert 'secSecureboot: "false"' in src, (
+    components = Path(__file__).resolve().parents[2] / "frontend/src/components"
+    form_src = (components / "instance-create-form.tsx").read_text(encoding="utf-8")
+    model_src = (components / "instance-create/model.ts").read_text(encoding="utf-8")
+    assert "ADVANCED_DEFAULTS" in form_src
+    assert 'secSecureboot: "false"' in model_src, (
         "the form must keep sending this; the version incompatibility is handled in the "
         "backend, where the target cluster is known"
     )

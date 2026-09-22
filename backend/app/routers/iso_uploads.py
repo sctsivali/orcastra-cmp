@@ -38,6 +38,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.models.db_models import IsoUploadSession
@@ -79,6 +80,35 @@ RECOVERY_CONNECT_TIMEOUT = 30.0
 
 _ACTIVE = ("pending", "uploading", "uploaded", "importing")
 _TERMINAL = ("ready", "failed")
+
+
+class _ReadyCacheInvalidationError(RuntimeError):
+    """The ISO landed, but inventory cannot safely publish it as ready yet."""
+
+
+async def _invalidate_ready_caches() -> None:
+    try:
+        await asyncio.to_thread(
+            lambda: get_cache_manager().invalidate_resource_cache(
+                "storage_volumes",
+                "storage_pool_resources",
+                require_shared=True,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - recovery must retry before publishing ready
+        logger.warning("Could not invalidate ISO capacity caches: %s", exc)
+        raise _ReadyCacheInvalidationError(
+            "ISO inventory cache invalidation did not complete"
+        ) from exc
+
+
+async def _publish_ready(db: AsyncSession, row: IsoUploadSession, result: Dict[str, Any]) -> None:
+    """Publish a landed ISO only after every reader cache has been fenced and swept."""
+    row.size = result.get("size")
+    await _invalidate_ready_caches()
+    row.status = "ready"
+    row.error = None
+    await db.commit()
 
 
 def _now() -> datetime:
@@ -561,10 +591,20 @@ async def _run_import(session_id: str, recovery: bool = False) -> None:
             result = await loop.run_in_executor(
                 _executor, _lxd_import_iso_sync, row.cluster_id, path, row.pool, row.volume_name, row.project, recovery,
             )
-            row.size = result.get("size")
-            row.status = "ready"
-            await db.commit()  # commit ready BEFORE deleting staging so a crash here is recoverable
+            # Publish ready only after inventory/capacity invalidation completes. If this worker
+            # dies before the commit, the importing row is recovered and the already-landed
+            # volume is adopted without exposing a terminal state beside stale inventory.
+            await _publish_ready(db, row, result)
             logger.info("ISO upload imported: session=%s pool=%s volume=%s", session_id, row.pool, row.volume_name)
+        except _ReadyCacheInvalidationError as e:
+            # The volume is already on LXD. Keep the durable row non-terminal so recovery can
+            # adopt it and retry cache reconciliation without submitting the import again.
+            await db.rollback()
+            logger.warning(
+                "ISO upload landed but is awaiting cache reconciliation: session=%s error=%s",
+                session_id,
+                e,
+            )
         except Exception as e:  # noqa: BLE001 - record the failure for the partner
             row.status = "failed"
             row.error = str(e)[:1000]
@@ -575,7 +615,12 @@ async def _run_import(session_id: str, recovery: bool = False) -> None:
             _cleanup_file(path)
 
 
-async def _finalize_from_existing(session_id: str) -> None:
+async def _finalize_from_existing(
+    session_id: str,
+    *,
+    absent_error: str = "import incomplete and no staged file remained to retry",
+    cleanup_path: Optional[str] = None,
+) -> None:
     """Recovery for a stranded row whose staging file is already gone: if the volume is in the pool the
     import had effectively succeeded -> ready; otherwise there is nothing to retry -> failed."""
     loop = asyncio.get_event_loop()
@@ -586,19 +631,33 @@ async def _finalize_from_existing(session_id: str) -> None:
                 _executor, _resolve_volume_sync, row.cluster_id, row.pool, row.volume_name, row.project
             )
             if result is not None:
-                row.size = result.get("size")
-                row.status = "ready"
+                await _publish_ready(db, row, result)
                 logger.info("Recovery: ISO volume already on cluster session=%s -> ready", session_id)
             else:
                 row.status = "failed"
-                row.error = "import incomplete and no staged file remained to retry"
+                row.error = absent_error
                 logger.warning("Recovery: no staging + volume absent session=%s -> failed", session_id)
-            await db.commit()
+            if row.status != "ready":
+                await db.commit()
+        except _ReadyCacheInvalidationError as e:
+            # Leave the row importing so a later recovery sweep retries cache reconciliation.
+            await db.rollback()
+            logger.warning(
+                "Recovery is awaiting ISO cache reconciliation session=%s error=%s",
+                session_id,
+                e,
+            )
         except Exception as e:  # noqa: BLE001
-            row.status = "failed"
-            row.error = str(e)[:1000]
-            await db.commit()
-            logger.error("Recovery finalize-from-existing failed session=%s error=%s", session_id, e)
+            # A failed exact read cannot prove the already-submitted import did not land.
+            await db.rollback()
+            logger.warning(
+                "Recovery could not verify existing ISO session=%s; deferring: %s",
+                session_id,
+                e,
+            )
+        finally:
+            if cleanup_path:
+                _cleanup_file(cleanup_path)
 
 
 async def _recover_orphaned_imports() -> None:
@@ -623,25 +682,8 @@ async def _recover_orphaned_imports() -> None:
         candidates = res.all()
 
     for sid, cluster_id, staging_path, created_at in candidates:
-        # 1) Too old -> terminal fail (bounds poison files / a permanently-gone cluster).
-        if created_at < too_old_before:
-            async with async_session_maker() as db:
-                claimed = await db.execute(
-                    update(IsoUploadSession)
-                    .where(IsoUploadSession.session_id == sid,
-                           IsoUploadSession.status == "importing",
-                           IsoUploadSession.created_at < too_old_before)
-                    .values(status="failed", error="import did not complete within the recovery window")
-                    .returning(IsoUploadSession.session_id)
-                )
-                won = claimed.scalar_one_or_none()
-                await db.commit()
-            if won:
-                _cleanup_file(staging_path)
-                logger.warning("Recovery: failed stale ISO import session=%s (exceeded recovery window)", sid)
-            continue
-
-        # 2) Cluster offline -> leave for a later sweep (a transient blip must not fail it).
+        # 1) Cluster offline -> leave for a later sweep. An unreachable cluster cannot prove an
+        # accepted import absent, including after the normal retry window.
         # get_client does a TLS handshake and a probe request, so it must not run inline:
         # this sweep runs on every uvicorn worker and iterates every stale candidate, which
         # would park the loop once per candidate against a slow cluster.
@@ -662,19 +704,38 @@ async def _recover_orphaned_imports() -> None:
             logger.info("Recovery: cluster %s offline; deferring ISO import session=%s", cluster_id, sid)
             continue
 
-        # 3) Claim (atomic) then re-drive.
+        # 2) Claim (atomic) then reconcile. Expired rows get an exact read before failure.
         async with async_session_maker() as db:
+            predicates = (
+                IsoUploadSession.session_id == sid,
+                IsoUploadSession.status == "importing",
+                IsoUploadSession.updated_at < stale_before,
+            )
+            if created_at < too_old_before:
+                predicates = (*predicates, IsoUploadSession.created_at < too_old_before)
             claimed = await db.execute(
                 update(IsoUploadSession)
-                .where(IsoUploadSession.session_id == sid,
-                       IsoUploadSession.status == "importing",
-                       IsoUploadSession.updated_at < stale_before)
+                .where(*predicates)
                 .values(updated_at=now)
                 .returning(IsoUploadSession.session_id)
             )
             won = claimed.scalar_one_or_none()
             await db.commit()
         if not won:
+            continue
+
+        if created_at < too_old_before:
+            logger.info(
+                "Recovery: verifying expired ISO import before terminal failure session=%s",
+                sid,
+            )
+            asyncio.create_task(
+                _finalize_from_existing(
+                    sid,
+                    absent_error="import did not complete within the recovery window",
+                    cleanup_path=staging_path,
+                )
+            )
             continue
 
         if staging_path and os.path.isfile(staging_path):

@@ -38,6 +38,7 @@ def hub(monkeypatch):
 async def _subscribe_under(hub, mapping, accept=None):
     """Subscribe from a task whose context carries the given project bound."""
     ctx = contextvars.copy_context()
+    ctx.run(org_scope.set_allowed_clusters, None)
     ctx.run(org_scope._visible_projects_var.set, mapping)
     ctx.run(org_scope._tenant_acl_var.set, None)
     predicate = accept if accept is not None else partial(frame_is_visible, "nuc2")

@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timezone
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+import re
 
 from app.models.schemas import (
     ProjectInfo,
@@ -59,14 +61,16 @@ from app.core.org_scope import (
 )
 from app.services import project_grants
 from app.core.single_flight import single_flight
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.services.activity_logger import get_activity_logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-# The create form reads this once per project pick; a create or delete drops it (cache.py).
+# The create form reads this once per project pick; dependent writes drop it.
 PROJECT_USAGE_CACHE_TTL = 30
+PROJECT_LIST_CACHE_KIND = "projects"
+PROJECT_USAGE_CACHE_KIND = "project_usage"
 activity_logger = get_activity_logger()
 
 router = APIRouter(
@@ -137,26 +141,68 @@ async def _gather_project_reads(
     return results
 
 
+_SIZE_PATTERN = re.compile(
+    r"^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$",
+    re.IGNORECASE,
+)
+_SIZE_FACTORS = {
+    "B": 1,
+    "KB": 10**3,
+    "MB": 10**6,
+    "GB": 10**9,
+    "TB": 10**12,
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
+}
+
+
 def _parse_size_to_bytes(size_str: str) -> int:
-    """Parse size string like '4GiB' or '512MiB' to bytes."""
-    size_str = size_str.strip()
-    
-    # extract number and unit
-    import re
-    match = re.match(r'^(\d+(?:\.\d+)?)\s*(GiB|MiB|GB|MB)$', size_str, re.IGNORECASE)
+    """Parse LXD byte sizes without conflating decimal and binary units."""
+    text = size_str.strip()
+    match = _SIZE_PATTERN.fullmatch(text)
     if not match:
-        raise ValueError(f"Invalid size format: {size_str}")
-    
-    value = float(match.group(1))
-    unit = match.group(2).upper()
-    
-    # convert to bytes
-    if unit in ('GIB', 'GB'):
-        return int(value * 1024 * 1024 * 1024)
-    elif unit in ('MIB', 'MB'):
-        return int(value * 1024 * 1024)
-    else:
-        raise ValueError(f"Unsupported unit: {unit}")
+        raise ValueError(
+            "Invalid size format. Use B, KB, MB, GB, TB, KiB, MiB, GiB, or TiB."
+        )
+
+    value = Decimal(match.group(1))
+    unit = (match.group(2) or "B").upper()
+    return int(value * _SIZE_FACTORS[unit])
+
+
+def _format_size(bytes_value: int, units: tuple[tuple[str, int], ...]) -> str:
+    """Format a byte amount using the semantic unit family supplied by the caller."""
+    value = max(0, int(bytes_value))
+    for unit, factor in units:
+        if value >= factor:
+            amount = Decimal(value) / Decimal(factor)
+            rendered = f"{amount:.2f}".rstrip("0").rstrip(".")
+            return f"{rendered} {unit}"
+    return f"{value} B"
+
+
+def _format_memory(bytes_value: int) -> str:
+    return _format_size(
+        bytes_value,
+        (("TiB", 1024**4), ("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024)),
+    )
+
+
+def _format_storage(bytes_value: int) -> str:
+    return _format_size(
+        bytes_value,
+        (("TB", 10**12), ("GB", 10**9), ("MB", 10**6), ("KB", 10**3)),
+    )
+
+
+def _invalidate_project_caches() -> None:
+    """Fence and clear every cached project projection affected by a project write."""
+    get_cache_manager().invalidate_resource_cache(
+        PROJECT_LIST_CACHE_KIND,
+        PROJECT_USAGE_CACHE_KIND,
+    )
 
 
 
@@ -166,7 +212,6 @@ def _refuse_cap_above_hardware(
     max_cpu: Optional[int],
     ram_bytes: Optional[int],
     storage_bytes: Optional[int],
-    labels: tuple,
 ) -> None:
     """Refuse a project limit larger than the hardware it would run on, naming both numbers.
 
@@ -175,38 +220,36 @@ def _refuse_cap_above_hardware(
     what a cap means. On a clustered host the totals are the cluster's (see
     LXDService.get_node_resources).
     """
-    cpu_label, ram_label, storage_label = labels
-    gib = 1024 ** 3
     if max_cpu is not None and max_cpu > resources.get("cpu_total", 0):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Max CPU ({cpu_label}) exceeds the {resources.get('cpu_total', 0)} CPU threads "
-                f"this host has"
+                f"Project allocation ({max_cpu} vCPU) exceeds this cluster's capacity of "
+                f"{resources.get('cpu_total', 0)} hardware threads"
             ),
         )
     if ram_bytes is not None and ram_bytes > resources.get("memory_total", 0):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Max RAM ({ram_label}) exceeds the {resources.get('memory_total', 0) / gib:.1f} GiB "
-                f"this host has"
+                f"Memory limit ({_format_memory(ram_bytes)}) exceeds this cluster's capacity "
+                f"of {_format_memory(resources.get('memory_total', 0))}"
             ),
         )
     if storage_bytes is not None and storage_bytes > resources.get("storage_total", 0):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Max Storage ({storage_label}) exceeds the {resources.get('storage_total', 0) / gib:.1f} GiB "
-                f"of storage this host has"
+                f"Storage limit ({_format_storage(storage_bytes)}) exceeds this cluster's "
+                f"capacity of {_format_storage(resources.get('storage_total', 0))}"
             ),
         )
 
 @router.get(
     "",
     response_model=List[ProjectListResponse],
-    summary="List all projects from all nodes",
-    description="Get a list of all projects across all connected LXD nodes.",
+    summary="List all projects from all clusters",
+    description="Get a list of all projects across all connected clusters.",
     responses={
         200: {"description": "List of projects retrieved successfully"},
         503: {"model": ErrorResponse, "description": "Local inventory reader unavailable"},
@@ -226,6 +269,7 @@ async def list_all_projects(
     if cached_response is not None:
         logger.debug("Returning cached projects list")
         return [ProjectListResponse(**item) for item in cached_response]
+    list_generation = get_resource_list_generation(cache, PROJECT_LIST_CACHE_KIND)
     
     try:
         node_names = lxd_service.get_node_names()
@@ -299,10 +343,16 @@ async def list_all_projects(
                 ))
 
         # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
+        if (
+            answered
+            and get_resource_list_generation(cache, PROJECT_LIST_CACHE_KIND)
+            == list_generation
+        ):
             cache_data = [proj.model_dump() for proj in all_projects]
             cache.set("api_responses", cache_key, cache_data, ttl=30)
             logger.debug("Cached projects list for 30 seconds")
+        elif answered:
+            logger.info("Not caching projects list: a project mutation completed during the read")
         else:
             logger.warning("Not caching projects list: no node answered")
         
@@ -323,7 +373,7 @@ async def list_all_projects(
     "/{host}",
     response_model=ProjectListResponse,
     summary="List all projects",
-    description="Get a list of all projects on a specific LXD node.",
+    description="Get a list of all projects in a specific cluster.",
     responses={
         200: {"description": "List of projects retrieved successfully"},
         503: {"model": ErrorResponse, "description": "LXD connection error"},
@@ -386,13 +436,17 @@ async def get_project_usage(
     verify_cluster_access(host)
     # Same silence as the list route about a project the caller may not see.
     if not project_is_visible(host, project_name) or not filter_projects_by_acl(host, [project_name]):
-        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found in cluster '{host}'",
+        )
 
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"project_usage:host={host}:project={project_name}")
     cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return ProjectUsageResponse(**cached)
+    usage_generation = get_resource_list_generation(cache, PROJECT_USAGE_CACHE_KIND)
     try:
         usage = await lxd_service.get_project_usage(host, project_name)
     except HTTPException:
@@ -400,7 +454,10 @@ async def get_project_usage(
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LXDProjectNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found in cluster '{host}'",
+        )
     except LXDOperationError as e:
         raise HTTPException(status_code=500, detail=str(e))
     response = ProjectUsageResponse(
@@ -412,8 +469,18 @@ async def get_project_usage(
         collected_at=datetime.now(timezone.utc),
     )
     # Short, and dropped by invalidate_instance_cache, so a create or delete refreshes it.
-    if usage.complete:
+    if (
+        usage.complete
+        and get_resource_list_generation(cache, PROJECT_USAGE_CACHE_KIND)
+        == usage_generation
+    ):
         cache.set("api_responses", cache_key, response.model_dump(mode="json"), ttl=PROJECT_USAGE_CACHE_TTL)
+    elif usage.complete:
+        logger.info(
+            "Not caching usage for project %s on %s: a dependent mutation completed during the read",
+            project_name,
+            host,
+        )
     return response
 
 
@@ -421,7 +488,10 @@ def _refuse_a_project_outside_the_bound(host: str, project_name: str) -> None:
     """404, the usage route's choice: a 403 on a guessed name would confirm that another
     organization has a project by that name on the shared cluster."""
     if not project_is_visible(host, project_name) or not filter_projects_by_acl(host, [project_name]):
-        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_name}' not found in cluster '{host}'",
+        )
 
 
 def _policy_refusal(exc: InstanceSecurityPolicyViolation) -> HTTPException:
@@ -450,7 +520,7 @@ async def _cluster_write_policy(
     "",
     response_model=ProjectCreateResponse,
     summary="Create a new project",
-    description="Create a new project on a specific LXD node.",
+    description="Create a new project in a specific cluster.",
     responses={
         201: {"description": "Project created successfully"},
         400: {"model": ErrorResponse, "description": "Invalid request"},
@@ -489,8 +559,9 @@ async def create_project(
                 max_cpu=request.max_cpu,
                 ram_bytes=_parse_size_to_bytes(request.max_ram),
                 storage_bytes=_parse_size_to_bytes(request.max_storage),
-                labels=(str(request.max_cpu), request.max_ram, request.max_storage),
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except (
             BlockingPoolFull,
             BlockingTimeout,
@@ -529,7 +600,10 @@ async def create_project(
                     max_ram=request.max_ram,
                     max_storage=request.max_storage,
                 )
-                message = f"Project '{request.name}' created successfully on {request.host}"
+                message = (
+                    f"Project '{request.name}' created successfully in cluster "
+                    f"'{request.host}'"
+                )
                 if grant_org is not None:
                     message += await project_grants.record_created_project(
                         db,
@@ -551,12 +625,9 @@ async def create_project(
 
         project = ProjectInfo(**project_data)
 
-        # Invalidate project list caches so subsequent API calls return fresh data
-        cache = get_cache_manager()
-        cache.delete("api_responses", get_scope_cache_key("projects:list:all"))
-        cache.delete("api_responses", get_scope_cache_key(f"projects:list:{request.host}"))
-        cache.delete("api_responses", "projects:list:all:scope=all")
-        cache.delete("api_responses", f"projects:list:{request.host}:scope=all")
+        # Advance the generations before clearing the list and quota families. A read that
+        # began before this create must not restore a stale response after the sweep.
+        _invalidate_project_caches()
         
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
@@ -586,8 +657,6 @@ async def create_project(
         )
         
         schedule_orcahub_event("project.created", request.host, request.name, request.name, resource_type="PROJECT")
-        # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_resource_cache("projects")
         return ProjectCreateResponse(
             success=True,
             message=message,
@@ -692,7 +761,7 @@ async def update_project(
             if not project:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Project '{project_name}' not found on {host}"
+                    detail=f"Project '{project_name}' not found in cluster '{host}'"
                 )
             validate_project_update(policy, project.get("config") or {})
 
@@ -722,23 +791,27 @@ async def update_project(
                     )
 
             if has_real_limits and available is not None:
-                _refuse_cap_above_hardware(
-                    available,
-                    max_cpu=request.max_cpu if request.max_cpu and request.max_cpu > 0 else None,
-                    ram_bytes=(
-                        _parse_size_to_bytes(request.max_ram)
-                        if request.max_ram and request.max_ram != "0" else None
-                    ),
-                    storage_bytes=(
-                        _parse_size_to_bytes(request.max_storage)
-                        if request.max_storage and request.max_storage != "0" else None
-                    ),
-                    labels=(
-                        str(request.max_cpu),
-                        request.max_ram or "",
-                        request.max_storage or "",
-                    ),
-                )
+                try:
+                    _refuse_cap_above_hardware(
+                        available,
+                        max_cpu=(
+                            request.max_cpu
+                            if request.max_cpu and request.max_cpu > 0
+                            else None
+                        ),
+                        ram_bytes=(
+                            _parse_size_to_bytes(request.max_ram)
+                            if request.max_ram and request.max_ram != "0"
+                            else None
+                        ),
+                        storage_bytes=(
+                            _parse_size_to_bytes(request.max_storage)
+                            if request.max_storage and request.max_storage != "0"
+                            else None
+                        ),
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             project_data, request_cancelled = await _finish_critical_write(
                 lxd_service.update_project(
@@ -753,22 +826,15 @@ async def update_project(
             if request_cancelled:
                 raise asyncio.CancelledError
         
-        # Invalidate project list caches so frontend gets fresh data
-        cache = get_cache_manager()
-        cache.delete("api_responses", get_scope_cache_key("projects:list:all"))
-        cache.delete("api_responses", get_scope_cache_key(f"projects:list:{host}"))
-        cache.delete("api_responses", "projects:list:all:scope=all")
-        cache.delete("api_responses", f"projects:list:{host}:scope=all")
-        cache.delete_pattern("api_responses", f"project_usage:host={host}:project={project_name}:*")
+        # Limits change both the list projection and the create form's quota line.
+        _invalidate_project_caches()
         logger.debug(f"Invalidated project cache after updating '{project_name}' on {host}")
         
         project = ProjectInfo(**project_data)
         
-        # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_resource_cache("projects")
         return ProjectUpdateResponse(
             success=True,
-            message=f"Project '{project_name}' updated successfully on {host}",
+            message=f"Project '{project_name}' updated successfully in cluster '{host}'",
             project=project,
         )
         
@@ -802,7 +868,7 @@ async def update_project(
 @router.delete(
     "/{host}/{project_name}",
     summary="Delete a project",
-    description="Delete a project from a specific LXD node.",
+    description="Delete a project from a specific cluster.",
     responses={
         200: {"description": "Project deleted successfully"},
         400: {"model": ErrorResponse, "description": "Invalid request"},
@@ -837,14 +903,8 @@ async def delete_project(
         )
 
         
-        # Invalidate project list caches so frontend gets fresh data
-        # Must use scoped cache keys to match the keys used by list endpoints
-        cache = get_cache_manager()
-        cache.delete("api_responses", get_scope_cache_key("projects:list:all"))
-        cache.delete("api_responses", get_scope_cache_key(f"projects:list:{host}"))
-        # Also clear unscoped keys for admin/background tasks
-        cache.delete("api_responses", "projects:list:all:scope=all")
-        cache.delete("api_responses", f"projects:list:{host}:scope=all")
+        # Clear same-name quota data as well, so a later recreate cannot inherit it.
+        _invalidate_project_caches()
         logger.debug(f"Invalidated project cache after deleting '{project_name}' from {host}")
         
         # Log activity for audit trail
@@ -857,11 +917,12 @@ async def delete_project(
         )
         
         schedule_orcahub_event("project.deleted", host, project_name, project_name, resource_type="PROJECT")
-        # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_resource_cache("projects")
         return {
             "success": True,
-            "message": f"Project '{project_name}' deleted successfully from {host}" + revoke_note
+            "message": (
+                f"Project '{project_name}' deleted successfully from cluster '{host}'"
+                + revoke_note
+            )
         }
         
     except LXDConnectionError as e:

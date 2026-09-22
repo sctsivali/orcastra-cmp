@@ -53,7 +53,7 @@ class WarningInfo(BaseModel):
     """Warning information."""
     uuid: str = Field(..., description="Warning UUID")
     location: str = Field("", description="Warning location (cluster member)")
-    source_node: str = Field("", description="Source node that reported this warning")
+    source_node: str = Field("", description="Cluster that reported this warning")
     project: str = Field("", description="Project name")
     type: str = Field("", description="Warning type")
     count: int = Field(0, description="Number of occurrences")
@@ -68,7 +68,7 @@ class WarningListResponse(FanoutReachability):
     """Response for listing warnings."""
     total: int = Field(..., description="Total number of warnings")
     warnings: List[WarningInfo] = Field(..., description="List of warnings")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 def _warning_rows(client) -> list:
@@ -131,10 +131,10 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> NodeRea
     "",
     response_model=WarningListResponse,
     summary="List all warnings",
-    description="Get a list of all warnings from LXD nodes.",
+    description="Get a list of all warnings from connected clusters.",
 )
 async def list_warnings(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all warnings."""
@@ -199,7 +199,7 @@ async def list_warnings(
 )
 async def get_warning(
     warning_uuid: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific warning."""
@@ -247,7 +247,7 @@ async def get_warning(
 )
 async def delete_warning(
     warning_uuid: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -276,7 +276,7 @@ async def delete_warning(
     "/system/all",
     response_model=dict,
     summary="Get all system warnings including certificates",
-    description="Get combined warnings from LXD nodes and certificate/connectivity issues.",
+    description="Get combined warnings from clusters and certificate/connectivity issues.",
 )
 async def get_all_system_warnings(
     lxd_service: LXDService = Depends(get_lxd_service),

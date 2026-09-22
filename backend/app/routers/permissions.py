@@ -52,7 +52,7 @@ class IdentityInfo(BaseModel):
     type: str = Field("", description="Identity type (display name)")
     auth_type: str = Field("", description="Authentication type for API (tls or oidc)")
     groups: List[str] = Field(default_factory=list, description="Groups this identity belongs to")
-    node: str = Field("", description="Node/cluster this identity belongs to")
+    node: str = Field("", description="Cluster this identity belongs to")
 
 
 class GroupIdentities(BaseModel):
@@ -67,21 +67,21 @@ class GroupInfo(BaseModel):
     description: str = Field("", description="Group description")
     identities: GroupIdentities = Field(default_factory=GroupIdentities, description="Identities in this group organized by auth type")
     permissions: List[Dict[str, Any]] = Field(default_factory=list, description="Group permissions")
-    node: str = Field("", description="Node/cluster this group belongs to")
+    node: str = Field("", description="Cluster this group belongs to")
 
 
 class IdentityListResponse(FanoutReachability):
     """Response for listing identities."""
     total: int = Field(..., description="Total number of identities")
     identities: List[IdentityInfo] = Field(..., description="List of identities")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 class GroupListResponse(FanoutReachability):
     """Response for listing groups."""
     total: int = Field(..., description="Total number of groups")
     groups: List[GroupInfo] = Field(..., description="List of groups")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 class IdentityAddRequest(BaseModel):
@@ -138,10 +138,10 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeR
     "",
     response_model=IdentityListResponse,
     summary="List all identities",
-    description="Get a list of all identities from LXD nodes.",
+    description="Get a list of all identities from connected clusters.",
 )
 async def list_identities(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all identities."""
@@ -191,7 +191,7 @@ async def list_identities(
 )
 async def get_identity(
     identity_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific identity."""
@@ -277,10 +277,10 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[
     "",
     response_model=GroupListResponse,
     summary="List all groups",
-    description="Get a list of all groups from LXD nodes.",
+    description="Get a list of all groups from connected clusters.",
 )
 async def list_groups(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all groups."""
@@ -330,7 +330,7 @@ async def list_groups(
 )
 async def get_group(
     group_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific group."""
@@ -383,7 +383,7 @@ async def create_group(
     name: str = Body(..., description="Group name"),
     description: str = Body("", description="Group description"),
     permissions: List[Dict[str, Any]] = Body(default_factory=list, description="Group permissions"),
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -450,7 +450,7 @@ class GroupUpdateRequest(BaseModel):
 async def update_group(
     group_name: str,
     request: GroupUpdateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -677,7 +677,7 @@ async def update_group(
 )
 async def delete_group(
     group_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -711,7 +711,7 @@ async def delete_group(
 async def add_identity_to_group(
     group_name: str,
     request: IdentityAddRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -778,7 +778,7 @@ async def remove_identity_from_group(
     group_name: str,
     auth_type: str,
     identity_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -852,7 +852,7 @@ async def remove_identity_from_group(
 async def delete_identity(
     auth_type: str,
     identity_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):

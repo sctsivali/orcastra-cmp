@@ -15,7 +15,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.core.config import get_settings
-from app.core.cache import get_cache_manager, REGIONS_OVERVIEW_CACHE_KEY
+from app.core.cache import (
+    CAPACITY_GENERATION_KIND,
+    REGIONS_OVERVIEW_CACHE_KEY,
+    get_cache_manager,
+    get_resource_list_generation,
+)
 from app.models.schemas import (
     ExtendedHardwareInfo,
     RegionNodeInfo,
@@ -152,6 +157,10 @@ async def get_regions_overview(
     if cached_data is not None:
         logger.debug("Returning cached regions overview")
         return RegionsOverviewResponse(**cached_data)
+    generations = (
+        get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
+        get_resource_list_generation(cache, "regions"),
+    )
     
     # important: serialise cold rebuilds per scope. A manual refresh bypasses the
     # response cache on purpose, and this endpoint fans out over every cluster
@@ -197,7 +206,12 @@ async def get_regions_overview(
                         total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
                         collected_at=datetime.now(timezone.utc),
                     )
-                    cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                    current = (
+                        get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
+                        get_resource_list_generation(cache, "regions"),
+                    )
+                    if current == generations:
+                        cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
                     mark_rebuilt(_lock_key)
                     return response
 
@@ -515,8 +529,13 @@ async def get_regions_overview(
                         "Not caching regions overview: %s answered but did not report resources",
                         ", ".join(sorted(degraded_clusters)),
                     )
-                else:
+                elif (
+                    get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
+                    get_resource_list_generation(cache, "regions"),
+                ) == generations:
                     cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                else:
+                    logger.info("Not caching regions overview: capacity changed during the read")
                 # important: mark only a rebuild that finished. In the finally below this
                 # also ran when the build raised, so the next waiter believed a rebuild had
                 # completed and served the cache it had asked to bypass.

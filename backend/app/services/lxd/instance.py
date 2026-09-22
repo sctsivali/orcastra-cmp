@@ -12,10 +12,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed, NotFound
 from requests import exceptions as requests_exc
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import VMInfo
-from app.models.db_models import InstanceOperationJob
+from app.models.db_models import InstanceOperationJob, Tag, TagAssignment, TagCategory
 from app.services.lxd.nic_preflight import NicPreflightError, check_nics
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
@@ -171,6 +173,16 @@ _CREATE_HEARTBEAT_SECONDS = 30
 _CREATE_RECOVERY_GRACE_SECONDS = 30
 _CREATE_ACTIVE_STATUSES = ("pending", "running", "unknown")
 _CREATE_TERMINAL_STATUSES = ("success", "failure", "partial")
+_CREATE_TAG_CATEGORY_PREFIXES = (
+    "loc_",
+    "reg_",
+    "vend_",
+    "own_",
+    "env_",
+    "app_",
+    "sla_",
+    "cost_",
+)
 
 
 class CreateSubmissionUnknown(LXDOperationError):
@@ -218,6 +230,108 @@ def _preserve_create_ambiguity(
     if isinstance(result, dict) and result.get("ambiguous_action") in {"create", "start"}:
         return dict(result)
     return {"ambiguous_action": fallback}
+
+
+def _requested_create_tags(row: InstanceOperationJob) -> list[str]:
+    """Return the normalized, non-secret tag intent stored with a durable create."""
+    requested = row.requested if isinstance(row.requested, dict) else {}
+    raw_tags = requested.get("tags", [])
+    if not isinstance(raw_tags, list) or any(
+        not isinstance(tag, str) or not tag for tag in raw_tags
+    ):
+        raise ValueError("Durable create job contains invalid normalized tags")
+    return sorted(set(raw_tags))
+
+
+def _create_tag_display_name(tag: str) -> str:
+    prefix = next(
+        (candidate for candidate in _CREATE_TAG_CATEGORY_PREFIXES if tag.startswith(candidate)),
+        None,
+    )
+    value = tag[len(prefix) :] if prefix else tag
+    return value.replace("-", " ").replace("_", " ").title()
+
+
+async def _upsert_materialized_create_tags(
+    db: AsyncSession,
+    row: InstanceOperationJob,
+    tags: list[str],
+) -> None:
+    """Persist verified create tags inside the terminal job transaction.
+
+    This deliberately uses the supplied session rather than ``TagService``. The latter commits
+    internally and writes to LXD, either of which would split the tag assignment from the
+    terminal CAS. LXD already received the canonical ``user.tags`` value in the create payload.
+    """
+    if not tags:
+        return
+
+    category_rows = (
+        await db.execute(
+            select(TagCategory.prefix, TagCategory.id).where(
+                TagCategory.prefix.in_(_CREATE_TAG_CATEGORY_PREFIXES)
+            )
+        )
+    ).all()
+    category_ids = {prefix: category_id for prefix, category_id in category_rows}
+    now = datetime.now(timezone.utc)
+
+    for tag_name in tags:
+        prefix = next(
+            (
+                candidate
+                for candidate in _CREATE_TAG_CATEGORY_PREFIXES
+                if tag_name.startswith(candidate)
+            ),
+            None,
+        )
+        inserted_tag_id = (
+            await db.execute(
+                pg_insert(Tag)
+                .values(
+                    name=tag_name,
+                    display_name=_create_tag_display_name(tag_name),
+                    category_id=category_ids.get(prefix),
+                    is_system=False,
+                    usage_count=0,
+                    created_by=row.requester,
+                    created_at=now,
+                    updated_at=now,
+                )
+                .on_conflict_do_nothing(index_elements=[Tag.name])
+                .returning(Tag.id)
+            )
+        ).scalar_one_or_none()
+        tag_id = inserted_tag_id
+        if tag_id is None:
+            tag_id = (
+                await db.execute(select(Tag.id).where(Tag.name == tag_name))
+            ).scalar_one_or_none()
+        if tag_id is None:
+            raise RuntimeError(f"Tag '{tag_name}' could not be resolved after upsert")
+
+        assignment_id = (
+            await db.execute(
+                pg_insert(TagAssignment)
+                .values(
+                    tag_id=tag_id,
+                    resource_type="instance",
+                    resource_id=row.instance_name,
+                    resource_host=row.cluster_id,
+                    resource_project=row.project,
+                    assigned_by=row.requester,
+                    assigned_at=now,
+                )
+                .on_conflict_do_nothing(constraint="uq_tag_assignment_resource")
+                .returning(TagAssignment.id)
+            )
+        ).scalar_one_or_none()
+        if assignment_id is not None:
+            await db.execute(
+                update(Tag)
+                .where(Tag.id == tag_id)
+                .values(usage_count=func.coalesce(Tag.usage_count, 0) + 1)
+            )
 
 
 async def _load_create_job(job_id: str) -> Optional[InstanceOperationJob]:
@@ -364,57 +478,71 @@ async def _finish_create_job(
     now = datetime.now(timezone.utc)
     safe_error = sanitize_error(error or "", limit=1000) or None
     final_operation_id = operation_id or row.operation_id
+    materialized = announce_created and status in {"success", "partial"}
+    materialized_tags: list[str] = []
     async with async_session_maker() as db:
-        predicates = (
-            InstanceOperationJob.job_id == row.job_id,
-            InstanceOperationJob.kind == "create",
-            InstanceOperationJob.status.in_(_CREATE_ACTIVE_STATUSES),
-        )
-        if owner := getattr(row, "locked_by", None):
-            predicates = (*predicates, InstanceOperationJob.locked_by == owner)
-        persisted = (
-            await db.execute(
-                select(InstanceOperationJob)
-                .where(*predicates)
-                .with_for_update()
+        try:
+            predicates = (
+                InstanceOperationJob.job_id == row.job_id,
+                InstanceOperationJob.kind == "create",
+                InstanceOperationJob.status.in_(_CREATE_ACTIVE_STATUSES),
             )
-        ).scalar_one_or_none()
-        if persisted is None:
-            return False
-        operation_ids = list(getattr(persisted, "operation_ids", None) or [])
-        if final_operation_id and final_operation_id not in operation_ids:
-            operation_ids.append(final_operation_id)
-        update_result = await db.execute(
-            update(InstanceOperationJob).where(*predicates).values(
-                phase=status,
-                status=status,
-                operation_id=final_operation_id,
-                operation_ids=operation_ids,
-                result=result,
-                error=safe_error,
-                locked_by=None,
-                locked_at=None,
-                updated_at=now,
-                finished_at=now,
+            if owner := getattr(row, "locked_by", None):
+                predicates = (*predicates, InstanceOperationJob.locked_by == owner)
+            persisted = (
+                await db.execute(
+                    select(InstanceOperationJob)
+                    .where(*predicates)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if persisted is None:
+                return False
+            operation_ids = list(getattr(persisted, "operation_ids", None) or [])
+            if final_operation_id and final_operation_id not in operation_ids:
+                operation_ids.append(final_operation_id)
+            update_result = await db.execute(
+                update(InstanceOperationJob).where(*predicates).values(
+                    phase=status,
+                    status=status,
+                    operation_id=final_operation_id,
+                    operation_ids=operation_ids,
+                    result=result,
+                    error=safe_error,
+                    locked_by=None,
+                    locked_at=None,
+                    updated_at=now,
+                    finished_at=now,
+                )
             )
-        )
-        if update_result.rowcount:
+            if not update_result.rowcount:
+                await db.rollback()
+                return False
+
+            if materialized:
+                materialized_tags = _requested_create_tags(persisted)
+                await _upsert_materialized_create_tags(db, persisted, materialized_tags)
+
             enqueue_instance_operation_audit(
                 db,
                 job_id=row.job_id,
                 stage="terminal",
             )
-        await db.commit()
-        transitioned = bool(update_result.rowcount)
-    if not transitioned:
-        return False
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
-    if invalidate_cache:
+    if invalidate_cache or materialized_tags:
         try:
-            get_cache_manager().invalidate_instance_cache()
+            cache = get_cache_manager()
+            if invalidate_cache:
+                cache.invalidate_instance_cache()
+            if materialized_tags:
+                cache.invalidate_tag_cache()
         except Exception as exc:  # noqa: BLE001 - cache failure cannot change the verdict
             logger.warning(
-                "Could not invalidate instance cache after create job %s: %s",
+                "Could not invalidate caches after create job %s: %s",
                 row.job_id,
                 _create_error(exc),
             )
@@ -428,7 +556,7 @@ async def _finish_create_job(
             _create_error(exc),
         )
 
-    if announce_created:
+    if materialized:
         await _emit_instance_created(
             row.cluster_id,
             row.project,

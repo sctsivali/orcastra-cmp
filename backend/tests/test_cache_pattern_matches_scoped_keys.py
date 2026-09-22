@@ -21,7 +21,14 @@ still shows the old membership until the TTL expires.
 import fnmatch
 import unittest
 
-from app.core.cache import CacheManager
+from app.core.cache import (
+    CacheManager,
+    MEMBER_RESOURCES_CACHE_PREFIX,
+    MICROCLOUD_RESOURCES_CACHE_PREFIX,
+    NODES_AVAILABILITY_CACHE_KEY,
+    NODES_STATUS_CACHE_KEY,
+    REGIONS_OVERVIEW_CACHE_KEY,
+)
 
 
 class FakeRedis:
@@ -94,6 +101,33 @@ class ScopedKeyInvalidationTests(unittest.TestCase):
         manager.delete_pattern("api_responses", "cluster_members:list:host=nuc2")
 
         self.assertIn(key, manager.redis_client.store)
+
+    def test_instance_invalidation_clears_every_capacity_projection(self):
+        capacity_keys = {
+            f"orcastra:api_responses:{NODES_STATUS_CACHE_KEY}:scope=all",
+            f"orcastra:api_responses:{REGIONS_OVERVIEW_CACHE_KEY}:scope=tenant:acl=abc",
+            f"orcastra:lxd_resources:{MICROCLOUD_RESOURCES_CACHE_PREFIX}:cluster-a",
+            f"orcastra:lxd_resources:{MEMBER_RESOURCES_CACHE_PREFIX}:cluster-a:member-1:scope=all",
+        }
+        availability = f"orcastra:api_responses:{NODES_AVAILABILITY_CACHE_KEY}:scope=all"
+        manager = self._manager_with(*capacity_keys, availability)
+
+        manager.invalidate_instance_cache()
+
+        self.assertTrue(capacity_keys.isdisjoint(manager.redis_client.store))
+        self.assertIn(availability, manager.redis_client.store, "allocation changes wiped reachability")
+
+    def test_storage_and_image_writes_clear_capacity_but_unrelated_resources_do_not(self):
+        node_key = f"orcastra:api_responses:{NODES_STATUS_CACHE_KEY}:scope=all"
+        manager = self._manager_with(node_key)
+
+        manager.invalidate_resource_cache("projects")
+        self.assertIn(node_key, manager.redis_client.store)
+
+        for resource in ("images", "storage_pools", "storage_pool_resources", "storage_volumes"):
+            manager.redis_client.store[node_key] = "cached"
+            manager.invalidate_resource_cache(resource)
+            self.assertNotIn(node_key, manager.redis_client.store, resource)
 
 
 if __name__ == "__main__":

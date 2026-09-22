@@ -671,7 +671,7 @@ async def cancel_renewal(
     "/warnings/all",
     response_model=SystemWarningsResponse,
     summary="Get all system warnings",
-    description="Get certificate and node connectivity warnings for all clusters."
+    description="Get certificate and cluster connectivity warnings for all clusters."
 )
 async def get_system_warnings(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager)

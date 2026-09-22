@@ -40,19 +40,18 @@ from app.core import vault_status
 from app.core.org_scope import apply_cluster_filter
 from app.services.lxd_certs.storage import RegistryRead
 from app.core.cache import (
+    CAPACITY_GENERATION_KIND,
     get_cache_manager,
-    MEMBER_RESOURCES_CACHE_PREFIX,
-    MICROCLOUD_RESOURCES_CACHE_PREFIX,
+    get_resource_list_generation,
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
-    REGIONS_OVERVIEW_CACHE_KEY,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/nodes",
-    tags=["Nodes"],
+    tags=["Clusters"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
@@ -179,10 +178,10 @@ def _nodes_for_project_scope(response: NodesStatusResponse) -> NodesStatusRespon
 @router.get(
     "",
     response_model=NodesStatusResponse,
-    summary="Get nodes status",
-    description="Check connectivity and status of all configured LXD nodes including Vault-registered clusters.",
+    summary="Get Cluster status",
+    description="Check connectivity and status for every registered Cluster.",
     responses={
-        200: {"description": "Node status retrieved successfully"},
+        200: {"description": "Cluster status retrieved successfully"},
     }
 )
 @single_flight("nodes:status")
@@ -191,7 +190,7 @@ async def get_nodes_status(
     fresh: bool = False,
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Get status of all LXD nodes including Vault-registered clusters."""
+    """Get the status of every registered Cluster."""
     
     # Try to get from cache first (180 second cache)
     # note: this TTL is the client's poll interval too. Keep the two in step, and keep the
@@ -202,6 +201,10 @@ async def get_nodes_status(
     if cached_response is not None:
         logger.debug("Returning cached nodes status")
         return _nodes_for_project_scope(NodesStatusResponse(**cached_response))
+    capacity_generation = get_resource_list_generation(
+        cache,
+        CAPACITY_GENERATION_KIND,
+    )
     
     # Not in cache - fetch fresh data using ASYNC PARALLEL version
     statuses = await lxd_service.check_nodes_status_async()
@@ -222,8 +225,14 @@ async def get_nodes_status(
     )
     
     # Cache the response for 180 seconds (enterprise TTL)
-    cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-    logger.debug("Cached nodes status for 180 seconds")
+    if (
+        get_resource_list_generation(cache, CAPACITY_GENERATION_KIND)
+        == capacity_generation
+    ):
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+        logger.debug("Cached nodes status for 180 seconds")
+    else:
+        logger.info("Not caching nodes status: capacity changed during the read")
     
     return _nodes_for_project_scope(response)
 
@@ -232,9 +241,9 @@ async def get_nodes_status(
 @router.get(
     "/names",
     response_model=list[str],
-    summary="Get node names",
+    summary="Get Cluster identifiers",
     description=(
-        "Get list of configured LXD node names. Carries no reachability: use "
+        "Get configured Cluster identifiers. Carries no reachability: use "
         "/nodes/availability when the caller has to know which clusters will answer."
     ),
     deprecated=True,
@@ -244,7 +253,7 @@ async def get_node_names(
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Get list of configured node names.
+    """Get configured Cluster identifiers.
 
     The body stays a bare list for the API-key clients of this deprecated route. What changed
     is what a lost registry looks like: the last known fleet with the degraded header, or 503
@@ -307,15 +316,15 @@ async def get_nodes_availability(
 @router.get(
     "/{node_name}/resources",
     response_model=NodeResources,
-    summary="Get node resources",
-    description="Get available resources (CPU, RAM, storage) for a specific node.",
+    summary="Get Cluster resources",
+    description="Get CPU, Memory, and Storage capacity for a specific Cluster.",
 )
 async def get_node_resources(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Get available resources for a specific node."""
+    """Get available resources for a specific registered Cluster."""
     verify_cluster_access(node_name)
     try:
         resources = await asyncio.to_thread(lxd_service.get_node_resources_detail, node_name)
@@ -329,15 +338,15 @@ async def get_node_resources(
 @router.get(
     "/{node_name}/gpus",
     response_model=GpuCardListResponse,
-    summary="Get node GPUs",
-    description="List the physical GPUs available on a specific node (for GPU passthrough).",
+    summary="Get Cluster GPUs",
+    description="List the physical GPUs available on a specific Cluster for GPU passthrough.",
 )
 async def get_node_gpus(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """List the GPUs on a specific node, classified for the passthrough picker."""
+    """List the GPUs on a specific registered Cluster for the passthrough picker."""
     verify_cluster_access(node_name)
     try:
         # get_node_gpus makes blocking LXD calls; keep them off the event loop.
@@ -361,11 +370,11 @@ async def get_node_gpus(
 @router.patch(
     "/{node_name}",
     response_model=NodeUpdateResponse,
-    summary="Update node metadata",
-    description="Update node display name and other metadata.",
+    summary="Update Cluster metadata",
+    description="Update a Cluster display name and other metadata.",
     responses={
-        200: {"description": "Node metadata updated successfully"},
-        404: {"description": "Node not found"},
+        200: {"description": "Cluster metadata updated successfully"},
+        404: {"description": "Cluster not found"},
         400: {"description": "Invalid request"},
     }
 )
@@ -376,7 +385,7 @@ async def update_node(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Update node metadata (display name)."""
+    """Update Cluster metadata such as its display name."""
     verify_cluster_access(node_name)
     from fastapi import HTTPException
     from app.core.node_metadata import get_node_metadata_store
@@ -411,7 +420,7 @@ async def update_node(
     if not node_exists:
         raise HTTPException(
             status_code=404,
-            detail=f"Node '{node_name}' not found"
+            detail=f"Cluster '{node_name}' not found"
         )
     
     try:
@@ -455,32 +464,28 @@ async def update_node(
         # Invalidate caches so updated name appears immediately
         cache = get_cache_manager()
         if cache:
-            cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
-            cache.delete("api_responses", "clusters:list:all:scope=all")
-            cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
-            cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
+            cache.invalidate_resource_cache("clusters", "regions")
+            cache.invalidate_capacity_cache()
             # trailing * so every org-scope suffix goes with it
             cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
-            # the regions map renders the display name too, and nothing else clears it
-            cache.delete_pattern("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*")
             cache.invalidate_cluster_cache(node_name)
-            logger.info(f"Invalidated caches after updating node {node_name}")
+            logger.info(f"Invalidated caches after updating Cluster {node_name}")
         
         return NodeUpdateResponse(
             success=True,
-            message=f"Node '{node_name}' updated successfully",
+            message=f"Cluster '{node_name}' updated successfully",
             node_name=node_name,
             display_name=request.display_name,
         )
     except Exception as e:
-        logger.error(f"Error updating node {node_name}: {e}")
+        logger.error(f"Error updating Cluster {node_name}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post(
     "/{node_name}/cache/invalidate",
-    summary="Invalidate node cache",
-    description="Force refresh node data by invalidating cache entries. Useful after configuration changes.",
+    summary="Invalidate Cluster cache",
+    description="Force a Cluster data refresh by invalidating cache entries after configuration changes.",
     responses={
         200: {"description": "Cache invalidated successfully"},
     }
@@ -490,30 +495,24 @@ async def invalidate_node_cache(
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Invalidate all cache entries for a specific node."""
+    """Invalidate all cache entries for a specific registered Cluster."""
     verify_cluster_access(node_name)
     from fastapi import HTTPException
     
     try:
         cache = get_cache_manager()
         
-        # Invalidate various cache keys for this node (pattern match for all scope variants)
-        cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
+        # These projections share generation tokens. Clear them through the helpers so an
+        # in-flight read cannot write its pre-invalidation result back afterwards.
+        cache.invalidate_capacity_cache()
         cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
-        cache.delete("lxd_resources", f"{MICROCLOUD_RESOURCES_CACHE_PREFIX}:{node_name}")
-        cache.delete_pattern("api_responses", f"cluster_members:list:host={node_name}*")
-        # important: these two were missing, so "invalidate this node" left the regions map and
-        # the per-member resource panels on the old body for a further 120s and 60s. Both carry
-        # the same node's hardware, so an operator who invalidated to force a refresh still read
-        # stale numbers on two surfaces and had no way to tell which one to trust.
-        cache.delete_pattern("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*")
-        cache.delete_pattern("lxd_resources", f"{MEMBER_RESOURCES_CACHE_PREFIX}:{node_name}:*")
+        cache.invalidate_resource_cache("cluster_members")
         
-        logger.info(f"Invalidated all cache entries for node: {node_name}")
+        logger.info(f"Invalidated all cache entries for Cluster: {node_name}")
         
         return {
             "success": True,
-            "message": f"Cache invalidated for node '{node_name}'",
+            "message": f"Cache invalidated for Cluster '{node_name}'",
             "node_name": node_name
         }
     except Exception as e:
@@ -523,8 +522,8 @@ async def invalidate_node_cache(
 
 @router.post(
     "/cache/invalidate-all",
-    summary="Invalidate all nodes cache",
-    description="Force refresh all nodes data by clearing all node-related cache entries.",
+    summary="Invalidate all Cluster caches",
+    description="Force a refresh by clearing every registered Cluster cache entry.",
     responses={
         200: {"description": "All caches invalidated successfully"},
     }
@@ -533,28 +532,27 @@ async def invalidate_all_nodes_cache(
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
-    """Invalidate all node-related cache entries."""
+    """Invalidate every registered Cluster cache entry."""
     from fastapi import HTTPException
     
     try:
         cache = get_cache_manager()
         
-        # Clear all nodes status cache (all scope variants)
-        cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
-        cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
-        cache.delete_pattern("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*")
+        # Advance the capacity generation before clearing its projections so an in-flight
+        # status/resource read cannot repopulate the cache after this explicit refresh.
+        cache.invalidate_capacity_cache()
 
-        # Clear all LXD resources cache (pattern delete: microcloud and member resources)
-        cache.delete_pattern("lxd_resources", "*")
+        # Availability uses a separate reachability-only cache.
+        cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+
+        # Cluster-member reads carry their own mutation generation.
+        cache.invalidate_resource_cache("cluster_members")
         
-        # Clear all cluster members cache
-        cache.delete_pattern("api_responses", "cluster_members:*")
-        
-        logger.info("Invalidated all node-related cache entries")
+        logger.info("Invalidated all Cluster cache entries")
         
         return {
             "success": True,
-            "message": "All node caches invalidated successfully"
+            "message": "All Cluster caches invalidated successfully"
         }
     except Exception as e:
         logger.error(f"Error invalidating all caches: {e}")

@@ -109,7 +109,7 @@ def test_a_node_with_no_usable_uplink_says_so_rather_than_listing_nothing():
     only_bad = {"lo": {"type": "loopback", "managed": False}}
     with pytest.raises(HTTPException) as exc:
         validate_uplink(ovn("lo"), only_bad)
-    assert "No network on this node can serve as an uplink" in exc.value.detail
+    assert "No network in this cluster can serve as an uplink" in exc.value.detail
 
 
 def test_every_candidate_nuc1_offers_today_is_judged_the_way_lxd_would():

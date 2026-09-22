@@ -25,7 +25,7 @@ from app.services.lxd_service import (
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.lxd_errors import lxd_http_error
 from app.core.single_flight import single_flight
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.core.dependencies import (
     AuthenticatedUser,
     check_read_only_mode,
@@ -81,7 +81,7 @@ PROJECT_QUERY = Query(
 PROJECT_QUERY_OPTIONAL = Query(
     None,
     pattern=_PROJECT_PATTERN,
-    description="Restrict to the store one project reads; omitted, every store on the host is listed",
+    description="Restrict to the store one project reads; omit to list every store in the cluster",
 )
 
 
@@ -178,8 +178,8 @@ def _filter_images_for_tenant(
 @router.get(
     "",
     response_model=List[ImageListResponse],
-    summary="List images from all nodes",
-    description="Get a list of available images from all connected LXD nodes.",
+    summary="List images from all clusters",
+    description="Get a list of available images from all connected clusters.",
     responses={
         200: {"description": "Images listed successfully"},
         500: {"model": ErrorResponse, "description": "Server error"},
@@ -201,6 +201,8 @@ async def list_all_images(
         # Reconstruct Pydantic models from cached dict
         return [ImageListResponse(**item) for item in cached_data]
     
+    list_generation = get_resource_list_generation(cache, "images")
+
     # Fetch images from all nodes in parallel
     node_names = lxd_service.get_node_names()
     allowed_images = await _allowed_image_fingerprints_by_host(lxd_service)
@@ -238,8 +240,11 @@ async def list_all_images(
     # so it reads as unreachable rather than empty for the life of the TTL.
     cache_data = [item.model_dump() for item in response]
     if answered:
-        cache.set("api_responses", cache_key, cache_data, ttl=180)
-        logger.debug("Cached images list for 180 seconds")
+        if get_resource_list_generation(cache, "images") == list_generation:
+            cache.set("api_responses", cache_key, cache_data, ttl=180)
+            logger.debug("Cached images list for 180 seconds")
+        else:
+            logger.info("Not caching images list: an image mutation completed during the read")
     else:
         logger.warning("Not caching images list: no node answered")
     
@@ -289,11 +294,11 @@ async def list_remote_images(fresh: bool = False):
 @router.get(
     "/{host}",
     response_model=ImageListResponse,
-    summary="List images from specific node",
-    description="Get a list of available images from a specific LXD node.",
+    summary="List images from a specific cluster",
+    description="Get a list of available images from a specific cluster.",
     responses={
         200: {"description": "Images listed successfully"},
-        400: {"model": ErrorResponse, "description": "Invalid host"},
+        400: {"model": ErrorResponse, "description": "Invalid cluster"},
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
@@ -303,7 +308,7 @@ async def list_node_images(
     project: Optional[str] = PROJECT_QUERY_OPTIONAL,
     all_projects: bool = Query(
         False,
-        description="Every image store on the node, each row naming its store; excludes `project`.",
+        description="Every image store in the cluster, each row naming its store; excludes `project`.",
     ),
 ):
     """The images `project` can use on one LXD node: what its own store holds when it
@@ -318,7 +323,7 @@ async def list_node_images(
         if host not in valid_nodes:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid host. Valid hosts: {valid_nodes}"
+                detail=f"Invalid cluster. Available clusters: {valid_nodes}"
             )
 
         if all_projects:
@@ -386,7 +391,10 @@ async def _resolved_store(lxd_service: LXDService, host: str, project: str) -> s
             max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
         )
     except (BlockingTimeout, BlockingPoolFull):
-        raise HTTPException(status_code=503, detail=f"Could not resolve the image store on {host}") from None
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not resolve the image store in cluster '{host}'",
+        ) from None
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e)) from None
 
@@ -601,7 +609,8 @@ async def delete_image(
             )
         except BlockingTimeout:
             raise HTTPException(
-                status_code=504, detail=f"Reading the image on {host} timed out"
+                status_code=504,
+                detail=f"Reading the image in cluster '{host}' timed out",
             ) from None
         except BlockingPoolFull:
             raise HTTPException(
@@ -612,7 +621,10 @@ async def delete_image(
             _store_must_be_visible(host, await _resolved_store(lxd_service, host, project))
             raise HTTPException(
                 status_code=404,
-                detail=f"Image '{fingerprint[:12]}' not found in the {project} image store on {host}",
+                detail=(
+                    f"Image '{fingerprint[:12]}' not found in the {project} image store "
+                    f"in cluster '{host}'"
+                ),
             )
         _store_must_be_visible(host, image.project)
 
@@ -637,7 +649,8 @@ async def delete_image(
             raise HTTPException(
                 status_code=504,
                 detail=(
-                    f"Deleting the image on {host} exceeded {IMAGE_DELETE_TIMEOUT:.0f}s and may "
+                    f"Deleting the image in cluster '{host}' exceeded "
+                    f"{IMAGE_DELETE_TIMEOUT:.0f}s and may "
                     "still be in progress; re-check the image list before retrying"
                 ),
             ) from None
@@ -674,7 +687,10 @@ async def delete_image(
         get_cache_manager().invalidate_resource_cache("images")
         return {
             "success": True,
-            "message": f"Image {fingerprint[:12]} deleted from the {image.project} image store on {host}",
+            "message": (
+                f"Image {fingerprint[:12]} deleted from the {image.project} image store "
+                f"in cluster '{host}'"
+            ),
             "forced": bool(force and dependents),
         }
     except HTTPException:

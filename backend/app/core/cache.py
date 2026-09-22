@@ -53,7 +53,27 @@ INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
 # Not under the `snapshots_fleet:` pattern so an invalidation can clear list entries while leaving
 # the token that tells already-running fleet reads their answer is stale.
 SNAPSHOT_FLEET_GENERATION_KEY = "snapshot_fleet_generation"
+RESOURCE_LIST_GENERATION_KEY_PREFIX = "resource_list_generation"
+CAPACITY_GENERATION_KIND = "capacity"
 MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
+
+
+class CacheInvalidationError(RuntimeError):
+    """A cache transition could not be made authoritative in the shared cache."""
+
+
+def get_resource_list_generation(cache: Any, kind: str) -> Optional[str]:
+    """Read a list-generation token from a cache implementation when supported.
+
+    Cache doubles and older in-process adapters only implement ``get``/``set``. Treating the
+    optional fence as absent keeps those adapters usable while the production ``CacheManager``
+    still supplies the cross-worker race guard. Errors from an implemented getter are not hidden.
+    """
+    getter = getattr(cache, "resource_list_generation", None)
+    if not callable(getter):
+        return None
+    return getter(kind)
+
 
 # Lazy import encryption to avoid circular imports
 _encryption_module = None
@@ -149,6 +169,10 @@ class CacheManager:
         self.default_ttl = default_ttl
         self.memory_cache = LRUCache(maxsize=memory_cache_size)
         self.redis_client = None
+        # Durable publish transitions distinguish intentional memory-only operation from a
+        # configured Redis deployment whose connection failed. In the latter case sibling
+        # workers may still hold stale shared entries, so a strict invalidation must fail.
+        self._redis_configured = bool(redis_url)
         
         # Define namespaces that should be encrypted
         # NOTE: LXD certificates are NOT cached in Redis for security
@@ -324,7 +348,15 @@ class CacheManager:
         logger.debug(f"Cache MISS: {cache_key}")
         return None
     
-    def set(self, namespace: str, key: str, value: Any, ttl: Optional[int] = None):
+    def set(
+        self,
+        namespace: str,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+        *,
+        require_shared: bool = False,
+    ):
         """
         Set value in cache with TTL.
         Stores in both Redis and memory cache for redundancy.
@@ -354,8 +386,18 @@ class CacheManager:
                 logger.debug(f"Cached in Redis: {cache_key} (TTL: {ttl}s, Encrypted: {should_encrypt})")
             except redis.TimeoutError:
                 logger.warning(f"Redis timeout while caching {cache_key} (memory cache still works)")
+                if require_shared:
+                    raise CacheInvalidationError(
+                        f"shared cache write timed out for {cache_key}"
+                    )
             except Exception as e:
                 logger.warning(f"Redis set error for {cache_key}: {e} (memory cache still works)")
+                if require_shared:
+                    raise CacheInvalidationError(
+                        f"shared cache write failed for {cache_key}"
+                    ) from e
+        elif require_shared and self._redis_configured:
+            raise CacheInvalidationError(f"shared cache is unavailable for {cache_key}")
     
     def delete(self, namespace: str, key: str):
         """Delete value from cache."""
@@ -372,9 +414,16 @@ class CacheManager:
         self.memory_cache.delete(cache_key)
         logger.debug(f"Deleted from cache: {cache_key}")
     
-    def delete_pattern(self, namespace: str, pattern: str = "*"):
+    def delete_pattern(
+        self,
+        namespace: str,
+        pattern: str = "*",
+        *,
+        require_shared: bool = False,
+    ):
         """Delete all keys matching pattern in namespace."""
         full_pattern = self._make_key(namespace, pattern)
+        shared_error: Optional[CacheInvalidationError] = None
         
         # Delete from Redis
         if self.redis_client:
@@ -385,6 +434,14 @@ class CacheManager:
                     logger.info(f"Deleted {len(keys)} keys matching {full_pattern}")
             except Exception as e:
                 logger.warning(f"Redis delete pattern error: {e}")
+                if require_shared:
+                    shared_error = CacheInvalidationError(
+                        f"shared cache delete failed for {full_pattern}"
+                    )
+        elif require_shared and self._redis_configured:
+            shared_error = CacheInvalidationError(
+                f"shared cache is unavailable for {full_pattern}"
+            )
         
         # Clear matching keys from memory cache
         if pattern == "*":
@@ -400,6 +457,8 @@ class CacheManager:
                 self.memory_cache.delete(k)
             if keys_to_delete:
                 logger.debug(f"Deleted {len(keys_to_delete)} memory cache keys matching {full_pattern}")
+        if shared_error is not None:
+            raise shared_error
     
     def invalidate_cluster_cache(self, cluster_id: str = None):
         """
@@ -408,6 +467,9 @@ class CacheManager:
         Otherwise, invalidate all cluster listings.
         """
         if cluster_id:
+            # Fence before the scoped sweep. A member read that started before this cluster
+            # mutation must not restore its old body after the matching keys are deleted.
+            self._advance_resource_generation("cluster_members")
             # Clear specific cluster caches
             self.delete("vault", f"secret/data/clusters/{cluster_id}/metadata")
             self.delete("vault", f"secret/data/clusters/{cluster_id}/secrets")
@@ -452,32 +514,70 @@ class CacheManager:
         its snapshots with it on the cluster, and that listing gained a cache without gaining a
         second reason to be cleared.
         """
+        # Advance first. A list that began before this mutation must see a different token even
+        # if it finishes in the small interval while the dependent key families are being swept.
+        try:
+            self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
+        except Exception as e:  # noqa: BLE001 - the clearance below is still authoritative
+            logger.debug(f"Could not record the instance list cache generation: {e}")
+
         self.delete_pattern("api_responses", "instances:*")
         self.delete_pattern("api_responses", "vms:*")
-        self.delete_pattern("api_responses", "monitoring:*")
-        self.delete_pattern("api_responses", "storage_volumes:*")
-        self.delete_pattern("api_responses", "snapshots_fleet:*")
+        # Instance lifecycle also changes every LXD `used_by` projection. Clear those list
+        # families through the generation-aware helper so a read that started before this
+        # mutation cannot put the old references back after the clearance.
+        self.invalidate_resource_cache(
+            "monitoring",
+            "project_usage",
+            "profiles",
+            "networks",
+            "storage_pools",
+            "storage_pool_resources",
+            "storage_volumes",
+            "snapshots_fleet",
+        )
         # a create, a delete or a NIC address pin changes the allocation table the IPAM page
         # reads, and its 120 s TTL is long enough to pin an address and not see it
         self.delete_pattern("api_responses", "ipam:*")
-        # The create form's quota line: a create or delete changes what a project has used.
-        self.delete_pattern("api_responses", "project_usage:*")
         # important: a list read that was already in flight when this ran still holds the old
         # picture and would write it back over the clearance a moment later (a fleet read takes
         # ten seconds with a dead cluster registered). The generation lets such a read notice.
-        try:
-            self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
-            self.set(
-                "api_responses",
-                SNAPSHOT_FLEET_GENERATION_KEY,
-                str(time.time_ns()),
-                ttl=3600,
-            )
-        except Exception as e:  # noqa: BLE001 - the clearance above is what matters
-            logger.debug(f"Could not record list cache generations: {e}")
         logger.info(
-            "Cleared instance, VM, monitoring, storage volume, IPAM, project usage and fleet snapshot caches"
+            "Cleared instance, VM, monitoring, storage volume, IPAM, project usage, fleet snapshot and capacity caches"
         )
+
+    def invalidate_capacity_cache(self, *, require_shared: bool = False):
+        """Drop cached capacity/allocation projections after resource-changing writes.
+
+        `/nodes`, regions, clustered resources, and member resources all embed allocation or free
+        capacity. Invalidating only the resource's own list makes a successful create/delete/upload
+        visible in one table while cards and pickers keep the old headroom for another TTL.
+        """
+        failures: list[Exception] = []
+        try:
+            self._advance_resource_generation(
+                CAPACITY_GENERATION_KIND,
+                require_shared=require_shared,
+            )
+        except CacheInvalidationError as exc:
+            failures.append(exc)
+        for namespace, pattern in (
+            ("api_responses", f"{NODES_STATUS_CACHE_KEY}*"),
+            ("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*"),
+            ("lxd_resources", f"{MICROCLOUD_RESOURCES_CACHE_PREFIX}:*"),
+            ("lxd_resources", f"{MEMBER_RESOURCES_CACHE_PREFIX}:*"),
+        ):
+            try:
+                if require_shared:
+                    self.delete_pattern(namespace, pattern, require_shared=True)
+                else:
+                    self.delete_pattern(namespace, pattern)
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        if failures:
+            raise CacheInvalidationError(
+                f"{len(failures)} shared capacity cache operation(s) failed"
+            ) from failures[0]
 
     def instance_list_generation(self) -> Optional[str]:
         """The token the last instance invalidation left; None when none has run yet."""
@@ -489,7 +589,45 @@ class CacheManager:
         value = self.get("api_responses", SNAPSHOT_FLEET_GENERATION_KEY)
         return str(value) if value is not None else None
 
-    def invalidate_resource_cache(self, *kinds: str):
+    def resource_list_generation(self, kind: str) -> Optional[str]:
+        """Token changed by `invalidate_resource_cache(kind)` for read/write race fencing."""
+        value = self.get(
+            "api_responses",
+            f"{RESOURCE_LIST_GENERATION_KEY_PREFIX}:{kind}",
+        )
+        return str(value) if value is not None else None
+
+    def _advance_resource_generation(
+        self,
+        kind: str,
+        *,
+        require_shared: bool = False,
+    ) -> None:
+        """Fence a cache family before its entries are cleared."""
+        try:
+            args = (
+                "api_responses",
+                f"{RESOURCE_LIST_GENERATION_KEY_PREFIX}:{kind}",
+                str(time.time_ns()),
+            )
+            if require_shared:
+                self.set(*args, ttl=3600, require_shared=True)
+            else:
+                self.set(*args, ttl=3600)
+        except Exception as e:  # noqa: BLE001 - the clearance remains authoritative
+            logger.debug("Could not record the %s cache generation: %s", kind, e)
+            if require_shared:
+                if isinstance(e, CacheInvalidationError):
+                    raise
+                raise CacheInvalidationError(
+                    f"could not advance the shared {kind} cache generation"
+                ) from e
+
+    def invalidate_resource_cache(
+        self,
+        *kinds: str,
+        require_shared: bool = False,
+    ):
         """Drop the cached list responses for the named resource kinds.
 
         Every list endpoint caches under `<kind>:list:...`, so a mutation that does not clear
@@ -501,19 +639,86 @@ class CacheManager:
         Pass the key prefixes the handler's own list endpoint uses, ex;
         `invalidate_resource_cache("storage_pools", "storage_pool_resources")`.
         """
+        failures: list[Exception] = []
         for kind in kinds:
-            self.delete_pattern("api_responses", f"{kind}:*")
+            try:
+                self._advance_resource_generation(
+                    kind,
+                    require_shared=require_shared,
+                )
+            except CacheInvalidationError as exc:
+                failures.append(exc)
             if kind == "snapshots_fleet":
                 try:
-                    self.set(
+                    args = (
                         "api_responses",
                         SNAPSHOT_FLEET_GENERATION_KEY,
                         str(time.time_ns()),
-                        ttl=3600,
                     )
+                    if require_shared:
+                        self.set(*args, ttl=3600, require_shared=True)
+                    else:
+                        self.set(*args, ttl=3600)
                 except Exception as e:  # noqa: BLE001 - the clearance above is what matters
                     logger.debug(f"Could not record the fleet snapshot generation: {e}")
+                    if require_shared:
+                        failures.append(
+                            e
+                            if isinstance(e, CacheInvalidationError)
+                            else CacheInvalidationError(
+                                "could not advance the shared fleet snapshot generation"
+                            )
+                        )
+            try:
+                if require_shared:
+                    self.delete_pattern(
+                        "api_responses",
+                        f"{kind}:*",
+                        require_shared=True,
+                    )
+                else:
+                    self.delete_pattern("api_responses", f"{kind}:*")
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        capacity_kinds = {
+            "images",
+            "storage_pools",
+            "storage_pool_resources",
+            "storage_volumes",
+        }
+        if capacity_kinds.intersection(kinds):
+            try:
+                if require_shared:
+                    self.invalidate_capacity_cache(require_shared=True)
+                else:
+                    self.invalidate_capacity_cache()
+            except CacheInvalidationError as exc:
+                failures.append(exc)
         logger.info("Cleared cached list responses for: %s", ", ".join(kinds))
+        if failures:
+            raise CacheInvalidationError(
+                f"{len(failures)} shared resource cache operation(s) failed"
+            ) from failures[0]
+
+    def invalidate_tag_cache(self, *, require_shared: bool = False) -> None:
+        """Fence and clear tag lists, categories, and statistics as one cache family."""
+        failures: list[Exception] = []
+        try:
+            self._advance_resource_generation("tags", require_shared=require_shared)
+        except CacheInvalidationError as exc:
+            failures.append(exc)
+        for pattern in ("tags:list:*", "categories:all:*", "stats:*"):
+            try:
+                if require_shared:
+                    self.delete_pattern("tags", pattern, require_shared=True)
+                else:
+                    self.delete_pattern("tags", pattern)
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        if failures:
+            raise CacheInvalidationError(
+                f"{len(failures)} shared tag cache operation(s) failed"
+            ) from failures[0]
     
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

@@ -103,7 +103,14 @@ def _keep_unit_tests_off_the_real_audit_database(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_router_persists_only_safe_intent_before_daemon_mutation(monkeypatch):
-    request = _request()
+    request = _request(
+        config={
+            "limits.cpu": "2",
+            "limits.memory": "2GiB",
+            "user.tags": " Env_PROD,app_api,env_prod ",
+        }
+    )
+    normalized_request = instances_router._normalize_create_tags(request)
     row = _job(request)
     order = []
     captured = {}
@@ -162,6 +169,7 @@ async def test_router_persists_only_safe_intent_before_daemon_mutation(monkeypat
         async def create_instance(self, **kwargs):
             order.append("daemon")
             assert kwargs["job_id"] == row.job_id
+            assert kwargs["config"]["user.tags"] == "app_api,env_prod"
             return "op-123"
 
     response = await instances_router.create_instance(
@@ -174,14 +182,16 @@ async def test_router_persists_only_safe_intent_before_daemon_mutation(monkeypat
 
     assert order == ["lock-enter", "policy", "persist", "daemon", "lock-exit"]
     assert captured["requester"] == "user-123"
-    assert captured["payload_hash"] == instances_router._create_request_hash(request)
+    assert captured["payload_hash"] == instances_router._create_request_hash(normalized_request)
     assert set(captured["requested"]) == {
         "instance_type",
         "source_type",
         "start_on_create",
         "profiles",
         "networkless_acknowledged",
+        "tags",
     }
+    assert captured["requested"]["tags"] == ["app_api", "env_prod"]
     assert captured["target_organization_id"] == 17
     assert captured["target_organization_resolution"] == "exact"
     stored = repr(captured["requested"])
@@ -191,6 +201,69 @@ async def test_router_persists_only_safe_intent_before_daemon_mutation(monkeypat
     assert "config" not in stored.lower()
     assert response.job_id == row.job_id
     assert response.operation_id == "op-123"
+
+
+def test_create_tags_are_canonical_before_hashing_and_safe_persistence():
+    first = instances_router._normalize_create_tags(
+        _request(config={"limits.cpu": "2", "user.tags": " Env_PROD, app_api,env_prod "})
+    )
+    second = instances_router._normalize_create_tags(
+        _request(config={"limits.cpu": "2", "user.tags": "app_api,env_prod"})
+    )
+
+    assert first.config == {"limits.cpu": "2", "user.tags": "app_api,env_prod"}
+    assert instances_router._create_request_hash(first) == instances_router._create_request_hash(
+        second
+    )
+    assert instances_router._safe_create_job_request(first)["tags"] == [
+        "app_api",
+        "env_prod",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_preflight_rejects_malformed_create_tags_before_daemon_reads(monkeypatch):
+    request = _request(config={"user.tags": "valid,bad tag"})
+    monkeypatch.setattr(instances_router, "verify_project_access", lambda _host, project: project)
+    monkeypatch.setattr(
+        instances_router,
+        "_run_create_preflight",
+        lambda *_args: pytest.fail("invalid tags reached create preflight"),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await instances_router.preflight_create_instance(
+            request=request,
+            lxd_service=SimpleNamespace(),
+            db=SimpleNamespace(),
+            _rbac=SimpleNamespace(user_id="user-123"),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "INVALID_INSTANCE_TAG"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_malformed_tags_before_idempotency_or_daemon_reads(monkeypatch):
+    request = _request(config={"user.tags": "valid,bad tag"})
+    monkeypatch.setattr(instances_router, "verify_project_access", lambda _host, project: project)
+    monkeypatch.setattr(
+        instances_router,
+        "get_operation_job_by_request",
+        lambda *_args: pytest.fail("invalid tags reached durable job lookup"),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await instances_router.create_instance(
+            request=request,
+            idempotency_key="request-1",
+            lxd_service=SimpleNamespace(),
+            db=SimpleNamespace(),
+            _rbac=SimpleNamespace(user_id="user-123", email=None),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "INVALID_INSTANCE_TAG"
 
 
 @pytest.mark.asyncio
@@ -1211,15 +1284,19 @@ class _ScalarResult:
 
 
 class _UpdateResult:
-    rowcount = 1
+    def __init__(self, rowcount=1):
+        self.rowcount = rowcount
 
 
 class _JobSession:
-    def __init__(self, row):
+    def __init__(self, row, *, update_rowcount=1):
         self.row = row
+        self.update_rowcount = update_rowcount
         self.select_statement = None
         self.update_statement = None
         self.added = []
+        self.commits = 0
+        self.rollbacks = 0
 
     def add(self, row):
         self.added.append(row)
@@ -1229,10 +1306,13 @@ class _JobSession:
             self.select_statement = statement
             return _ScalarResult(self.row)
         self.update_statement = statement
-        return _UpdateResult()
+        return _UpdateResult(self.update_rowcount)
 
     async def commit(self):
-        return None
+        self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 def _statement_values(statement):
@@ -1305,6 +1385,335 @@ async def test_terminal_create_audit_correlates_create_and_start_operations(monk
     ]
     assert isinstance(db.added[0], InstanceOperationAuditOutbox)
     assert drained == [{"job_id": row.job_id}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["success", "partial"])
+async def test_materialized_terminal_create_persists_tags_in_the_cas_transaction(
+    monkeypatch,
+    status,
+):
+    request = _request()
+    row = _job(
+        request,
+        requested={
+            "instance_type": request.instance_type,
+            "source_type": request.source_type,
+            "start_on_create": request.start_on_create,
+            "profiles": request.profiles,
+            "tags": ["app_api", "env_prod"],
+        },
+    )
+    db = _JobSession(row)
+    persisted = []
+
+    @asynccontextmanager
+    async def session_maker():
+        yield db
+
+    async def upsert(session, persisted_row, tags):
+        persisted.append((session, persisted_row, tags))
+
+    monkeypatch.setattr(instance_module, "async_session_maker", session_maker)
+    monkeypatch.setattr(instance_module, "_upsert_materialized_create_tags", upsert)
+    monkeypatch.setattr(
+        instance_module,
+        "get_cache_manager",
+        lambda: SimpleNamespace(
+            invalidate_instance_cache=lambda: None,
+            delete_pattern=lambda *_args: None,
+        ),
+    )
+    monkeypatch.setattr(
+        instance_module,
+        "_emit_instance_created",
+        lambda *_args: asyncio.sleep(0),
+    )
+
+    transitioned = await instance_module._finish_create_job(
+        row,
+        status,
+        operation_id="create-op",
+        result={"instance_status": "Stopped"},
+        invalidate_cache=True,
+        announce_created=True,
+    )
+
+    assert transitioned is True
+    assert persisted == [(db, row, ["app_api", "env_prod"])]
+    assert db.commits == 1
+    assert db.rollbacks == 0
+    assert [(event.job_id, event.stage) for event in db.added] == [
+        (row.job_id, "terminal")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_and_unknown_create_jobs_never_persist_assignments(monkeypatch):
+    request = _request()
+    row = _job(
+        request,
+        requested={"tags": ["env_prod"]},
+        status="running",
+    )
+    db = _JobSession(row)
+
+    @asynccontextmanager
+    async def session_maker():
+        yield db
+
+    async def forbidden_upsert(*_args):
+        pytest.fail("a create without verified materialization persisted tags")
+
+    monkeypatch.setattr(instance_module, "async_session_maker", session_maker)
+    monkeypatch.setattr(instance_module, "_upsert_materialized_create_tags", forbidden_upsert)
+
+    transitioned = await instance_module._finish_create_job(
+        row,
+        "failure",
+        operation_id="create-op",
+        error="daemon refused create",
+    )
+    assert transitioned is True
+
+    updates = []
+
+    async def set_job(*args, **kwargs):
+        updates.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(instance_module, "_set_create_job", set_job)
+    marked = await instance_module._mark_create_unknown(
+        row,
+        operation_id="create-op",
+        error="operation outcome unavailable",
+        result={"ambiguous_action": "create"},
+    )
+
+    assert marked is True
+    assert updates[0][1]["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_row,update_rowcount", [(True, 1), (False, 0)])
+async def test_losing_terminal_cas_cannot_persist_create_tags(
+    monkeypatch,
+    missing_row,
+    update_rowcount,
+):
+    request = _request()
+    row = _job(request, requested={"tags": ["env_prod"]})
+    db = _JobSession(None if missing_row else row, update_rowcount=update_rowcount)
+
+    @asynccontextmanager
+    async def session_maker():
+        yield db
+
+    async def forbidden_upsert(*_args):
+        pytest.fail("a worker that lost the terminal CAS persisted tags")
+
+    monkeypatch.setattr(instance_module, "async_session_maker", session_maker)
+    monkeypatch.setattr(instance_module, "_upsert_materialized_create_tags", forbidden_upsert)
+
+    transitioned = await instance_module._finish_create_job(
+        row,
+        "success",
+        operation_id="create-op",
+        announce_created=True,
+    )
+
+    assert transitioned is False
+    assert db.commits == 0
+    assert db.added == []
+    assert db.rollbacks == (0 if missing_row else 1)
+
+
+@pytest.mark.asyncio
+async def test_tag_database_error_rolls_back_terminal_verdict_and_recovery_can_retry(
+    monkeypatch,
+):
+    request = _request()
+    row = _job(request, requested={"tags": ["env_prod"]})
+    first = _JobSession(row)
+    recovery = _JobSession(row)
+    sessions = iter((first, recovery))
+    attempts = 0
+
+    @asynccontextmanager
+    async def session_maker():
+        yield next(sessions)
+
+    async def flaky_upsert(*_args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("database unavailable while assigning tags")
+
+    monkeypatch.setattr(instance_module, "async_session_maker", session_maker)
+    monkeypatch.setattr(instance_module, "_upsert_materialized_create_tags", flaky_upsert)
+    monkeypatch.setattr(
+        instance_module,
+        "get_cache_manager",
+        lambda: SimpleNamespace(
+            invalidate_instance_cache=lambda: None,
+            delete_pattern=lambda *_args: None,
+        ),
+    )
+    monkeypatch.setattr(
+        instance_module,
+        "_emit_instance_created",
+        lambda *_args: asyncio.sleep(0),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await instance_module._finish_create_job(
+            row,
+            "success",
+            operation_id="create-op",
+            announce_created=True,
+        )
+
+    assert first.commits == 0
+    assert first.rollbacks == 1
+    assert first.added == []
+
+    transitioned = await instance_module._finish_create_job(
+        row,
+        "success",
+        operation_id="create-op",
+        announce_created=True,
+    )
+
+    assert transitioned is True
+    assert attempts == 2
+    assert recovery.commits == 1
+    assert recovery.rollbacks == 0
+    assert [(event.job_id, event.stage) for event in recovery.added] == [
+        (row.job_id, "terminal")
+    ]
+
+
+class _TagResult:
+    def __init__(self, *, scalar=None, rows=None):
+        self.scalar = scalar
+        self.rows = rows or []
+
+    def scalar_one_or_none(self):
+        return self.scalar
+
+    def all(self):
+        return list(self.rows)
+
+
+class _TagPersistenceSession:
+    def __init__(self):
+        self.categories = {"env_": 7, "app_": 8}
+        self.tags = {}
+        self.tag_values = {}
+        self.assignments = set()
+        self.assignment_values = []
+        self.usage = {}
+
+    @staticmethod
+    def _values(statement):
+        return {
+            getattr(column, "key", str(column)): getattr(value, "value", value)
+            for column, value in statement._values.items()
+        }
+
+    @staticmethod
+    def _where_value(statement, key):
+        for criterion in statement._where_criteria:
+            if getattr(getattr(criterion, "left", None), "key", None) == key:
+                return getattr(getattr(criterion, "right", None), "value", None)
+        raise AssertionError(f"No {key} predicate in {statement}")
+
+    async def execute(self, statement):
+        if getattr(statement, "is_select", False):
+            table = statement.get_final_froms()[0].name
+            if table == "tag_categories":
+                return _TagResult(rows=list(self.categories.items()))
+            if table == "tags":
+                name = self._where_value(statement, "name")
+                return _TagResult(scalar=self.tags.get(name))
+            raise AssertionError(f"Unexpected select from {table}")
+
+        table = statement.table.name
+        values = self._values(statement)
+        if type(statement).__name__ == "Insert" and table == "tags":
+            name = values["name"]
+            if name in self.tags:
+                return _TagResult(scalar=None)
+            tag_id = len(self.tags) + 1
+            self.tags[name] = tag_id
+            self.tag_values[name] = values
+            self.usage[tag_id] = values["usage_count"]
+            return _TagResult(scalar=tag_id)
+        if type(statement).__name__ == "Insert" and table == "tag_assignments":
+            identity = (
+                values["tag_id"],
+                values["resource_type"],
+                values["resource_id"],
+                values["resource_host"],
+                values["resource_project"],
+            )
+            if identity in self.assignments:
+                return _TagResult(scalar=None)
+            self.assignments.add(identity)
+            self.assignment_values.append(values)
+            return _TagResult(scalar=len(self.assignments))
+        if type(statement).__name__ == "Update" and table == "tags":
+            tag_id = self._where_value(statement, "id")
+            self.usage[tag_id] += 1
+            return _UpdateResult()
+        raise AssertionError(f"Unexpected tag persistence statement: {statement}")
+
+
+@pytest.mark.asyncio
+async def test_create_tag_upsert_is_retry_safe_and_scopes_same_name_by_project():
+    request = _request()
+    first = _job(
+        request,
+        requester="actor-a",
+        requested={"tags": ["app_api", "env_prod"]},
+    )
+    other_project = _job(
+        request,
+        job_id="job-2",
+        project="tenant-b",
+        requester="actor-b",
+        requested={"tags": ["env_prod"]},
+    )
+    db = _TagPersistenceSession()
+
+    await instance_module._upsert_materialized_create_tags(
+        db, first, instance_module._requested_create_tags(first)
+    )
+    await instance_module._upsert_materialized_create_tags(
+        db, first, instance_module._requested_create_tags(first)
+    )
+    await instance_module._upsert_materialized_create_tags(
+        db, other_project, instance_module._requested_create_tags(other_project)
+    )
+
+    env_id = db.tags["env_prod"]
+    assert db.usage[db.tags["app_api"]] == 1
+    assert db.usage[env_id] == 2
+    assert db.tag_values["env_prod"]["category_id"] == 7
+    assert db.tag_values["env_prod"]["created_by"] == "actor-a"
+    assert {
+        (assignment["resource_host"], assignment["resource_project"], assignment["resource_id"])
+        for assignment in db.assignment_values
+        if assignment["tag_id"] == env_id
+    } == {
+        ("cluster-a", "tenant-a", "web01"),
+        ("cluster-a", "tenant-b", "web01"),
+    }
+    assert {
+        assignment["assigned_by"]
+        for assignment in db.assignment_values
+        if assignment["tag_id"] == env_id
+    } == {"actor-a", "actor-b"}
 
 
 @pytest.mark.asyncio

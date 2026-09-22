@@ -69,7 +69,7 @@ class NetworkACLInfo(BaseModel):
     egress: List[Dict[str, Any]] = Field(default_factory=list, description="Egress rules")
     config: Dict[str, str] = Field(default_factory=dict, description="ACL configuration")
     used_by: List[str] = Field(default_factory=list, description="Resources using this ACL")
-    node: str = Field("", description="Node name")
+    node: str = Field("", description="Cluster where the network ACL is defined")
     project: str = Field(
         DEFAULT_PROJECT,
         description="LXD project that holds this ACL",
@@ -165,7 +165,7 @@ class NetworkACLListResponse(FanoutReachability):
     """Response for listing network ACLs."""
     total: int = Field(..., description="Total number of ACLs")
     acls: List[NetworkACLInfo] = Field(..., description="List of network ACLs")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
 
 
 def _fetch_acls_for_node(
@@ -213,10 +213,10 @@ def _fetch_acls_for_node(
     "",
     response_model=NetworkACLListResponse,
     summary="List all network ACLs",
-    description="Get a list of all network ACLs from LXD nodes.",
+    description="Get a list of all network ACLs from connected clusters.",
 )
 async def list_network_acls(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     project: Optional[str] = Query(
         None,
         description=(
@@ -305,7 +305,7 @@ async def list_network_acls(
 async def get_network_acl(
     acl_name: str,
     http_response: Response,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
     ),
@@ -357,7 +357,7 @@ async def get_network_acl(
 )
 async def create_network_acl(
     request: NetworkACLCreateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
     ),
@@ -442,7 +442,7 @@ async def create_network_acl(
 )
 async def update_network_acl(
     acl_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     description: Optional[str] = Body(None),
     ingress: Optional[List[Dict[str, Any]]] = Body(None),
     egress: Optional[List[Dict[str, Any]]] = Body(None),
@@ -527,7 +527,7 @@ async def update_network_acl(
 )
 async def delete_network_acl(
     acl_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
     ),

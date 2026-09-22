@@ -38,6 +38,14 @@ from app.core.tenant_visibility import tenant_acl_active
 
 logger = logging.getLogger(__name__)
 
+_MONITORING_CACHE_KIND = "monitoring"
+
+
+def _resource_generation(cache: Any, kind: str) -> Optional[str]:
+    """Read a resource generation, allowing deliberately minimal cache test doubles."""
+    read = getattr(cache, "resource_list_generation", None)
+    return read(kind) if callable(read) else None
+
 router = APIRouter(
     prefix="/monitoring",
     tags=["Monitoring"],
@@ -80,18 +88,6 @@ _cpu_samples_lock = threading.Lock()
 # never answered. That is what forced the status ladder below to guess from the error text.
 # LXDService.check_nodes_status_async is the same fan-out /nodes uses, so the dashboard and the
 # node pickers now answer from one implementation.
-
-def format_bytes(bytes_val: int) -> str:
-    """Format bytes to human readable string."""
-    if bytes_val == 0:
-        return "0 B"
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    i = 0
-    while bytes_val >= 1024 and i < len(units) - 1:
-        bytes_val /= 1024
-        i += 1
-    return f"{bytes_val:.2f} {units[i]}"
-
 
 def _fetch_instance_state(client, instance_name: str, project: str, host: str) -> Optional[Dict[str, Any]]:
     """Fetch instance state from LXD - runs in thread pool."""
@@ -411,6 +407,7 @@ async def get_monitoring_dashboard(
     if cached_response is not None:
         logger.debug("Returning cached dashboard response (background collector)")
         return MonitoringDashboardResponse(**cached_response)
+    monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
 
     try:
         start_time = time.time()
@@ -787,7 +784,11 @@ async def get_monitoring_dashboard(
         history_key = _monitoring_history_key(scope_key)
         last_store_time = _last_history_store_times.get(history_key, 0)
         
-        if current_time - last_store_time >= _history_min_interval:
+        if (
+            current_time - last_store_time >= _history_min_interval
+            and _resource_generation(cache, _MONITORING_CACHE_KIND)
+            == monitoring_generation
+        ):
             try:
                 _last_history_store_times[history_key] = current_time
 
@@ -822,9 +823,18 @@ async def get_monitoring_dashboard(
         # the previous entry in place means they keep seeing stale-but-true numbers
         # and the next request retries.
         if connected_nodes:
-            cache.set(
-                "api_responses", dashboard_key, response.model_dump(), ttl=_DASHBOARD_CACHE_TTL
-            )
+            if (
+                _resource_generation(cache, _MONITORING_CACHE_KIND)
+                == monitoring_generation
+            ):
+                cache.set(
+                    "api_responses",
+                    dashboard_key,
+                    response.model_dump(),
+                    ttl=_DASHBOARD_CACHE_TTL,
+                )
+            else:
+                logger.info("Not caching monitoring dashboard: data changed during the read")
         else:
             logger.warning("Not caching monitoring dashboard: no cluster answered")
 
@@ -844,15 +854,15 @@ async def get_monitoring_dashboard(
 @router.get(
     "/nodes/{node_name}/metrics",
     response_model=ClusterMonitoringMetrics,
-    summary="Get metrics for a specific node",
-    description="Get detailed metrics for a specific cluster node.",
+    summary="Get metrics for a specific Cluster",
+    description="Get detailed metrics for a specific registered Cluster.",
 )
 async def get_node_metrics(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """Get detailed metrics for a specific node. Cached for 30 seconds."""
+    """Get detailed metrics for a specific registered Cluster. Cached for 30 seconds."""
     verify_cluster_access(node_name)
     
     # check cache first
@@ -861,6 +871,7 @@ async def get_node_metrics(
     cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return ClusterMonitoringMetrics(**cached)
+    monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
 
     try:
         # run node status + VM list in parallel to eliminate waterfall
@@ -870,7 +881,7 @@ async def get_node_metrics(
 
         node = next((n for n in node_statuses_list if n.name == node_name), None)
         if not node:
-            raise HTTPException(status_code=404, detail=f"Node '{node_name}' not found")
+            raise HTTPException(status_code=404, detail=f"Cluster '{node_name}' not found")
         
         if not node.connected:
             # note: this endpoint used to omit the status entirely and answer null, so a caller
@@ -905,7 +916,7 @@ async def get_node_metrics(
         
         resources = node.resources
         if not resources:
-            raise HTTPException(status_code=500, detail="Node resources not available")
+            raise HTTPException(status_code=500, detail="Cluster resources are not available")
         
         # instance count already fetched in parallel above
         node_instances = [
@@ -948,13 +959,19 @@ async def get_node_metrics(
         )
         
         # cache for 30 seconds
-        cache.set("api_responses", cache_key, result.model_dump(), ttl=30)
+        if (
+            _resource_generation(cache, _MONITORING_CACHE_KIND)
+            == monitoring_generation
+        ):
+            cache.set("api_responses", cache_key, result.model_dump(), ttl=30)
+        else:
+            logger.info("Not caching node metrics: monitoring data changed during the read")
         return result
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting node metrics: {e}")
+        logger.error(f"Error getting Cluster metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1085,6 +1102,7 @@ async def get_network_metrics(
     cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return NetworkMetrics(**cached)
+    monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
 
     try:
         all_vms, connected_nodes = await lxd_service.list_all_vms()
@@ -1137,7 +1155,13 @@ async def get_network_metrics(
         # monitoring surface reads as a healthy idle cluster. Do not cache a
         # total nobody reported.
         if connected_nodes:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+            if (
+                _resource_generation(cache, _MONITORING_CACHE_KIND)
+                == monitoring_generation
+            ):
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+            else:
+                logger.info("Not caching network metrics: monitoring data changed during the read")
         else:
             logger.warning("Not caching network metrics: no cluster answered")
         return response

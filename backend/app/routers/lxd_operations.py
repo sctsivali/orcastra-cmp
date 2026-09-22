@@ -50,7 +50,7 @@ class OperationInfo(BaseModel):
     err: str = Field("", description="Error message if any")
     may_cancel: bool = Field(False, description="Whether operation can be cancelled")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Operation metadata")
-    node_name: str = Field("", description="Node where operation is running")
+    node_name: str = Field("", description="Cluster where the operation is running")
     project: str = Field("default", description="Project for this operation")
     instance_name: str = Field("", description="Instance name if applicable")
 
@@ -59,12 +59,12 @@ class OperationListResponse(BaseModel):
     """Response for listing operations."""
     total: int = Field(..., description="Total number of operations")
     operations: List[OperationInfo] = Field(..., description="List of operations")
-    nodes: List[str] = Field(..., description="List of nodes")
+    nodes: List[str] = Field(..., description="Clusters included in this response")
     unreachable_nodes: List[str] = Field(
         default_factory=list,
         description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
+            "Clusters that could not be reached. Their entries are missing from this list, "
+            "so an unreachable cluster is distinguishable from one that has none."
         ),
     )
 
@@ -145,10 +145,10 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
     "",
     response_model=OperationListResponse,
     summary="List all operations",
-    description="Get a list of all operations from LXD nodes.",
+    description="Get a list of all operations from connected clusters.",
 )
 async def list_operations(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all operations."""
@@ -216,7 +216,7 @@ async def list_operations(
 )
 async def get_operation(
     operation_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific operation."""
@@ -255,7 +255,7 @@ async def get_operation(
 )
 async def cancel_operation(
     operation_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -290,7 +290,7 @@ async def cancel_operation(
 )
 async def wait_operation(
     operation_id: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     timeout: Optional[int] = Query(30, description="Timeout in seconds"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):

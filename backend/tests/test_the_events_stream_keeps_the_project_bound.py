@@ -77,6 +77,7 @@ def test_a_frame_carries_its_project(raw, expected_project):
 
 def _decide(mapping, acl, host, payload):
     def check():
+        org_scope.set_allowed_clusters(None)
         org_scope._visible_projects_var.set(mapping)
         org_scope._tenant_acl_var.set(acl)
         return frame_is_visible(host, payload)

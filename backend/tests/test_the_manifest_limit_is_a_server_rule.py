@@ -19,6 +19,10 @@ from app.core.extension_manifest import MANIFEST_MAX_BYTES
 from app.routers.extensions import assert_manifest_within_limit
 
 
+def test_the_documented_16_kb_limit_is_decimal_bytes() -> None:
+    assert MANIFEST_MAX_BYTES == 16_000
+
+
 class FakeRequest:
     """Only the part the guard reads. FastAPI has already cached the body by then."""
 

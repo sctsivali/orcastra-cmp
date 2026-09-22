@@ -192,7 +192,12 @@ def aggregate_microcloud_resources(
     """
     try:
         # Try to get from cache first
-        from app.core.cache import get_cache_manager, MICROCLOUD_RESOURCES_CACHE_PREFIX
+        from app.core.cache import (
+            CAPACITY_GENERATION_KIND,
+            MICROCLOUD_RESOURCES_CACHE_PREFIX,
+            get_cache_manager,
+            get_resource_list_generation,
+        )
         from app.core.config import get_settings
         
         cache = get_cache_manager()
@@ -204,6 +209,10 @@ def aggregate_microcloud_resources(
         if cached_resources is not None:
             logger.info(f"Cache HIT for MicroCloud resources: {node_name}")
             return NodeResources(**cached_resources)
+        capacity_generation = get_resource_list_generation(
+            cache,
+            CAPACITY_GENERATION_KIND,
+        )
         
         logger.info(f"Cache MISS for MicroCloud resources: {node_name}, aggregating from members")
         
@@ -244,7 +253,7 @@ def aggregate_microcloud_resources(
             logger.info(f"Found {len(online_members)} online members in MicroCloud cluster {node_name}")
             
             # Initialize aggregated counters
-            total_cpu_cores = 0
+            total_cpu_threads = 0
             total_cpu_used = 0
             total_cpu_sockets = 0
             total_memory = 0
@@ -359,7 +368,7 @@ def aggregate_microcloud_resources(
                         
                         # Aggregate totals
                         cluster_gpu = cluster_gpu.merge(member_gpu_inv)
-                        total_cpu_cores += member_cpu_total
+                        total_cpu_threads += member_cpu_total
                         total_cpu_used += member_cpu_used
                         total_cpu_sockets += cpu_sockets
                         total_memory += member_memory_total
@@ -368,8 +377,10 @@ def aggregate_microcloud_resources(
                         successful_members += 1
                         logger.debug(
                             f"Member {member_name}: "
-                            f"CPU={member_cpu_total} cores (used={member_cpu_used}), "
-                            f"RAM={member_memory_total / 1024 / 1024 / 1024:.1f} GB (used={member_memory_used / 1024 / 1024 / 1024:.1f} GB), "
+                            f"CPU capacity={member_cpu_total} hardware threads "
+                            f"({member_cpu_used} vCPUs allocated), "
+                            f"Memory={member_memory_total / 1024 / 1024 / 1024:.1f} GiB "
+                            f"({member_memory_used / 1024 / 1024 / 1024:.1f} GiB used), "
                             f"GPU={member_gpu_total} compute "
                             f"of {member_gpu_inv.gpu_cards_total} cards (used={member_gpu_used})"
                         )
@@ -397,12 +408,12 @@ def aggregate_microcloud_resources(
             
             # Create aggregated NodeResources
             aggregated = NodeResources(
-                cpu_total=total_cpu_cores,
+                cpu_total=total_cpu_threads,
                 cpu_used=total_cpu_used,
-                cpu_available=clamp_available(total_cpu_cores, total_cpu_used),
+                cpu_available=clamp_available(total_cpu_threads, total_cpu_used),
                 cpu_allocated=total_cpu_used,
-                cpu_allocation_ratio=allocation_ratio(total_cpu_used, total_cpu_cores),
-                cpu_overcommitted=total_cpu_used > total_cpu_cores,
+                cpu_allocation_ratio=allocation_ratio(total_cpu_used, total_cpu_threads),
+                cpu_overcommitted=total_cpu_used > total_cpu_threads,
                 cpu_sockets=total_cpu_sockets,
                 memory_total=total_memory,
                 memory_used=total_memory_used,
@@ -432,15 +443,23 @@ def aggregate_microcloud_resources(
             
             logger.info(
                 f"Successfully aggregated resources from {successful_members}/{len(online_members)} online members in {node_name}: "
-                f"Total CPU={total_cpu_cores} cores (used={total_cpu_used}), "
-                f"RAM={total_memory / 1024 / 1024 / 1024:.1f} GB (used={total_memory_used / 1024 / 1024 / 1024:.1f} GB), "
+                f"CPU capacity={total_cpu_threads} hardware threads "
+                f"({total_cpu_used} vCPUs allocated), "
+                f"Memory={total_memory / 1024 / 1024 / 1024:.1f} GiB "
+                f"({total_memory_used / 1024 / 1024 / 1024:.1f} GiB used), "
                 f"GPU={cluster_gpu.gpu_total} compute of "
                 f"{cluster_gpu.gpu_cards_total} cards (used={cluster_gpu.gpu_used})"
             )
             
             # Cache the aggregated result
-            cache.set("lxd_resources", cache_key, aggregated.model_dump(), ttl=cache_ttl)
-            logger.debug(f"Cached MicroCloud resources for {node_name} (TTL: {cache_ttl}s)")
+            if (
+                get_resource_list_generation(cache, CAPACITY_GENERATION_KIND)
+                == capacity_generation
+            ):
+                cache.set("lxd_resources", cache_key, aggregated.model_dump(), ttl=cache_ttl)
+                logger.debug(f"Cached MicroCloud resources for {node_name} (TTL: {cache_ttl}s)")
+            else:
+                logger.info("Not caching MicroCloud resources: capacity changed during the read")
             
             return aggregated
             

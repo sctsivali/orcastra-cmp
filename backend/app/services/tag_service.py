@@ -25,7 +25,7 @@ from app.models.schemas import (
     BulkTagAssignRequest, BulkTagAssignResponse,
     UserTagVisibilitySettings, UserTagVisibilityResponse,
 )
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.services.lxd.utils import wait_for_lxd_operation
 from app.core.lxd_path import safe_segment
 
@@ -240,8 +240,7 @@ class TagService:
         
         if created_count > 0:
             await self.db.commit()
-            # Invalidate cache
-            self.cache.delete("tags", "categories:all")
+            self._invalidate_tag_cache()
         
         return created_count
     
@@ -251,6 +250,7 @@ class TagService:
         cached = self.cache.get("tags", cache_key)
         if cached:
             return [TagCategoryResponse(**c) for c in cached]
+        tag_generation = get_resource_list_generation(self.cache, "tags")
         
         query = select(TagCategory).order_by(TagCategory.sort_order)
         if not include_inactive:
@@ -285,8 +285,16 @@ class TagService:
             }
             response.append(TagCategoryResponse(**cat_dict))
         
-        # Cache for 10 minutes
-        self.cache.set("tags", cache_key, [r.model_dump() for r in response], ttl=CACHE_TTL_CATEGORIES)
+        # Cache for 10 minutes unless a tag/category mutation completed during the DB reads.
+        if get_resource_list_generation(self.cache, "tags") == tag_generation:
+            self.cache.set(
+                "tags",
+                cache_key,
+                [r.model_dump() for r in response],
+                ttl=CACHE_TTL_CATEGORIES,
+            )
+        else:
+            logger.info("Not caching tag categories: tag data changed during the read")
         
         return response
     
@@ -322,9 +330,7 @@ class TagService:
         await self.db.commit()
         await self.db.refresh(category)
         
-        # Invalidate cache
-        self.cache.delete("tags", "categories:all:True")
-        self.cache.delete("tags", "categories:all:False")
+        self._invalidate_tag_cache()
         
         return TagCategoryResponse(
             id=category.id,
@@ -360,9 +366,7 @@ class TagService:
         await self.db.commit()
         await self.db.refresh(category)
         
-        # Invalidate cache
-        self.cache.delete("tags", "categories:all:True")
-        self.cache.delete("tags", "categories:all:False")
+        self._invalidate_tag_cache()
         
         # Get tag count
         count_result = await self.db.execute(
@@ -403,6 +407,7 @@ class TagService:
         cached = self.cache.get("tags", cache_key)
         if cached and not include_usage:  # Don't cache usage counts
             return TagListResponse(**cached)
+        tag_generation = get_resource_list_generation(self.cache, "tags")
         
         query = select(Tag).options(selectinload(Tag.category))
         
@@ -481,8 +486,13 @@ class TagService:
         )
         
         # Cache without usage counts
-        if not include_usage:
+        if (
+            not include_usage
+            and get_resource_list_generation(self.cache, "tags") == tag_generation
+        ):
             self.cache.set("tags", cache_key, response.model_dump(), ttl=CACHE_TTL_TAGS)
+        elif not include_usage:
+            logger.info("Not caching tag list: tag data changed during the read")
         
         return response
     
@@ -938,6 +948,7 @@ class TagService:
         
         await self.db.commit()
         await self.db.refresh(visibility)
+        self._invalidate_tag_cache()
         
         return await self.get_user_visibility_response(user_id)
     
@@ -951,6 +962,7 @@ class TagService:
         cached = self.cache.get("tags", cache_key)
         if cached:
             return TagStatsResponse(**cached)
+        tag_generation = get_resource_list_generation(self.cache, "tags")
         
         # Total tags
         total_tags = (await self.db.execute(select(func.count(Tag.id)))).scalar() or 0
@@ -1019,7 +1031,10 @@ class TagService:
             tags_by_category=tags_by_category,
         )
         
-        self.cache.set("tags", cache_key, response.model_dump(), ttl=CACHE_TTL_STATS)
+        if get_resource_list_generation(self.cache, "tags") == tag_generation:
+            self.cache.set("tags", cache_key, response.model_dump(), ttl=CACHE_TTL_STATS)
+        else:
+            logger.info("Not caching tag statistics: tag data changed during the read")
         
         return response
     
@@ -1245,21 +1260,16 @@ class TagService:
 
     def _invalidate_tag_cache(self):
         """Invalidate all tag-related caches."""
-        # Use delete_pattern (glob/prefix match), not delete (single literal key),
-        # otherwise the trailing "*" never matches the real keys.
-        self.cache.delete_pattern("tags", "tags:list:*")
-        self.cache.delete_pattern("tags", "categories:all:*")
-        self.cache.delete_pattern("tags", "stats:*")
+        self.cache.invalidate_tag_cache()
 
     def _invalidate_resource_cache(self, resource_type: str):
         """Invalidate resource-related caches after tag operations."""
         if resource_type == "project":
-            self.cache.delete_pattern("api_responses", "projects:*")
+            self.cache.invalidate_resource_cache("projects")
         elif resource_type == "instance":
-            self.cache.delete_pattern("api_responses", "vms:*")
-            self.cache.delete_pattern("api_responses", "instances:*")
+            self.cache.invalidate_instance_cache()
         elif resource_type == "node":
-            self.cache.delete_pattern("api_responses", "nodes:*")
+            self.cache.invalidate_capacity_cache()
 
 
 # ============================================

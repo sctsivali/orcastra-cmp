@@ -144,6 +144,20 @@ def test_file_upload_carries_one_normalized_project_and_bounds_the_read(monkeypa
     assert audit[0]["target_project"] == OWN_PROJECT
 
 
+def test_file_upload_accepts_the_exact_decimal_100_mb_boundary():
+    assert file_transfer.MAX_UPLOAD_SIZE == 100_000_000
+
+    file_transfer._validate_upload_size(100_000_000)
+
+
+def test_file_upload_rejects_one_byte_over_the_decimal_100_mb_boundary():
+    with pytest.raises(HTTPException) as exc:
+        file_transfer._validate_upload_size(100_000_001)
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == "File too large. Maximum size is 100 MB."
+
+
 def test_tag_body_cannot_bypass_the_shared_cluster_project_bound():
     service = _TagService()
 

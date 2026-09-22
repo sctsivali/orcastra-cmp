@@ -443,8 +443,8 @@ class ResourceManager:
                         if aggregated_resources:
                             status.resources = aggregated_resources
                             logger.info(f"MicroCloud {node_name} aggregated resources: "
-                                      f"CPU={aggregated_resources.cpu_total} cores, "
-                                      f"RAM={aggregated_resources.memory_total / 1024 / 1024 / 1024:.1f} GB, "
+                                      f"CPU capacity={aggregated_resources.cpu_total} hardware threads, "
+                                      f"Memory={aggregated_resources.memory_total / 1024 / 1024 / 1024:.1f} GiB, "
                                       f"GPU={aggregated_resources.gpu_total} compute "
                                       f"of {aggregated_resources.gpu_cards_total} cards")
                         else:

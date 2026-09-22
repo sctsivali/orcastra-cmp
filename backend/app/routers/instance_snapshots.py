@@ -78,6 +78,18 @@ _SNAPSHOT_OUTCOME_UNKNOWN = {
 }
 
 
+def _invalidate_snapshot_views() -> None:
+    """Clear snapshot rows and storage headroom after a snapshot-side mutation."""
+    cache = get_cache_manager()
+    # Keep each family as an independent call. Cache implementations have always accepted a
+    # single family, and several integrations provide that narrow protocol rather than the
+    # concrete CacheManager. The production manager supports varargs, but relying on that detail
+    # turned an otherwise correct snapshot response into a 500 after LXD had already accepted the
+    # mutation.
+    cache.invalidate_resource_cache("snapshots_fleet")
+    cache.invalidate_resource_cache("storage_pool_resources")
+
+
 def _blocking(fn, *args, label: str, **kwargs):
     """Every LXD call here goes off the event loop on the shared proxy pool.
 
@@ -319,7 +331,7 @@ def _raise_create_outcome_unknown(
     )
     # A retry is unsafe until the operator checks whether the first request appeared. Evict the
     # fleet result so that check cannot be answered by the stale pre-request list.
-    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+    _invalidate_snapshot_views()
     raise HTTPException(status_code=502, detail=_SNAPSHOT_OUTCOME_UNKNOWN)
 
 
@@ -513,7 +525,7 @@ async def create_snapshot(
     # the row is still absent when the page refreshes, which reads as a control that did
     # nothing. Cleared on every accepted path: pending work can appear during the next read,
     # while a refused operation never reaches this point and changed no listing.
-    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+    _invalidate_snapshot_views()
     if not completed:
         response.status_code = 202
     return SnapshotCreateResponse(
@@ -604,8 +616,11 @@ async def delete_snapshot(
     except snapshots_service.LXDOperationUnreadable as exc:
         # The daemon took the work and told us nothing we can wait on. Upstream problem, not a bad
         # request, and reporting success would be the exact failure this surface exists to avoid.
+        _invalidate_snapshot_views()
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
+        # A transport failure after submission cannot prove the delete did not land.
+        _invalidate_snapshot_views()
         _audit(
             "instance.snapshot.delete", instance_name, host, project,
             result="failure", error_message=str(exc), details={"snapshot": snapshot_name},
@@ -650,7 +665,7 @@ async def delete_snapshot(
     # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
     # the row is still there when the page refreshes, which reads as a control that did
     # nothing. Cleared only on the success path: a refused operation changed no listing.
-    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+    _invalidate_snapshot_views()
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,
@@ -744,6 +759,9 @@ async def restore_snapshot(
                 details={"snapshot": snapshot_name, **kw.pop("details", {})}, **kw
             ),
         )
+        if safety_name:
+            # The safety point exists even when the restore later fails.
+            _invalidate_snapshot_views()
 
         operation_id = await _blocking(
             snapshots_service.restore_instance_snapshot,
@@ -759,8 +777,11 @@ async def restore_snapshot(
     except snapshots_service.LXDOperationUnreadable as exc:
         # The daemon took the work and told us nothing we can wait on. Upstream problem, not a bad
         # request, and reporting success would be the exact failure this surface exists to avoid.
+        get_cache_manager().invalidate_instance_cache()
         raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
+        # Restore can stop or partly modify an instance before the transport reports a failure.
+        get_cache_manager().invalidate_instance_cache()
         _audit(
             "instance.snapshot.restore", instance_name, body.host, body.project,
             result="failure",
@@ -777,6 +798,7 @@ async def restore_snapshot(
             result="failure", error_message=outcome.get("err"),
             details={"snapshot": snapshot_name, "safety_snapshot": safety_name},
         )
+        get_cache_manager().invalidate_instance_cache()
         raise HTTPException(
             status_code=502,
             detail=(
@@ -804,7 +826,7 @@ async def restore_snapshot(
     # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
     # the row is still there when the page refreshes, which reads as a control that did
     # nothing. Cleared only on the success path: a refused operation changed no listing.
-    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+    get_cache_manager().invalidate_instance_cache()
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,

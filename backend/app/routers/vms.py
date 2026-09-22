@@ -352,7 +352,7 @@ async def _create_vm_under_policy(
     "",
     response_model=VMListResponse,
     summary="List all VMs",
-    description="Get a list of all virtual machines across all connected LXD nodes.",
+    description="Get a list of all virtual machines across all connected clusters.",
     responses={
         200: {"description": "List of VMs retrieved successfully"},
         500: {"model": ErrorResponse, "description": "Server error"},
@@ -362,7 +362,7 @@ async def _create_vm_under_policy(
 async def list_vms(
     host: Optional[str] = Query(
         None, 
-        description="Filter by specific host node"
+        description="Filter by a specific cluster"
     ),
     status: Optional[VMStatus] = Query(
         None, 
@@ -384,6 +384,7 @@ async def list_vms(
         logger.debug(f"Returning cached VMs list for {cache_key}")
         # Reconstruct from cached dict
         return VMListResponse(**cached_response)
+    list_generation = cache.instance_list_generation()
     
     try:
         vms, connected_nodes = await lxd_service.list_all_vms()
@@ -476,8 +477,11 @@ async def list_vms(
         # full TTL. Worse on a forced refresh, which would overwrite data the
         # operator could still see with the result of an outage.
         if connected_nodes:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug(f"Cached VMs list for 180 seconds: {cache_key}")
+            if cache.instance_list_generation() == list_generation:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+                logger.debug(f"Cached VMs list for 180 seconds: {cache_key}")
+            else:
+                logger.info("Not caching VMs list: instance inventory changed during the read")
         else:
             logger.warning("Not caching VMs list: no cluster answered")
         
@@ -504,11 +508,11 @@ async def list_vms(
 )
 async def get_vm(
     vm_name: str,
-    host: str = Query(..., description="LXD host node where the VM resides"),
+    host: str = Query(..., description="Cluster where the VM resides"),
     project: Optional[str] = Query(
         None,
         description=(
-            "LXD project the VM belongs to. A name is unique per project, not per host, so "
+            "LXD project the VM belongs to. A name is unique per project, not per cluster, so "
             "omitting this searches only projects visible to the caller."
         ),
     ),
@@ -538,7 +542,7 @@ async def get_vm(
         if not vm:
             raise HTTPException(
                 status_code=404, 
-                detail=f"VM '{vm_name}' not found on host '{host}'"
+                detail=f"VM '{vm_name}' not found in cluster '{host}'"
             )
         verify_instance_view_access(host, vm.project or "default", vm.name)
         
@@ -563,7 +567,7 @@ async def get_vm(
     response_model=VMCreateResponse,
     status_code=201,
     summary="Create a new VM",
-    description="Create a new virtual machine on the specified LXD host.",
+    description="Create a new virtual machine in the specified cluster.",
     responses={
         201: {"description": "VM created successfully"},
         400: {"model": ErrorResponse, "description": "Invalid request"},
@@ -588,7 +592,7 @@ async def create_vm(
         if request.host not in valid_nodes:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid host. Valid hosts: {valid_nodes}"
+                detail=f"Invalid cluster. Available clusters: {valid_nodes}"
             )
 
         vm = await _create_vm_under_policy(
@@ -602,7 +606,7 @@ async def create_vm(
         get_cache_manager().invalidate_instance_cache()
         return VMCreateResponse(
             success=True,
-            message=f"VM '{request.name}' created successfully on {request.host}",
+            message=f"VM '{request.name}' created successfully in cluster '{request.host}'",
             vm=vm,
         )
         
@@ -950,7 +954,7 @@ async def restart_vm(
 )
 async def delete_vm(
     vm_name: str,
-    host: str = Query(..., description="LXD host node"),
+    host: str = Query(..., description="Target cluster"),
     force: bool = Query(False, description="Force delete running VM"),
     project: Optional[str] = Query(None, description="LXD project name"),
     lxd_service: LXDService = Depends(get_lxd_service),

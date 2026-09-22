@@ -30,7 +30,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -118,23 +117,11 @@ router = APIRouter(
 
 
 async def _run_import_and_refresh(session_id: str) -> None:
-    """Run the shared import, then drop the dashboard's cached images list so a
-    freshly imported image shows up immediately.
-
-    The images list is cached ~180s per scope and nothing in the shared import
-    path invalidates it, so without this a just-uploaded image would not appear
-    on the Images page until the cache expired. Invalidating here (rather than in
-    the OrcaHub-shared ``_run_import``) keeps this a dashboard concern and leaves
-    the OrcaHub path untouched.
-    """
+    """Run the shared import, whose ready transition already refreshes inventory."""
     try:
         await _run_import(session_id)
     finally:
         await _audit_import_outcome(session_id)
-    try:
-        get_cache_manager().delete_pattern("api_responses", "images:list:*")
-    except Exception:  # noqa: BLE001 - cache invalidation is best-effort
-        logger.warning("Failed to invalidate images cache after import", exc_info=True)
 
 
 async def _audit_import_outcome(session_id: str) -> None:

@@ -150,4 +150,7 @@ def test_confirmed_create_invalidates_the_fleet_cache(create_side_effects):
 
     assert response.status_code == 201, response.text
     assert response.json()["status"] == "succeeded"
-    assert create_side_effects.invalidations == ["snapshots_fleet"]
+    assert create_side_effects.invalidations == [
+        "snapshots_fleet",
+        "storage_pool_resources",
+    ]

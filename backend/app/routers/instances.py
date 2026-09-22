@@ -252,11 +252,11 @@ async def get_instance_write_policy(
     "",
     response_model=VMListResponse,
     summary="List all instances",
-    description="Get a list of all instances (containers and VMs) across all connected LXD nodes.",
+    description="Get a list of all instances (containers and VMs) across all connected clusters.",
 )
 @single_flight("instances:list")
 async def list_instances(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
+    host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     project: Optional[str] = Query(None, description="LXD project to list. Omit for every project the caller may see."),
     status: Optional[VMStatus] = Query(None, description="Filter by instance status"),
     instance_type: Optional[str] = Query(None, description="Filter by type: container or virtual-machine"),
@@ -489,11 +489,11 @@ async def list_instance_specifications(
 )
 async def get_instance(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None,
         description=(
-            "LXD project the instance belongs to. A name is unique per project, not per host, "
+            "LXD project the instance belongs to. A name is unique per project, not per cluster, "
             "so omitting this searches only projects visible to the caller."
         ),
     ),
@@ -520,7 +520,10 @@ async def get_instance(
                 project_filter=project_filter,
             )
         if not vm:
-            raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Instance {instance_name} not found in cluster '{host}'",
+            )
         verify_instance_view_access(host, vm.project or "default", vm.name)
         return vm
     except HTTPException:
@@ -587,6 +590,37 @@ def _create_request_hash(request: InstanceCreateRequest) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _normalize_create_tags(request: InstanceCreateRequest) -> InstanceCreateRequest:
+    """Canonicalize ``user.tags`` before preflight, hashing, or daemon submission.
+
+    LXD stores tags as one comma-separated config value while PostgreSQL stores one row per
+    tag. Normalizing once at the request boundary keeps both representations and the durable
+    idempotency hash aligned. An explicitly present but empty segment is malformed; callers
+    that do not want tags should omit ``user.tags``.
+    """
+    config = dict(request.config or {})
+    if "user.tags" not in config:
+        return request
+
+    normalized: set[str] = set()
+    for raw_tag in config["user.tags"].split(","):
+        tag = raw_tag.strip().lower()
+        valid, error = TagService.validate_tag_name(tag)
+        if not valid:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_INSTANCE_TAG",
+                    "field": "config.user.tags",
+                    "message": error,
+                },
+            )
+        normalized.add(tag)
+
+    config["user.tags"] = ",".join(sorted(normalized))
+    return request.model_copy(update={"config": config})
+
+
 def _create_requester(user: AuthenticatedUser) -> str:
     requester = str(user.user_id or "").strip()
     if requester:
@@ -599,12 +633,14 @@ def _create_requester(user: AuthenticatedUser) -> str:
 
 def _safe_create_job_request(request: InstanceCreateRequest) -> dict:
     """The minimum non-sensitive create intent needed by recovery."""
+    tags_value = (request.config or {}).get("user.tags", "")
     return {
         "instance_type": request.instance_type,
         "source_type": request.source_type,
         "start_on_create": bool(request.start_on_create),
         "profiles": list(request.profiles or ["default"]),
         "networkless_acknowledged": "networkless" in request.acknowledgements,
+        "tags": tags_value.split(",") if tags_value else [],
     }
 
 
@@ -623,6 +659,7 @@ async def preflight_create_instance(
     """Return blockers and warnings after project authorization and authoritative reads."""
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
+    request = _normalize_create_tags(request)
     _validate_image_server(request.image_server)
     async with serialize_cluster_configuration(db, request.host):
         evaluation = await _run_create_preflight(request, lxd_service)
@@ -726,6 +763,7 @@ async def create_instance(
     # deliberately bad create into an enumeration oracle for another organization's networks.
     project = verify_project_access(request.host, request.project)
     request = request.model_copy(update={"project": project})
+    request = _normalize_create_tags(request)
     _validate_image_server(request.image_server)
     key = _create_idempotency_key(idempotency_key)
     requester = _create_requester(_rbac)
@@ -930,7 +968,7 @@ async def create_instance(
         # invalidates cached inventory after operation terminal plus readback.
         return VMCreateResponse(
             success=True,
-            message=f"Creating instance '{request.name}' on {request.host}",
+            message=f"Creating instance '{request.name}' in cluster '{request.host}'",
             vm=None,
             operation_id=operation_id,
             job_id=job.job_id,
@@ -1206,7 +1244,7 @@ async def restart_instance(
 )
 async def delete_instance(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(None, description="LXD project name"),
     force: bool = Query(False, description="Force delete a running instance"),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -1319,11 +1357,11 @@ async def delete_instance(
 )
 async def get_instance_metrics(
     instance_name: str,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     project: Optional[str] = Query(
         None,
         description=(
-            "LXD project the instance lives in. A name is unique per project, not per host, so "
+            "LXD project the instance lives in. A name is unique per project, not per cluster, so "
             "omitting this reads the instance of that name in `default`."
         ),
     ),
@@ -1334,7 +1372,10 @@ async def get_instance_metrics(
     try:
         metrics = await lxd_service.get_instance_metrics(host, instance_name, scoped_project)
         if not metrics:
-            raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Instance {instance_name} not found in cluster '{host}'",
+            )
         return metrics
     except LXDConnectionError as e:
         # The cluster did not answer. Without this the retyped exception falls to
@@ -1358,7 +1399,7 @@ async def get_instance_metrics(
 class NicAddressRequest(BaseModel):
     """Set or clear the fixed IPv4 on one network interface."""
 
-    host: str = Field(..., description="Target host node")
+    host: str = Field(..., description="Target cluster")
     project: Optional[str] = Field("default", description="LXD project holding the instance")
     ipv4_address: Optional[str] = Field(
         None,
@@ -1402,7 +1443,8 @@ async def set_instance_nic_address(
     client = lxd_service.get_client_with_reconnect(request.host)
     if client is None:
         raise HTTPException(
-            status_code=503, detail=f"Could not connect to {request.host}"
+            status_code=503,
+            detail=f"Could not connect to cluster '{request.host}'",
         )
 
     try:

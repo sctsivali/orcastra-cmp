@@ -20,7 +20,11 @@ from pylxd.exceptions import LXDAPIException
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.lxd_errors import lxd_transport_error
 from app.core.single_flight import single_flight
-from app.core.cache import get_cache_manager, MEMBER_RESOURCES_CACHE_PREFIX
+from app.core.cache import (
+    CAPACITY_GENERATION_KIND,
+    MEMBER_RESOURCES_CACHE_PREFIX,
+    get_cache_manager,
+)
 from app.core.config import get_settings
 from app.models.schemas import (
     MemberResources, 
@@ -49,6 +53,14 @@ from app.services.lxd.node_resources import PoolReading
 from app.services.lxd.storage_model import summarise_cluster_storage
 
 logger = logging.getLogger(__name__)
+
+_CLUSTER_MEMBERS_CACHE_KIND = "cluster_members"
+
+
+def _resource_generation(cache: object, kind: str) -> Optional[str]:
+    """Read a resource generation, allowing deliberately minimal cache test doubles."""
+    read = getattr(cache, "resource_list_generation", None)
+    return read(kind) if callable(read) else None
 
 _connect_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="member_connect")
 # get_client revalidates with a live (3, 5) GET and may rebuild the client, which costs a TLS
@@ -120,8 +132,8 @@ class ClusterMember(BaseModel):
 
 class ClusterMembersResponse(BaseModel):
     """Response for listing cluster members."""
-    node: str = Field(..., description="Node name being queried")
-    is_clustered: bool = Field(..., description="Whether the node is part of a cluster")
+    node: str = Field(..., description="Registered Cluster identifier being queried")
+    is_clustered: bool = Field(..., description="Whether the registered endpoint has clustering enabled")
     cluster_enabled: bool = Field(..., description="Whether clustering is enabled")
     members: List[ClusterMember] = Field(default_factory=list, description="List of cluster members")
     total: int = Field(0, description="Total number of members")
@@ -131,10 +143,10 @@ class ClusterMembersResponse(BaseModel):
     "",
     response_model=ClusterMembersResponse,
     summary="List cluster members",
-    description="Get list of all members in a hypervisor cluster. Only works for clustered nodes.",
+    description="Get all machines in a hypervisor cluster. Only works for Clusters with clustering enabled.",
 )
 async def list_cluster_members(
-    node: str = Query(..., description="Node name to query for cluster members"),
+    node: str = Query(..., description="Registered Cluster identifier to query"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
@@ -148,6 +160,7 @@ async def list_cluster_members(
         logger.debug(f"Returning cached cluster members for host={node}")
         # Reconstruct Pydantic model from cached dict
         return ClusterMembersResponse(**cached_data)
+    members_generation = _resource_generation(cache, _CLUSTER_MEMBERS_CACHE_KIND)
     
     try:
         # important: an unreachable cluster answers 503 here like everywhere else. This
@@ -223,9 +236,15 @@ async def list_cluster_members(
                 total=len(members)
             )
             
-            # Cache as dict for 120 seconds
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug("Cached cluster members for 120 seconds")
+            # Cache as dict for 180 seconds
+            if (
+                _resource_generation(cache, _CLUSTER_MEMBERS_CACHE_KIND)
+                == members_generation
+            ):
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+                logger.debug("Cached cluster members for 180 seconds")
+            else:
+                logger.info("Not caching cluster members: membership changed during the read")
             
             return response
             
@@ -257,7 +276,7 @@ async def list_cluster_members(
 )
 async def get_cluster_member(
     member_name: str,
-    node: str = Query(..., description="Node name to query"),
+    node: str = Query(..., description="Registered Cluster identifier to query"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific cluster member."""
@@ -301,12 +320,12 @@ Additional endpoint for cluster members resources
     "/{member_name}/resources",
     response_model=MemberResources,
     summary="Get member resources",
-    description="Get resource information (CPU, RAM, GPU, storage) for a specific cluster member.",
+    description="Get CPU, Memory, GPU, and Storage information for a specific Cluster member.",
 )
 @single_flight("member_resources")
 async def get_member_resources(
     member_name: str,
-    node: str = Query(..., description="Node name to query"),
+    node: str = Query(..., description="Registered Cluster identifier to query"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
@@ -326,6 +345,7 @@ async def get_member_resources(
     if cached_resources is not None:
         logger.info(f"Cache HIT for member resources: {node}/{member_name}")
         return MemberResources(**cached_resources)
+    capacity_generation = _resource_generation(cache, CAPACITY_GENERATION_KIND)
 
     logger.info(f"Cache MISS for member resources: {node}/{member_name}")
 
@@ -475,15 +495,20 @@ async def get_member_resources(
         # instance numbers are floors for the full minute would keep serving them long after
         # the transient that caused it, and the operator has no way to ask for a rebuild that
         # the cache would not answer.
-        cache.set(
-            "lxd_resources",
-            cache_key,
-            resources.model_dump(),
-            ttl=DEGRADED_CACHE_TTL if fanout.degraded else cache_ttl,
-        )
+        if _resource_generation(cache, CAPACITY_GENERATION_KIND) == capacity_generation:
+            cache.set(
+                "lxd_resources",
+                cache_key,
+                resources.model_dump(),
+                ttl=DEGRADED_CACHE_TTL if fanout.degraded else cache_ttl,
+            )
+        else:
+            logger.info("Not caching member resources: capacity changed during the read")
         logger.info(
-            f"Member {member_name} resources: CPU={cpu_total} cores ({usage.cpu_used} used), "
-            f"RAM={memory_total / 1024 / 1024 / 1024:.1f} GB ({memory_used / 1024 / 1024 / 1024:.1f} GB used), "
+            f"Member {member_name} resources: CPU capacity={cpu_total} hardware threads "
+            f"({usage.cpu_used} vCPUs allocated), "
+            f"Memory={memory_total / 1024 / 1024 / 1024:.1f} GiB "
+            f"({memory_used / 1024 / 1024 / 1024:.1f} GiB used), "
             f"GPU={gpu_inv.gpu_total} compute of {gpu_inv.gpu_cards_total} cards "
             f"({gpu_inv.gpu_used} used), {usage.running}/{usage.count} instances running"
             + (f", degraded: {','.join(fanout.degraded_parts)}" if fanout.degraded else "")

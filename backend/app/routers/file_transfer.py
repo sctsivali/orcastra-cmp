@@ -27,11 +27,20 @@ router = APIRouter(
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
-# max upload size: 100 MB
-MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+# File-transfer limits use decimal SI units, matching the operator-facing MB label.
+MAX_UPLOAD_SIZE_MB = 100
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1_000_000
 
 # thread pool for blocking pylxd calls
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="file_transfer")
+
+
+def _validate_upload_size(size_bytes: int) -> None:
+    if size_bytes > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE_MB} MB.",
+        )
 
 
 def _push_file_to_instance(
@@ -51,7 +60,7 @@ def _push_file_to_instance(
     """
     client = lxd_service.get_client_with_reconnect(host)
     if client is None:
-        raise LXDConnectionError(f"Cannot connect to node '{host}'")
+        raise LXDConnectionError(f"Cannot connect to cluster '{host}'")
 
     # Build request params
     params = {"path": dest_path}
@@ -97,7 +106,7 @@ def _push_file_to_instance(
 )
 async def push_file_to_instance(
     file: UploadFile = File(..., description="File to upload"),
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., description="Target cluster"),
     instance_name: str = Query(..., description="Target instance name"),
     project: str = Query("default", description="LXD project name"),
     dest_path: str = Query(..., description="Destination path inside the instance (ex; /root/myfile.txt)"),
@@ -123,11 +132,7 @@ async def push_file_to_instance(
     # body in memory. Authorization deliberately runs first: a caller must not make the server
     # consume an upload for an instance it cannot see.
     file_data = await file.read(MAX_UPLOAD_SIZE + 1)
-    if len(file_data) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024 * 1024)} MB.",
-        )
+    _validate_upload_size(len(file_data))
 
     logger.info(
         f"Uploading file '{file.filename}' ({len(file_data)} bytes) "

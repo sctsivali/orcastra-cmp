@@ -330,7 +330,7 @@ def test_a_create_the_cluster_accepts_without_an_operation_is_not_a_201(audited,
     ]
     assert len(failures) == 1, f"the unverifiable acceptance must be audited: {audited}"
     assert failures[0]["error_message"] == "snapshot_outcome_unknown"
-    assert invalidated == ["snapshots_fleet"]
+    assert invalidated == ["snapshots_fleet", "storage_pool_resources"]
 
 
 def test_a_create_transport_failure_after_post_started_has_an_unknown_outcome(
@@ -368,7 +368,7 @@ def test_a_create_transport_failure_after_post_started_has_an_unknown_outcome(
     ]
     assert len(failures) == 1
     assert failures[0]["error_message"] == "snapshot_outcome_unknown"
-    assert invalidated == ["snapshots_fleet"]
+    assert invalidated == ["snapshots_fleet", "storage_pool_resources"]
 
 
 def test_the_production_error_handler_preserves_the_unknown_outcome_contract():

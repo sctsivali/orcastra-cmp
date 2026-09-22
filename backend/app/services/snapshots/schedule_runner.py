@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.cache import get_cache_manager
 from app.core.lxd_names import LXD_NAME_PATTERN
 from app.core.request_context import RequestContext, set_request_context
 from app.services.activity_logger import get_activity_logger
@@ -49,6 +50,17 @@ _NAME_RE = re.compile(LXD_NAME_PATTERN)
 # `Failed creating instance snapshot record "<name>": Snapshot "<instance>/<name>" already exists`,
 # delivered asynchronously as the operation's error, never as an HTTP status.
 _ALREADY_EXISTS = "already exists"
+
+
+def _invalidate_snapshot_views() -> None:
+    """Best-effort refresh after LXD has already decided the snapshot outcome."""
+    try:
+        get_cache_manager().invalidate_resource_cache(
+            "snapshots_fleet",
+            "storage_pool_resources",
+        )
+    except Exception as exc:  # noqa: BLE001 - cache failure cannot rewrite an LXD verdict
+        logger.warning("Could not invalidate scheduled snapshot caches: %s", exc)
 
 
 @dataclass
@@ -274,6 +286,7 @@ async def run_one(
                     label=f"settle prune {victim}",
                 )
             pruned.append(victim)
+            _invalidate_snapshot_views()
             _audit(schedule, "instance.snapshot.schedule.pruned", "success", snapshot=victim)
         except Exception as exc:  # noqa: BLE001
             # A prune that failed is not a reason to skip the snapshot: `expires_at` on every row
@@ -330,6 +343,7 @@ async def run_one(
 
     if not operation_id:
         # Synchronous 200: nothing to wait for and the work is done.
+        _invalidate_snapshot_views()
         _audit(schedule, "instance.snapshot.schedule.run", "success", snapshot=name)
         return RunOutcome(result="success", snapshot=name, pruned=pruned)
 
@@ -361,6 +375,7 @@ async def run_one(
         settled=bool(outcome.get("settled")),
         pruned=pruned,
     )
+    _invalidate_snapshot_views()
     return RunOutcome(result="success", snapshot=name, pruned=pruned)
 
 
@@ -375,6 +390,7 @@ def _classify_create_failure(
     source of second copies.
     """
     if _ALREADY_EXISTS in (error or "").lower():
+        _invalidate_snapshot_views()
         _audit(
             schedule,
             "instance.snapshot.schedule.run",

@@ -26,7 +26,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
 from app.core.api_key_expiry import is_expired as key_expired, now_utc
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.core.org_scope import (
@@ -60,7 +60,7 @@ class KeyInfo(BaseModel):
     """Key information."""
     id: str = Field(..., description="Unique key ID")
     name: str = Field(..., description="Key name")
-    node: str = Field(..., description="Target node/cluster")
+    node: str = Field(..., description="Target cluster")
     project: str = Field(..., description="LXD project")
     auth_level: str = Field(..., description="Authorization level: standard or admin")
     created_at: str = Field(..., description="Creation timestamp")
@@ -74,7 +74,7 @@ class KeyInfo(BaseModel):
 class KeyCreateRequest(BaseModel):
     """Request body for generating a new key."""
     name: str = Field(..., min_length=1, max_length=100, description="Key name")
-    node: str = Field(..., description="Target node/cluster")
+    node: str = Field(..., description="Target cluster")
     project: str = Field("default", description="LXD project (ignored for admin level)")
     auth_level: str = Field(..., description="Authorization level: standard or admin")
     expire_days: int = Field(365, ge=1, le=3650, description="Expiration in days (1-3650)")
@@ -330,7 +330,10 @@ async def create_key(
         if client is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Node '{request.node}' not found or not connected. Please check available nodes."
+                detail=(
+                    f"Cluster '{request.node}' was not found or is not connected. "
+                    "Check the available clusters."
+                )
             )
         
         # Create TLS identity in LXD
@@ -577,9 +580,9 @@ async def create_key(
             }
         )
         
-        # Clear cache
-        cache = get_cache_manager()
-        cache.delete("api_responses", get_scope_cache_key("my_keys:list"))
+        # Every scoped list caches the same Vault roster before applying actor visibility.
+        # Fence and clear all actor scopes so another session cannot retain or restore it.
+        get_cache_manager().invalidate_resource_cache("my_keys")
         
         return KeyInfo(
             id=key_id,
@@ -610,7 +613,7 @@ async def create_key(
 )
 async def list_keys(
     status_filter: Optional[str] = Query(None, description="Filter by status: active, expired, or all"),
-    search: Optional[str] = Query(None, description="Search by name, project, or node"),
+    search: Optional[str] = Query(None, description="Search by name, project, or cluster"),
     fresh: bool = False,
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
@@ -624,8 +627,12 @@ async def list_keys(
         cached_data = None if fresh else cache.get("api_responses", cache_key)
         
         if cached_data is None:
+            list_generation = get_resource_list_generation(cache, "my_keys")
             keys_metadata = list_keys_from_vault(vault_client)
-            cache.set("api_responses", cache_key, keys_metadata, ttl=180)
+            if get_resource_list_generation(cache, "my_keys") == list_generation:
+                cache.set("api_responses", cache_key, keys_metadata, ttl=180)
+            else:
+                logger.info("Not caching key list: the Vault roster changed during the read")
         else:
             keys_metadata = cached_data
 
@@ -855,9 +862,9 @@ async def delete_key(
             }
         )
         
-        # Clear cache
-        cache = get_cache_manager()
-        cache.delete("api_responses", get_scope_cache_key("my_keys:list"))
+        # Clear every actor projection and advance the list generation before an older read can
+        # restore a roster that still contains this key.
+        get_cache_manager().invalidate_resource_cache("my_keys")
         
         return {
             "success": True,
