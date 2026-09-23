@@ -10,8 +10,10 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 import traceback
+
+from app.core.error_sanitizer import redact_query_secrets
 
 
 
@@ -235,6 +237,42 @@ class LogDeduplicationFilter(logging.Filter):
             self._flushed.clear()
 
 
+class QuerySecretFilter(logging.Filter):
+    """Redact credential query parameters from uvicorn's own request lines.
+
+    important: uvicorn writes every WebSocket handshake to uvicorn.error at INFO as
+    '<client> - "WebSocket <path>?<query>" [accepted]', and the browser authenticates a socket
+    with ?token=<JWT>. Every terminal, console and events connection therefore put a live
+    bearer token in the container log. Only string arguments are rewritten, so the formatters
+    that index into record.args keep the shape they expect.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_query_secrets(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_query_secrets(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+        elif isinstance(record.args, Mapping):
+            record.args = {
+                key: (redact_query_secrets(arg) if isinstance(arg, str) else arg)
+                for key, arg in record.args.items()
+            }
+        return True
+
+
+QUERY_SECRET_LOGGERS = ("uvicorn.error", "uvicorn.access")
+
+
+def install_query_secret_filter() -> None:
+    """Attach QuerySecretFilter to the uvicorn loggers once, however often logging is set up."""
+    for name in QUERY_SECRET_LOGGERS:
+        target = logging.getLogger(name)
+        if not any(isinstance(existing, QuerySecretFilter) for existing in target.filters):
+            target.addFilter(QuerySecretFilter())
+
+
 def setup_logging(
     service_name: str = "orcastra-backend",
     version: str = "0.0.0",
@@ -279,6 +317,7 @@ def setup_logging(
     # Set specific log levels for noisy libraries
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    install_query_secret_filter()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)

@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.core.config import get_settings
+from app.core.error_sanitizer import is_sensitive_param, sanitize_error
 from app.core.request_context import get_request_context
 from app.core.request_security import resolve_client_ip
 from app.core.logging_config import get_access_logger
@@ -69,7 +70,8 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as e:
-            error_message = str(e)
+            # note: this lands in OpenSearch, so it gets the same redaction as a client detail
+            error_message = sanitize_error(str(e))
             raise
         finally:
             # Calculate latency
@@ -116,12 +118,12 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         ctx,
     ) -> dict:
         """Build structured access log entry."""
-        # Extract query params (sanitized)
-        query_params = dict(request.query_params)
-        # Mask sensitive params
-        for sensitive_key in ["token", "password", "secret", "api_key", "authorization"]:
-            if sensitive_key in query_params:
-                query_params[sensitive_key] = "[REDACTED]"
+        # important: matched by stem, not by exact name. An exact list let access_token,
+        # client_secret and X-Api-Key through in clear, straight into the access index.
+        query_params = {
+            name: ("[REDACTED]" if is_sensitive_param(name) else value)
+            for name, value in request.query_params.items()
+        }
         
         # Build user info
         user_info = None
