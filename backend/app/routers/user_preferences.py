@@ -13,16 +13,18 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import TYPE_CHECKING, Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
 import base64
-import ipaddress
-import socket
-import httpx
 
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_authenticated, AuthenticatedUser
+from app.core.safe_http import SafeHTTPError, guarded_request
+from app.core.url_safety import UnsafeURLError
+
+if TYPE_CHECKING:
+    import httpx
 from app.models.db_models import UserPreferences
 
 logger = logging.getLogger(__name__)
@@ -351,44 +353,17 @@ async def reset_user_preferences(
 # Image Proxy - fetch cross-origin images server-side
 # ============================================
 
-# important: SSRF protection - block requests to private/internal network ranges
-_PRIVATE_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),   # Carrier-grade NAT (Tailscale range)
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / cloud metadata
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-]
+MAX_PROXY_IMAGE_BYTES = 2 * 1024 * 1024
+PROXY_IMAGE_PORTS = frozenset({80, 443})
+PROXY_IMAGE_MAX_REDIRECTS = 3
 
-_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
-
-
-def _is_ssrf_safe(url: str) -> bool:
-    """Return False if the URL resolves to a private/internal IP address."""
-    from urllib.parse import urlparse
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-        if not host:
-            return False
-        if host.lower() in _BLOCKED_HOSTNAMES:
-            return False
-        resolved = socket.getaddrinfo(host, None)
-        for _, _, _, _, sockaddr in resolved:
-            ip = ipaddress.ip_address(sockaddr[0])
-            if any(ip in net for net in _PRIVATE_NETWORKS):
-                return False
-        return True
-    except Exception:
-        return False
+# note: a test seam. None in production, where guarded_request opens its own pinned connection.
+_IMAGE_TRANSPORT: Optional["httpx.AsyncBaseTransport"] = None
 
 
 class ProxyImageRequest(BaseModel):
     """Request to proxy-fetch an image from a URL."""
-    url: str = Field(..., description="URL of the image to fetch")
+    url: str = Field(..., min_length=1, max_length=2048, description="URL of the image to fetch")
 
 class ProxyImageResponse(BaseModel):
     """Base64-encoded image data."""
@@ -405,42 +380,29 @@ async def proxy_image(
     request: ProxyImageRequest,
     _user: AuthenticatedUser = Depends(require_authenticated()),
 ):
-    """Proxy-fetch an image URL to avoid browser CORS restrictions."""
-    url = request.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    """Proxy-fetch an image URL to avoid browser CORS restrictions.
 
-    if not _is_ssrf_safe(url):
-        raise HTTPException(status_code=400, detail="URL points to a private or disallowed address")
-
-    # limit max image size to 2MB
-    max_size = 2 * 1024 * 1024
-
+    important: the caller picks the URL and the request leaves from inside the network boundary,
+    so it goes through guarded_request. Every hop is checked and resolved off the event loop, the
+    connection is pinned to the address that was judged, only ports 80 and 443 are allowed, at most
+    three redirects are followed, and a body past 2 MiB is abandoned while it streams.
+    """
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
+        response = await guarded_request(
+            "GET",
+            request.url.strip(),
+            max_bytes=MAX_PROXY_IMAGE_BYTES,
+            max_redirects=PROXY_IMAGE_MAX_REDIRECTS,
+            allowed_ports=PROXY_IMAGE_PORTS,
+            content_type_prefix="image/",
+            transport=_IMAGE_TRANSPORT,
+        )
+    except UnsafeURLError as exc:
+        logger.warning("Image proxy refused a URL: %s", exc)
+        raise HTTPException(status_code=400, detail=f"URL is not one this server may fetch: {exc}")
+    except SafeHTTPError as exc:
+        logger.warning("Image proxy fetch failed: %s", exc)
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {exc}")
 
-            content_type = resp.headers.get("content-type", "")
-            if not content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail=f"URL does not point to an image (content-type: {content_type})")
-
-            if len(resp.content) > max_size:
-                raise HTTPException(status_code=400, detail="Image exceeds 2MB size limit")
-
-            # build data URI
-            b64 = base64.b64encode(resp.content).decode("utf-8")
-            data_uri = f"data:{content_type};base64,{b64}"
-            return ProxyImageResponse(data=data_uri)
-
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"Image proxy HTTP error for {url}: {e.response.status_code}")
-        raise HTTPException(status_code=400, detail=f"Failed to fetch image: HTTP {e.response.status_code}")
-    except httpx.RequestError as e:
-        logger.warning(f"Image proxy request error for {url}: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {str(e)}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Image proxy unexpected error for {url}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch image")
+    b64 = base64.b64encode(response.body).decode("utf-8")
+    return ProxyImageResponse(data=f"data:{response.content_type};base64,{b64}")
