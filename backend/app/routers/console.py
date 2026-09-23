@@ -28,6 +28,7 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verify_cluster_access
+from app.core.session_scope import audit_scope_clause, visible_session_rows
 from app.core.instance_access import (
     can_view_instance,
     operation_targets,
@@ -304,6 +305,8 @@ async def list_active_tracked_sessions(
         user_email=user_email,
         allowed_clusters=allowed_clusters,
     )
+    if scope == "org":
+        sessions = visible_session_rows(sessions)
     if degraded:
         # the shared view is unavailable, so this is one worker's slice of the truth.
         # Say so rather than let the UI present a short list as the whole picture.
@@ -348,8 +351,8 @@ async def query_session_audit_logs(
             # does. Same set verify_cluster_access enforces, computed once.
             allowed = get_current_allowed_clusters()
             if allowed is not None:
-                # restrict to the caller's own clusters (host == cluster_id); empty -> nothing
-                query = query.where(SessionAuditLog.host.in_(allowed or {"__none__"}))
+                # the caller's own clusters, and on a shared one only the projects in its bound
+                query = query.where(audit_scope_clause(SessionAuditLog, allowed))
             # admin (allowed is None): no cluster filter
         else:
             # default: own sessions only (data minimization / GDPR)
@@ -363,6 +366,8 @@ async def query_session_audit_logs(
         query = query.limit(limit)
         result = await db.execute(query)
         logs = result.scalars().all()
+        if scope == "org":
+            logs = visible_session_rows(logs)
 
         return [
             {
