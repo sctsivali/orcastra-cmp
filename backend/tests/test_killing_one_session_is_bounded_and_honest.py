@@ -2,7 +2,9 @@
 
 The project bound on this route was not pinned by any test: replacing it with a no-op left the
 suite green, because the per-operation (project, instance) match masked it whenever the test
-used the default project.
+used the default project. And the read before the cancel turned any error, a timeout or a 5xx
+included, into "already ended" without trying the cancel, so the UI was told a live session was
+gone while it kept running. Only a 404 means that now.
 """
 
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ from typing import Any, Optional
 
 import pytest
 from fastapi import HTTPException
+from pylxd import exceptions as pylxd_exceptions
 
 from app.routers import console
 from tests.instance_access_fakes import CLUSTER, partner
@@ -68,3 +71,34 @@ async def test_a_kill_in_a_foreign_project_is_refused_before_any_lxd_call(instal
             await _kill(FOREIGN)
     assert exc.value.status_code == 403
     assert ops.calls == []
+
+
+def _lxd_error(status_code: int) -> Exception:
+    return pylxd_exceptions.LXDAPIException(
+        SimpleNamespace(status_code=status_code, json=lambda: {"error": "daemon error"})
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [_lxd_error(500), _lxd_error(503), TimeoutError("read timed out"), ConnectionResetError("reset")],
+    ids=["500", "503", "timeout", "reset"],
+)
+async def test_a_failed_read_is_a_failure_and_cancels_nothing(install, error) -> None:
+    ops = install(error)
+    with partner({"default", "own-web"}):
+        response = await _kill("own-web")
+    assert response.success is False
+    assert response.error == "Could not read the session, so it was not terminated"
+    assert ops.calls == ["GET op-1"]
+
+
+async def test_a_missing_operation_has_already_ended(install) -> None:
+    ops = install(pylxd_exceptions.NotFound(
+        SimpleNamespace(status_code=404, json=lambda: {"error": "Operation not found"})
+    ))
+    with partner({"default", "own-web"}):
+        response = await _kill("own-web")
+    assert response.success is True
+    assert "already ended" in response.message
+    assert ops.calls == ["GET op-1"]

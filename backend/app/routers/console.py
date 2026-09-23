@@ -892,8 +892,13 @@ async def kill_active_session(
         try:
             op_response = await asyncio.to_thread(client.api.operations[safe_segment(operation_id)].get)
             operation = op_response.json().get("metadata") or {}
-        except Exception:
-            return ActionResponse(success=True, message=f"Session {operation_id[:8]}... already ended")
+        except Exception as exc:
+            # note: only a 404 means the session is gone. A timeout or a 5xx says nothing about
+            # it, and without the read the ownership check below cannot run, so nothing is killed.
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                return ActionResponse(success=True, message=f"Session {operation_id[:8]}... already ended")
+            logger.warning(f"Could not read operation {operation_id} on {host}: {exc}")
+            return ActionResponse(success=False, error="Could not read the session, so it was not terminated")
         if (project, instance_name) not in operation_targets(operation):
             return ActionResponse(success=False, error="Session not found for this instance")
         
