@@ -4,6 +4,7 @@
 
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { 
@@ -853,11 +854,16 @@ export function useHealth() {
 // ========================================
 
 // Warnings Hooks
+// important: /warnings, /warnings/system/all and /server are partner-only on the backend. The
+// dashboard and monitoring pages mount these for every role, so the gate lives in the hook
+// rather than at the call sites, where a new consumer could miss it.
 export function useWarnings(host?: string) {
+  const { isPartner } = usePermissions();
   return useRefreshableQuery({
     queryKey: ["warnings", host],
     queryFn: ({ fresh }) => api.warnings.list(host, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
+    enabled: isPartner,
     refetchInterval: 60000, // Check warnings every minute
   });
 }
@@ -1432,10 +1438,12 @@ export function useDeleteInstance() {
 
 // Server Info Hooks
 export function useServerInfo(host?: string) {
+  const { isPartner } = usePermissions();
   return useRefreshableQuery({
     queryKey: ["serverInfo", host],
     queryFn: ({ fresh }) => api.server.list(host, { fresh }),
     ...STATIC_DATA_CONFIG,
+    enabled: isPartner,
   });
 }
 
@@ -1916,11 +1924,13 @@ export function useCancelPendingCert() {
 }
 
 export function useSystemWarnings() {
+  const { isPartner } = usePermissions();
   return useRefreshableQuery({
     queryKey: ["systemWarnings"],
     // note: every sibling destructures { fresh }; this one did not, so the second half of
     // "Refresh all" on the warnings page silently reused whatever was already in flight.
     queryFn: ({ fresh }) => api.certificates.getSystemWarnings({ fresh }),
+    enabled: isPartner,
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
   });

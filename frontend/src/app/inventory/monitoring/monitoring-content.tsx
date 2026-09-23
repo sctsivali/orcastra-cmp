@@ -100,6 +100,7 @@ import {
 } from "@/components/ui/tooltip";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
 import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { cn, formatHypervisorType } from "@/lib/utils";
 import { MonitoringDashboardResponse, MetricsHistoryPoint, ClusterMonitoringMetrics, InstanceMonitoringSummary, VMInfo } from "@/types";
@@ -739,6 +740,7 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
 }
 
 export default function MonitoringContent() {
+  const { isPartner } = usePermissions();
   const [refreshInterval, setRefreshInterval] = useState(5000);
   const [isPaused, setIsPaused] = useState(false);
   const [timeRange, setTimeRange] = useState(60); // Default 5 minutes (60 points at 5s intervals)
@@ -2519,123 +2521,125 @@ export default function MonitoringContent() {
         </Card>
       </div>
 
-      {/* Alarm Statistics */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle>
-              Alarm Statistics
-            </CardTitle>
-            <CardDescription>System alerts and warnings overview</CardDescription>
-          </div>
-          {warningsCounts.total > 0 && (
-            <Link 
-              href={selectedNode === "all" ? "/inventory/warnings" : `/inventory/warnings?node=${encodeURIComponent(selectedNode)}`}
-              className="text-sm text-primary hover:underline flex items-center gap-1"
-            >
-              View All ({warningsCounts.total})
-              <ChevronRight className="h-4 w-4" />
-            </Link>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Link 
-              href={`/inventory/warnings?severity=critical${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
-                <Flame className="h-5 w-5 text-red-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-red-600">{warningsCounts.critical}</p>
-                <p className="text-xs text-muted-foreground">Critical</p>
-              </div>
-            </Link>
-            <Link 
-              href={`/inventory/warnings?severity=high${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
-                <ShieldAlert className="h-5 w-5 text-orange-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-orange-600">{warningsCounts.high}</p>
-                <p className="text-xs text-muted-foreground">Major</p>
-              </div>
-            </Link>
-            <Link 
-              href={`/inventory/warnings?severity=warning${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
-                <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-yellow-600">{warningsCounts.warning}</p>
-                <p className="text-xs text-muted-foreground">Warning</p>
-              </div>
-            </Link>
-            <Link 
-              href={`/inventory/warnings?severity=low${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
-                <Info className="h-5 w-5 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-blue-600">{warningsCounts.low + warningsCounts.info}</p>
-                <p className="text-xs text-muted-foreground">Info</p>
-              </div>
-            </Link>
-          </div>
+      {/* Alarm Statistics: warnings are partner-only, so a tenant would read a false zero */}
+      {isPartner && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle>
+                Alarm Statistics
+              </CardTitle>
+              <CardDescription>System alerts and warnings overview</CardDescription>
+            </div>
+            {warningsCounts.total > 0 && (
+              <Link 
+                href={selectedNode === "all" ? "/inventory/warnings" : `/inventory/warnings?node=${encodeURIComponent(selectedNode)}`}
+                className="text-sm text-primary hover:underline flex items-center gap-1"
+              >
+                View All ({warningsCounts.total})
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            )}
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Link 
+                href={`/inventory/warnings?severity=critical${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
+                  <Flame className="h-5 w-5 text-red-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-red-600">{warningsCounts.critical}</p>
+                  <p className="text-xs text-muted-foreground">Critical</p>
+                </div>
+              </Link>
+              <Link 
+                href={`/inventory/warnings?severity=high${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
+                  <ShieldAlert className="h-5 w-5 text-orange-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-orange-600">{warningsCounts.high}</p>
+                  <p className="text-xs text-muted-foreground">Major</p>
+                </div>
+              </Link>
+              <Link 
+                href={`/inventory/warnings?severity=warning${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
+                  <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-yellow-600">{warningsCounts.warning}</p>
+                  <p className="text-xs text-muted-foreground">Warning</p>
+                </div>
+              </Link>
+              <Link 
+                href={`/inventory/warnings?severity=low${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
+                  <Info className="h-5 w-5 text-blue-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-blue-600">{warningsCounts.low + warningsCounts.info}</p>
+                  <p className="text-xs text-muted-foreground">Info</p>
+                </div>
+              </Link>
+            </div>
           
-          {/* Certificate Issues & Inactive Nodes */}
-          {(warningsCounts.certIssues > 0 || warningsCounts.inactiveNodes > 0) && (
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              {warningsCounts.certIssues > 0 && (
-                <Link 
-                  href="/inventory/clusters/certificates"
-                  className="flex items-center gap-3 p-4 rounded-lg border bg-purple-500/5 border-purple-500/20 hover:bg-purple-500/10 hover:border-purple-500/40 transition-all cursor-pointer group"
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
-                    <Shield className="h-5 w-5 text-purple-500" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-purple-600">{warningsCounts.certIssues}</p>
-                    <p className="text-xs text-muted-foreground">Cert Issues</p>
-                  </div>
-                </Link>
-              )}
-              {warningsCounts.inactiveNodes > 0 && (
-                <Link 
-                  href={`/inventory/warnings?tab=nodes${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-                  className="flex items-center gap-3 p-4 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
-                    <WifiOff className="h-5 w-5 text-rose-500" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-rose-600">{warningsCounts.inactiveNodes}</p>
-                    <p className="text-xs text-muted-foreground">Inactive Nodes</p>
-                  </div>
-                </Link>
-              )}
-            </div>
-          )}
+            {/* Certificate Issues & Inactive Nodes */}
+            {(warningsCounts.certIssues > 0 || warningsCounts.inactiveNodes > 0) && (
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                {warningsCounts.certIssues > 0 && (
+                  <Link 
+                    href="/inventory/clusters/certificates"
+                    className="flex items-center gap-3 p-4 rounded-lg border bg-purple-500/5 border-purple-500/20 hover:bg-purple-500/10 hover:border-purple-500/40 transition-all cursor-pointer group"
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
+                      <Shield className="h-5 w-5 text-purple-500" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-purple-600">{warningsCounts.certIssues}</p>
+                      <p className="text-xs text-muted-foreground">Cert Issues</p>
+                    </div>
+                  </Link>
+                )}
+                {warningsCounts.inactiveNodes > 0 && (
+                  <Link 
+                    href={`/inventory/warnings?tab=nodes${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                    className="flex items-center gap-3 p-4 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
+                      <WifiOff className="h-5 w-5 text-rose-500" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-rose-600">{warningsCounts.inactiveNodes}</p>
+                      <p className="text-xs text-muted-foreground">Inactive Nodes</p>
+                    </div>
+                  </Link>
+                )}
+              </div>
+            )}
           
-          {warningsCounts.total === 0 && (
-            <div className="mt-4 text-center py-4 bg-green-500/5 rounded-lg border border-green-500/20">
-              <p className="text-green-600 font-medium">✓ All systems operational - No active alarms</p>
-            </div>
-          )}
-          {warningsCounts.total > 0 && (
-            <div className="mt-4 text-xs text-muted-foreground">
-              <span>Click any category to view details</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            {warningsCounts.total === 0 && (
+              <div className="mt-4 text-center py-4 bg-green-500/5 rounded-lg border border-green-500/20">
+                <p className="text-green-600 font-medium">✓ All systems operational - No active alarms</p>
+              </div>
+            )}
+            {warningsCounts.total > 0 && (
+              <div className="mt-4 text-xs text-muted-foreground">
+                <span>Click any category to view details</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Node Status Cards */}
       <Card>

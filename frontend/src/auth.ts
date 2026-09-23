@@ -364,10 +364,16 @@ export const authConfig: NextAuthConfig = {
       const isPartner = groupsLower.some((g) => partnerGroups.includes(g));
 
       // Admin-only routes (Identities & Groups moved to Admin+Partner in sidebar,
-      // but middleware also allows Partner)
+      // but middleware also allows Partner). The cluster pages below read partner-only
+      // backend routes, so a tenant deep link is sent home before the page mounts.
       const adminOrPartnerPaths = [
         "/inventory/identities",
         "/inventory/groups",
+        "/inventory/clustering/members",
+        "/inventory/operations",
+        "/inventory/server",
+        "/inventory/warnings",
+        "/my-keys",
       ];
 
       const isAdminOrPartnerRoute = adminOrPartnerPaths.some(

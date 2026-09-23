@@ -131,7 +131,9 @@ function MyKeysContent() {
     // trip AND its own react-query cache entry. Filtering client-side removes both, and it
     // is what makes the tab counts and the facet counts honest.
     queryKey: ["my-keys"],
-    queryFn: ({ fresh }) => api.myKeys.list(undefined, undefined, { fresh }) });
+    queryFn: ({ fresh }) => api.myKeys.list(undefined, undefined, { fresh }),
+    // the query mounts before the page's role gate returns, and /my-keys is partner-only
+    enabled: isPartner });
 
   const keys = useMemo(() => (keysData as any)?.keys || [], [keysData]);
   // Derived from the full list rather than the response counters, so a tab label cannot

@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
@@ -53,6 +54,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
   const { isReadOnly } = useReadOnlyMode();
+  const { isPartner } = usePermissions();
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [newDisplayName, setNewDisplayName] = useState(node.display_name || node.name);
@@ -308,8 +310,8 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
           />
         </div>
 
-        {/* View Members Button for MicroCloud */}
-        {node.node_type?.toLowerCase() === "microcloud" && node.connected && (
+        {/* View Members Button for MicroCloud (the members page is partner-only) */}
+        {isPartner && node.node_type?.toLowerCase() === "microcloud" && node.connected && (
           <div className="mt-3 pt-3 border-t">
             <Button
               variant="outline"
