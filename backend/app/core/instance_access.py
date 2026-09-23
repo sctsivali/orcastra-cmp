@@ -80,6 +80,30 @@ async def verify_whole_cluster_access(cluster_id: str, db: "AsyncSession", email
         )
 
 
+def refuse_host_reach_where_bounded(cluster_id: str, body: dict) -> None:
+    """Raise 403 when a caller held to a project bound sets config or a device that reaches the host.
+
+    important: a project bound keeps one organization out of another's projects, and the host is
+    under every project. Privileged containers, raw.* and idmap config, kernel modules, syscall
+    interception, host-path disks and host device types would carry a bounded caller past the
+    bound. The bound exists only where another party holds the cluster, so a partner on its own
+    cluster and an admin are unaffected. A GPU device stays allowed.
+    """
+    from app.core.proxy_paths import host_reach
+
+    if visible_projects_for(cluster_id) is None:
+        return
+    reach = host_reach(body, allow_gpu=True)
+    if reach:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"The request sets {reach}, which reaches the host that another organization's "
+                "instances on this cluster also run on. An administrator can make this change."
+            ),
+        )
+
+
 def can_view_instance(cluster_id: str, project: Optional[str], instance_name: str) -> bool:
     """Whether this request may see `instance_name` in `project`: the bound and the ACL."""
     name = normalize_project(project)

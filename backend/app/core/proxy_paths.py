@@ -188,8 +188,8 @@ def _projects_named_in(body: Dict[str, Any]) -> List[str]:
     return [str(value) for value in named if value not in (None, "")]
 
 
-def _host_reach(body: Dict[str, Any]) -> Optional[str]:
-    """What in an instance body reaches the host, or None."""
+def _host_reach(body: Dict[str, Any], allow_gpu: bool = False) -> Optional[str]:
+    """What in an instance body reaches the host, or None. allow_gpu leaves a GPU device out."""
     config = body.get("config")
     if isinstance(config, dict):
         for key in config:
@@ -201,7 +201,7 @@ def _host_reach(body: Dict[str, Any]) -> Optional[str]:
             if not isinstance(device, dict):
                 continue
             kind = str(device.get("type") or "").lower()
-            if kind in _HOST_DEVICE_TYPES:
+            if kind in _HOST_DEVICE_TYPES and not (allow_gpu and kind == "gpu"):
                 return f"device {name} of type {kind}"
             if kind == "disk" and str(device.get("source") or "").startswith("/"):
                 return f"device {name}, a disk from a host path"
@@ -291,3 +291,8 @@ def assert_project_scope_allows_path(
             f"all projects on this cluster. This key is limited to {granted}."
         ),
     )
+
+
+def host_reach(body: Dict[str, Any], allow_gpu: bool = False) -> Optional[str]:
+    """Public name for the host-reach rule, so the dashboard routes and the proxy share one list."""
+    return _host_reach(body, allow_gpu=allow_gpu)

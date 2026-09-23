@@ -27,6 +27,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.instance_access import refuse_host_reach_where_bounded
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -433,6 +434,8 @@ async def create_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this project")
+        # important: a profile is applied to instances, so the host-reach rule holds for it too
+        refuse_host_reach_where_bounded(host, {"config": request.config or {}, "devices": request.devices or {}})
         created, etag = await asyncio.to_thread(
             create_profile_sync, client, owner,
             {
@@ -517,6 +520,8 @@ async def update_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
+        # important: a profile is applied to instances, so the host-reach rule holds for it too
+        refuse_host_reach_where_bounded(host, {"config": request.config or {}, "devices": request.devices or {}})
         written, etag = await asyncio.to_thread(
             update_profile_sync, client, profile_name, owner,
             config=request.config, devices=request.devices, description=request.description,

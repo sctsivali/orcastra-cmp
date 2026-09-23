@@ -41,7 +41,7 @@ from app.core.org_scope import (
     project_is_visible,
 )
 from app.core.config import get_settings
-from app.core.instance_access import resolve_instance_project
+from app.core.instance_access import refuse_host_reach_where_bounded, resolve_instance_project
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
@@ -260,6 +260,7 @@ async def create_instance(
     # deliberately bad create into an enumeration oracle for another organization's networks.
     if not project_is_visible(request.host, request.project or "default"):
         raise HTTPException(status_code=403, detail="Access denied to this project")
+    refuse_host_reach_where_bounded(request.host, {"config": request.config or {}, "devices": request.devices or {}})
     _validate_image_server(request.image_server)
     try:
         result = await lxd_service.create_instance(
