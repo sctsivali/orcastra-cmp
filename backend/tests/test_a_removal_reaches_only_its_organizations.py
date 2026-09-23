@@ -118,11 +118,57 @@ async def test_an_admin_removal_passes_every_org_it_emptied(removal_spy):
     assert removal_spy == [{7, 8}]
 
 
-async def test_a_removal_that_removed_nothing_passes_nothing(removal_spy):
+async def test_a_removal_that_removed_nothing_says_so(removal_spy):
+    from fastapi import HTTPException
+
     db = await _seeded()
     partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
-    await user_groups.remove_user_from_all("nobody@example.test", user=partner, db=db)
-    assert removal_spy == [set()]
+    with pytest.raises(HTTPException) as caught:
+        await user_groups.remove_user_from_all("nobody@example.test", user=partner, db=db)
+    assert caught.value.status_code == 404
+    assert "not a member of any organization you run" in caught.value.detail
+    assert removal_spy == []
+
+
+async def test_a_buyer_partner_cannot_remove_from_the_sellers_org_it_only_buys_from(removal_spy):
+    """The list shows a partner every org it belongs to, a tenant row included. The removal is not a silent 200."""
+    from fastapi import HTTPException
+
+    db = await _seeded()
+    db.add(Organization(id=20, name="Seller", slug="seller", source="local", created_by="seller@example.test"))
+    await db.commit()
+    db.add_all([
+        OrganizationMember(organization_id=20, user_email="partner@example.test", role="tenant"),
+        OrganizationMember(organization_id=20, user_email="target@example.test", role="tenant"),
+    ])
+    await db.commit()
+    partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
+    with pytest.raises(HTTPException) as caught:
+        await user_groups.remove_user_from_all("target@example.test", user=partner, db=db)
+    assert caught.value.status_code == 404
+    left = (await db.execute(
+        select(OrganizationMember.organization_id).where(OrganizationMember.user_email == "target@example.test")
+    )).scalars().all()
+    assert left == [20]
+
+
+async def test_an_admin_row_runs_its_org_for_the_list_removal_too(removal_spy):
+    """The member routes and the user list agree on who runs an org (RUNNING_ROLES)."""
+    db = await _seeded()
+    db.add(Organization(id=30, name="Run", slug="run", source="local", created_by="founder@example.test"))
+    await db.commit()
+    db.add_all([
+        OrganizationMember(organization_id=30, user_email="partner@example.test", role="admin"),
+        OrganizationMember(organization_id=30, user_email="target@example.test", role="tenant"),
+    ])
+    await db.commit()
+    partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
+    await user_groups.remove_user_from_all("target@example.test", user=partner, db=db)
+    left = (await db.execute(
+        select(OrganizationMember.organization_id).where(OrganizationMember.user_email == "target@example.test")
+    )).scalars().all()
+    assert left == []
+    assert removal_spy == [{30}]
 
 
 async def test_a_partner_cannot_remove_a_co_partner_from_an_org_orcahub_manages(removal_spy):

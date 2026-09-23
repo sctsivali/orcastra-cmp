@@ -114,6 +114,7 @@ async def test_a_legacy_member_row_is_not_mistaken_for_a_partner(monkeypatch) ->
     monkeypatch.setattr(user_groups, "get_authentik_sync", lambda: _NoAuthentik())
     await user_groups.remove_user_from_all(T, user=_user(RUNNER), db=db)
     assert T not in await _members(db, 2)
+    assert pushes and 2 in pushes[0], "a legacy member row in a synced org is removed there too, so OrcaHub is told"
 
 
 def test_the_remove_dialog_shows_the_refusal() -> None:
@@ -123,4 +124,8 @@ def test_the_remove_dialog_shows_the_refusal() -> None:
     assert "{deleteMutation.error && (" in dialog, "a refused removal must say why"
     assert "(deleteMutation.error as Error).message" in dialog
     assert "deleteMutation.reset()" in source, "one row's refusal must not show on another row"
-    assert "result.kept?.length" in source, "a partial removal must say which organizations kept the user"
+    partial = source[source.index("if (result.kept?.length)") :]
+    partial = partial[: partial.index("}") + 1]
+    assert "toast(" in partial and "description: result.detail" in partial, (
+        "a partial removal must say which organizations kept the user"
+    )

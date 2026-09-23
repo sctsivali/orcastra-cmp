@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.services.cluster_parties import RUNNING_ROLES
 from app.services.organization_service import OrganizationService, synced_partner_refusal
 from app.core.dependencies import AuthenticatedUser, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
@@ -174,7 +175,7 @@ async def assign_user_role(
                         select(OrganizationMember.organization_id)
                         .where(
                             OrganizationMember.user_email == user.email,
-                            OrganizationMember.role == "partner",
+                            OrganizationMember.role.in_(RUNNING_ROLES),
                         )
                     ),
                 ),
@@ -301,7 +302,7 @@ async def remove_user_from_all(
                         select(OrganizationMember.organization_id)
                         .where(
                             OrganizationMember.user_email == user.email,
-                            OrganizationMember.role == "partner",
+                            OrganizationMember.role.in_(RUNNING_ROLES),
                         )
                     ),
                 ),
@@ -324,6 +325,12 @@ async def remove_user_from_all(
     removed_rows = removed.all()
     if kept and not removed_rows:
         raise HTTPException(status_code=409, detail=synced_partner_refusal(user_email, list(kept.values())))
+    # note: the list shows a partner every org they belong to, a tenant row included, while a
+    # removal reaches only the orgs they run. Say so rather than answer success for nothing.
+    if highest != Role.ADMIN and not removed_rows:
+        raise HTTPException(
+            status_code=404, detail=f"{user_email} is not a member of any organization you run"
+        )
     removed_org_ids = {org_id for org_id, _role in removed_rows}
     await db.commit()
 
@@ -334,11 +341,11 @@ async def remove_user_from_all(
 
     # important: OrcaHub lets only a platform admin remove a partner from an organization, and
     # its group sync then takes their role_partner away. So a non-admin's removal is sent only for
-    # the organizations where the removed row was a tenant. The dashboard removal itself is
-    # unchanged.
+    # the organizations where the removed row was a tenant (or the legacy "member" the dashboard's
+    # add route writes). The dashboard removal itself is unchanged.
     pushed_org_ids = (
         removed_org_ids if highest == Role.ADMIN
-        else {org_id for org_id, role in removed_rows if role == "tenant"}
+        else {org_id for org_id, role in removed_rows if role not in RUNNING_ROLES}
     )
     # push removal to OrcaHub (non-blocking, best-effort), only for the orgs just left
     try:
