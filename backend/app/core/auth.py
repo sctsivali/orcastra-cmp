@@ -16,6 +16,7 @@ from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketExcepti
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
+from app.core.request_context import get_request_context
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,13 @@ async def get_current_user(
     request.state.user_groups = user.groups
     request.state.user_role = None
     request.state.user_type = None  # alias for user_role, kept for compat
+
+    # note: the access log, app log and audit actor read the RequestContext. It is written only
+    # here and in rbac._populate_request_state, both after the token verified.
+    ctx = get_request_context()
+    if ctx is not None:
+        ctx.user_id = user.user_id
+        ctx.user_groups = user.groups
 
     return user
 
