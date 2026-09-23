@@ -87,7 +87,10 @@ class _OwnedElsewhereSession(_SlugTakenSession):
         self._owner = owner
         self._calls = 0
 
-    async def execute(self, *_args: Any, **_kwargs: Any):
+    async def execute(self, *args: Any, **_kwargs: Any):
+        # note: the project claim check runs before the org lookups and finds no holder here.
+        if args and "tenant_policy_rules" in str(args[0]):
+            return _NoResult()
         self._calls += 1
         if self._calls == 2:
             return _Found(self._owner)

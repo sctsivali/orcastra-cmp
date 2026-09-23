@@ -3197,7 +3197,13 @@ class ProvisionTenantAccessRequest(BaseModel):
     """Request from OrcaHub to auto-create tenant access for a provisioned project."""
     organization_external_id: str = Field(..., description="OrcaHub organization UUID")
     cluster_id: str = Field(..., description="Cluster ID where the project was created")
-    project_name: str = Field(..., description="LXD project name")
+    # important: a provisioned grant names the one project that was bought. '*' would reach
+    # every project on the cluster, including another organization's, and OrcaHub never sends it.
+    project_name: str = Field(
+        ..., min_length=1, max_length=63,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$",
+        description="LXD project name",
+    )
     instance_name: str = Field(default="*", description="Instance name or * for all in project")
     user_emails: List[str] = Field(default_factory=list, description="Tenant user emails to grant access")
     permissions: List[str] = Field(
@@ -3220,6 +3226,47 @@ class ProvisionTenantAccessResponse(BaseModel):
     org_created: bool = False
     members_created: int = 0
     cluster_mapped: bool = False
+
+
+async def _refuse_a_project_another_party_holds(
+    db: AsyncSession, api_key: Dict[str, Any], cluster_id: str, project_name: str
+) -> None:
+    """Provisioning may not grant a project another organization's policies already name.
+
+    important: a '*' grant covers every project on the cluster, including another
+    organization's. The rule written here widens the Partner bound of whoever minted the key
+    (a new org is created_by them) and hands the listed emails that project. The key's own side
+    is the organizations it synced or provisioned and those its creator belongs to or created.
+    A project nobody names yet, which is every freshly created one, still provisions.
+
+    note: org_scope.project_is_visible cannot stand in for this. The external router carries no
+    user scope, so it answers True for every project here.
+    """
+    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
+
+    holders = (await db.execute(
+        select(Organization.id, Organization.api_key_id)
+        .join(TenantAccessPolicy, TenantAccessPolicy.organization_id == Organization.id)
+        .join(TenantPolicyRule, TenantPolicyRule.policy_id == TenantAccessPolicy.id)
+        .where(and_(
+            TenantPolicyRule.cluster_id == cluster_id,
+            TenantPolicyRule.project_name == project_name,
+        ))
+        .distinct()
+    )).all()
+    if not holders:
+        return
+    key_id = api_key.get("id", "")
+    creator = api_key.get("created_by") or ""
+    own_orgs = await get_org_ids_for_email(creator, db) if creator else set()
+    if any(org_key != key_id and org_id not in own_orgs for org_id, org_key in holders):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"No permission for project {project_name}: another organization holds it "
+                f"on cluster {cluster_id}"
+            ),
+        )
 
 
 @external_router.post(
@@ -3248,6 +3295,7 @@ async def provision_tenant_access(
     allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
     if body.project_name not in allowed_projects and "*" not in allowed_projects:
         raise HTTPException(status_code=403, detail=f"No permission for project {body.project_name}")
+    await _refuse_a_project_another_party_holds(db, api_key, body.cluster_id, body.project_name)
 
     api_key_id = api_key.get("id", "")
     org_created = False
