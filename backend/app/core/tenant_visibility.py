@@ -3,7 +3,7 @@
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from app.core.org_scope import check_tenant_permission, get_tenant_acl
+from app.core.org_scope import check_tenant_permission, get_tenant_acl, project_is_visible
 
 _INSTANCE_VOLUME_TYPES = {"container", "virtual-machine"}
 
@@ -101,12 +101,20 @@ def filter_visible_lxd_references(
     references: list[str],
     required_permission: str = "view",
 ) -> list[str]:
-    """Keep only used_by/resource references visible to the current tenant."""
-    safe_references = references or []
+    """Keep only used_by/resource references this request may see.
+
+    important: the project bound applies first and to every role, then the tenant ACL. A
+    Partner has no ACL, so without the bound a network, ACL, pool or volume on a shared cluster
+    named the other organization's instances and projects in its "used by" list.
+    """
+    bounded = [
+        reference for reference in (references or [])
+        if project_is_visible(cluster_id, parse_lxd_reference(reference)[0])
+    ]
     if not tenant_acl_active():
-        return list(safe_references)
+        return bounded
     return [
-        reference for reference in safe_references
+        reference for reference in bounded
         if tenant_can_view_lxd_reference(cluster_id, reference, required_permission)
     ]
 

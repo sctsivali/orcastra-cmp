@@ -239,6 +239,9 @@ async def list_network_acls(
         # below never runs for them. An ACL body is a firewall policy, so on a shared cluster
         # this is the only thing keeping one organization's rules out of another's console.
         all_acls = [a for a in all_acls if project_is_visible(a.node, a.project)]
+        # note: used_by is held to the bound for every role, not only under the tenant ACL
+        for acl in all_acls:
+            acl.used_by = filter_visible_lxd_references(acl.node, acl.used_by)
 
         if tenant_acl_active():
             visible_acls = []
@@ -246,7 +249,6 @@ async def list_network_acls(
                 # ownership as well as usage: see tenant_may_see_project
                 if not tenant_may_see_project(acl.node, acl.project):
                     continue
-                acl.used_by = filter_visible_lxd_references(acl.node, acl.used_by)
                 if acl.used_by:
                     visible_acls.append(acl)
             all_acls = visible_acls
