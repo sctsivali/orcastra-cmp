@@ -14,10 +14,13 @@ which organization a wildcard came from.
 """
 
 from dataclasses import dataclass, replace
-from typing import Awaitable, Callable, Iterable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, Optional
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from app.core.auth import AuthenticatedUser
 
 WILDCARD = "*"
 DEFAULT_PROJECT = "default"
@@ -140,3 +143,53 @@ def tenant_project_bound(
         if cluster_id in shared
     }
     return bound or None
+
+
+# ---------------------------------------------------------------------------
+# Tenant ACL narrowing (shared by the HTTP dependency and the WS setter)
+# ---------------------------------------------------------------------------
+
+async def project_bound_for(
+    user: "AuthenticatedUser",
+    db: AsyncSession,
+    acl: Optional[dict],
+) -> Optional[dict[str, set[str]]]:
+    """The project bound for this request, for both scope setters.
+
+    A Partner or Admin (no tenant ACL) gets get_visible_projects. A tenant on a shared cluster
+    is held to default plus the projects its confined ACL names, so every project_is_visible
+    gate applies to them as well and not only the flag-gated ACL check.
+    """
+    # note: imported here because org_scope imports this module
+    from app.core import org_scope
+
+    if acl is None:
+        return await org_scope.get_visible_projects(user, db)
+    if not acl:
+        return None
+    return tenant_project_bound(acl, await org_scope._clusters_with_several_orgs(db))
+
+
+def narrow_by_tenant_acl(
+    allowed: Optional[set[str]],
+    acl: Optional[dict],
+) -> Optional[set[str]]:
+    """
+    Intersect the org-derived cluster set with the clusters the tenant's ACL grants.
+
+    important: an EMPTY acl dict is a real answer, not a missing one. It means the tenant holds
+    no active policy assignment, and check_tenant_permission already denies every cluster for
+    it. Keeping the org-wide set here contradicted that. The tenant saw no instances, yet every
+    power route whose ACL check sits behind TENANT_PERM_ENFORCEMENT_ENABLED still passed
+    verify_cluster_access, and break-glass reused the same set for the terminal. Empty ACL means
+    empty scope, so the two layers agree.
+
+    note: None stays unrestricted and is returned untouched. get_user_allowed_clusters returns
+    None only for an admin and get_tenant_acl_rules returns None only for admin or partner, so
+    both are non-None for tenants and only for tenants. The guard stays so that a future role
+    answering None for one and a dict for the other cannot raise inside a router-level
+    dependency, which would be a 500 on every request.
+    """
+    if acl is None or allowed is None:
+        return allowed
+    return allowed.intersection(acl.keys())

@@ -172,7 +172,7 @@ def test_every_auth_write_route_checks_the_whole_cluster() -> None:
 PROJECT_GUARDS = {
     "verify_project_access", "verify_instance_view_access", "resolve_instance_project",
     "project_is_visible", "can_view_instance", "verify_whole_cluster_access",
-    "_authorize_tag_target",
+    "verify_tag_target",
 }
 EXEMPT = {
     ("iso_uploads_dashboard.py", "create_upload"): "refuses every project except default",

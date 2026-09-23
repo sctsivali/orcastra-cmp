@@ -20,8 +20,8 @@ import logging
 
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, verify_tenant_permission
-from app.core.instance_access import verify_instance_view_access, verify_project_access
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.instance_access import verify_tag_target
 from app.services.tag_service import TagService
 from app.services.lxd_service import get_lxd_service
 from app.models.schemas import (
@@ -65,35 +65,6 @@ def get_user_id(
 ) -> Optional[str]:
     """Extract user ID from headers."""
     return x_user_id
-
-
-def _authorize_tag_target(
-    resource_type: str,
-    resource_id: str,
-    host: Optional[str],
-    project: Optional[str],
-    *,
-    read: bool,
-) -> None:
-    """Hold a tag read or write to the resource it names, not only to the cluster in the query.
-
-    important: a tag write is a real LXD write (user.tags on the node, project or instance) and a
-    row keyed by host and project, so a Partner on a shared cluster could tag another
-    organization's instance or project. The node a node tag names is the cluster itself, which
-    the query `host` never covered. The project is normalized for the check only: the tag store
-    keys rows on the raw value, so callers keep passing that down unchanged.
-    """
-    if resource_type == "node":
-        verify_cluster_access(resource_id)
-    elif host and resource_type == "project":
-        name = verify_project_access(host, resource_id)
-        if read:
-            verify_tenant_permission(host, name, None, "view")
-    elif host and resource_type == "instance":
-        if read:
-            verify_instance_view_access(host, project, resource_id)
-        else:
-            verify_project_access(host, project)
 
 
 # ============================================
@@ -278,7 +249,7 @@ async def get_resource_tags(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="resource_type must be 'node', 'project', or 'instance'"
         )
-    _authorize_tag_target(resource_type, resource_id, host, project, read=True)
+    verify_tag_target(resource_type, resource_id, host, project, read=True)
     
     return await tag_service.get_resource_tags(
         resource_type=resource_type,
@@ -315,7 +286,7 @@ async def set_resource_tags(
         )
     # note: the body can name the host and project too, and the service writes to whichever
     # wins below, so that is what gets authorized
-    _authorize_tag_target(
+    verify_tag_target(
         resource_type, resource_id, host or request.resource_host,
         project or request.resource_project, read=False,
     )
@@ -355,7 +326,7 @@ async def add_resource_tags(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="resource_type must be 'node', 'project', or 'instance'"
         )
-    _authorize_tag_target(
+    verify_tag_target(
         resource_type, resource_id, host or request.resource_host,
         project or request.resource_project, read=False,
     )
@@ -395,7 +366,7 @@ async def remove_resource_tag(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="resource_type must be 'node', 'project', or 'instance'"
         )
-    _authorize_tag_target(resource_type, resource_id, host, project, read=False)
+    verify_tag_target(resource_type, resource_id, host, project, read=False)
     
     await tag_service.remove_tag_from_resource(
         tag_name=tag_name,
@@ -428,7 +399,7 @@ async def update_instance_tags_legacy(
 ):
     """Update tags for an instance (legacy endpoint)."""
     verify_cluster_access(host)
-    _authorize_tag_target("instance", instance_name, host, project, read=False)
+    verify_tag_target("instance", instance_name, host, project, read=False)
     return await tag_service.set_resource_tags(
         resource_type="instance",
         resource_id=instance_name,
@@ -455,7 +426,7 @@ async def update_project_tags_legacy(
 ):
     """Update tags for a project (legacy endpoint)."""
     verify_cluster_access(host)
-    _authorize_tag_target("project", project_name, host, None, read=False)
+    verify_tag_target("project", project_name, host, None, read=False)
     return await tag_service.set_resource_tags(
         resource_type="project",
         resource_id=project_name,
@@ -501,7 +472,7 @@ async def get_instance_tags_legacy(
 ):
     """Get tags for an instance (legacy endpoint)."""
     verify_cluster_access(host)
-    _authorize_tag_target("instance", instance_name, host, project, read=True)
+    verify_tag_target("instance", instance_name, host, project, read=True)
     return await tag_service.get_resource_tags(
         resource_type="instance",
         resource_id=instance_name,
@@ -582,7 +553,7 @@ async def import_from_lxd(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="resource_type must be 'node', 'project', or 'instance'"
         )
-    _authorize_tag_target(resource_type, resource_id, host, project, read=False)
+    verify_tag_target(resource_type, resource_id, host, project, read=False)
     
     return await tag_service.import_tags_from_lxd(
         resource_type=resource_type,

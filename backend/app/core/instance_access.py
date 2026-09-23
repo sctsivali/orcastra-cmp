@@ -96,6 +96,35 @@ def verify_instance_view_access(
     return name
 
 
+def verify_tag_target(
+    resource_type: str,
+    resource_id: str,
+    host: Optional[str],
+    project: Optional[str],
+    *,
+    read: bool,
+) -> None:
+    """Hold a tag read or write to the resource it names, not only to the cluster in the query.
+
+    important: a tag write is a real LXD write (user.tags on the node, project or instance) and a
+    row keyed by host and project, so a Partner on a shared cluster could tag another
+    organization's instance or project. The node a node tag names is the cluster itself, which
+    the query `host` never covered. The project is normalized for the check only: the tag store
+    keys rows on the raw value, so callers keep passing that down unchanged.
+    """
+    if resource_type == "node":
+        verify_cluster_access(resource_id)
+    elif host and resource_type == "project":
+        name = verify_project_access(host, resource_id)
+        if read:
+            verify_tenant_permission(host, name, None, "view")
+    elif host and resource_type == "instance":
+        if read:
+            verify_instance_view_access(host, project, resource_id)
+        else:
+            verify_project_access(host, project)
+
+
 def _first_viewable_project(
     lxd_service: "LXDService", cluster_id: str, instance_name: str
 ) -> Optional[str]:
