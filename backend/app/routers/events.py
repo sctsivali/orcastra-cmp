@@ -35,7 +35,7 @@ async def events_websocket(
     """Stream a node's LXD operation events (incl. image-pull progress) to the
     browser. Auth token is passed as the ``token`` query parameter."""
     settings = get_settings()
-    if settings.auth_enabled and settings.authentik_issuer and user is None:
+    if settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 

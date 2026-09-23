@@ -12,7 +12,7 @@ from typing import Optional
 
 import httpx
 import jwt
-from fastapi import Depends, HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
@@ -352,12 +352,27 @@ async def get_ws_user(
 
     Extracts token from the ``token`` query parameter
     (WebSocket connections cannot use HTTP Authorization headers after upgrade).
-    Returns ``None`` when auth is disabled; validates JWT otherwise.
-    Does NOT close the socket - callers decide how to handle ``None``.
+    Returns ``None`` when auth is disabled, validates the JWT otherwise, and returns ``None``
+    for a missing or invalid token so the caller closes the socket with 1008.
+
+    important: a server with auth enabled and no issuer used to return ``None`` here, and
+    every socket guard was gated on the issuer too, so the terminal, console, events and
+    monitoring sockets served anyone. It now refuses the handshake with 1011, which names
+    the server's configuration as the fault, the same way get_current_user answers 503.
     """
 
-    if not settings.auth_enabled or not settings.authentik_issuer:
+    if not settings.auth_enabled:
         return None
+
+    if not settings.authentik_issuer:
+        logger.error(
+            "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured. Refusing every "
+            "WebSocket until it is set, rather than serving them unauthenticated"
+        )
+        raise WebSocketException(
+            code=status.WS_1011_INTERNAL_ERROR,
+            reason="Authentication is enabled but not configured on this server",
+        )
 
     token = websocket.query_params.get("token")
     if not token:

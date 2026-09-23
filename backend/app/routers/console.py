@@ -1237,7 +1237,7 @@ async def console_websocket(
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
     _settings = _gs()
-    if _settings.auth_enabled and _settings.authentik_issuer and user is None:
+    if _settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 
