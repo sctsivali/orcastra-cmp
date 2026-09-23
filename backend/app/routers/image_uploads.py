@@ -73,6 +73,11 @@ _ACTIVE = ("pending", "uploading", "uploaded", "importing")
 _TERMINAL = ("ready", "failed")
 # Sessions whose declared bytes have not all reached the staging dir yet.
 _UNWRITTEN = ("pending", "uploading")
+# An API-key session that has not received a byte this long after its last change is abandoned
+# or squatting, so it is failed and stops holding a slot and reserving staging bytes.
+UNSTARTED_KEY_SESSION_RECLAIM = timedelta(
+    minutes=int(os.getenv("UPLOAD_UNSTARTED_RECLAIM_MIN", "60"))
+)
 
 
 def _now() -> datetime:
@@ -115,6 +120,35 @@ async def reserved_staging_bytes(db: AsyncSession) -> int:
         )
         total += int(res.scalar_one() or 0)
     return total
+
+
+async def fail_unstarted_key_sessions(db: AsyncSession) -> None:
+    """Fail API-key sessions, in both upload tables, that never received a byte in the grace window.
+
+    important: without this an API-key session reserved its declared bytes for the whole TTL, so
+    one key could open its four slots, send nothing, and turn every other create into 507. The
+    dashboard reclaim skips API-key sessions to keep their resume window, and that is kept for a
+    session that has started: only one with no bytes at all is failed here.
+    """
+    cutoff = _now() - UNSTARTED_KEY_SESSION_RECLAIM
+    failed = 0
+    for model in (ImageUploadSession, IsoUploadSession):
+        res = await db.execute(
+            select(model).where(
+                model.status.in_(_UNWRITTEN),
+                model.upload_offset == 0,
+                model.api_key_id.is_not(None),
+                model.updated_at < cutoff,
+            )
+        )
+        for row in res.scalars().all():
+            _cleanup_file(row.staging_path)
+            row.status = "failed"
+            row.error = "upload session received no data in time"
+            failed += 1
+    if failed:
+        await db.commit()
+        logger.info("Failed %d API-key upload session(s) that received no data", failed)
 
 
 def assert_session_owner(row: Union[ImageUploadSession, IsoUploadSession], key_id: str) -> None:
@@ -185,6 +219,7 @@ async def create_upload(
 
     _ensure_dir()
     await _gc_expired(db)
+    await fail_unstarted_key_sessions(db)
 
     # important: slots are counted per key. A global count let one key with write on any cluster
     # hold every slot and starve every other integration and the dashboard for the session TTL.

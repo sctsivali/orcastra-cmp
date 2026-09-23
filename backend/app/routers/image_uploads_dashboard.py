@@ -55,6 +55,7 @@ from app.routers.image_uploads import (
     SESSION_TTL_HOURS,
     TUS_VERSION,
     UPLOAD_DIR,
+    fail_unstarted_key_sessions,
     reserved_staging_bytes,
 )
 import logging
@@ -171,6 +172,7 @@ async def create_upload(
 
     _ensure_dir()
     await _gc_expired(db)
+    await fail_unstarted_key_sessions(db)
     await _reclaim_idle_sessions(db)  # free slots held by abandoned browser uploads
 
     # Bound concurrency so staging disk cannot be exhausted by parallel uploads.

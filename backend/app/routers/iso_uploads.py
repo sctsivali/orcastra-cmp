@@ -41,7 +41,11 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import append_request_body
 from app.models.db_models import IsoUploadSession
-from app.routers.image_uploads import assert_session_owner, reserved_staging_bytes
+from app.routers.image_uploads import (
+    assert_session_owner,
+    fail_unstarted_key_sessions,
+    reserved_staging_bytes,
+)
 from app.routers.integrations import validate_api_key
 from app.services.lxd_service import get_lxd_service
 import logging
@@ -178,6 +182,7 @@ async def create_upload(
 
     _ensure_dir()
     await _gc_expired(db)
+    await fail_unstarted_key_sessions(db)
 
     # important: slots are counted per key. A global count let one key with write on any cluster
     # hold every slot and starve every other integration and the dashboard for the session TTL.

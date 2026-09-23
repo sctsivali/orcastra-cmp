@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.models.db_models import ImageUploadSession, IsoUploadSession
 from app.routers import image_uploads, image_uploads_dashboard, iso_uploads, iso_uploads_dashboard
@@ -21,6 +22,8 @@ from tests._sqlite_session import sqlite_session
 GIB = 1024 * 1024 * 1024
 KEY_A = "oak_test_a"
 KEY_B = "oak_test_b"
+KEY_SQUAT = "oak_test_squat"
+PAST_GRACE = timedelta(minutes=61)
 
 
 def _key(key_id: str) -> Dict[str, Any]:
@@ -48,7 +51,15 @@ def staging(monkeypatch, tmp_path):
     return state
 
 
-def _seed(model: Any, sid: str, owner: Optional[str], total: int, offset: int = 0, status: str = "pending") -> Any:
+def _seed(
+    model: Any,
+    sid: str,
+    owner: Optional[str],
+    total: int,
+    offset: int = 0,
+    status: str = "pending",
+    idle: timedelta = timedelta(0),
+) -> Any:
     extra = (
         {"alias": "img", "instance_type": "container"}
         if model is ImageUploadSession
@@ -65,6 +76,7 @@ def _seed(model: Any, sid: str, owner: Optional[str], total: int, offset: int = 
         status=status,
         staging_path=f"/nonexistent/{sid}",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=6),
+        updated_at=datetime.now(timezone.utc) - idle,
         **extra,
     )
 
@@ -156,3 +168,63 @@ async def test_a_create_that_fits_the_reservation_still_succeeds(staging):
         _image_body(2 * GIB), api_key=_key(KEY_A), db=db, x_api_key_id=KEY_A
     )
     assert created["session_id"]
+
+
+def _squat(idle: timedelta) -> list:
+    """One key's four slots, the most it can hold, with no byte ever sent: 24 GiB declared."""
+    return [
+        _seed(ImageUploadSession, "s1", KEY_SQUAT, 4 * GIB, idle=idle),
+        _seed(ImageUploadSession, "s2", KEY_SQUAT, 4 * GIB, idle=idle),
+        _seed(IsoUploadSession, "s3", KEY_SQUAT, 8 * GIB, idle=idle),
+        _seed(IsoUploadSession, "s4", KEY_SQUAT, 8 * GIB, idle=idle),
+    ]
+
+
+async def _status(db: Any, model: Any, sid: str) -> str:
+    row = (await db.execute(select(model).where(model.session_id == sid))).scalar_one()
+    return row.status
+
+
+@pytest.mark.parametrize("model,router,dash,body", KINDS)
+async def test_a_key_that_sends_nothing_stops_reserving(model, router, dash, body, staging):
+    staging["free"] = 26 * GIB
+    db = await _db(*_squat(PAST_GRACE))
+    created = await router.create_upload(body(GIB), api_key=_key(KEY_A), db=db, x_api_key_id=KEY_A)
+    assert created["session_id"]
+    assert await _status(db, ImageUploadSession, "s1") == "failed"
+    assert await _status(db, IsoUploadSession, "s4") == "failed"
+    created = await dash.create_upload(body(GIB), db=db, _rbac=None, _ro=None)
+    assert created["session_id"]
+
+
+@pytest.mark.parametrize("model,_router,dash,body", KINDS)
+async def test_the_dashboard_create_also_releases_a_squat(model, _router, dash, body, staging):
+    staging["free"] = 26 * GIB
+    db = await _db(*_squat(PAST_GRACE))
+    created = await dash.create_upload(body(GIB), db=db, _rbac=None, _ro=None)
+    assert created["session_id"]
+
+
+@pytest.mark.parametrize("model,router,_dash,body", KINDS)
+async def test_an_unstarted_session_still_reserves_inside_the_grace(model, router, _dash, body, staging):
+    staging["free"] = 26 * GIB
+    db = await _db(*_squat(timedelta(minutes=5)))
+    with pytest.raises(HTTPException) as caught:
+        await router.create_upload(body(GIB), api_key=_key(KEY_A), db=db, x_api_key_id=KEY_A)
+    assert caught.value.status_code == 507
+    assert await _status(db, ImageUploadSession, "s1") == "pending"
+
+
+async def test_a_started_key_session_keeps_its_resume_window(staging):
+    db = await _db(
+        _seed(ImageUploadSession, "p", KEY_B, 4 * GIB, offset=1, status="uploading", idle=PAST_GRACE)
+    )
+    await image_uploads.create_upload(_image_body(), api_key=_key(KEY_A), db=db, x_api_key_id=KEY_A)
+    assert await _status(db, ImageUploadSession, "p") == "uploading"
+    assert await image_uploads.reserved_staging_bytes(db) >= 4 * GIB - 1
+
+
+async def test_a_dashboard_session_is_left_to_the_dashboard_reclaim(staging):
+    db = await _db(_seed(IsoUploadSession, "d", None, GIB, idle=PAST_GRACE))
+    await image_uploads.create_upload(_image_body(), api_key=_key(KEY_A), db=db, x_api_key_id=KEY_A)
+    assert await _status(db, IsoUploadSession, "d") == "pending"
