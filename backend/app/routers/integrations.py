@@ -5,6 +5,7 @@ Supports integration with Orcahub and other external applications (soon with Orc
 """
 
 import asyncio
+import re
 import secrets
 import hashlib
 from urllib.parse import urlencode, urlsplit
@@ -2578,6 +2579,44 @@ def _envelope_error(exc: BaseException) -> str:
     return sanitize_error(str(exc), limit=1000)
 
 
+# note: per worker, like the pool it guards. One slow cluster may hold at most this many proxy
+# threads, so a cluster that reads slowly (a read no longer trips the breaker) cannot fill the
+# shared pool and fail every other cluster's calls and every concurrent /sync.
+CLUSTER_PROXY_SLOTS = max(1, PROXY_POOL_WORKERS // 2)
+# note: LXD holds GET /operations/<id>/wait open for `timeout` seconds. Past the pooled read timeout
+# (8 s) that is a 504 and a thread held for nothing, so the wait is answered earlier with the
+# operation as it stands and the caller polls, which the integrator already does.
+OPERATION_WAIT_CAP_SECONDS = 5
+_OPERATION_WAIT_PATH = re.compile(r"^/operations/[^/]+/wait/?$")
+_cluster_slots: Dict[tuple, asyncio.Semaphore] = {}
+
+
+async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """run_blocking, holding one of the cluster's proxy slots until the call returns."""
+    key = (id(asyncio.get_running_loop()), cluster_id)
+    slots = _cluster_slots.setdefault(key, asyncio.Semaphore(CLUSTER_PROXY_SLOTS))
+    if slots.locked():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cluster {cluster_id} is busy with other requests, retry shortly",
+            headers={"Retry-After": "2"},
+        )
+    async with slots:
+        return await run_blocking(fn, *args, **kwargs)
+
+
+def _capped_operation_wait(base_path: str, method: str, query_params: Dict[str, str]) -> None:
+    """Bound the `timeout` of an operation wait below the pooled read timeout, in place."""
+    if method != "GET" or not _OPERATION_WAIT_PATH.match(base_path):
+        return
+    try:
+        requested = int(float(query_params.get("timeout", "")))
+    except ValueError:
+        requested = -1
+    capped = requested if 0 <= requested <= OPERATION_WAIT_CAP_SECONDS else OPERATION_WAIT_CAP_SECONDS
+    query_params["timeout"] = str(capped)
+
+
 @external_router.post(
     "/raw-proxy",
     response_model=RawProxyResponse,
@@ -2655,7 +2694,8 @@ async def raw_proxy(
         # request and may rebuild the client, so it needs the same offload as the verb call
         # below. Wrapping only the verb call would leave this on the event loop.
         try:
-            client = await run_blocking(
+            client = await _run_for_cluster(
+                request.cluster_id,
                 lxd_service.connection_manager.get_client,
                 request.cluster_id,
                 timeout=PROXY_CONNECT_TIMEOUT,
@@ -2705,6 +2745,7 @@ async def raw_proxy(
         # Add project parameter if not default
         if project and project != "default":
             query_params["project"] = project
+        _capped_operation_wait(base_path, method, query_params)
 
         # Build endpoint URL directly using client's session
         endpoint = client.api._api_endpoint
@@ -2723,7 +2764,8 @@ async def raw_proxy(
         # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
         # and then goes silent must degrade this one cluster, never the whole process.
         try:
-            response = await run_blocking(
+            response = await _run_for_cluster(
+                request.cluster_id,
                 raw_request,
                 client.api.session,
                 method,
