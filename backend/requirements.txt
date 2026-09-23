@@ -1,3 +1,6 @@
+# note: pinned through constraints.txt so a rebuild installs the tested set, not the newest one.
+-c constraints.txt
+
 # FastAPI and server
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0

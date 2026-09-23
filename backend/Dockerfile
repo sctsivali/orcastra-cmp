@@ -1,5 +1,6 @@
 # Backend Dockerfile for Orcastra Dashboard API
-FROM python:3.12-slim as base
+# note: pinned by digest to the base 1.0.0-RC4-hotfix1 was built on, so the OS layers do not drift.
+FROM python:3.12-slim@sha256:97490e383c4cffb12825431fa24e3d2b70e39fd691a8e33c46bf4c18edca3998 as base
 
 # Build arguments for version management
 ARG APP_VERSION=1.0.0-RC2
@@ -26,8 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install dependencies (this layer is cached unless requirements.txt changes)
-COPY requirements.txt .
+# Copy and install dependencies (this layer is cached unless requirements.txt or constraints.txt changes)
+COPY requirements.txt constraints.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Final stage
