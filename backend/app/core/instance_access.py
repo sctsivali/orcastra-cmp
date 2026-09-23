@@ -22,6 +22,7 @@ from app.core.org_scope import (
     project_is_visible,
     verify_cluster_access,
     verify_tenant_permission,
+    visible_projects_for,
 )
 from app.core.tenant_visibility import parse_lxd_reference
 from app.services.lxd.availability import unreachable_detail
@@ -55,6 +56,23 @@ def verify_project_access(cluster_id: str, project: Optional[str]) -> str:
             detail="Access denied to this project",
         )
     return name
+
+
+def verify_whole_cluster_access(cluster_id: str) -> None:
+    """Raise 403 unless this request may change state that belongs to the whole cluster.
+
+    important: a caller held to a project bound on `cluster_id` shares it with another
+    organization. LXD auth groups, identities and server-level entitlements belong to no project,
+    so a server `admin` key, a group with any permission list, or an identity added to or deleted
+    from a group would reach the other organization's projects. On such a cluster only a caller
+    with no bound (an admin) may write them.
+    """
+    verify_cluster_access(cluster_id)
+    if visible_projects_for(cluster_id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not permitted on a cluster shared with another organization",
+        )
 
 
 def can_view_instance(cluster_id: str, project: Optional[str], instance_name: str) -> bool:

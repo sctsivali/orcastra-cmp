@@ -19,6 +19,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.instance_access import verify_whole_cluster_access
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.core.lxd_names import safe_segment
@@ -400,6 +401,7 @@ async def create_group(
 ):
     """Create a new group."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -491,6 +493,7 @@ async def update_group(
     This endpoint handles this by applying project permissions first, then nested permissions.
     """
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     import asyncio
     
     try:
@@ -713,6 +716,7 @@ async def delete_group(
 ):
     """Delete a group."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -760,6 +764,7 @@ async def add_identity_to_group(
 ):
     """Add an identity to a group by updating the identity's groups list."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -840,6 +845,7 @@ async def remove_identity_from_group(
 ):
     """Remove an identity from a group by updating the identity's groups list."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -927,6 +933,7 @@ async def delete_identity(
 ):
     """Delete an identity from the LXD server."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         

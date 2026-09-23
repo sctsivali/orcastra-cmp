@@ -36,6 +36,11 @@ from app.core.org_scope import (
 )
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_names import safe_segment
+from app.core.instance_access import (
+    normalize_project,
+    verify_project_access,
+    verify_whole_cluster_access,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -313,6 +318,13 @@ async def create_key(
     """Generate a new TLS identity key."""
     # A key is provisioned into a specific node's LXD trust store, so the node is the boundary.
     verify_cluster_access(request.node)
+    # important: the key is an LXD credential, so it is held to what it grants as well. A server
+    # admin key spans every project, and a standard key is operator on the project it names.
+    if request.auth_level == "admin":
+        verify_whole_cluster_access(request.node)
+        project = normalize_project(request.project)
+    else:
+        project = verify_project_access(request.node, request.project)
 
     vault_client = get_vault_keys_client()
 
@@ -412,7 +424,7 @@ async def create_key(
             logger.info("Creating admin permissions: server-level admin access")
         else:
             # Standard gets project-level access with operator entitlement
-            project_url = f"/1.0/projects/{request.project}"
+            project_url = f"/1.0/projects/{project}"
             permissions = [
                 {
                     "entity_type": "project",
@@ -420,8 +432,8 @@ async def create_key(
                     "entitlement": "operator"
                 }
             ]
-            description = f"Group for {request.name} with operator access to project {request.project}"
-            logger.info(f"Creating standard permissions for project: {request.project}, URL: {project_url}")
+            description = f"Group for {request.name} with operator access to project {project}"
+            logger.info(f"Creating standard permissions for project: {project}, URL: {project_url}")
         
         logger.info(f"Permissions to be created: {permissions}")
         
@@ -546,7 +558,7 @@ async def create_key(
             "id": key_id,
             "name": request.name,
             "node": request.node,
-            "project": request.project,
+            "project": project,
             "auth_level": request.auth_level,
             "created_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat(),
@@ -567,7 +579,7 @@ async def create_key(
             target_type="ssh_key",
             target_id=key_id,
             target_host=request.node,
-            target_project=request.project,
+            target_project=project,
             result="success",
             details={
                 "name": request.name,
@@ -585,7 +597,7 @@ async def create_key(
             id=key_id,
             name=request.name,
             node=request.node,
-            project=request.project,
+            project=project,
             auth_level=request.auth_level,
             created_at=created_at.isoformat(),
             expires_at=expires_at.isoformat(),
