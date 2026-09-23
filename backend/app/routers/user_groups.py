@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.services.organization_service import OrganizationService
 from app.core.dependencies import AuthenticatedUser, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
@@ -308,23 +309,14 @@ async def remove_user_from_all(
         # important: OrcaHub owns the roster of an organization it synced and lets only a platform
         # admin remove a partner there. A dashboard removal is not sent there for a partner (see
         # below), so the next sync would quietly bring them back. Refused, with the reason.
-        synced_partner = (await db.execute(
-            select(Organization.slug)
-            .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
-            .where(
-                OrganizationMember.user_email == user_email,
-                OrganizationMember.organization_id.in_(partner_org_ids),
-                OrganizationMember.role != "tenant",
-                Organization.source == "orcahub",
-                Organization.api_key_id.isnot(None),
-            )
-        )).scalars().all()
+        caller_orgs = (await db.execute(partner_org_ids)).scalars().all()
+        synced_partner = await OrganizationService(db).synced_partner_orgs(user_email, list(caller_orgs))
         if synced_partner:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"{user_email} is a partner of {', '.join(sorted(synced_partner))}, which OrcaHub "
-                    "manages. A platform admin removes a partner there, or an Orcastra admin here."
+                    f"{user_email} is a partner of {', '.join(synced_partner)}, which OrcaHub manages. "
+                    "An Orcastra admin can remove them here, or a platform admin in OrcaHub."
                 ),
             )
         removed = await db.execute(

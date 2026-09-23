@@ -270,6 +270,17 @@ async def list_members(
     return [MemberResponse.model_validate(m) for m in members]
 
 
+def _refuse_a_synced_partner(user_email: str, slugs: list[str]) -> None:
+    if slugs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{user_email} is a partner of {', '.join(slugs)}, which OrcaHub manages. An Orcastra "
+                "admin can remove them here, or a platform admin in OrcaHub."
+            ),
+        )
+
+
 @router.post("/{org_id}/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
 async def add_member(
     org_id: int,
@@ -281,7 +292,7 @@ async def add_member(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
+    if not await svc.user_runs_org(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
     try:
@@ -309,8 +320,10 @@ async def update_member(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
+    if not await svc.user_runs_org(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    if role != "admin":
+        _refuse_a_synced_partner(member_email, await svc.synced_partner_orgs(member_email, [org_id]))
 
     member = await svc.update_member_role(org_id, member_email, "member")
     if not member:
@@ -329,8 +342,10 @@ async def remove_member(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
+    if not await svc.user_runs_org(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    if role != "admin":
+        _refuse_a_synced_partner(member_email, await svc.synced_partner_orgs(member_email, [org_id]))
 
     if not await svc.remove_member(org_id, member_email):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")

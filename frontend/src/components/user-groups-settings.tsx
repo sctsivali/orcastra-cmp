@@ -493,9 +493,12 @@ export function UserGroupsSettings() {
                           )}
                           <Dialog
                             open={deleteEmail === user.user_email}
-                            onOpenChange={(open) =>
-                              setDeleteEmail(open ? user.user_email : null)
-                            }
+                            onOpenChange={(open) => {
+                              // one mutation serves every row, so a refusal shown for one user
+                              // must not appear when another row's dialog opens
+                              deleteMutation.reset();
+                              setDeleteEmail(open ? user.user_email : null);
+                            }}
                           >
                           <TooltipProvider>
                             <Tooltip>
@@ -524,6 +527,12 @@ export function UserGroupsSettings() {
                                 This cannot be undone.
                               </DialogDescription>
                             </DialogHeader>
+                            {deleteMutation.error && (
+                              <div className="flex items-center gap-2 text-sm text-destructive">
+                                <AlertCircle className="h-4 w-4 shrink-0" />
+                                {(deleteMutation.error as Error).message}
+                              </div>
+                            )}
                             <DialogFooter>
                               <Button
                                 variant="outline"

@@ -287,6 +287,50 @@ class OrganizationService:
         )
         return result.scalar_one_or_none() is not None
 
+    async def user_runs_org(self, org_id: int, user_email: str, user_role: str) -> bool:
+        """Whether a user may change an organization's roster: admin, its creator, or a member above tenant.
+
+        important: user_has_access answers "may this user see the organization" and is true for a tenant
+        row too, so a partner who only buys from another partner could add, change and remove that
+        partner's organization members with it.
+        """
+        if user_role == "admin":
+            return True
+        org = await self.get_organization(org_id)
+        if not org:
+            return False
+        if org.created_by == user_email:
+            return True
+        result = await self.db.execute(
+            select(OrganizationMember.id).where(
+                OrganizationMember.organization_id == org_id,
+                OrganizationMember.user_email == user_email,
+                OrganizationMember.role != "tenant",
+            )
+        )
+        return result.first() is not None
+
+    async def synced_partner_orgs(self, member_email: str, org_ids: list[int]) -> list[str]:
+        """Slugs of OrcaHub-synced organizations, among org_ids, where member_email is a partner or admin.
+
+        note: OrcaHub owns those rosters and lets only a platform admin remove a partner. A dashboard
+        change to such a row is not sent there, so the next sync would quietly undo it.
+        """
+        if not org_ids:
+            return []
+        result = await self.db.execute(
+            select(Organization.slug)
+            .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+            .where(
+                OrganizationMember.user_email == member_email,
+                OrganizationMember.organization_id.in_(org_ids),
+                OrganizationMember.role.in_(("partner", "admin")),
+                Organization.source == "orcahub",
+                Organization.api_key_id.isnot(None),
+            )
+        )
+        return sorted(result.scalars().all())
+
     async def get_user_cluster_ids(self, user_email: str, user_role: str) -> list[str]:
         """
         Get list of cluster IDs the user can access.
