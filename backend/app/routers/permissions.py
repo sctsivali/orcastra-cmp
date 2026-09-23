@@ -18,7 +18,7 @@ from app.services.lxd_service import (
     require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_partner
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, visible_projects_for
 from app.core.instance_access import verify_whole_cluster_access
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
@@ -42,6 +42,16 @@ groups_router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+
+
+def _whole_cluster_nodes(nodes: List[str]) -> List[str]:
+    """The clusters whose LXD auth objects this request may read.
+
+    important: groups and identities belong to no project, so on a cluster shared with another
+    organization they carry that organization's project URLs and client certificates. A caller
+    held to a project bound there reads them no more than it may write them.
+    """
+    return [node for node in nodes if visible_projects_for(node) is None]
 
 
 class IdentityInfo(BaseModel):
@@ -146,8 +156,9 @@ async def list_identities(
     """List all identities."""
     if host:
         verify_cluster_access(host)
+        verify_whole_cluster_access(host)
     try:
-        nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
+        nodes_to_query = [host] if host else _whole_cluster_nodes(lxd_service.connection_manager.get_node_names())
         
         # Fetch identities from all nodes in parallel
         loop = asyncio.get_event_loop()
@@ -163,7 +174,7 @@ async def list_identities(
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
         unreachable_nodes: List[str] = (
-            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+            [] if host else _whole_cluster_nodes(sorted(set(lxd_service.get_node_names()) - set(nodes_to_query)))
         )
         fan = collect(nodes_to_query, results, noun="identities")
         unreachable_nodes.extend(fan.unreachable_nodes)
@@ -172,7 +183,7 @@ async def list_identities(
         return IdentityListResponse(
             total=len(all_identities),
             identities=all_identities,
-            nodes=lxd_service.connection_manager.get_node_names(),
+            nodes=_whole_cluster_nodes(lxd_service.connection_manager.get_node_names()),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
@@ -195,6 +206,7 @@ async def get_identity(
 ):
     """Get details for a specific identity."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
         response = client.api["auth"]["identities"][safe_segment(identity_id)].get()
@@ -285,8 +297,9 @@ async def list_groups(
     """List all groups."""
     if host:
         verify_cluster_access(host)
+        verify_whole_cluster_access(host)
     try:
-        nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
+        nodes_to_query = [host] if host else _whole_cluster_nodes(lxd_service.connection_manager.get_node_names())
         
         # Fetch groups from all nodes in parallel
         loop = asyncio.get_event_loop()
@@ -302,7 +315,7 @@ async def list_groups(
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
         unreachable_nodes: List[str] = (
-            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+            [] if host else _whole_cluster_nodes(sorted(set(lxd_service.get_node_names()) - set(nodes_to_query)))
         )
         fan = collect(nodes_to_query, results, noun="groups")
         unreachable_nodes.extend(fan.unreachable_nodes)
@@ -311,7 +324,7 @@ async def list_groups(
         return GroupListResponse(
             total=len(all_groups),
             groups=all_groups,
-            nodes=lxd_service.connection_manager.get_node_names(),
+            nodes=_whole_cluster_nodes(lxd_service.connection_manager.get_node_names()),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
@@ -334,6 +347,7 @@ async def get_group(
 ):
     """Get details for a specific group."""
     verify_cluster_access(host)
+    verify_whole_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         

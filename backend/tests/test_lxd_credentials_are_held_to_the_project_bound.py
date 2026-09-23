@@ -167,6 +167,94 @@ def test_every_auth_write_route_checks_the_whole_cluster() -> None:
         assert "verify_whole_cluster_access(" in ast.unparse(node), node.name
 
 
+# -- Groups and Identities reads ---------------------------------------------------------------
+
+OTHER = "cluster-b"
+
+
+class _Fleet:
+    """Two connected clusters: CLUSTER is shared under the partner's bound, OTHER is not."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+        names = staticmethod(lambda: [CLUSTER, OTHER])
+
+        def get_client(host: str) -> None:
+            self.asked.append(host)
+            raise _Reached(host)
+
+        self.connection_manager = type(
+            "CM", (), {"get_node_names": names, "get_client": staticmethod(get_client)}
+        )()
+        self.get_node_names = lambda: [CLUSTER, OTHER]
+
+
+@pytest.fixture
+def fleet(monkeypatch: pytest.MonkeyPatch) -> _Fleet:
+    def rows(model: Callable[..., Any]) -> Callable[[Any, str], Any]:
+        def fetch(_service: Any, node: str) -> Any:
+            return permissions.NodeRead(rows=[model(node)])
+        return fetch
+
+    monkeypatch.setattr(permissions, "_fetch_groups_for_node",
+                        rows(lambda node: permissions.GroupInfo(name="g", node=node)))
+    monkeypatch.setattr(permissions, "_fetch_identities_for_node",
+                        rows(lambda node: permissions.IdentityInfo(id="i", node=node)))
+    return _Fleet()
+
+
+def _shared_and_other() -> Any:
+    return scoped(allowed={CLUSTER, OTHER}, acl=None, bound={CLUSTER: {"default", "own-web"}})
+
+
+@pytest.mark.parametrize("read", [permissions.get_group, permissions.get_identity],
+                         ids=["get_group", "get_identity"])
+async def test_an_auth_object_on_a_shared_cluster_is_not_shown(read, fleet: _Fleet) -> None:
+    with _shared_and_other():
+        with pytest.raises(HTTPException) as exc:
+            await read("g", host=CLUSTER, lxd_service=fleet)
+    assert exc.value.status_code == 403
+    assert fleet.asked == []
+
+
+@pytest.mark.parametrize("read", [permissions.list_groups, permissions.list_identities],
+                         ids=["list_groups", "list_identities"])
+async def test_a_listing_for_a_shared_cluster_is_refused(read, fleet: _Fleet) -> None:
+    with _shared_and_other():
+        with pytest.raises(HTTPException) as exc:
+            await read(host=CLUSTER, lxd_service=fleet)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("read,field", [(permissions.list_groups, "groups"),
+                                        (permissions.list_identities, "identities")],
+                         ids=["list_groups", "list_identities"])
+async def test_a_fleet_listing_leaves_the_shared_cluster_out(read, field: str, fleet: _Fleet) -> None:
+    with _shared_and_other():
+        answer = await read(host=None, lxd_service=fleet)
+    assert {row.node for row in getattr(answer, field)} == {OTHER}
+    assert answer.nodes == [OTHER]
+    assert CLUSTER not in answer.unreachable_nodes
+
+
+@pytest.mark.parametrize("read,field", [(permissions.list_groups, "groups"),
+                                        (permissions.list_identities, "identities")],
+                         ids=["list_groups", "list_identities"])
+async def test_an_unbounded_caller_still_lists_every_cluster(read, field: str, fleet: _Fleet) -> None:
+    with scoped(allowed=None, acl=None, bound=None):
+        answer = await read(host=None, lxd_service=fleet)
+    assert {row.node for row in getattr(answer, field)} == {CLUSTER, OTHER}
+
+
+@pytest.mark.parametrize("read", [permissions.get_group, permissions.get_identity],
+                         ids=["get_group", "get_identity"])
+async def test_an_auth_object_on_an_unshared_cluster_is_still_read(read, fleet: _Fleet) -> None:
+    with _shared_and_other():
+        with pytest.raises(Exception):
+            await read("g", host=OTHER, lxd_service=fleet)
+    assert fleet.asked == [OTHER]
+
+
 # -- the class: a cluster check with a project and no project bound ----------------------------
 
 PROJECT_GUARDS = {
