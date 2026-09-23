@@ -25,6 +25,7 @@ from app.services.lxd.fanout import is_read_timeout
 from app.services.lxd.proxy import (
     ALLOWED_METHODS,
     API_KEY_CACHE_TTL,
+    AUTH_POOL_WORKERS,
     LAST_USED_WRITE_INTERVAL,
     PROXY_CONNECT_TIMEOUT,
     PROXY_MAX_IN_FLIGHT,
@@ -913,6 +914,72 @@ async def _gather_per_cluster(
 
     batches = await asyncio.gather(*[one(c) for c in cluster_ids])
     return [item for batch in batches for item in batch]
+
+
+# note: the external auth reads run on the four auth threads that also authenticate every
+# API-key request, so an unauthenticated flood may queue only this many before being shed.
+EXTERNAL_AUTH_MAX_IN_FLIGHT = AUTH_POOL_WORKERS * 4
+REGIONS_UNAVAILABLE = "Cluster regions could not be read in time. Retry shortly."
+
+
+def _cluster_display_names_blocking(cluster_ids: List[str]) -> Dict[str, str]:
+    """Display name per cluster id, from its Vault metadata only. Falls back to the id."""
+    names = {cluster_id: cluster_id for cluster_id in cluster_ids}
+    settings = get_settings()
+    if not cluster_ids or not (settings.vault_enabled and settings.vault_token):
+        return names
+    vault = get_vault_client(settings.vault_addr, settings.vault_token)
+    for cluster_id in cluster_ids:
+        try:
+            meta = vault.vault_read(f"{settings.vault_clusters_path}/{cluster_id}/metadata")
+        except Exception:
+            continue
+        if isinstance(meta, dict):
+            names[cluster_id] = meta.get("display_name") or meta.get("name") or cluster_id
+    return names
+
+
+def _region_rows_blocking(cluster_ids: set) -> Dict[str, Dict[str, Any]]:
+    """The /regions rows for the given clusters. Reads Vault, so it only runs off the loop."""
+    from app.services.lxd_cert_manager import LXDCertificateManager
+
+    settings = get_settings()
+    vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
+    cert_manager = LXDCertificateManager(
+        vault_client=vault_client,
+        clusters_path=settings.vault_clusters_path
+    )
+    regions: Dict[str, Dict[str, Any]] = {}
+    for cluster_id in sorted(cluster_ids):
+        try:
+            cluster_info = cert_manager.get_cluster_info(cluster_id)
+            location_data = _public_location_data(
+                cluster_info.get("metadata", {}).get("location", {})
+            )
+            if not location_data.get("latitude") or not location_data.get("longitude"):
+                continue
+
+            region_id = location_data.get("region_id") or cluster_id
+            if region_id not in regions:
+                regions[region_id] = {
+                    "region_id": region_id,
+                    "region_name": location_data.get("region_name") or location_data.get("city") or cluster_id,
+                    "country_code": location_data.get("country_code") or "XX",
+                    "country_name": location_data.get("country_name") or "Unknown",
+                    "city": location_data.get("city") or location_data.get("region_name") or "Unknown",
+                    "latitude": location_data.get("latitude"),
+                    "longitude": location_data.get("longitude"),
+                    "continent": location_data.get("continent") or "XX",
+                    "facility_name": location_data.get("facility_name"),
+                    "facility_provider": location_data.get("facility_provider"),
+                    "node_count": 0,
+                    "instance_count": 0,
+                    "instance_running": 0,
+                }
+            regions[region_id]["node_count"] += 1
+        except Exception as e:
+            logger.warning(f"Could not get region info for {cluster_id}: {e}")
+    return regions
 
 
 CLUSTER_INFO_UNREADABLE = (
@@ -2166,7 +2233,18 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, secret_hash = get_api_key_from_vault(vault_client, request.api_key_id)
+        # important: unauthenticated callers reach this, so its Vault reads run on the bounded
+        # auth pool. Inline they froze the event loop, and /health with it, for as long as a
+        # degraded Vault took to answer.
+        metadata, secret_hash = await run_blocking(
+            get_api_key_from_vault,
+            vault_client,
+            request.api_key_id,
+            timeout=VALIDATE_KEY_TIMEOUT,
+            label="validate_endpoint",
+            executor=auth_executor,
+            max_in_flight=EXTERNAL_AUTH_MAX_IN_FLIGHT,
+        )
         
         # Verify secret
         if not verify_api_key_secret(request.api_key_secret, secret_hash):
@@ -2189,30 +2267,22 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         
         # Enrich cluster permissions with cluster names from Vault
         enriched_permissions = []
-        settings = get_settings()
-        
-        # Build cluster name lookup
-        cluster_names = {}
-        if settings.vault_enabled and settings.vault_token:
-            try:
-                from app.services.lxd_cert_manager import LXDCertificateManager
-                vault = get_vault_client(settings.vault_addr, settings.vault_token)
-                cert_manager = LXDCertificateManager(
-                    vault_client=vault,
-                    clusters_path=settings.vault_clusters_path
-                )
-                
-                for perm in raw_permissions:
-                    cluster_id = perm.get("cluster_id")
-                    if cluster_id and cluster_id not in cluster_names:
-                        try:
-                            cluster_info = cert_manager.get_cluster_info(cluster_id)
-                            meta = cluster_info.get("metadata", {})
-                            cluster_names[cluster_id] = meta.get("display_name") or meta.get("name") or cluster_id
-                        except Exception:
-                            cluster_names[cluster_id] = cluster_id
-            except Exception as e:
-                logger.warning(f"Could not enrich cluster names: {e}")
+        cluster_ids = sorted({
+            perm.get("cluster_id") for perm in raw_permissions
+            if isinstance(perm, dict) and perm.get("cluster_id")
+        })
+        try:
+            cluster_names = await run_blocking(
+                _cluster_display_names_blocking,
+                cluster_ids,
+                timeout=VALIDATE_KEY_TIMEOUT,
+                label="validate_cluster_names",
+                executor=auth_executor,
+                max_in_flight=EXTERNAL_AUTH_MAX_IN_FLIGHT,
+            )
+        except Exception as e:  # noqa: BLE001 - names are decoration, the ids still answer
+            logger.warning("Could not enrich cluster names: %s", sanitize_error(str(e)))
+            cluster_names = {}
         
         # Build enriched permissions with cluster names
         for perm in raw_permissions:
@@ -2231,6 +2301,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
     except HTTPException:
         return APIKeyValidateResponse(valid=False, error=INVALID_API_KEY_MESSAGE)
     except Exception as e:
+        # note: a Vault stall (BlockingTimeout or BlockingPoolFull) lands here too.
         logger.error(f"Error validating API key: {e}")
         return APIKeyValidateResponse(valid=False, error="Validation failed")
 
@@ -2400,42 +2471,19 @@ async def get_integration_regions(
         regions: Dict[str, Dict[str, Any]] = {}
 
         if settings.vault_enabled and settings.vault_token:
-            from app.services.lxd_cert_manager import LXDCertificateManager
-            vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-            cert_manager = LXDCertificateManager(
-                vault_client=vault_client,
-                clusters_path=settings.vault_clusters_path
-            )
-
-            for cluster_id in allowed_clusters:
-                try:
-                    cluster_info = cert_manager.get_cluster_info(cluster_id)
-                    location_data = _public_location_data(
-                        cluster_info.get("metadata", {}).get("location", {})
-                    )
-                    if not location_data.get("latitude") or not location_data.get("longitude"):
-                        continue
-
-                    region_id = location_data.get("region_id") or cluster_id
-                    if region_id not in regions:
-                        regions[region_id] = {
-                            "region_id": region_id,
-                            "region_name": location_data.get("region_name") or location_data.get("city") or cluster_id,
-                            "country_code": location_data.get("country_code") or "XX",
-                            "country_name": location_data.get("country_name") or "Unknown",
-                            "city": location_data.get("city") or location_data.get("region_name") or "Unknown",
-                            "latitude": location_data.get("latitude"),
-                            "longitude": location_data.get("longitude"),
-                            "continent": location_data.get("continent") or "XX",
-                            "facility_name": location_data.get("facility_name"),
-                            "facility_provider": location_data.get("facility_provider"),
-                            "node_count": 0,
-                            "instance_count": 0,
-                            "instance_running": 0,
-                        }
-                    regions[region_id]["node_count"] += 1
-                except Exception as e:
-                    logger.warning(f"Could not get region info for {cluster_id}: {e}")
+            # note: proxy_executor, not auth_executor. A loop over many clusters must not hold
+            # one of the few threads that authenticate every request.
+            try:
+                regions = await run_blocking(
+                    _region_rows_blocking,
+                    allowed_clusters,
+                    timeout=SYNC_CLUSTER_TIMEOUT,
+                    label="integration_regions",
+                    executor=proxy_executor,
+                    max_in_flight=PROXY_MAX_IN_FLIGHT,
+                )
+            except (BlockingTimeout, BlockingPoolFull):
+                raise HTTPException(status_code=503, detail=REGIONS_UNAVAILABLE) from None
 
         totals = await _integration_hardware_totals(lxd_service, allowed_clusters)
 
@@ -2452,6 +2500,8 @@ async def get_integration_regions(
             "total_gpu": totals["gpu"],
             "total_gpu_cards": totals["gpu_cards"],
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error loading integration regions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -3195,7 +3245,17 @@ async def sync_policies_from_external(
 
     try:
         vault_client = get_vault_integrations_client()
-        metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
+        metadata, stored_hash = await run_blocking(
+            get_api_key_from_vault,
+            vault_client,
+            api_key_id,
+            timeout=VALIDATE_KEY_TIMEOUT,
+            label="external_policies_auth",
+            executor=auth_executor,
+            max_in_flight=EXTERNAL_AUTH_MAX_IN_FLIGHT,
+        )
+    except (BlockingTimeout, BlockingPoolFull):
+        raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
     except HTTPException:
         raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
@@ -3360,7 +3420,17 @@ async def get_policies_for_external(
 
     try:
         vault_client = get_vault_integrations_client()
-        metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
+        metadata, stored_hash = await run_blocking(
+            get_api_key_from_vault,
+            vault_client,
+            api_key_id,
+            timeout=VALIDATE_KEY_TIMEOUT,
+            label="external_policies_auth",
+            executor=auth_executor,
+            max_in_flight=EXTERNAL_AUTH_MAX_IN_FLIGHT,
+        )
+    except (BlockingTimeout, BlockingPoolFull):
+        raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
     except HTTPException:
         raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
