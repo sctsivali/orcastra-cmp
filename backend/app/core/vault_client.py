@@ -148,32 +148,30 @@ class VaultClient:
         
         return session
     
-    def _is_sensitive_path(self, path: str) -> bool:
-        """
-        Check if a path contains sensitive data that should NEVER be cached in Redis.
-        
-        - Certificates and private keys should NEVER be cached externally
-        - Only Vault should hold sensitive credentials
-        - Memory caching in connection manager is acceptable (process-local)
-        """
-        sensitive_patterns = ['/certs', '/certificates', '/keys', '/private', '/secrets']
-        path_lower = path.lower()
-        return any(pattern in path_lower for pattern in sensitive_patterns)
-    
+    # important: an allowlist, not a denylist. The denylist named /certs, /keys and /secrets
+    # and let everything else through, so an integration API key's /secret (the plaintext
+    # secret and its HMAC under the fields raw and hash), a user mapping and my-keys
+    # credentials all sat in Redis for five minutes. Only metadata is safe to cache, and a
+    # path nobody thought about now stays out by default.
+    CACHEABLE_PATH_SUFFIXES = ("/metadata",)
+
+    def _is_cacheable_path(self, path: str) -> bool:
+        """True only for a Vault path whose contents may be held in Redis."""
+        return (path or "").lower().rstrip("/").endswith(self.CACHEABLE_PATH_SUFFIXES)
+
     def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         """
         Read data from Vault with optional caching.
-        
-        Paths containing sensitive data (/certs, /keys, /secrets) are NEVER cached
-        in Redis, regardless of use_cache parameter.
-        This is to prevent credential leakage via cache.
+
+        Only metadata paths are ever cached in Redis, regardless of use_cache. Every other
+        path, credentials, certificates, key secrets and user mappings included, is read
+        from Vault each time so it never reaches the cache.
         """
         start = time.perf_counter()
-        # SECURITY: Never cache sensitive paths in Redis
-        is_sensitive = self._is_sensitive_path(path)
-        should_cache = use_cache and not is_sensitive
+        cacheable = self._is_cacheable_path(path)
+        should_cache = use_cache and cacheable
         
-        # Try cache first (only for non-sensitive paths)
+        # Try cache first (only for cacheable metadata paths)
         cache = get_cache()
         if should_cache and cache:
             cached_data = cache.get("vault", path)
@@ -194,7 +192,7 @@ class VaultClient:
             else:
                 data = result.get("data", {})  # KV v1 or other
             
-            # Cache the result with appropriate TTL (ONLY for non-sensitive paths)
+            # Cache the result with appropriate TTL (only for cacheable metadata paths)
             if should_cache and cache:
                 # Determine TTL based on path
                 ttl = self._get_cache_ttl(path)
@@ -204,7 +202,7 @@ class VaultClient:
             _audit_vault_operation(
                 "vault.secret.read", path,
                 duration_ms=duration,
-                details={"cached": False, "sensitive": is_sensitive},
+                details={"cached": False, "sensitive": not cacheable},
             )
 
             return data
@@ -242,8 +240,8 @@ class VaultClient:
             
             if "/metadata" in path:
                 return settings.cache_ttl_vault_metadata
-            # Note: /certs paths are never cached due to _is_sensitive_path check
-            # This branch exists for completeness but won't be used for caching
+            # note: only /metadata paths are cached (see _is_cacheable_path), so the
+            # branches below are never used to cache anything
             elif "/certs" in path:
                 return 0  # Never cache
             elif "/secrets" in path:

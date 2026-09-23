@@ -243,10 +243,12 @@ class CacheManager:
     
     def _is_sensitive_field(self, field_name: str) -> bool:
         """Check if a field name indicates sensitive data."""
+        # note: raw and hash are the field names an integration API key secret is stored
+        # under, which none of the other stems match.
         sensitive_patterns = [
             'password', 'token', 'secret', 'key', 'cert', 'certificate',
             'credential', 'auth', 'private', 'trust_password', 'client.crt',
-            'client.key', 'ca.pem', 'pem', 'crt'
+            'client.key', 'ca.pem', 'pem', 'crt', 'raw', 'hash'
         ]
         field_lower = field_name.lower()
         return any(pattern in field_lower for pattern in sensitive_patterns)
