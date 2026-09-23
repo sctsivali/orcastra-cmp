@@ -26,34 +26,29 @@ oauth2_scheme = HTTPBearer(auto_error=False)
 class JWKSClient:
     """
     Caches JWKS (public keys) from the Authentik OIDC provider.
-    Keys are refreshed after `cache_ttl` seconds or on key-not-found.
-    Uses async httpx for non-blocking HTTP calls.
+
+    important: every fetch happens in ensure_key_for, which is async, and get_signing_key is a
+    pure lookup. A token with an unknown kid used to trigger a synchronous refetch on the event
+    loop for every request, so random kids stalled the worker and hammered the provider. An
+    unknown kid now forces at most one refetch per FORCED_REFETCH_INTERVAL per worker, and a
+    failed refresh is not retried inside FAILED_REFRESH_BACKOFF. Keys stay in use while a TTL
+    refresh fails.
     """
+
+    FORCED_REFETCH_INTERVAL = 30.0
+    FAILED_REFRESH_BACKOFF = 5.0
 
     def __init__(self) -> None:
         self._jwks: dict = {}
         self._jwks_uri: str = ""
-        self._last_fetched: float = 0.0
         self._cache_ttl: int = 3600  # default 1h
         self._lock = asyncio.Lock()
         self._warmed_up: bool = False
-
-    def _discover_jwks_uri_sync(self, issuer: str) -> str:
-        """Fetch JWKS URI synchronously (fallback for non-async contexts)."""
-        import requests as _requests
-        discovery_url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
-        try:
-            resp = _requests.get(discovery_url, timeout=5)
-            resp.raise_for_status()
-            data = resp.json()
-            jwks_uri = data.get("jwks_uri", "")
-            if not jwks_uri:
-                raise ValueError("jwks_uri not found in OIDC discovery document")
-            logger.info(f"Discovered JWKS URI: {jwks_uri}")
-            return jwks_uri
-        except Exception as e:
-            logger.error(f"Failed to fetch OIDC discovery from {discovery_url}: {e}")
-            raise
+        # note: monotonic, and an attribute so tests can move time without touching the loop's clock
+        self._clock = time.monotonic
+        self._last_fetched: float = float("-inf")
+        self._last_forced_refetch: float = float("-inf")
+        self._last_failed_refresh: float = float("-inf")
 
     async def _discover_jwks_uri_async(self, issuer: str) -> str:
         """Fetch JWKS URI asynchronously using httpx."""
@@ -85,19 +80,6 @@ class JWKSClient:
             logger.error(f"Failed to fetch JWKS from {jwks_uri}: {e}")
             raise
 
-    def _fetch_jwks_sync(self, jwks_uri: str) -> dict:
-        """Fetch JWKS synchronously (fallback)."""
-        import requests as _requests
-        try:
-            resp = _requests.get(jwks_uri, timeout=5)
-            resp.raise_for_status()
-            jwks = resp.json()
-            logger.info(f"Fetched {len(jwks.get('keys', []))} keys from JWKS endpoint")
-            return jwks
-        except Exception as e:
-            logger.error(f"Failed to fetch JWKS from {jwks_uri}: {e}")
-            raise
-
     async def warm_up(self, settings: Settings) -> None:
         """Pre-warm JWKS cache at startup to avoid first-request latency."""
         if not settings.authentik_issuer:
@@ -107,31 +89,64 @@ class JWKSClient:
                 self._cache_ttl = settings.auth_jwks_cache_ttl
                 self._jwks_uri = await self._discover_jwks_uri_async(settings.authentik_issuer)
                 self._jwks = await self._fetch_jwks_async(self._jwks_uri)
-                self._last_fetched = time.time()
+                self._last_fetched = self._clock()
                 self._warmed_up = True
             logger.info("JWKS cache pre-warmed successfully")
         except Exception as e:
             logger.warning(f"JWKS pre-warm failed (will retry on first request): {e}")
 
-    def get_signing_key(self, token: str, settings: Settings) -> jwt.algorithms.RSAAlgorithm:
+    def _find_key(self, kid: object) -> Optional[dict]:
+        for key_data in self._jwks.get("keys", []):
+            if key_data.get("kid") == kid:
+                return key_data
+        return None
+
+    def _is_stale(self, ttl: float) -> bool:
+        return not self._jwks.get("keys") or (self._clock() - self._last_fetched) > ttl
+
+    def _satisfied(self, kid: object, ttl: float) -> bool:
+        return self._find_key(kid) is not None and not self._is_stale(ttl)
+
+    async def ensure_key_for(self, token: str, settings: Settings) -> None:
+        """Refresh the cache when it cannot answer for this token's kid. Never raises.
+
+        A stale or empty cache is refreshed unless the last refresh failed within the backoff.
+        A fresh cache missing the kid is refetched at most once per FORCED_REFETCH_INTERVAL,
+        whoever asks. Whatever happens, get_signing_key decides the answer afterwards.
         """
-        Get the signing key for a given JWT token.
-        Fetches/caches JWKS and matches by 'kid' header.
-        Uses sync calls as fallback if not pre-warmed.
-        """
-        self._cache_ttl = settings.auth_jwks_cache_ttl
+        try:
+            kid = jwt.get_unverified_header(token).get("kid")
+        except jwt.PyJWTError:
+            return
+        if not kid:
+            return
+        ttl = settings.auth_jwks_cache_ttl
+        self._cache_ttl = ttl
+        if self._satisfied(kid, ttl):
+            return
+        async with self._lock:
+            if self._satisfied(kid, ttl):
+                return
+            now = self._clock()
+            if self._is_stale(ttl):
+                if now - self._last_failed_refresh < self.FAILED_REFRESH_BACKOFF:
+                    return
+            else:
+                if now - self._last_forced_refetch < self.FORCED_REFETCH_INTERVAL:
+                    return
+                self._last_forced_refetch = now
+                # note: the kid is attacker-chosen text, so it stays out of the log line
+                logger.warning("Token signing key not found in cached JWKS, refreshing")
+            try:
+                if not self._jwks_uri:
+                    self._jwks_uri = await self._discover_jwks_uri_async(settings.authentik_issuer)
+                self._jwks = await self._fetch_jwks_async(self._jwks_uri)
+                self._last_fetched = self._clock()
+            except Exception:  # noqa: BLE001 - the lookup that follows answers 401 or 503
+                self._last_failed_refresh = self._clock()
 
-        # discover jwks_uri if not yet known
-        if not self._jwks_uri:
-            self._jwks_uri = self._discover_jwks_uri_sync(settings.authentik_issuer)
-
-        # refresh cache if expired
-        now = time.time()
-        if not self._jwks or (now - self._last_fetched) > self._cache_ttl:
-            self._jwks = self._fetch_jwks_sync(self._jwks_uri)
-            self._last_fetched = now
-
-        # decode header to get kid
+    def get_signing_key(self, token: str) -> jwt.algorithms.RSAAlgorithm:
+        """Look up the key for this token's kid in the cache. Never touches the network."""
         try:
             unverified_header = jwt.get_unverified_header(token)
         except jwt.exceptions.DecodeError as e:
@@ -147,24 +162,19 @@ class JWKSClient:
                 detail="Token header missing 'kid' claim",
             )
 
-        # find matching key
-        for key_data in self._jwks.get("keys", []):
-            if key_data.get("kid") == kid:
-                return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
+        if not self._jwks.get("keys"):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Token signing keys are not available yet, try again shortly",
+            )
 
-        # key not found - try refreshing JWKS once (key rotation scenario)
-        logger.warning(f"Key '{kid}' not found in cached JWKS, refreshing...")
-        self._jwks = self._fetch_jwks_sync(self._jwks_uri)
-        self._last_fetched = time.time()
-
-        for key_data in self._jwks.get("keys", []):
-            if key_data.get("kid") == kid:
-                return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Unable to find signing key '{kid}' in JWKS",
-        )
+        key_data = self._find_key(kid)
+        if key_data is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unable to find the token's signing key",
+            )
+        return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
 
 
 # module-level singleton
@@ -225,11 +235,12 @@ def _require_auth_configured(settings: Settings) -> None:
 
 def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
     """
-    Validate a JWT access token against the Authentik JWKS.
+    Validate a JWT access token against the cached Authentik JWKS.
     Returns an AuthenticatedUser on success, raises HTTPException on failure.
+    Never fetches keys. Callers go through verify_token, which refreshes the cache first.
     """
     _require_auth_configured(settings)
-    signing_key = _jwks_client.get_signing_key(token, settings)
+    signing_key = _jwks_client.get_signing_key(token)
 
     try:
         payload = jwt.decode(
@@ -289,6 +300,17 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
         )
 
 
+async def verify_token(token: str, settings: Settings) -> AuthenticatedUser:
+    """Verify a bearer token, refreshing the key cache asynchronously when it cannot answer.
+
+    The one entry point for request and socket authentication. Raises HTTPException: 503 when
+    the server is not configured or has no keys yet, 401 for a token that does not verify.
+    """
+    _require_auth_configured(settings)
+    await _jwks_client.ensure_key_for(token, settings)
+    return validate_jwt(token, settings)
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme),
@@ -327,7 +349,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = validate_jwt(credentials.credentials, settings)
+    user = await verify_token(credentials.credentials, settings)
 
     # attach user to request state for access by middleware/logging
     # user_role is populated later by RBAC dependency (_populate_request_state)
@@ -404,8 +426,7 @@ async def get_ws_user(
         return None
 
     try:
-        user = validate_jwt(token, settings)
-        return user
+        return await verify_token(token, settings)
     except HTTPException as exc:
         logger.warning(f"WebSocket JWT validation failed: {exc.detail}")
         return None

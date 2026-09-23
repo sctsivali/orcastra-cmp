@@ -1148,7 +1148,7 @@ async def monitoring_websocket(ws: WebSocket):
     Authorization headers on WebSocket upgrade requests).
     """
     from app.core.config import get_settings
-    from app.core.auth import validate_jwt
+    from app.core.auth import verify_token
 
     # Validate auth token from query param
     settings = get_settings()
@@ -1165,7 +1165,7 @@ async def monitoring_websocket(ws: WebSocket):
             await ws.close(code=1008, reason="Authentication required")
             return
         try:
-            user = validate_jwt(token, settings)
+            user = await verify_token(token, settings)
             from app.core.rbac import Role, get_highest_role, resolve_roles
             if get_highest_role(resolve_roles(user)) != Role.ADMIN:
                 await ws.close(code=1008, reason="Monitoring WebSocket is admin-only")
