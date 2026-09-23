@@ -139,3 +139,9 @@ def test_sync_honours_the_allowlist(allow):
     allow("10.0.0.5/32")
     assert SyncDataRequest(app_url="http://10.0.0.5:3001").app_url == "http://10.0.0.5:3001"
     assert SyncDataRequest(app_url="http://example.test").app_url is None
+
+
+@pytest.mark.parametrize("value", ["https://[::1", "http://[fe80::1", "https://[zz::1]/"])
+def test_a_malformed_app_url_is_dropped_not_a_failed_sync(allow, value):
+    assert SyncDataRequest(app_url=value).app_url is None
+

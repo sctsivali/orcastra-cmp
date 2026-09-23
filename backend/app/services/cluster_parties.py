@@ -112,3 +112,20 @@ async def clusters_held_by_another_party(
             if (creators.get(key_id) or "").lower() not in side:
                 held_elsewhere |= clusters
     return held_elsewhere
+
+
+async def held_or_every_bounded(db: AsyncSession, email: str, bounded: Iterable[str]) -> Set[str]:
+    """clusters_held_by_another_party for a read path, which narrows rather than failing.
+
+    note: when who holds a cluster cannot be confirmed (Vault slow), a list treats every bounded
+    cluster as held, the count-based bound production has always applied, instead of answering 503.
+    """
+    wanted = set(bounded)
+    try:
+        return await clusters_held_by_another_party(db, email, wanted)
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        logger.warning("Could not confirm who holds %d cluster(s), keeping them bounded", len(wanted))
+        return wanted
+

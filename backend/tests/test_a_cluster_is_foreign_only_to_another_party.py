@@ -83,3 +83,25 @@ async def test_the_side_of_a_user_is_their_organizations(creators) -> None:
     db = await _world()
     assert await cluster_parties.side_of(db, A) == {A, A2}
     assert await cluster_parties.side_of(db, "Nobody@Example.test") == {"nobody@example.test"}
+
+
+async def test_a_list_keeps_every_bounded_cluster_when_the_party_check_stalls(monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    async def stall(*_a, **_k):
+        raise HTTPException(status_code=503, detail="Could not confirm who holds these clusters. Try again.")
+
+    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", stall)
+    assert await cluster_parties.held_or_every_bounded(None, A, {"sold", "shared"}) == {"sold", "shared"}
+
+
+async def test_a_list_still_raises_anything_but_a_stall(monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    async def boom(*_a, **_k):
+        raise HTTPException(status_code=500, detail="bug")
+
+    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", boom)
+    with pytest.raises(HTTPException):
+        await cluster_parties.held_or_every_bounded(None, A, {"sold"})
+

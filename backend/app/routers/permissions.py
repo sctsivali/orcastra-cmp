@@ -59,7 +59,7 @@ async def _held_elsewhere(nodes: List[str], db: AsyncSession, email: str) -> set
     bounded = sorted({node for node in nodes if visible_projects_for(node) is not None})
     if not bounded:
         return set()
-    return await cluster_parties.clusters_held_by_another_party(db, email, bounded)
+    return await cluster_parties.held_or_every_bounded(db, email, bounded)
 
 
 class IdentityInfo(BaseModel):

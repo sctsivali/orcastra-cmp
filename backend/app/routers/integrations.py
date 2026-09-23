@@ -313,11 +313,15 @@ class SyncDataRequest(BaseModel):
         try:
             return check_callback_url(value)
         except ValueError as exc:
-            parts = urlsplit(value)
+            try:
+                parts = urlsplit(value)
+                shown = f"{parts.scheme}://{parts.hostname or '?'}"
+            except ValueError:
+                shown = "an unparsable URL"
             logger.warning(
-                "Ignoring the app_url of a sync (%s://%s): %s. OrcaHub callbacks stay off until its "
+                "Ignoring the app_url of a sync (%s): %s. OrcaHub callbacks stay off until its "
                 "BACKEND_URL is public https or its address is in ORCAHUB_CALLBACK_ALLOWED_NETWORKS",
-                parts.scheme, parts.hostname or "?", exc,
+                shown, exc,
             )
             return None
 
