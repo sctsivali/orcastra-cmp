@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.core.auth import AuthenticatedUser
 from app.routers import integrations
 from app.routers.integrations import (
     MAX_SYNC_MEMBERS,
@@ -117,7 +118,12 @@ async def test_a_refresh_over_the_cap_upserts_nothing(monkeypatch):
         "get_api_key_from_vault",
         lambda _v, _k: ({"id": "oak_test", "app_url": "https://example.test"}, "h"),
     )
+    async def manages_every_key(_db, _user, keys):
+        return keys
+
+    monkeypatch.setattr(integrations, "_keys_the_caller_manages", manages_every_key)
+    user = AuthenticatedUser(user_id="refresher", email="partner@example.test", groups=["role_partner"])
     with pytest.raises(HTTPException) as caught:
-        await integrations.refresh_organizations(api_key_id="oak_test", db=None)
+        await integrations.refresh_organizations(api_key_id="oak_test", db=None, user=user)
     assert caught.value.status_code == 502
     assert upserts == []

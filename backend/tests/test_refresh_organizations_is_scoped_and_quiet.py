@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from app.core import org_scope
 from app.core.safe_http import GuardedResponse, SafeHTTPError
 from app.core.url_safety import UnsafeURLError
+from app.core.auth import AuthenticatedUser
 from app.routers import integrations
 
 KEY_B = {
@@ -58,9 +59,18 @@ class Outbound:
         monkeypatch.setattr(httpx, "AsyncClient", _NoRawHttpx)
 
 
+async def _manages_every_key(_db, _user, keys):
+    """Who manages a key is covered by test_a_key_on_a_shared_cluster_is_managed_by_its_side."""
+    return keys
+
+
+REFRESHER = AuthenticatedUser(user_id="refresher", email="partner@example.test", groups=["role_partner"])
+
+
 @pytest.fixture
 def key(monkeypatch):
     state = {"metadata": dict(KEY_B)}
+    monkeypatch.setattr(integrations, "_keys_the_caller_manages", _manages_every_key)
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
     monkeypatch.setattr(
         integrations, "get_api_key_from_vault", lambda _v, _k: (dict(state["metadata"]), "h")
@@ -71,7 +81,7 @@ def key(monkeypatch):
 async def _refresh(allowed, key_id: str = "oak_test_b"):
     token = org_scope._allowed_clusters_var.set(allowed)
     try:
-        return await integrations.refresh_organizations(api_key_id=key_id, db=None)
+        return await integrations.refresh_organizations(api_key_id=key_id, db=None, user=REFRESHER)
     finally:
         org_scope._allowed_clusters_var.reset(token)
 

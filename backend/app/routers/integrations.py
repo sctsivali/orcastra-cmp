@@ -1762,17 +1762,80 @@ def _audit_api_key(
         logger.warning("Could not audit %s for %s: %s", action, key_id, exc)
 
 
-def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
-    """Return an API key's metadata only if it overlaps the caller's clusters.
+def _read_api_key_metadata_blocking(key_id: str) -> Dict[str, Any]:
+    """A key's metadata document, or {} when it cannot be read. The cached /metadata path only."""
+    try:
+        return get_vault_integrations_client().vault_read(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+        ) or {}
+    except Exception:
+        return {}
 
-    important: `list_api_keys` already filters by `cluster_permissions` overlap, but every
-    single-key handler took `key_id` straight from the path and looked it up in Vault with no
-    such check. A caller who learned any key id could read its permissions and user mappings,
-    or revoke and delete it, across organisations. The overlap rule here is the same one the
-    list endpoint uses, so the two surfaces agree.
+
+async def _org_mate_emails(db: AsyncSession, email: str) -> set[str]:
+    """Lowercased emails of everyone who belongs to, or created, one of this user's organizations."""
+    own = await get_org_ids_for_email(email, db)
+    if not own:
+        return set()
+    members = (await db.execute(
+        select(OrganizationMember.user_email).where(OrganizationMember.organization_id.in_(own))
+    )).scalars().all()
+    creators = (await db.execute(
+        select(Organization.created_by).where(Organization.id.in_(own))
+    )).scalars().all()
+    return {str(e).lower() for e in [*members, *creators] if e}
+
+
+def _key_clusters(metadata: Dict[str, Any]) -> set[str]:
+    return {
+        str(p.get("cluster_id") or "")
+        for p in metadata.get("cluster_permissions", []) or []
+        if isinstance(p, dict)
+    }
+
+
+async def _keys_the_caller_manages(
+    db: AsyncSession, user: AuthenticatedUser, keys: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """The keys, out of ones already in the caller's cluster scope, that this user may manage.
+
+    important: cluster overlap alone let a Partner on a cluster bound to another organization read,
+    revoke and delete that organization's keys, which breaks its OrcaHub sync and provisioning. A
+    key granting a cluster another party holds is managed only by its creator or the creator's
+    organization. An Admin, and a key whose clusters are all the caller's own, keep the old rule.
     """
-    metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+
+    if not keys or get_highest_role(resolve_roles(user)) == Role.ADMIN:
+        return keys
+    email = (user.email or "").lower()
+    mine = [k for k in keys if str(k.get("created_by") or "").lower() == email]
+    rest = [k for k in keys if str(k.get("created_by") or "").lower() != email]
+    if not rest:
+        return keys
+    held = await _clusters_held_by_another_party(
+        db, user.email, set().union(*(_key_clusters(k) for k in rest))
+    )
+    mates = await _org_mate_emails(db, user.email) if held else set()
+    kept = [
+        k for k in rest
+        if not (_key_clusters(k) & held) or str(k.get("created_by") or "").lower() in mates
+    ]
+    return [k for k in keys if k in mine or k in kept]
+
+
+async def _authorize_api_key(key_id: str, user: AuthenticatedUser, db: AsyncSession) -> Dict[str, Any]:
+    """Return an API key's metadata only if the caller may manage it, else 404.
+
+    important: `list_api_keys` filters by cluster overlap and by who manages the key, and every
+    single-key handler takes `key_id` straight from the path, so both apply here too and the two
+    surfaces agree. The read runs in a thread (asyncio.to_thread keeps the request's org scope)
+    because Vault answers synchronously.
+    """
+    metadata = await asyncio.to_thread(_read_api_key_metadata_blocking, key_id)
     _assert_key_in_scope(metadata, get_current_allowed_clusters())
+    if not await _keys_the_caller_manages(db, user, [metadata]):
+        raise HTTPException(status_code=404, detail="API key not found")
     return metadata
 
 
@@ -1899,7 +1962,11 @@ async def _refuse_a_grant_past_the_project_bound(
     # important: the router admits tenants, and a key's grants and mappings are partner data.
     dependencies=[Depends(require_partner())],
 )
-async def list_api_keys(fresh: bool = False):
+async def list_api_keys(
+    fresh: bool = False,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
     """List API keys visible to the current user (admin sees all, others see org-scoped)."""
     vault_client = get_vault_integrations_client()
     
@@ -1910,7 +1977,7 @@ async def list_api_keys(fresh: bool = False):
         cached_data = None if fresh else cache.get("api_responses", cache_key)
         
         if cached_data is None:
-            all_metadata = list_api_keys_from_vault(vault_client)
+            all_metadata = await asyncio.to_thread(list_api_keys_from_vault, vault_client)
             
             # Filter by org scope: non-admin users only see keys
             # whose cluster_permissions overlap with their allowed clusters
@@ -1928,6 +1995,9 @@ async def list_api_keys(fresh: bool = False):
             cache.set("api_responses", cache_key, all_metadata, ttl=60)
         else:
             all_metadata = cached_data
+        # note: after the cache, because the cached list is shared by everyone with the same
+        # cluster scope while who manages a key depends on the caller.
+        all_metadata = await _keys_the_caller_manages(db, user, all_metadata)
         
         # Process and count
         keys = []
@@ -1941,7 +2011,7 @@ async def list_api_keys(fresh: bool = False):
                 active_count += 1
             
             # Get user mapping count
-            user_mappings = get_user_mappings_from_vault(vault_client, metadata["id"])
+            user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, metadata["id"])
             
             keys.append(APIKeyInfo(
                 **metadata,
@@ -1969,14 +2039,17 @@ async def list_api_keys(fresh: bool = False):
     description="Get details of a specific API key.",
     dependencies=[Depends(require_partner())],
 )
-async def get_api_key(key_id: str):
+async def get_api_key(
+    key_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
     """Get API key details."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    metadata = await _authorize_api_key(key_id, user, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         
         return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
         
@@ -2001,7 +2074,7 @@ async def update_api_key_permissions(
     db: AsyncSession = Depends(get_db),
 ):
     """Update API key cluster permissions."""
-    current = _authorize_api_key(get_vault_integrations_client(), key_id)
+    current = await _authorize_api_key(key_id, _rbac, db)
 
     # important: creation validates the requested clusters against the caller's own set
     # (see create_api_key), and this path did not, so a partner could create a key scoped to
@@ -2044,7 +2117,7 @@ async def update_api_key_permissions(
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
+        metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Update permissions
         metadata["cluster_permissions"] = [p.model_dump() for p in permissions]
@@ -2063,7 +2136,7 @@ async def update_api_key_permissions(
         evict_api_key_cache(key_id)
         _audit_api_key(API_KEY_PERMISSIONS_UPDATE, key_id, _rbac, metadata, before=before)
 
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
 
     except HTTPException:
@@ -2082,13 +2155,14 @@ async def revoke_api_key(
     key_id: str,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Revoke an API key (immediate revocation)."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
+        metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Mark as revoked
         metadata["is_revoked"] = True
@@ -2112,7 +2186,7 @@ async def revoke_api_key(
 
         logger.info(f"API key {key_id} revoked")
         
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
         
     except HTTPException:
@@ -2131,14 +2205,15 @@ async def delete_api_key(
     key_id: str,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete an API key permanently."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
         # Verify it exists
-        metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+        metadata, _secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)
@@ -2173,14 +2248,15 @@ async def add_user_mapping(
     request: UserMappingRequest,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Add or update a user mapping for an API key."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
         # Verify API key exists
-        get_api_key_from_vault(vault_client, key_id)
+        await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Create user mapping
         now = datetime.utcnow().isoformat()
@@ -2215,17 +2291,17 @@ async def add_user_mapping(
     description="Get all user mappings for an API key.",
     dependencies=[Depends(require_partner())],
 )
-async def list_user_mappings(key_id: str):
+async def list_user_mappings(
+    key_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
     """List all user mappings for an API key."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, user, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        # Verify API key exists
-        get_api_key_from_vault(vault_client, key_id)
-        
-        # Get mappings
-        return get_user_mappings_from_vault(vault_client, key_id)
+        return await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         
     except HTTPException:
         raise
@@ -3062,7 +3138,6 @@ async def list_synced_organizations(
         orgs = result.scalars().all()
 
         # enrich with app_name from Vault
-        vault_client = get_vault_integrations_client()
         app_name_cache: Dict[str, str] = {}
 
         response = []
@@ -3070,11 +3145,8 @@ async def list_synced_organizations(
             app_name = None
             if org.api_key_id:
                 if org.api_key_id not in app_name_cache:
-                    try:
-                        meta, _ = get_api_key_from_vault(vault_client, org.api_key_id)
-                        app_name_cache[org.api_key_id] = meta.get("app_name", "")
-                    except Exception:
-                        app_name_cache[org.api_key_id] = ""
+                    meta = await asyncio.to_thread(_read_api_key_metadata_blocking, org.api_key_id)
+                    app_name_cache[org.api_key_id] = meta.get("app_name", "")
                 app_name = app_name_cache[org.api_key_id] or None
 
             response.append(IntegrationOrgResponse(
@@ -3132,6 +3204,7 @@ async def refresh_organizations(
         description="API key ID of the external app to refresh from",
     ),
     db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_partner()),
 ):
     """On-demand pull of organizations from external app via stored callback URL."""
     # important: read the scope here on the loop. run_blocking uses run_in_executor, which does not
@@ -3146,6 +3219,8 @@ async def refresh_organizations(
     except (BlockingTimeout, BlockingPoolFull):
         raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
     _assert_key_in_scope(metadata, allowed)
+    if not await _keys_the_caller_manages(db, user, [metadata]):
+        raise HTTPException(status_code=404, detail="API key not found")
     # important: the member push and the webhook already skip such a key. Refreshing it would send
     # its stored credential hash to its callback URL and write the answer under its ownership.
     if _api_key_is_unusable(metadata):

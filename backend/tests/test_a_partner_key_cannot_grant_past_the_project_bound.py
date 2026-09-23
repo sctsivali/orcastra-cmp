@@ -74,6 +74,12 @@ class _Cache:
         return None
 
 
+def _returns(value: Dict[str, Any]):
+    async def fake(_key_id: str, _user: Any, _db: Any) -> Dict[str, Any]:
+        return value
+    return fake
+
+
 @pytest.fixture
 def env(monkeypatch):
     vault = FakeVault()
@@ -228,7 +234,7 @@ def _stored(cluster_id: str, projects: List[str], permissions: Optional[List[str
 
 
 async def _update(env, monkeypatch, stored, permissions, db):
-    monkeypatch.setattr(integrations, "_authorize_api_key", lambda _v, _k: stored)
+    monkeypatch.setattr(integrations, "_authorize_api_key", _returns(stored))
     monkeypatch.setattr(
         integrations, "get_api_key_from_vault", lambda _v, _k: (dict(stored), "hash")
     )

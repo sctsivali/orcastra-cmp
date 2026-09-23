@@ -39,6 +39,10 @@ STORED: Dict[str, Any] = {
 MARKERS = ("APP-URL-MARKER", "RAW-SECRET-MARKER", "HASH-MARKER", "JUNK-MARKER")
 
 
+async def _returns_copy_of_stored(_key_id: str, _user: Any, _db: Any) -> Dict[str, Any]:
+    return json.loads(json.dumps(STORED))
+
+
 class Spy:
     def __init__(self) -> None:
         self.events: List[Dict[str, Any]] = []
@@ -73,7 +77,7 @@ def env(monkeypatch):
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: _Cache())
     monkeypatch.setattr(integrations, "evict_api_key_cache", lambda _k: None)
-    monkeypatch.setattr(integrations, "_authorize_api_key", lambda _v, _k: json.loads(json.dumps(STORED)))
+    monkeypatch.setattr(integrations, "_authorize_api_key", _returns_copy_of_stored)
     monkeypatch.setattr(
         integrations, "get_api_key_from_vault", lambda _v, _k: (json.loads(json.dumps(STORED)), "HASH-MARKER")
     )
