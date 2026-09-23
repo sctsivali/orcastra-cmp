@@ -65,7 +65,9 @@ from app.core.proxy_paths import (
     query_key_name,
 )
 from app.core.type_utils import normalize_cluster_type
-from app.services.orcahub_sync import check_callback_url
+from app.core.safe_http import guarded_request
+from app.core.url_safety import UnsafeURLError
+from app.services.orcahub_sync import callback_networks, callback_requires_https, check_callback_url
 
 logger = logging.getLogger(__name__)
 
@@ -2863,6 +2865,7 @@ async def list_synced_organizations(
 
 
 _UNUSABLE_ORG_LIST = "External app returned an unusable organization list"
+REFRESH_RESPONSE_MAX_BYTES = 1024 * 1024
 
 
 def _parse_refreshed_organizations(data: Any) -> List[SyncOrganization]:
@@ -2897,8 +2900,6 @@ async def refresh_organizations(
     db: AsyncSession = Depends(get_db),
 ):
     """On-demand pull of organizations from external app via stored callback URL."""
-    import httpx
-
     # important: read the scope here on the loop. run_blocking uses run_in_executor, which does not
     # carry ContextVars, so the same check inside the thread would see None and pass everyone.
     allowed = get_current_allowed_clusters()
@@ -2922,28 +2923,38 @@ async def refresh_organizations(
     # Call external app's organizations endpoint
     callback_url = f"{app_url.rstrip('/')}/api/external/organizations"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                callback_url,
-                headers={
-                    "X-API-Key-ID": api_key_id,
-                    "X-API-Key-Secret-Hash": secret_hash,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as e:
-        # note: status only. The body is whatever the stored URL answered, and the status in a
-        # client-facing detail would make this endpoint a scanner of that URL.
-        logger.error(
-            "External app returned HTTP %s for api key %s", e.response.status_code, api_key_id
+        resp = await guarded_request(
+            "GET",
+            callback_url,
+            headers={
+                "X-API-Key-ID": api_key_id,
+                "X-API-Key-Secret-Hash": secret_hash,
+            },
+            max_bytes=REFRESH_RESPONSE_MAX_BYTES,
+            max_redirects=0,
+            require_https=callback_requires_https(app_url),
+            allowed_networks=callback_networks(),
+            content_type_prefix="application/json",
+            raise_for_status=False,
+            timeout=15.0,
         )
-        raise HTTPException(status_code=502, detail="External app returned an error")
+    except UnsafeURLError as e:
+        logger.warning("Refresh refused the stored callback URL of api key %s: %s", api_key_id, e)
+        raise HTTPException(status_code=502, detail="The stored callback URL is not allowed")
     except Exception as e:
         logger.error(
             "Failed to reach external app for api key %s: %s", api_key_id, sanitize_error(str(e))
         )
         raise HTTPException(status_code=502, detail="Failed to reach external app")
+    if not 200 <= resp.status_code < 300:
+        # note: status only. The body is whatever the stored URL answered, and the status in a
+        # client-facing detail would make this endpoint a scanner of that URL.
+        logger.error("External app returned HTTP %s for api key %s", resp.status_code, api_key_id)
+        raise HTTPException(status_code=502, detail="External app returned an error")
+    try:
+        data = resp.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail=_UNUSABLE_ORG_LIST) from None
 
     sync_orgs = _parse_refreshed_organizations(data)
     if not sync_orgs:

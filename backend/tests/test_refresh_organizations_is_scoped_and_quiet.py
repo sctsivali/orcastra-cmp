@@ -9,6 +9,7 @@ not carry ContextVars, so a check made inside the thread sees None and passes ev
 scope tests below run the real run_blocking, so moving the check into the thread fails them.
 """
 
+import json
 import logging
 from typing import Any, Dict, List
 
@@ -18,6 +19,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.core import org_scope
+from app.core.safe_http import GuardedResponse, SafeHTTPError
+from app.core.url_safety import UnsafeURLError
 from app.routers import integrations
 
 KEY_B = {
@@ -27,29 +30,32 @@ KEY_B = {
 }
 
 
+class _NoRawHttpx:
+    def __init__(self, *_a: Any, **_k: Any) -> None:
+        raise AssertionError("the refresh must call out through guarded_request, not raw httpx")
+
+
 class Outbound:
     """Records every outbound call the refresh makes and answers with a fixed response."""
 
-    def __init__(self, status: int = 200, body: Any = None, text: str = "") -> None:
+    def __init__(self, status: int = 200, body: Any = None, text: str = "", raises=None) -> None:
         self.status = status
         self.body = body
         self.text = text
+        self.raises = raises
         self.calls: List[Dict[str, Any]] = []
 
     def install(self, monkeypatch) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            self.calls.append({"url": str(request.url), "headers": dict(request.headers)})
+        async def recorder(method: str, url: str, **kwargs: Any) -> GuardedResponse:
+            self.calls.append({"method": method, "url": url, **kwargs})
+            if self.raises is not None:
+                raise self.raises
             if self.body is not None:
-                return httpx.Response(self.status, json=self.body)
-            return httpx.Response(self.status, text=self.text)
+                return GuardedResponse(self.status, "application/json", json.dumps(self.body).encode())
+            return GuardedResponse(self.status, "text/plain", self.text.encode())
 
-        real = httpx.AsyncClient
-
-        def factory(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
-            kwargs["transport"] = httpx.MockTransport(handler)
-            return real(*args, **kwargs)
-
-        monkeypatch.setattr(httpx, "AsyncClient", factory)
+        monkeypatch.setattr(integrations, "guarded_request", recorder)
+        monkeypatch.setattr(httpx, "AsyncClient", _NoRawHttpx)
 
 
 @pytest.fixture
@@ -147,3 +153,53 @@ def test_a_real_key_id_passes_the_pattern(key, monkeypatch):
         params={"api_key_id": "oak_0123456789abcdef0123456789abcdef"},
     )
     assert response.status_code == 200, response.text[:200]
+
+
+async def test_the_callback_goes_out_under_the_url_policy(key, monkeypatch):
+    outbound = Outbound(body={"organizations": []})
+    outbound.install(monkeypatch)
+    await _refresh(None)
+    call = outbound.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://example.test/api/external/organizations"
+    assert call["max_redirects"] == 0
+    assert call["require_https"] is True
+    assert call["content_type_prefix"] == "application/json"
+    assert call["max_bytes"] == integrations.REFRESH_RESPONSE_MAX_BYTES
+
+
+async def test_a_refused_url_is_a_502_naming_the_policy(key, monkeypatch):
+    Outbound(raises=UnsafeURLError("host resolves to an internal address")).install(monkeypatch)
+    with pytest.raises(HTTPException) as caught:
+        await _refresh(None)
+    assert caught.value.status_code == 502
+    assert caught.value.detail == "The stored callback URL is not allowed"
+
+
+async def test_a_transport_failure_is_a_502(key, monkeypatch):
+    Outbound(raises=SafeHTTPError("could not reach the URL")).install(monkeypatch)
+    with pytest.raises(HTTPException) as caught:
+        await _refresh(None)
+    assert caught.value.status_code == 502
+    assert caught.value.detail == "Failed to reach external app"
+
+
+async def test_a_planted_loopback_value_is_refused_before_any_connection(key, monkeypatch):
+    """A value stored before the boundary check existed is re-checked at use time."""
+    key["metadata"]["app_url"] = "http://127.0.0.1:4050"
+    monkeypatch.setattr(httpx.AsyncClient, "send", _refuse_send)
+    with pytest.raises(HTTPException) as caught:
+        await _refresh(None)
+    assert caught.value.status_code == 502
+    assert caught.value.detail == "The stored callback URL is not allowed"
+
+
+async def _refuse_send(*_a: Any, **_k: Any) -> None:
+    raise AssertionError("no connection may be attempted for a refused URL")
+
+
+async def test_a_body_that_is_not_json_is_a_502(key, monkeypatch):
+    Outbound(status=200, text="<html>").install(monkeypatch)
+    with pytest.raises(HTTPException) as caught:
+        await _refresh(None)
+    assert caught.value.status_code == 502

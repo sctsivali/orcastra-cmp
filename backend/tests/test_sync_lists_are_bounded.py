@@ -92,3 +92,32 @@ def test_a_usable_refresh_payload_parses():
         "org-1"
     ]
     assert integrations._parse_refreshed_organizations({}) == []
+
+
+async def test_a_refresh_over_the_cap_upserts_nothing(monkeypatch):
+    import json
+
+    from app.core.safe_http import GuardedResponse
+
+    upserts = []
+
+    async def recorder(method, url, **kwargs):
+        body = {"organizations": [ORG] * (MAX_SYNC_ORGANIZATIONS + 1)}
+        return GuardedResponse(200, "application/json", json.dumps(body).encode())
+
+    async def upsert(*args, **kwargs):
+        upserts.append(args)
+        return 0
+
+    monkeypatch.setattr(integrations, "guarded_request", recorder)
+    monkeypatch.setattr(integrations, "_upsert_synced_organizations", upsert)
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
+    monkeypatch.setattr(
+        integrations,
+        "get_api_key_from_vault",
+        lambda _v, _k: ({"id": "oak_test", "app_url": "https://example.test"}, "h"),
+    )
+    with pytest.raises(HTTPException) as caught:
+        await integrations.refresh_organizations(api_key_id="oak_test", db=None)
+    assert caught.value.status_code == 502
+    assert upserts == []

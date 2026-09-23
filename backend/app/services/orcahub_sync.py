@@ -11,12 +11,13 @@ from functools import lru_cache
 from typing import Optional, List, Dict, Any, Tuple
 from urllib.parse import urlsplit
 
-import httpx
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.url_safety import NEVER_ALLOWED, IPNetwork, validate_url_field
+from app.core.error_sanitizer import sanitize_error
+from app.core.safe_http import guarded_request
+from app.core.url_safety import NEVER_ALLOWED, IPNetwork, UnsafeURLError, validate_url_field
 from app.models.db_models import Organization
 
 logger = logging.getLogger(__name__)
@@ -155,31 +156,45 @@ async def push_members_to_orcahub(
         })
 
     callback_url = f"{creds['app_url'].rstrip('/')}/api/external/members/sync"
-
+    # important: app_url was chosen by whoever holds the key and this request carries the raw
+    # secret, so it goes through the same URL policy as every other OrcaHub callback, re-checked
+    # and pinned at the moment of the request.
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                callback_url,
-                headers={
-                    "X-API-Key-ID": creds["api_key_id"],
-                    "X-API-Key-Secret": creds["api_key_secret"],
-                },
-                json={"members": payload_members},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            logger.info(
-                f"Pushed {len(payload_members)} member(s) to OrcaHub: "
-                f"synced={data.get('data', {}).get('synced', 0)}, "
-                f"removed={data.get('data', {}).get('removed', 0)}"
-            )
-            return True
-    except httpx.HTTPStatusError as e:
-        logger.error(f"OrcaHub member push failed: HTTP {e.response.status_code}")
-    except Exception as e:
-        logger.error(f"OrcaHub member push failed: {e}")
-
-    return False
+        resp = await guarded_request(
+            "POST",
+            callback_url,
+            headers={
+                "X-API-Key-ID": creds["api_key_id"],
+                "X-API-Key-Secret": creds["api_key_secret"],
+            },
+            json={"members": payload_members},
+            max_bytes=CALLBACK_RESPONSE_MAX_BYTES,
+            max_redirects=0,
+            require_https=callback_requires_https(creds["app_url"]),
+            allowed_networks=callback_networks(),
+            raise_for_status=False,
+            timeout=15.0,
+        )
+    except UnsafeURLError as exc:
+        logger.warning("OrcaHub member push refused for api key %s: %s", creds["api_key_id"], exc)
+        return False
+    except Exception as exc:
+        logger.error("OrcaHub member push failed: %s", sanitize_error(str(exc)))
+        return False
+    if not 200 <= resp.status_code < 300:
+        logger.error("OrcaHub member push failed: HTTP %s", resp.status_code)
+        return False
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    counts = data.get("data") if isinstance(data, dict) else None
+    counts = counts if isinstance(counts, dict) else {}
+    logger.info(
+        "Pushed %d member(s) to OrcaHub: synced=%s, removed=%s",
+        len(payload_members), counts.get("synced", 0), counts.get("removed", 0),
+    )
+    return True
 
 
 async def push_member_removal_to_orcahub(
