@@ -365,12 +365,12 @@ FOREIGN_BODIES = [
 HOST_BODIES = [
     ("POST", "/1.0/instances", {"name": "c1", "config": {"security.privileged": "true"}}),
     ("PUT", "/1.0/instances/web", {"config": {"raw.lxc": "lxc.apparmor.profile=unconfined"}}),
-    ("PATCH", "/1.0/instances/web", {"config": {"Security.IDMap.Isolated": "false"}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"Security.IDMap.Size": "65536"}}),
     ("PATCH", "/1.0/instances/web", {"config": {"linux.kernel_modules": "overlay"}}),
     ("PATCH", "/1.0/instances/web", {"devices": {"host": {"type": "disk", "source": "/", "path": "/mnt"}}}),
     ("PATCH", "/1.0/instances/web", {"devices": {"sock": {"type": "proxy", "listen": "tcp:0.0.0.0:1",
                                                             "connect": "unix:/var/lib/lxd/unix.socket"}}}),
-    ("PATCH", "/1.0/instances/web", {"devices": {"g": {"type": "gpu"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"r": {"type": "disk", "source": "ceph:rbd/vol", "path": "/r"}}}),
     ("PATCH", "/1.0/instances/web", {"devices": {"eth1": {"type": "nic", "nictype": "physical", "parent": "eno1"}}}),
     ("POST", "/1.0/instances", {"name": "c1", "devices": {"d": {"type": "unix-block", "source": "/dev/sda"}}}),
 ]
@@ -382,6 +382,10 @@ PLAIN_BODIES = [
                                                             "path": "/data"}}}),
     ("PATCH", "/1.0/instances/web", {"devices": {"eth0": {"type": "nic", "network": "lxdbr0"}}}),
     ("PUT", "/1.0/instances/web/state", {"action": "stop", "force": True}),
+    # a GPU, a switch set off and a VM's own config drive do not reach the host
+    ("PATCH", "/1.0/instances/web", {"devices": {"g": {"type": "gpu"}}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"security.privileged": "false", "security.idmap.isolated": "true"}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"cloud": {"type": "disk", "source": "cloud-init:config"}}}),
 ]
 
 

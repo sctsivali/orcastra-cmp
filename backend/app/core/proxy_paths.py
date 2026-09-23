@@ -167,16 +167,18 @@ def assert_server_state_unchanged(path: str, method: str) -> None:
 # LXD reads a project from the body of a copy, a move and an image-from-instance, and an
 # instance's own config and devices can reach the host, which belongs to every project at once.
 # note: refused only for a key that is not `*`. The integrator's keys are `*` and unaffected.
-_HOST_CONFIG_PREFIXES = (
-    "raw.",
-    "security.privileged",
-    "security.idmap.",
-    "linux.kernel_modules",
-    "security.syscalls.intercept.",
-)
+# A value is judged, not only a key: the dashboard's create form sends security.privileged "false"
+# for Deny, and security.idmap.isolated only ever narrows the map, so it is left out.
+_HOST_CONFIG_SET = ("raw.", "security.idmap.base", "security.idmap.size", "linux.kernel_modules")
+_HOST_CONFIG_SWITCHES = ("security.privileged", "security.syscalls.intercept.")
+_SWITCHED_OFF = frozenset({"", "false", "0", "no", "off"})
+# note: a GPU is allowed. It shares the host's cards, and does not reach the host's files or root.
 _HOST_DEVICE_TYPES = frozenset(
-    {"unix-char", "unix-block", "unix-hotplug", "usb", "gpu", "pci", "infiniband", "proxy"}
+    {"unix-char", "unix-block", "unix-hotplug", "usb", "pci", "infiniband", "proxy"}
 )
+# LXD's own drives for a VM. Any other disk source outside a storage pool is on the host: a path,
+# or a ceph:/cephfs: volume mapped with the host's own Ceph credentials.
+_BUILTIN_DISK_SOURCES = frozenset({"cloud-init:config", "agent:config"})
 
 
 def _projects_named_in(body: Dict[str, Any]) -> List[str]:
@@ -188,12 +190,19 @@ def _projects_named_in(body: Dict[str, Any]) -> List[str]:
     return [str(value) for value in named if value not in (None, "")]
 
 
-def _host_reach(body: Dict[str, Any], allow_gpu: bool = False) -> Optional[str]:
-    """What in an instance body reaches the host, or None. allow_gpu leaves a GPU device out."""
+def _config_reaches_host(key: Any, value: Any) -> bool:
+    name, setting = str(key).lower(), str(value if value is not None else "").strip().lower()
+    if name.startswith(_HOST_CONFIG_SWITCHES):
+        return setting not in _SWITCHED_OFF
+    return name.startswith(_HOST_CONFIG_SET) and setting != ""
+
+
+def _host_reach(body: Dict[str, Any]) -> Optional[str]:
+    """What in an instance or profile body reaches the host, or None."""
     config = body.get("config")
     if isinstance(config, dict):
-        for key in config:
-            if str(key).lower().startswith(_HOST_CONFIG_PREFIXES):
+        for key, value in config.items():
+            if _config_reaches_host(key, value):
                 return f"config {key}"
     devices = body.get("devices")
     if isinstance(devices, dict):
@@ -201,10 +210,14 @@ def _host_reach(body: Dict[str, Any], allow_gpu: bool = False) -> Optional[str]:
             if not isinstance(device, dict):
                 continue
             kind = str(device.get("type") or "").lower()
-            if kind in _HOST_DEVICE_TYPES and not (allow_gpu and kind == "gpu"):
+            if kind in _HOST_DEVICE_TYPES:
                 return f"device {name} of type {kind}"
-            if kind == "disk" and str(device.get("source") or "").startswith("/"):
-                return f"device {name}, a disk from a host path"
+            if kind == "disk":
+                source = str(device.get("source") or "")
+                if source.startswith("/"):
+                    return f"device {name}, a disk from a host path"
+                if source and not device.get("pool") and source.lower() not in _BUILTIN_DISK_SOURCES:
+                    return f"device {name}, a disk from outside a storage pool"
             if kind == "nic" and str(device.get("nictype") or "").lower() == "physical":
                 return f"device {name}, a physical host interface"
     return None
@@ -293,6 +306,6 @@ def assert_project_scope_allows_path(
     )
 
 
-def host_reach(body: Dict[str, Any], allow_gpu: bool = False) -> Optional[str]:
+def host_reach(body: Dict[str, Any]) -> Optional[str]:
     """Public name for the host-reach rule, so the dashboard routes and the proxy share one list."""
-    return _host_reach(body, allow_gpu=allow_gpu)
+    return _host_reach(body)

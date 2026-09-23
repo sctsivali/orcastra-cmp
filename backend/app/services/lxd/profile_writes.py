@@ -10,7 +10,7 @@ use is refused with the instances named rather than by the daemon's terse text.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.lxd_names import safe_segment
 from app.services.lxd.project_scope import project_params
@@ -79,9 +79,13 @@ def update_profile_sync(
     devices: Optional[Dict[str, Dict[str, str]]],
     description: Optional[str],
     if_match: Optional[str],
+    guard: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     """Read-modify-write with the precondition, then read back. Raises PreconditionFailed
-    when the fresh read already contradicts `if_match`, before anything is written."""
+    when the fresh read already contradicts `if_match`, before anything is written.
+
+    `guard(payload, current)` may raise to refuse the write. It sees the same read the write is
+    built on, so what it judges as unchanged cannot have changed before the PUT."""
     current, current_etag = read_profile_sync(client, name, owner)
     # important: compared here as well as by the daemon. The write below is built on this read,
     # so a precondition the read already contradicts must not become a PUT at all, and a daemon
@@ -99,6 +103,8 @@ def update_profile_sync(
         payload["devices"] = devices
     if description is not None:
         payload["description"] = description
+    if guard is not None:
+        guard(payload, current)
     put_kwargs: Dict[str, Any] = {
         "json": payload,
         "params": project_params(owner),

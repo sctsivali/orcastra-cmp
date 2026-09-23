@@ -80,20 +80,32 @@ async def verify_whole_cluster_access(cluster_id: str, db: "AsyncSession", email
         )
 
 
-def refuse_host_reach_where_bounded(cluster_id: str, body: dict) -> None:
+def refuse_host_reach_where_bounded(cluster_id: str, body: dict, current: Optional[dict] = None) -> None:
     """Raise 403 when a caller held to a project bound sets config or a device that reaches the host.
 
     important: a project bound keeps one organization out of another's projects, and the host is
-    under every project. Privileged containers, raw.* and idmap config, kernel modules, syscall
-    interception, host-path disks and host device types would carry a bounded caller past the
-    bound. The bound exists only where another party holds the cluster, so a partner on its own
-    cluster and an admin are unaffected. A GPU device stays allowed.
+    under every project. Privileged containers, raw.* and idmap maps, kernel modules, syscall
+    interception, disks from outside a storage pool and host device types would carry a bounded
+    caller past the bound. The bound exists only where another party holds the cluster, so a
+    partner on its own cluster and an admin are unaffected. A GPU device stays allowed.
+
+    With `current`, only what the write adds or changes is judged. The profile editor sends both
+    maps whole, and an entry the profile already carries is not the caller's doing.
     """
     from app.core.proxy_paths import host_reach
 
     if visible_projects_for(cluster_id) is None:
         return
-    reach = host_reach(body, allow_gpu=True)
+    if current is not None:
+        body = {
+            part: {
+                name: value
+                for name, value in (body.get(part) or {}).items()
+                if (current.get(part) or {}).get(name) != value
+            }
+            for part in ("config", "devices")
+        }
+    reach = host_reach(body)
     if reach:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

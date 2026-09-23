@@ -520,12 +520,14 @@ async def update_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        # important: a profile is applied to instances, so the host-reach rule holds for it too
-        refuse_host_reach_where_bounded(host, {"config": request.config or {}, "devices": request.devices or {}})
+        # important: a profile is applied to instances, so the host-reach rule holds for it too.
+        # Judged inside the write, against the read the write is built on, and only for what
+        # the edit adds or changes: the editor sends both maps whole.
         written, etag = await asyncio.to_thread(
             update_profile_sync, client, profile_name, owner,
             config=request.config, devices=request.devices, description=request.description,
             if_match=if_match,
+            guard=lambda payload, current: refuse_host_reach_where_bounded(host, payload, current=current),
         )
         
         # Log activity: profile update success
