@@ -215,14 +215,14 @@ async def test_a_vault_stall_resolving_creators_answers_503(env, monkeypatch):
     assert env["vault"].writes == []
 
 
-def _stored(cluster_id: str, projects: List[str]) -> Dict[str, Any]:
+def _stored(cluster_id: str, projects: List[str], permissions: Optional[List[str]] = None) -> Dict[str, Any]:
     return {
         "id": "oak_legacy",
         "name": "legacy",
         "app_name": "app",
         "created_at": "2026-01-01T00:00:00",
         "cluster_permissions": [
-            {"cluster_id": cluster_id, "projects": projects, "permissions": ["write"]}
+            {"cluster_id": cluster_id, "projects": projects, "permissions": permissions or ["write"]}
         ],
     }
 
@@ -262,3 +262,29 @@ async def test_an_update_cannot_add_past_the_bound(env, monkeypatch):
     assert "cluster-a/proj-b" in str(caught.value.detail)
     assert "cluster-a/*" not in str(caught.value.detail)
     assert env["vault"].writes == []
+
+
+@pytest.mark.parametrize("raised", [["read", "write", "admin"], ["write"], ["admin"]])
+async def test_an_update_cannot_raise_the_level_of_a_carried_over_grant(env, monkeypatch, raised):
+    stored = _stored("cluster-a", ["*"], permissions=["read"])
+    permissions = [ClusterPermission(cluster_id="cluster-a", permissions=raised, projects=["*"])]
+    with pytest.raises(HTTPException) as caught:
+        await _update(env, monkeypatch, stored, permissions, FakeSession(HOLDERS, {1}))
+    assert caught.value.status_code == 403
+    assert "cluster-a/*" in str(caught.value.detail)
+    assert env["vault"].writes == []
+
+
+async def test_an_update_may_lower_the_level_of_a_carried_over_grant(env, monkeypatch):
+    stored = _stored("cluster-a", ["*"], permissions=["read", "write", "admin"])
+    permissions = [ClusterPermission(cluster_id="cluster-a", permissions=["read"], projects=["*"])]
+    result = await _update(env, monkeypatch, stored, permissions, FakeSession(HOLDERS, {1}))
+    assert result.cluster_permissions[0].permissions == ["read"]
+    assert env["vault"].writes
+
+
+async def test_a_visible_project_may_still_take_any_level(env, monkeypatch):
+    stored = _stored("cluster-a", ["proj-a"], permissions=["read"])
+    permissions = [ClusterPermission(cluster_id="cluster-a", permissions=["admin"], projects=["proj-a"])]
+    result = await _update(env, monkeypatch, stored, permissions, FakeSession(HOLDERS, {1}))
+    assert result.cluster_permissions[0].permissions == ["admin"]

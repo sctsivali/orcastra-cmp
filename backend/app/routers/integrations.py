@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Tuple, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
 import requests
@@ -39,7 +39,7 @@ from app.services.lxd.proxy import (
     raw_request,
     socket_timeout_for,
 )
-from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
+from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, granted_level
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
@@ -1839,7 +1839,7 @@ async def _refuse_a_grant_past_the_project_bound(
     db: AsyncSession,
     caller_email: str,
     grants: List[ClusterPermission],
-    already_granted: Optional[Dict[str, set[str]]] = None,
+    already_granted: Optional[Dict[str, Tuple[set[str], int]]] = None,
 ) -> None:
     """A Partner may not give a key more of a cluster than they can see there.
 
@@ -1847,8 +1847,8 @@ async def _refuse_a_grant_past_the_project_bound(
     holds, a Partner could name that party's project, or '*', and the key then acted on it
     through /raw-proxy, /proxy and /provision-tenant-access. A cluster held only by the caller's
     side is unchanged, so the '*' grant an OrcaHub connection carries still mints there. What a
-    key already holds on a cluster is carried over on update, so an edit cannot widen a key but
-    never breaks a running one. Admin is not bound.
+    key already holds on a cluster (its projects and its permission level) is carried over on
+    update, so an edit cannot widen a key but never breaks a running one. Admin is not bound.
     """
     if get_current_allowed_clusters() is None:
         return
@@ -1856,12 +1856,17 @@ async def _refuse_a_grant_past_the_project_bound(
         db, caller_email, {grant.cluster_id for grant in grants}
     )
     kept = already_granted or {}
+
+    def carried_over(grant: ClusterPermission, project: str) -> bool:
+        projects, level = kept.get(grant.cluster_id, (set(), -1))
+        return project in projects and granted_level(grant.permissions) <= level
+
     refused = sorted({
         f"{grant.cluster_id}/{project}"
         for grant in grants
         if grant.cluster_id in held_elsewhere
         for project in grant.projects
-        if project not in kept.get(grant.cluster_id, set())
+        if not carried_over(grant, project)
         and (project == "*" or not project_is_visible(grant.cluster_id, project))
     })
     if refused:
@@ -1870,6 +1875,7 @@ async def _refuse_a_grant_past_the_project_bound(
             detail=(
                 f"Not permitted to grant these projects: {refused}. Another organization also "
                 "holds that cluster, so a key may name only the projects you can see there. "
+                "A project the key already holds is kept at its current permission level. "
                 "An administrator can issue a wider key."
             ),
         )
@@ -2005,8 +2011,13 @@ async def update_api_key_permissions(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
+    # note: the last grant per cluster wins, as it does in assert_cluster_permission and the
+    # proxies, and the permission default mirrors theirs.
     already_granted = {
-        p.get("cluster_id", ""): set(p.get("projects") or ["default"])
+        p.get("cluster_id", ""): (
+            set(p.get("projects") or ["default"]),
+            granted_level(p.get("permissions", ["read"])),
+        )
         for p in (current.get("cluster_permissions") or [])
         if isinstance(p, dict)
     }
