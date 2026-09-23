@@ -33,7 +33,11 @@ def register_error_handlers(app: FastAPI) -> None:
         if exc.status_code < 500:
             return await http_exception_handler(request, exc)
         reference, full = reference_for(exc)
-        logger.error("Server fault %s on %s %s: %s", reference, _method(request), request.url.path, full)
+        # note: a 502/503/504 is an answer this application chose (a cluster down, a pool shed, an
+        # identity provider still starting), so it is a warning. It is still logged, because the
+        # reference in the response must lead somewhere.
+        log = logger.warning if exc.status_code in AVAILABILITY_STATUSES else logger.error
+        log("Server fault %s on %s %s: %s", reference, _method(request), request.url.path, full)
         if exc.status_code in AVAILABILITY_STATUSES:
             detail = sanitize_error(exc.detail)
         else:

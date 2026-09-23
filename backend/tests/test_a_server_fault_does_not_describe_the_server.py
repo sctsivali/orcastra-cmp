@@ -89,6 +89,24 @@ def test_an_unexpected_fault_answers_with_a_reference(client: TestClient, caplog
     assert any(body["reference"] in r.getMessage() and "10.0.1.4" in r.getMessage() for r in caplog.records)
 
 
+def test_an_availability_answer_is_logged_as_a_warning_with_its_reference(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="app.core.error_handlers"):
+        response = client.get("/unreachable")
+    reference = response.json()["reference"]
+    records = [r for r in caplog.records if reference in r.getMessage()]
+    assert [r.levelno for r in records] == [logging.WARNING]
+
+
+def test_an_unexpected_fault_is_logged_as_an_error(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="app.core.error_handlers"):
+        response = client.get("/vault")
+    reference = response.json()["reference"]
+    records = [r for r in caplog.records if reference in r.getMessage()]
+    assert [r.levelno for r in records] == [logging.ERROR]
+
+
 def test_an_availability_answer_keeps_its_sentence_without_the_address(client: TestClient) -> None:
     response = client.get("/unreachable")
     assert response.status_code == 503
