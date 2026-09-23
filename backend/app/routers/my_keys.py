@@ -253,14 +253,28 @@ def create_pfx(cert_pem: bytes, key_pem: bytes, password: str = "") -> bytes:
     return pfx_data
 
 
-def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
-    """Return a key's metadata only if the caller may reach the cluster it belongs to.
+def _short_fingerprint(fingerprint: str) -> str:
+    """The first 16 characters, as the audit log in this file already records it."""
+    return f"{fingerprint[:16]}..." if fingerprint else ""
+
+
+def _owned_by_another(metadata: Dict[str, Any], caller: AuthenticatedUser) -> bool:
+    """Whether a record names an owner other than the caller.
+
+    note: records issued before owner_email existed name nobody. There is nothing to backfill
+    them from, so they stay on cluster scope rather than disappearing from their owner.
+    """
+    owner = metadata.get("owner_email")
+    return bool(owner) and owner != caller.email
+
+
+def _authorize_key(vault_client: Any, key_id: str, caller: AuthenticatedUser) -> Dict[str, Any]:
+    """Return a key's metadata only if the caller may reach its cluster and owns it.
 
     important: a key here is a real LXD client certificate with a private key, and an
-    ``auth_level`` of "admin" provisions it server-scope on that node. Nothing tied these
-    records to the caller: the router gate is ``require_tenant()``, which every authenticated
-    user satisfies, so any user could name any key id. The cluster is the boundary that already
-    governs every other resource, so it governs these too.
+    ``auth_level`` of "admin" provisions it server-scope on that node. The cluster is the
+    boundary that governs every other resource, so it governs these too, and a record that
+    names an owner belongs to that owner alone within the cluster.
     """
     try:
         metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
@@ -271,8 +285,16 @@ def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
         # from a non-existent one by probing.
         raise HTTPException(status_code=404, detail="Key not found")
     node = metadata.get("node")
-    if node:
-        verify_cluster_access(node)
+    if not node:
+        # important: this used to skip the check entirely, in front of a PKCS#12 download that
+        # carries the private key. A record with no node cannot be scoped, so it cannot be
+        # authorized, and it answers like a missing key.
+        logger.warning("Refusing key %s: the record carries no node to scope it by", key_id)
+        raise HTTPException(status_code=404, detail="Key not found")
+    verify_cluster_access(node)
+    # note: an unrestricted context (admin, dev mode) keeps reaching every record
+    if get_current_allowed_clusters() is not None and _owned_by_another(metadata, caller):
+        raise HTTPException(status_code=404, detail="Key not found")
     return metadata
 
 
@@ -531,6 +553,9 @@ async def create_key(
             "identity_id": identity_id,
             "group_name": group_name,
             "fingerprint": fingerprint,
+            # important: the record carried no owner, so two people in the same cluster scope
+            # listed, downloaded and deleted each other's keys
+            "owner_email": _rbac.email,
         }
         
         # Save to Vault (secure storage)
@@ -587,6 +612,7 @@ async def list_keys(
     status_filter: Optional[str] = Query(None, description="Filter by status: active, expired, or all"),
     search: Optional[str] = Query(None, description="Search by name, project, or node"),
     fresh: bool = False,
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """List all keys from Vault."""
     vault_client = get_vault_keys_client()
@@ -607,11 +633,15 @@ async def list_keys(
         # DATA was not, so a scoped cache entry was still filled from an unfiltered read. Each
         # key belongs to a cluster, so the caller's cluster set is the filter. `None` means an
         # unrestricted context (admin, dev mode, background task) and keeps everything.
+        #
+        # A record with no node cannot be scoped, so nobody is shown it. That also keeps an
+        # admin listing from failing on the missing field below.
+        keys_metadata = [k for k in keys_metadata if k.get("node")]
         allowed = get_current_allowed_clusters()
         if allowed is not None:
             keys_metadata = [
                 k for k in keys_metadata
-                if not k.get("node") or k.get("node") in allowed
+                if k.get("node") in allowed and not _owned_by_another(k, _rbac)
             ]
         
         # Process keys and check expiration
@@ -668,7 +698,7 @@ async def list_keys(
                 is_expired=is_expired,
                 identity_id=key_meta["identity_id"],
                 group_name=key_meta["group_name"],
-                fingerprint=key_meta.get("fingerprint", ""),
+                fingerprint=_short_fingerprint(key_meta.get("fingerprint", "")),
             )
             processed_keys.append(key_info)
         
@@ -697,7 +727,7 @@ async def download_key(
     vault_client = get_vault_keys_client()
 
     # important: this streams a private key. Authorize before reading it, not after.
-    _authorize_key(vault_client, key_id)
+    _authorize_key(vault_client, key_id, _rbac)
 
     try:
         # Get certificate and key from Vault
@@ -740,7 +770,7 @@ async def delete_key(
     """Delete a key."""
     vault_client = get_vault_keys_client()
 
-    _authorize_key(vault_client, key_id)
+    _authorize_key(vault_client, key_id, _rbac)
 
     try:
         # Get metadata from Vault
