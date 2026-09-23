@@ -97,13 +97,16 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     // before its DHCP lease lands, so its IPs are briefly empty; in that case we
     // re-fetch a few times (bounded, event-triggered — not a return to polling)
     // until the address appears or we give up.
+    // note: the event names its project, and passing it on reads that instance rather than
+    // the first same-named one the caller may see
     const fetchAndUpsert = async (
       host: string,
       name: string,
+      project?: string,
       ipRetries = 6,
     ) => {
       try {
-        const vm: any = await api.instances.get(name, host);
+        const vm: any = await api.instances.get(name, host, project);
         upsertInstance(vm);
         const needsIp =
           vm.status === "Running" &&
@@ -111,7 +114,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         if (needsIp && ipRetries > 0) {
           setTimeout(() => {
             // Only keep retrying while the row is still present.
-            void fetchAndUpsert(host, name, ipRetries - 1);
+            void fetchAndUpsert(host, name, project, ipRetries - 1);
           }, 4000);
         }
       } catch {
@@ -140,7 +143,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         if (code !== undefined && code >= STATUS_SUCCESS) {
           if (code === STATUS_SUCCESS) {
             // Created: pull the real row in, then drop the placeholder.
-            void fetchAndUpsert(host, p.name).finally(() =>
+            void fetchAndUpsert(host, p.name, msg.project || p.project).finally(() =>
               dropPending(host, p.name),
             );
           } else {
@@ -178,7 +181,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         return;
       }
       // created / started / stopped / restarted / updated / paused / resumed …
-      void fetchAndUpsert(host, name).finally(() => dropPending(host, name));
+      void fetchAndUpsert(host, name, msg.project).finally(() => dropPending(host, name));
     };
 
     const handleMessage = (host: string, raw: string) => {

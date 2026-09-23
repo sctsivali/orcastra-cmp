@@ -19,6 +19,7 @@ export interface ConfirmActionState {
   action: "stop" | "restart" | null;
   name: string;
   host: string;
+  project: string;
   force: boolean;
 }
 

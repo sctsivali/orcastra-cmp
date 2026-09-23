@@ -31,7 +31,7 @@ import {
 // Query Keys
 export const queryKeys = {
   vms: ["vms"] as const,
-  vm: (name: string, host: string) => ["vm", name, host] as const,
+  vm: (name: string, host: string, project?: string) => ["vm", name, host, project ?? null] as const,
   instanceMetrics: (host: string, instanceName: string, project: string) => 
     ["instanceMetrics", host, instanceName, project] as const,
   images: ["images"] as const,
@@ -123,10 +123,10 @@ export function useVMs(host?: string, status?: string) {
   });
 }
 
-export function useVM(name: string, host: string) {
+export function useVM(name: string, host: string, project?: string) {
   return useQuery({
-    queryKey: queryKeys.vm(name, host),
-    queryFn: () => vmAPI.get(name, host),
+    queryKey: queryKeys.vm(name, host, project),
+    queryFn: () => vmAPI.get(name, host, project),
     enabled: !!name && !!host,
   });
 }
@@ -1364,10 +1364,10 @@ export function useInstances(host?: string, opts?: { realtime?: boolean; enabled
 //
 // important: `enabled` is re-asserted AFTER the spread. ON_DEMAND_CONFIG sets enabled false by
 // design, so spreading it last would silently disable every caller.
-export function useInstance(name: string, host: string, enabled = true) {
+export function useInstance(name: string, host: string, project?: string, enabled = true) {
   return useQuery({
-    queryKey: ["instance", name, host],
-    queryFn: () => api.instances.get(name, host),
+    queryKey: ["instance", name, host, project ?? null],
+    queryFn: () => api.instances.get(name, host, project),
     ...ON_DEMAND_CONFIG,
     enabled: enabled && !!name && !!host,
   });
@@ -1385,12 +1385,14 @@ export function useCreateInstance() {
 }
 
 // Instance Action Mutations (using vmAPI)
+// important: the project is sent so the backend acts on the row the operator clicked. Without
+// it the backend has to search, and two projects can hold the same instance name.
 export function useStartInstance() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.vms.start(name, { host }),
+    mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
+      api.vms.start(name, { host, project }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1403,8 +1405,8 @@ export function useStopInstance() {
   return useMutation({
     // force power-cycles instead of a graceful ACPI shutdown (needed for a VM
     // with no OS installed / sitting at a boot menu, which can't answer ACPI).
-    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) =>
-      api.vms.stop(name, { host, force, timeout: 30 }),
+    mutationFn: ({ name, host, project, force }: { name: string; host: string; project?: string; force?: boolean }) =>
+      api.vms.stop(name, { host, project, force, timeout: 30 }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1415,8 +1417,8 @@ export function useRestartInstance() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) =>
-      api.vms.restart(name, { host, force, timeout: 30 }),
+    mutationFn: ({ name, host, project, force }: { name: string; host: string; project?: string; force?: boolean }) =>
+      api.vms.restart(name, { host, project, force, timeout: 30 }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },

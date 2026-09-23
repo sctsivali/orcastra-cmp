@@ -40,9 +40,13 @@ export function InstanceDetailDialog({
   // important: the LIST payload sets resources to null, so this is the only way to show them.
   // Everything else below is already on the row, which is why the dialog paints immediately and
   // only this one section can be pending.
+  // note: the row names its own project, which beats the prop. A caller that passed no project
+  // still reads the instance that was clicked, not a same-named one in the default project.
+  const instanceProject = instance?.project || project;
   const { data: fetched } = useInstance(
     instance?.name ?? "",
     instance?.host ?? "",
+    instanceProject,
     isOpen && !!instance,
   );
 
@@ -52,7 +56,7 @@ export function InstanceDetailDialog({
   const { data: metrics, isLoading: isLoadingMetrics } = useInstanceMetrics(
     instance?.host ?? "",
     instance?.name ?? "",
-    project,
+    instanceProject,
     isOpen && !!instance && tab === "metrics",
   );
 

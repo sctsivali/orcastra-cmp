@@ -460,8 +460,12 @@ export const vmAPI = {
     return fetchRead<VMListResponse>(endpoint, opts);
   },
 
-  get: async (name: string, host: string): Promise<VMInfo> => {
-    return fetchAPI<VMInfo>(`/vms/${name}?host=${encodeURIComponent(host)}`);
+  // note: the project is optional. Omitted, the backend searches only the projects this
+  // caller may see. Sent, it names the one instance meant when two projects share a name.
+  get: async (name: string, host: string, project?: string): Promise<VMInfo> => {
+    const params = new URLSearchParams({ host });
+    if (project) params.append("project", project);
+    return fetchAPI<VMInfo>(`/vms/${encodeURIComponent(name)}?${params.toString()}`);
   },
 
   create: async (data: VMCreateRequest): Promise<VMCreateResponse> => {
@@ -1044,12 +1048,16 @@ export const instanceAPI = {
     return fetchRead<VMListResponse>(endpoint, opts);
   },
 
-  get: async (name: string, host: string): Promise<VMInfo> => {
-    return fetchAPI<VMInfo>(`/instances/${name}?host=${encodeURIComponent(host)}`);
+  get: async (name: string, host: string, project?: string): Promise<VMInfo> => {
+    const params = new URLSearchParams({ host });
+    if (project) params.append("project", project);
+    return fetchAPI<VMInfo>(`/instances/${encodeURIComponent(name)}?${params.toString()}`);
   },
 
-  getMetrics: async (name: string, host: string): Promise<InstanceMetrics> => {
-    return fetchAPI<InstanceMetrics>(`/instances/${name}/metrics?host=${encodeURIComponent(host)}`);
+  getMetrics: async (name: string, host: string, project?: string): Promise<InstanceMetrics> => {
+    const params = new URLSearchParams({ host });
+    if (project) params.append("project", project);
+    return fetchAPI<InstanceMetrics>(`/instances/${encodeURIComponent(name)}/metrics?${params.toString()}`);
   },
 };
 

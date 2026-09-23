@@ -459,7 +459,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
         instance={vm}
         isOpen={showMonitoring}
         onClose={() => setShowMonitoring(false)}
-        project="default"
+        project={vm.project || "default"}
       />
     </div>
   );
