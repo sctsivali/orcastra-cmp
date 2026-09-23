@@ -34,17 +34,23 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
         return None
 
     try:
+        import asyncio
+
         from app.routers.integrations import (
             get_vault_integrations_client,
             VAULT_INTEGRATIONS_PATH,
         )
 
+        # note: in a thread. The /secret read is never cached, so it is a Vault round trip on
+        # every push, and to_thread keeps the request context the Vault audit record reads.
         vault_client = get_vault_integrations_client()
-        metadata = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/metadata"
+        metadata = await asyncio.to_thread(
+            vault_client.vault_read,
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/metadata",
         )
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret"
+        secret_data = await asyncio.to_thread(
+            vault_client.vault_read,
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret",
         )
         app_url = metadata.get("app_url")
         raw_secret = secret_data.get("raw")

@@ -174,8 +174,10 @@ async def list_certificates(
         for cluster_id in cluster_ids:
             try:
                 # Get certificate data from Vault
+                # note: in a thread. Only metadata is cached, so the certificate reads below are a
+                # Vault round trip per cluster, and on the loop a slow Vault stalls the worker.
                 cert_path = f"{settings.vault_clusters_path}/{cluster_id}/certs"
-                cert_data = cert_manager.vault.vault_read(cert_path)
+                cert_data = await asyncio.to_thread(cert_manager.vault.vault_read, cert_path)
                 
                 # Skip clusters with no valid certificate (ex; Pending Trust)
                 cert_pem = cert_data.get("client.crt", "")
@@ -185,13 +187,13 @@ async def list_certificates(
                 
                 # Get metadata
                 metadata_path = f"{settings.vault_clusters_path}/{cluster_id}/metadata"
-                metadata = cert_manager.vault.vault_read(metadata_path)
+                metadata = await asyncio.to_thread(cert_manager.vault.vault_read, metadata_path)
                 
                 # Check for pending renewal
                 pending_path = f"{settings.vault_clusters_path}/{cluster_id}/pending_certs"
                 has_pending = False
                 try:
-                    pending_data = cert_manager.vault.vault_read(pending_path)
+                    pending_data = await asyncio.to_thread(cert_manager.vault.vault_read, pending_path)
                     has_pending = bool(pending_data.get("client.crt"))
                 except:
                     pass
@@ -276,7 +278,7 @@ async def get_certificate(
         # Get certificate data
         cert_path = f"{settings.vault_clusters_path}/{cluster_id}/certs"
         try:
-            cert_data = cert_manager.vault.vault_read(cert_path)
+            cert_data = await asyncio.to_thread(cert_manager.vault.vault_read, cert_path)
         except VaultClientError:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -287,7 +289,7 @@ async def get_certificate(
         pending_path = f"{settings.vault_clusters_path}/{cluster_id}/pending_certs"
         has_pending = False
         try:
-            pending_data = cert_manager.vault.vault_read(pending_path)
+            pending_data = await asyncio.to_thread(cert_manager.vault.vault_read, pending_path)
             has_pending = bool(pending_data.get("client.crt"))
         except:
             pass
@@ -550,7 +552,7 @@ async def verify_renewal(
         # Get pending certificate
         pending_path = f"{settings.vault_clusters_path}/{cluster_id}/pending_certs"
         try:
-            pending_data = cert_manager.vault.vault_read(pending_path)
+            pending_data = await asyncio.to_thread(cert_manager.vault.vault_read, pending_path)
         except VaultClientError:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -799,7 +801,7 @@ async def cleanup_pending_certificates(
         for cluster_id in cluster_ids:
             try:
                 pending_path = f"{settings.vault_clusters_path}/{cluster_id}/pending_certs"
-                pending_data = cert_manager.vault.vault_read(pending_path)
+                pending_data = await asyncio.to_thread(cert_manager.vault.vault_read, pending_path)
                 
                 created_at_str = pending_data.get("created_at")
                 if created_at_str:

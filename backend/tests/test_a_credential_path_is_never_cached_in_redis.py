@@ -4,9 +4,16 @@ The cache used a denylist of /certs, /keys and /secrets, so an integration API k
 holding the plaintext secret and its HMAC as `raw` and `hash`, went into Redis and the in-process
 LRU for five minutes. Neither field name matched the encryption patterns either, so it sat there in
 clear.
+
+A read that is never cached is a Vault round trip every time, and vault_read is synchronous, so an
+async caller of an uncached path runs it in a thread. The ratchet at the end holds that line.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import ast
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import pytest
 from cryptography.fernet import Fernet
@@ -130,3 +137,142 @@ def test_raw_and_hash_are_encrypted_at_rest_in_the_cache(monkeypatch: pytest.Mon
         "raw": "oas_plaintext",
         "name": "oak_test",
     }
+
+
+# ---------------------------------------------------------------------------
+# Uncached reads stay off the event loop
+# ---------------------------------------------------------------------------
+
+
+class _ThreadVault:
+    """Answers by the last path segment and records the thread each read ran on."""
+
+    def __init__(self, answers: Dict[str, Dict[str, Any]]) -> None:
+        self.answers = answers
+        self.reads: List[Tuple[str, int]] = []
+
+    def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
+        self.reads.append((path.rsplit("/", 1)[-1], threading.get_ident()))
+        return dict(self.answers.get(path.rsplit("/", 1)[-1], {}))
+
+    def vault_delete(self, path: str) -> None:
+        return None
+
+
+def _cert_manager(answers: Dict[str, Dict[str, Any]]) -> SimpleNamespace:
+    return SimpleNamespace(
+        vault=_ThreadVault(answers), list_clusters=lambda use_cache=False: ["cluster-a"]
+    )
+
+
+def _on_loop(vault: _ThreadVault) -> List[str]:
+    loop_thread = threading.get_ident()
+    return [segment for segment, thread in vault.reads if thread == loop_thread]
+
+
+async def test_the_certificate_pages_read_vault_off_the_loop() -> None:
+    from fastapi import HTTPException
+
+    from app.models.schemas import CertificateVerifyRequest
+    from app.routers import cert_manager as router
+
+    manager = _cert_manager({"certs": {"client.crt": "not-a-pem"}})
+    await router.list_certificates(cert_manager=manager)
+    assert {segment for segment, _ in manager.vault.reads} == {"certs", "metadata", "pending_certs"}
+    assert _on_loop(manager.vault) == [], "list_certificates read Vault on the event loop"
+
+    manager = _cert_manager({"certs": {"client.crt": "not-a-pem"}})
+    await router.get_certificate(cluster_id="cluster-a", cert_manager=manager)
+    assert {segment for segment, _ in manager.vault.reads} == {"certs", "pending_certs"}
+    assert _on_loop(manager.vault) == []
+
+    manager = _cert_manager({})
+    with pytest.raises(HTTPException):
+        await router.verify_renewal(
+            request=CertificateVerifyRequest(cluster_id="cluster-a"), cert_manager=manager, _=None
+        )
+    assert [segment for segment, _ in manager.vault.reads] == ["pending_certs"]
+    assert _on_loop(manager.vault) == []
+
+    manager = _cert_manager({})
+    await router.cleanup_pending_certificates(cert_manager=manager, _=None)
+    assert [segment for segment, _ in manager.vault.reads] == ["pending_certs"]
+    assert _on_loop(manager.vault) == []
+
+
+async def test_the_orcahub_credentials_are_read_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.routers import integrations
+    from app.services import orcahub_sync
+
+    vault = _ThreadVault({"metadata": {"app_url": "https://hub.example.test"}, "secret": {"raw": "oas_x"}})
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
+    org = SimpleNamespace(id=1, source="orcahub", api_key_id="oak_test")
+    creds = await orcahub_sync._get_orcahub_credentials(org)
+    assert creds is not None and creds["api_key_secret"] == "oas_x"
+    assert [segment for segment, _ in vault.reads] == ["metadata", "secret"]
+    assert _on_loop(vault) == [], "the OrcaHub key's secret was read on the event loop"
+
+
+APP = Path(vc.__file__).resolve().parents[1]
+
+# note: direct reads of uncached paths inside an async body that predate the allowlist, when these
+# paths were already uncached, except refresh_organizations. That one is a partner's on-demand
+# refresh whose /secret read was cached before. The set may shrink and must never grow.
+ACCEPTED_ON_LOOP_READS = {
+    "routers/cert_manager.py::initiate_renewal::cert_path",
+    "routers/cert_manager.py::get_system_warnings::cert_path",
+    "routers/cluster_registration.py::check_cluster_authentication::"
+    "f'{settings.vault_clusters_path}/{cluster_id}/certs'",
+    "routers/integrations.py::refresh_organizations::"
+    "f'secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret'",
+}
+
+
+def _own_body(fn: ast.AsyncFunctionDef) -> Iterator[ast.AST]:
+    stack: List[ast.AST] = list(fn.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        yield node
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _is_metadata(arg: ast.expr) -> bool:
+    if isinstance(arg, ast.JoinedStr) and arg.values:
+        tail = arg.values[-1]
+        return isinstance(tail, ast.Constant) and str(tail.value).rstrip("/").endswith("/metadata")
+    if isinstance(arg, ast.Constant):
+        return str(arg.value).rstrip("/").endswith("/metadata")
+    return isinstance(arg, ast.Name) and arg.id == "metadata_path"
+
+
+def _direct_reads_on_the_loop() -> List[Tuple[str, bool]]:
+    """(site, is_metadata) for every vault_read called directly in an async function body."""
+    found: List[Tuple[str, bool]] = []
+    for path in APP.rglob("*.py"):
+        for fn in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            for node in _own_body(fn):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "vault_read"
+                    and node.args
+                ):
+                    site = f"{path.relative_to(APP)}::{fn.name}::{ast.unparse(node.args[0])}"
+                    found.append((site, _is_metadata(node.args[0])))
+    return found
+
+
+def test_no_new_uncached_vault_read_runs_on_the_loop() -> None:
+    reads = _direct_reads_on_the_loop()
+    assert any(is_metadata for _, is_metadata in reads), (
+        "the scan sees no cached metadata read either, so it no longer finds vault_read calls"
+    )
+    new = sorted({site for site, is_metadata in reads if not is_metadata} - ACCEPTED_ON_LOOP_READS)
+    assert not new, (
+        "an async function calls vault_read on an uncached path directly, which blocks the event "
+        "loop for a Vault round trip. Run it with asyncio.to_thread: " + ", ".join(new)
+    )
