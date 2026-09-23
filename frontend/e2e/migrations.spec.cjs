@@ -45,6 +45,52 @@ test("Admin can open Migration Center in desktop-light and mobile-dark", async (
   await expectCleanMigrationHarness(api);
 });
 
+for (const scenario of [
+  {
+    name: "identity binding failure",
+    status: 403,
+    error: "identity_binding_required",
+    reason:
+      "this sign-in could not be bound to a current identity; sign out, sign in again, then retry",
+  },
+  {
+    name: "current role denial",
+    status: 403,
+    error: "current_role_denied",
+    reason:
+      "your current role does not allow Migration Center access; ask an administrator to assign the Admin or Partner role",
+  },
+  {
+    name: "authority service outage",
+    status: 503,
+    error: "authority_unavailable",
+    reason:
+      "current access could not be verified; retry shortly or ask an administrator to check the identity service",
+  },
+]) {
+  test(`Migration Center explains ${scenario.name} without exposing server diagnostics`, async ({ page }) => {
+    const serverDiagnostic = "sensitive upstream identity diagnostic";
+    await authenticate(page.context(), "partner");
+    const api = await installMigrationFixtures(page, "partner", {
+      authorityListError: {
+        status: scenario.status,
+        detail: {
+          error: scenario.error,
+          message: serverDiagnostic,
+        },
+      },
+    });
+
+    await page.goto("/inventory/migrations");
+
+    await expect(page.getByRole("heading", { level: 1, name: "Migration Center" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Could not load migrations" })).toBeVisible();
+    await expect(page.getByText(new RegExp(scenario.reason))).toBeVisible();
+    await expect(page.getByText(serverDiagnostic, { exact: false })).toHaveCount(0);
+    await expectCleanMigrationHarness(api);
+  });
+}
+
 test("an initial migration queue failure leaves saved drafts usable", async ({ page }) => {
   const draft = makePlan({ plan_id: "plan-draft-while-jobs-unavailable" });
   await authenticate(page.context(), "partner");
@@ -160,6 +206,7 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
 
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   await choose(page, "Destination cluster", "Cluster B");
+  await expect(page.getByLabel("Destination member (optional)")).toBeVisible();
   await page.getByLabel("Destination project", { exact: true }).fill("target-project");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
 
@@ -344,6 +391,42 @@ test("durable copy does not offer destination member placement", async ({ page }
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   await choose(page, "Destination cluster", "Cluster B");
   await expect(page.getByLabel("Destination member (optional)")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Copy placement is automatic" })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Durable copy cannot target a specific destination member in this release. The destination cluster selects placement.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expectCleanMigrationHarness(api);
+});
+
+test("project migration actions stay hidden until capability admission is known", async ({ page }) => {
+  let releaseSettings;
+  const settingsGate = new Promise((resolve) => {
+    releaseSettings = resolve;
+  });
+
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { settingsGate });
+
+  await page.goto("/inventory");
+  const projectCard = page.locator('[data-slot="project-card"]').filter({ hasText: "default" });
+  await expect(projectCard).toBeVisible();
+  await projectCard.getByRole("button", { name: "Project actions for default" }).click();
+  await expect(page.getByRole("menuitem", { name: "Relocate Workloads" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Relocate Project" })).toHaveCount(0);
+
+  releaseSettings();
+  await expect(page.getByRole("menuitem", { name: "Relocate Workloads" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Relocate Project" })).toBeVisible();
+
+  await page.getByRole("menuitem", { name: "Relocate Workloads" }).click();
+  await expect(page).toHaveURL(/\bmode=member\b/);
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
+  await choose(page, "Destination member (optional)", "member-b");
   await expectCleanMigrationHarness(api);
 });
 

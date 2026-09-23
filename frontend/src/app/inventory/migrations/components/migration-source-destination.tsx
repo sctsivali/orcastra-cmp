@@ -326,7 +326,7 @@ export function MigrationSourceDestination({
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {draft.intent === "move" && (
+        {draft.intent === "move" ? (
           <div className="space-y-2">
             <Label htmlFor="migration-target-member">Destination member (optional)</Label>
             <SearchableSelect
@@ -340,6 +340,15 @@ export function MigrationSourceDestination({
               disabled={!draft.targetCluster || resourceLoading}
             />
           </div>
+        ) : (
+          <Alert>
+            <Info className="h-4 w-4" aria-hidden />
+            <AlertTitle>Copy placement is automatic</AlertTitle>
+            <AlertDescription>
+              Durable copy cannot target a specific destination member in this release. The
+              destination cluster selects placement.
+            </AlertDescription>
+          </Alert>
         )}
         <div className="space-y-2">
           <Label htmlFor="migration-target-pool">Destination storage pool (optional)</Label>

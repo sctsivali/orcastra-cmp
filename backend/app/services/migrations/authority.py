@@ -30,6 +30,10 @@ _MAX_RESPONSE_BYTES = 256 * 1024
 _PAGE_SIZE = 2
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _ALLOWED_ROLES = frozenset({Role.ADMIN, Role.PARTNER})
+_HASHED_USER_ID_LENGTH = 64
+_LOWERCASE_HEX = frozenset("0123456789abcdef")
+_SUBJECT_USER_UUID = "user_uuid"
+_SUBJECT_HASHED_USER_ID = "hashed_user_id"
 
 
 class CurrentAuthorityError(RuntimeError):
@@ -99,6 +103,7 @@ class _UserPage:
 @dataclass(frozen=True, slots=True)
 class _CurrentUser:
     provider_uuid: str = field(repr=False)
+    provider_uid: str | None = field(repr=False)
     email: str = field(repr=False)
     role: Role
     mapped_groups: tuple[str, ...] = field(repr=False)
@@ -116,8 +121,12 @@ def _required_text(value: Any, *, code: str, message: str, limit: int) -> str:
     return value
 
 
-def _canonical_subject_uuid(value: Any) -> str:
-    """Require the Authentik OIDC subject mode that emits the user's canonical UUID."""
+def _canonical_subject(value: Any) -> tuple[str, str]:
+    """Accept only Authentik's immutable UUID and hashed-user-ID subject modes.
+
+    Username and email subjects are mutable. An arbitrary opaque value cannot be proven against
+    the Admin API user record, so neither may authorize durable infrastructure work.
+    """
     subject = _required_text(
         value,
         code="actor_subject_missing",
@@ -127,16 +136,37 @@ def _canonical_subject_uuid(value: Any) -> str:
     try:
         parsed = UUID(subject)
     except (ValueError, AttributeError, TypeError):
-        raise AuthorityIdentityError(
-            "actor_subject_not_uuid",
-            "Migration Center requires an Authentik UUID subject.",
-        ) from None
-    if subject != str(parsed):
-        raise AuthorityIdentityError(
-            "actor_subject_not_uuid",
-            "Migration Center requires an Authentik UUID subject.",
+        parsed = None
+    if parsed is not None and subject == str(parsed):
+        return subject, _SUBJECT_USER_UUID
+
+    # Authentik's default hashed_user_id mode emits User.uid, a lowercase SHA-256 hex digest.
+    # Exact shape checking rejects username/email/custom subject modes before an Admin API lookup;
+    # the later uid equality check proves which user record owns it.
+    if (
+        len(subject) == _HASHED_USER_ID_LENGTH
+        and all(character in _LOWERCASE_HEX for character in subject)
+    ):
+        return subject, _SUBJECT_HASHED_USER_ID
+
+    raise AuthorityIdentityError(
+        "actor_subject_mode_unsupported",
+        "Migration Center requires an immutable Authentik subject mode.",
+    )
+
+
+def _canonical_user_uid(value: Any) -> str:
+    """Validate Authentik's read-only User.uid projection without exposing it."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _HASHED_USER_ID_LENGTH
+        or any(character not in _LOWERCASE_HEX for character in value)
+    ):
+        raise AuthorityResponseError(
+            "authentik_user_uid_invalid",
+            "Authentik returned an invalid user identity.",
         )
-    return subject
+    return value
 
 
 def identity_pin_from_user(
@@ -156,10 +186,9 @@ def identity_pin_from_user(
         message="The authenticated identity has no valid issuer.",
         limit=2048,
     )
-    # important: Authentik can emit email, username, hashed, or UUID subjects. Only its canonical
-    # user UUID can be bound directly to the Admin API record without a mutable lookup attribute.
-    # Migration Center therefore fails closed unless the provider uses UUID subject mode.
-    subject = _canonical_subject_uuid(claims.get("sub"))
+    # important: only Authentik's immutable UUID and hashed-user-ID modes are accepted. The hashed
+    # value is proven against the read-only User.uid projection before its UUID is pinned.
+    subject = _canonical_subject(claims.get("sub"))[0]
     email = _required_text(
         user.email,
         code="actor_email_missing",
@@ -279,8 +308,13 @@ def _mapped_role(groups: list[Any]) -> tuple[Role, tuple[str, ...]]:
     return highest, tuple(sorted(mapped_names))
 
 
-def _parse_current_user(record: dict[str, Any], *, expected_email: str) -> _CurrentUser:
-    provider_uuid = _canonical_uuid(record.get("uuid"))
+def _parse_current_user(
+    record: dict[str, Any],
+    *,
+    expected_email: str,
+    provider_uuid: str,
+    provider_uid: str | None,
+) -> _CurrentUser:
     if record.get("email") != expected_email:
         raise AuthorityDeniedError(
             "actor_email_changed",
@@ -300,10 +334,26 @@ def _parse_current_user(record: dict[str, Any], *, expected_email: str) -> _Curr
     role, mapped_names = _mapped_role(groups)
     return _CurrentUser(
         provider_uuid=provider_uuid,
+        provider_uid=provider_uid,
         email=expected_email,
         role=role,
         mapped_groups=mapped_names,
     )
+
+
+def _parse_user_identifiers(
+    record: dict[str, Any],
+    *,
+    subject_mode: str,
+) -> tuple[str, str | None]:
+    """Parse only immutable identifiers so authorization state cannot become an oracle."""
+    provider_uuid = _canonical_uuid(record.get("uuid"))
+    provider_uid = (
+        _canonical_user_uid(record.get("uid"))
+        if subject_mode == _SUBJECT_HASHED_USER_ID
+        else None
+    )
+    return provider_uuid, provider_uid
 
 
 class AuthentikAuthorityVerifier:
@@ -462,21 +512,42 @@ class AuthentikAuthorityVerifier:
     async def pin_user(self, user: AuthenticatedUser) -> CurrentMigrationAuthority:
         """Resolve a validated request identity to one active Admin or Partner UUID."""
         identity = identity_pin_from_user(user, self._settings)
-        page = await self._query_users(
-            {
-                "uuid": identity.subject,
-                "include_groups": "true",
-                "page_size": _PAGE_SIZE,
-            }
+        subject, subject_mode = _canonical_subject(identity.subject)
+        lookup_params: dict[str, str | int] = {
+            "include_groups": "true",
+            "page_size": _PAGE_SIZE,
+        }
+        lookup_name: str
+        if subject_mode == _SUBJECT_USER_UUID:
+            lookup_params["uuid"] = subject
+            lookup_name = "UUID"
+        else:
+            # Authentik does not expose User.uid as a list filter. Email only narrows the bounded
+            # candidate set: exact uid equality below is the immutable authorization proof.
+            lookup_params["email"] = identity.email
+            lookup_name = "email"
+        page = await self._query_users(lookup_params)
+        record = self._one_user(page, lookup=lookup_name)
+        provider_uuid, provider_uid = _parse_user_identifiers(
+            record, subject_mode=subject_mode
         )
-        record = self._one_user(page, lookup="UUID")
-        current = _parse_current_user(record, expected_email=identity.email)
-        if current.provider_uuid != identity.subject:
+        current_subject = (
+            provider_uuid
+            if subject_mode == _SUBJECT_USER_UUID
+            else provider_uid
+        )
+        if current_subject != subject:
             raise AuthorityDeniedError(
                 "actor_subject_user_mismatch",
                 "The authenticated subject does not match the Authentik user identity.",
             )
-        pin = MigrationAuthorityPin(identity=identity, provider_uuid=identity.subject)
+        current = _parse_current_user(
+            record,
+            expected_email=identity.email,
+            provider_uuid=provider_uuid,
+            provider_uid=provider_uid,
+        )
+        pin = MigrationAuthorityPin(identity=identity, provider_uuid=current.provider_uuid)
         return CurrentMigrationAuthority(
             pin=pin,
             role=current.role,
@@ -491,7 +562,7 @@ class AuthentikAuthorityVerifier:
                 "actor_issuer_mismatch",
                 "The pinned identity does not belong to the configured issuer.",
             )
-        subject_uuid = _canonical_subject_uuid(pin.identity.subject)
+        subject, subject_mode = _canonical_subject(pin.identity.subject)
         email = _required_text(
             pin.identity.email,
             code="actor_email_missing",
@@ -499,25 +570,43 @@ class AuthentikAuthorityVerifier:
             limit=320,
         )
         provider_uuid = _canonical_uuid(pin.provider_uuid)
-        if subject_uuid != provider_uuid:
+        if subject_mode == _SUBJECT_USER_UUID and subject != provider_uuid:
             raise AuthorityDeniedError(
                 "actor_identity_binding_changed",
                 "The pinned subject no longer matches the Authentik user identity.",
             )
         page = await self._query_users(
             {
-                "uuid": subject_uuid,
+                "uuid": provider_uuid,
                 "include_groups": "true",
                 "page_size": _PAGE_SIZE,
             }
         )
         record = self._one_user(page, lookup="UUID")
-        current = _parse_current_user(record, expected_email=email)
-        if current.provider_uuid != subject_uuid:
+        current_provider_uuid, current_provider_uid = _parse_user_identifiers(
+            record, subject_mode=subject_mode
+        )
+        if current_provider_uuid != provider_uuid:
             raise AuthorityDeniedError(
                 "actor_uuid_changed",
                 "Authentik did not return the pinned user identity.",
             )
+        current_subject = (
+            current_provider_uuid
+            if subject_mode == _SUBJECT_USER_UUID
+            else current_provider_uid
+        )
+        if current_subject != subject:
+            raise AuthorityDeniedError(
+                "actor_identity_binding_changed",
+                "The pinned subject no longer matches the Authentik user identity.",
+            )
+        current = _parse_current_user(
+            record,
+            expected_email=email,
+            provider_uuid=current_provider_uuid,
+            provider_uid=current_provider_uid,
+        )
         return CurrentMigrationAuthority(
             pin=pin,
             role=current.role,

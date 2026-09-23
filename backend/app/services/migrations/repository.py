@@ -4,13 +4,37 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import (
+    String,
+    and_,
+    case,
+    cast,
+    delete,
+    exists,
+    false,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    true,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
+from app.models.db_models import (
+    Organization,
+    OrganizationCluster,
+    OrganizationMember,
+    TenantAccessPolicy,
+    TenantPolicyRule,
+)
 from app.models.migration_models import (
     MigrationAuditOutbox,
     MigrationJob,
@@ -27,6 +51,24 @@ ACTIVE_STATUSES = ("pending", "running", "waiting", "unknown", "manual_recovery"
 CLAIMABLE_STATUSES = ("pending", "running", "unknown")
 TERMINAL_STATUSES = ("success", "failure", "cancelled")
 _CLAIM_ADVISORY_KEY = 5_178_261_933
+
+
+@dataclass(frozen=True)
+class MigrationListVisibility:
+    """Immutable request authority used to filter before pagination.
+
+    ``visible_projects`` contains only clusters with a project boundary. A cluster absent
+    from that tuple is unrestricted by project, matching the request-scoped organization
+    boundary in ``org_scope``.
+    """
+
+    role: str
+    actor_issuer: str
+    actor_subject: str
+    actor_email: str
+    actor_provider_uuid: str
+    allowed_clusters: Optional[frozenset[str]]
+    visible_projects: Optional[tuple[tuple[str, frozenset[str]], ...]]
 
 
 class RepositoryConflict(RuntimeError):
@@ -81,6 +123,196 @@ def _holds_concurrency_slot(_now: datetime):
     )
 
 
+def _request_endpoint_visibility(
+    cluster_column: Any,
+    project_column: Any,
+    visibility: MigrationListVisibility,
+) -> Any:
+    predicates: list[Any] = []
+    if visibility.allowed_clusters is not None:
+        if not visibility.allowed_clusters:
+            return false()
+        predicates.append(cluster_column.in_(visibility.allowed_clusters))
+
+    if visibility.visible_projects:
+        bounded_clusters = tuple(cluster for cluster, _projects in visibility.visible_projects)
+        allowed_pairs: list[Any] = []
+        for cluster, projects in visibility.visible_projects:
+            if projects:
+                allowed_pairs.append(and_(cluster_column == cluster, project_column.in_(projects)))
+        predicates.append(or_(cluster_column.not_in(bounded_clusters), *allowed_pairs))
+
+    return and_(*predicates) if predicates else literal(True)
+
+
+def _shared_cluster_ids() -> Any:
+    owner = aliased(OrganizationCluster)
+    owner_key = case(
+        (
+            owner.organization_id.is_(None),
+            literal("unbound:") + cast(owner.id, String),
+        ),
+        else_=literal("org:") + cast(owner.organization_id, String),
+    )
+    return select(owner.cluster_id).group_by(owner.cluster_id).having(func.count(func.distinct(owner_key)) > 1)
+
+
+def _partner_endpoint_authority(
+    model: Any,
+    cluster_column: Any,
+    project_column: Any,
+) -> Any:
+    binding = aliased(OrganizationCluster)
+    policy = aliased(TenantAccessPolicy)
+    rule = aliased(TenantPolicyRule)
+
+    binding_exists = exists(
+        select(1)
+        .select_from(binding)
+        .where(
+            binding.organization_id == model.source_organization_id,
+            binding.cluster_id == cluster_column,
+        )
+    )
+    project_grant_exists = exists(
+        select(1)
+        .select_from(rule)
+        .join(policy, policy.id == rule.policy_id)
+        .where(
+            policy.organization_id == model.source_organization_id,
+            rule.cluster_id == cluster_column,
+            rule.project_name == project_column,
+        )
+    )
+    return and_(
+        binding_exists,
+        or_(
+            project_column == "default",
+            cluster_column.not_in(_shared_cluster_ids()),
+            project_grant_exists,
+        ),
+    )
+
+
+def _partner_current_authority(
+    model: Any,
+    visibility: MigrationListVisibility,
+) -> Any:
+    organization = aliased(Organization)
+    member = aliased(OrganizationMember)
+    member_exists = exists(
+        select(1)
+        .select_from(member)
+        .where(
+            member.organization_id == organization.id,
+            member.user_email == visibility.actor_email,
+        )
+    )
+    affiliated = exists(
+        select(1)
+        .select_from(organization)
+        .where(
+            organization.id == model.source_organization_id,
+            organization.is_active.is_(True),
+            or_(
+                organization.created_by == visibility.actor_email,
+                member_exists,
+            ),
+        )
+    )
+    return and_(
+        affiliated,
+        _partner_endpoint_authority(
+            model,
+            model.source_cluster_id,
+            model.source_project,
+        ),
+        _partner_endpoint_authority(
+            model,
+            model.target_cluster_id,
+            model.target_project,
+        ),
+    )
+
+
+def _list_visibility_predicate(
+    model: Any,
+    visibility: MigrationListVisibility,
+    *,
+    exact_actor: bool,
+) -> Any:
+    if visibility.role not in {"admin", "partner"}:
+        return false()
+
+    predicates = [
+        model.source_organization_id == model.target_organization_id,
+        _request_endpoint_visibility(
+            model.source_cluster_id,
+            model.source_project,
+            visibility,
+        ),
+        _request_endpoint_visibility(
+            model.target_cluster_id,
+            model.target_project,
+            visibility,
+        ),
+    ]
+    if exact_actor:
+        predicates.extend(
+            (
+                model.requester == visibility.actor_email,
+                model.actor_issuer == visibility.actor_issuer,
+                model.actor_subject == visibility.actor_subject,
+                model.actor_email == visibility.actor_email,
+                model.actor_provider_uuid == visibility.actor_provider_uuid,
+            )
+        )
+    if visibility.role == "partner":
+        predicates.append(_partner_current_authority(model, visibility))
+    return and_(*predicates)
+
+
+async def _list_visible_page(
+    db: AsyncSession,
+    model: Any,
+    predicate: Any,
+    *,
+    sort_column: Any,
+    limit: int,
+    offset: int,
+) -> tuple[list[Any], int]:
+    """Return one page and its exact total from one database snapshot."""
+    visible = (
+        select(
+            model.id.label("row_id"),
+            sort_column.label("sort_timestamp"),
+        )
+        .where(predicate)
+        .cte(f"visible_{model.__tablename__}")
+    )
+    page = (
+        select(visible.c.row_id, visible.c.sort_timestamp)
+        .order_by(visible.c.sort_timestamp.desc(), visible.c.row_id.desc())
+        .offset(offset)
+        .limit(limit)
+        .cte(f"page_{model.__tablename__}")
+    )
+    total = select(func.count().label("visible_total")).select_from(visible).cte(f"total_{model.__tablename__}")
+    statement = (
+        select(model, total.c.visible_total)
+        .select_from(
+            total.outerjoin(page, true()).outerjoin(
+                model,
+                model.id == page.c.row_id,
+            )
+        )
+        .order_by(page.c.sort_timestamp.desc(), page.c.row_id.desc())
+    )
+    records = (await db.execute(statement)).all()
+    exact_total = int(records[0][1] or 0) if records else 0
+    return [record[0] for record in records if record[0] is not None], exact_total
+
+
 async def get_plan(db: AsyncSession, plan_id: str, *, lock: bool = False) -> Optional[MigrationPlan]:
     stmt = select(MigrationPlan).where(MigrationPlan.plan_id == plan_id)
     if lock:
@@ -89,19 +321,25 @@ async def get_plan(db: AsyncSession, plan_id: str, *, lock: bool = False) -> Opt
 
 
 async def list_plans(
-    db: AsyncSession, requester: str, *, limit: int, offset: int
+    db: AsyncSession,
+    visibility: MigrationListVisibility,
+    *,
+    limit: int,
+    offset: int,
 ) -> tuple[list[MigrationPlan], int]:
-    predicate = MigrationPlan.requester == requester
-    total = int((await db.execute(select(func.count()).select_from(MigrationPlan).where(predicate))).scalar() or 0)
-    rows = (
-        await db.execute(
-            select(MigrationPlan)
-            .where(predicate)
-            .order_by(MigrationPlan.updated_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-    ).scalars().all()
+    predicate = _list_visibility_predicate(
+        MigrationPlan,
+        visibility,
+        exact_actor=True,
+    )
+    rows, total = await _list_visible_page(
+        db,
+        MigrationPlan,
+        predicate,
+        sort_column=MigrationPlan.updated_at,
+        limit=limit,
+        offset=offset,
+    )
     return list(rows), total
 
 
@@ -171,9 +409,7 @@ async def get_job(db: AsyncSession, job_id: str, *, lock: bool = False) -> Optio
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def get_job_by_request(
-    db: AsyncSession, requester: str, idempotency_key: str
-) -> Optional[MigrationJob]:
+async def get_job_by_request(db: AsyncSession, requester: str, idempotency_key: str) -> Optional[MigrationJob]:
     return (
         await db.execute(
             select(MigrationJob).where(
@@ -187,25 +423,23 @@ async def get_job_by_request(
 async def list_jobs(
     db: AsyncSession,
     *,
-    organization_ids: Optional[set[int]],
+    visibility: MigrationListVisibility,
     limit: int,
     offset: int,
 ) -> tuple[list[MigrationJob], int]:
-    predicate = text("true")
-    if organization_ids is not None:
-        if not organization_ids:
-            return [], 0
-        predicate = MigrationJob.source_organization_id.in_(organization_ids)
-    total = int((await db.execute(select(func.count()).select_from(MigrationJob).where(predicate))).scalar() or 0)
-    rows = (
-        await db.execute(
-            select(MigrationJob)
-            .where(predicate)
-            .order_by(MigrationJob.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-    ).scalars().all()
+    predicate = _list_visibility_predicate(
+        MigrationJob,
+        visibility,
+        exact_actor=False,
+    )
+    rows, total = await _list_visible_page(
+        db,
+        MigrationJob,
+        predicate,
+        sort_column=MigrationJob.created_at,
+        limit=limit,
+        offset=offset,
+    )
     return list(rows), total
 
 
@@ -213,11 +447,11 @@ async def list_resources(db: AsyncSession, job_id: str) -> list[MigrationResourc
     return list(
         (
             await db.execute(
-                select(MigrationResource)
-                .where(MigrationResource.job_id == job_id)
-                .order_by(MigrationResource.ordinal)
+                select(MigrationResource).where(MigrationResource.job_id == job_id).order_by(MigrationResource.ordinal)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -232,7 +466,9 @@ async def list_timeline(db: AsyncSession, job_id: str) -> list[MigrationAuditOut
                 )
                 .order_by(MigrationAuditOutbox.sequence)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -263,11 +499,7 @@ async def enqueue_event(
 ) -> None:
     if event_id is not None:
         existing = (
-            await db.execute(
-                select(MigrationAuditOutbox.id).where(
-                    MigrationAuditOutbox.event_id == event_id
-                )
-            )
+            await db.execute(select(MigrationAuditOutbox.id).where(MigrationAuditOutbox.event_id == event_id))
         ).scalar_one_or_none()
         if existing is not None:
             return
@@ -312,9 +544,7 @@ async def create_job(
     existing = await get_job_by_request(db, requester, idempotency_key)
     if existing is not None:
         if existing.payload_hash != payload_hash:
-            raise RepositoryConflict(
-                "This Idempotency-Key was already used for a different execution request."
-            )
+            raise RepositoryConflict("This Idempotency-Key was already used for a different execution request.")
         return existing, False
     now = utcnow()
     preflight = plan.preflight_payload or {}
@@ -356,9 +586,7 @@ async def create_job(
         status="pending",
         retention_hours=plan.retention_hours,
         external_cutover_required=plan.external_cutover_required,
-        safe_result=sanitize_payload(
-            {"reason": reason, "acknowledgements": acknowledgements}
-        ),
+        safe_result=sanitize_payload({"reason": reason, "acknowledgements": acknowledgements}),
         created_at=now,
         updated_at=now,
     )
@@ -367,18 +595,14 @@ async def create_job(
         await db.flush()
         lock_specs = {
             (
-                canonical_resource_key(
-                    "project", plan.source_cluster_id, plan.source_project, None
-                ),
+                canonical_resource_key("project", plan.source_cluster_id, plan.source_project, None),
                 "project",
                 plan.source_cluster_id,
                 plan.source_project,
                 None,
             ),
             (
-                canonical_resource_key(
-                    "project", plan.target_cluster_id, plan.target_project, None
-                ),
+                canonical_resource_key("project", plan.target_cluster_id, plan.target_project, None),
                 "project",
                 plan.target_cluster_id,
                 plan.target_project,
@@ -416,9 +640,7 @@ async def create_job(
                     ),
                 }
             )
-        for lock_key, lock_scope, cluster_id, project, resource_name in sorted(
-            lock_specs, key=lambda spec: spec[0]
-        ):
+        for lock_key, lock_scope, cluster_id, project, resource_name in sorted(lock_specs, key=lambda spec: spec[0]):
             db.add(
                 MigrationResourceLock(
                     job_id=row.job_id,
@@ -430,12 +652,8 @@ async def create_job(
                 )
             )
         for ordinal, resource in enumerate(preflight.get("resources") or []):
-            source = resource.get("source") or {
-                "name": resource.get("source_name")
-            }
-            target = resource.get("target") or {
-                "name": resource.get("target_name")
-            }
+            source = resource.get("source") or {"name": resource.get("source_name")}
+            target = resource.get("target") or {"name": resource.get("target_name")}
             resource_key = str(
                 resource.get("resource_key")
                 or f"{resource.get('resource_type', 'resource')}:{source.get('name') or ordinal}"
@@ -479,9 +697,7 @@ async def create_job(
         winner = await get_job_by_request(db, requester, idempotency_key)
         if winner is not None and winner.payload_hash == payload_hash:
             return winner, False
-        raise RepositoryConflict(
-            "Another migration for this source or target is already active."
-        ) from None
+        raise RepositoryConflict("Another migration for this source or target is already active.") from None
     await db.refresh(row)
     return row, True
 
@@ -524,9 +740,7 @@ async def set_job(
     values["revision"] = MigrationJob.revision + 1
     result = await db.execute(update(MigrationJob).where(*predicates).values(**values))
     if result.rowcount and terminal:
-        await db.execute(
-            delete(MigrationResourceLock).where(MigrationResourceLock.job_id == job_id)
-        )
+        await db.execute(delete(MigrationResourceLock).where(MigrationResourceLock.job_id == job_id))
     if result.rowcount and event_message:
         phase = str(values.get("phase") or "queued")
         await enqueue_event(
@@ -599,9 +813,7 @@ async def set_resource(
     await db.commit()
 
 
-async def assert_lease(
-    db: AsyncSession, job_id: str, worker_id: str, fence_token: int
-) -> bool:
+async def assert_lease(db: AsyncSession, job_id: str, worker_id: str, fence_token: int) -> bool:
     """Confirm the current worker still owns a non-expired mutation lease."""
     row = (
         await db.execute(
@@ -640,7 +852,9 @@ async def claim_job(db: AsyncSession, job_id: str, worker_id: str) -> Optional[M
     busy_global = int(
         (
             await db.execute(
-                select(func.count()).select_from(MigrationJob).where(
+                select(func.count())
+                .select_from(MigrationJob)
+                .where(
                     _holds_concurrency_slot(now),
                     MigrationJob.job_id != job_id,
                 )
@@ -651,7 +865,9 @@ async def claim_job(db: AsyncSession, job_id: str, worker_id: str) -> Optional[M
     busy_org = int(
         (
             await db.execute(
-                select(func.count()).select_from(MigrationJob).where(
+                select(func.count())
+                .select_from(MigrationJob)
+                .where(
                     _holds_concurrency_slot(now),
                     MigrationJob.source_organization_id == row.source_organization_id,
                     MigrationJob.job_id != job_id,
@@ -662,18 +878,16 @@ async def claim_job(db: AsyncSession, job_id: str, worker_id: str) -> Optional[M
     )
     cluster_conflict = (
         await db.execute(
-            select(MigrationJob.job_id).where(
+            select(MigrationJob.job_id)
+            .where(
                 _holds_concurrency_slot(now),
                 MigrationJob.job_id != job_id,
                 or_(
-                    MigrationJob.source_cluster_id.in_(
-                        [row.source_cluster_id, row.target_cluster_id]
-                    ),
-                    MigrationJob.target_cluster_id.in_(
-                        [row.source_cluster_id, row.target_cluster_id]
-                    ),
+                    MigrationJob.source_cluster_id.in_([row.source_cluster_id, row.target_cluster_id]),
+                    MigrationJob.target_cluster_id.in_([row.source_cluster_id, row.target_cluster_id]),
                 ),
-            ).limit(1)
+            )
+            .limit(1)
         )
     ).first()
     global_limit = max(1, int(get_settings().migration_global_concurrency))
@@ -693,9 +907,7 @@ async def claim_job(db: AsyncSession, job_id: str, worker_id: str) -> Optional[M
     return row
 
 
-async def heartbeat(
-    db: AsyncSession, job_id: str, worker_id: str, fence_token: int
-) -> bool:
+async def heartbeat(db: AsyncSession, job_id: str, worker_id: str, fence_token: int) -> bool:
     now = utcnow()
     result = await db.execute(
         update(MigrationJob)
@@ -732,7 +944,9 @@ async def recoverable_job_ids(db: AsyncSession, *, limit: int = 50) -> list[str]
                 .order_by(MigrationJob.updated_at)
                 .limit(limit)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -764,9 +978,7 @@ async def cleanup_due_jobs(db: AsyncSession) -> int:
     return int(result.rowcount or 0)
 
 
-async def pending_outbox_rows(
-    db: AsyncSession, *, worker_id: str, limit: int = 50
-) -> list[MigrationAuditOutbox]:
+async def pending_outbox_rows(db: AsyncSession, *, worker_id: str, limit: int = 50) -> list[MigrationAuditOutbox]:
     now = utcnow()
     rows = list(
         (
@@ -787,7 +999,9 @@ async def pending_outbox_rows(
                 .limit(limit)
                 .with_for_update(skip_locked=True)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     for row in rows:
         row.status = "delivering"

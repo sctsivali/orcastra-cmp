@@ -9,12 +9,60 @@ export interface ReadError {
   retryAfterSeconds?: number;
 }
 
+const AUTHORITY_READ_ERRORS = {
+  identity_binding_required: {
+    status: 403,
+    kind: "forbidden",
+    reason: "this sign-in could not be bound to a current identity; sign out, sign in again, then retry",
+  },
+  current_role_denied: {
+    status: 403,
+    kind: "forbidden",
+    reason: "your current role does not allow Migration Center access; ask an administrator to assign the Admin or Partner role",
+  },
+  authority_unavailable: {
+    status: 503,
+    kind: "failed",
+    reason: "current access could not be verified; retry shortly or ask an administrator to check the identity service",
+  },
+} as const satisfies Record<
+  string,
+  { status: number; kind: ReadErrorKind; reason: string }
+>;
+
+type AuthorityReadErrorCode = keyof typeof AUTHORITY_READ_ERRORS;
+
+function describeAuthorityReadError(error: APIError): ReadError | undefined {
+  if (
+    typeof error.detail !== "object" ||
+    error.detail === null ||
+    Array.isArray(error.detail)
+  ) {
+    return undefined;
+  }
+
+  const code = (error.detail as Record<string, unknown>).error;
+  if (typeof code !== "string" || !(code in AUTHORITY_READ_ERRORS)) {
+    return undefined;
+  }
+
+  const description = AUTHORITY_READ_ERRORS[code as AuthorityReadErrorCode];
+  if (error.status !== description.status) return undefined;
+
+  // Keep copy local and allowlisted. A server-provided message must never turn an upstream
+  // identity diagnostic into browser-visible text.
+  return { kind: description.kind, reason: description.reason };
+}
+
 /**
  * One reading of a failed request, for every control that has to say why it is empty.
  * Keeps the wording in one place so a pool picker and a network picker cannot drift.
  */
 export function describeReadError(error: unknown): ReadError {
   if (error instanceof APIError) {
+    const authorityError = describeAuthorityReadError(error);
+    if (authorityError) return authorityError;
+
     if (error.status === 429) {
       const wait = error.retryAfter ?? 30;
       return { kind: "rate-limited", reason: `rate limited by the API, try again in ${wait} s`, retryAfterSeconds: wait };

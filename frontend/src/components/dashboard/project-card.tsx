@@ -75,7 +75,11 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
   const { isPartner } = usePermissions();
   const { navigate } = useNavigationProgress();
   const migrationCapabilities = useMigrationCapabilities();
-  const canPlanMigration = isPartner && migrationCapabilities.centerEnabled === true;
+  const canPlanMigration =
+    isPartner &&
+    !migrationCapabilities.isLoading &&
+    !migrationCapabilities.isError &&
+    migrationCapabilities.centerEnabled === true;
   // useId rather than an id built from projectKey: the key carries a colon and the project name
   // is operator-supplied, so neither is safe to put in the DOM id the disclosure points at.
   const instancesRegionId = React.useId();

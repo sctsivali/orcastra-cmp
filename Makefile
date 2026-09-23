@@ -304,6 +304,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-role-gates.mjs
 	@echo "$(COLOR_GREEN)Checking auth transition isolation...$(COLOR_RESET)"
 	@node scripts/checks/check-auth-transition-isolation.mjs
+	@echo "$(COLOR_GREEN)Checking Migration Center authority read errors...$(COLOR_RESET)"
+	@node scripts/checks/check-migration-authority-read-errors.mjs
 	@echo "$(COLOR_GREEN)Checking tenant node-inventory isolation...$(COLOR_RESET)"
 	@node scripts/checks/check-tenant-node-inventory.mjs
 	@echo "$(COLOR_GREEN)Checking controlled status labels...$(COLOR_RESET)"

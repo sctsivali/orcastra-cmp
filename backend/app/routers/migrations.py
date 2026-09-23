@@ -19,6 +19,8 @@ from app.core.dependencies import (
     require_partner,
 )
 from app.core.org_scope import (
+    get_current_allowed_clusters,
+    get_current_visible_projects,
     get_user_org_ids,
     org_scope_dependency,
     verify_project_access,
@@ -51,12 +53,29 @@ from app.services.migrations.orchestrator import (
 )
 from app.services.migrations.metrics import collect_migration_metrics
 from app.services.migrations.presenters import job_response, plan_response
+from app.services.migrations.repository import MigrationListVisibility
 from app.services.migrations.security import MigrationSecurityError, sanitize_error
 from app.services.snapshots.schedule_authority import standing_authority_refusal
 
 
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = logging.getLogger(__name__)
+
+_IDENTITY_BINDING_REQUIRED_DETAIL = {
+    "error": "identity_binding_required",
+    "message": (
+        "Migration Center could not verify this sign-in's identity binding. "
+        "Sign out, sign in again, and retry."
+    ),
+}
+_CURRENT_ROLE_DENIED_DETAIL = {
+    "error": "current_role_denied",
+    "message": "Migration Center requires a current Admin or Partner role.",
+}
+_AUTHORITY_UNAVAILABLE_DETAIL = {
+    "error": "authority_unavailable",
+    "message": "Migration Center could not verify current access. Retry shortly.",
+}
 
 
 def require_migration_admission() -> None:
@@ -123,13 +142,26 @@ async def _service_call(awaitable: Awaitable[Any]) -> Any:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except MigrationAuthorityError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except (AuthorityDeniedError, AuthorityIdentityError) as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except AuthorityIdentityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_IDENTITY_BINDING_REQUIRED_DETAIL,
+        ) from exc
+    except AuthorityDeniedError as exc:
+        # Only a conclusive current-role refusal may be described as a role denial. Missing,
+        # disabled, replaced, or rebound accounts are identity-binding failures and must not
+        # disclose which authoritative account check failed.
+        detail = (
+            _CURRENT_ROLE_DENIED_DETAIL
+            if exc.code == "actor_role_not_authorized"
+            else _IDENTITY_BINDING_REQUIRED_DETAIL
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail) from exc
     except CurrentAuthorityError as exc:
         logger.warning("Migration authority verification failed: %s", exc.code)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Current migration authority could not be verified.",
+            detail=_AUTHORITY_UNAVAILABLE_DETAIL,
         ) from exc
     except (MigrationConflict, MigrationSecurityError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -168,6 +200,50 @@ def _authorize_row(row: Any) -> None:
 
 async def _current_authority(user: AuthenticatedUser) -> Any:
     return await _service_call(AuthentikAuthorityVerifier().pin_user(user))
+
+
+def _list_visibility(authority: Any) -> MigrationListVisibility:
+    allowed_clusters = get_current_allowed_clusters()
+    visible_projects = get_current_visible_projects()
+    return MigrationListVisibility(
+        role=authority.role.value,
+        actor_issuer=authority.pin.identity.issuer,
+        actor_subject=authority.pin.identity.subject,
+        actor_email=authority.pin.identity.email,
+        actor_provider_uuid=authority.pin.provider_uuid,
+        allowed_clusters=(
+            None if allowed_clusters is None else frozenset(allowed_clusters)
+        ),
+        visible_projects=(
+            None
+            if visible_projects is None
+            else tuple(
+                sorted(
+                    (cluster_id, frozenset(projects))
+                    for cluster_id, projects in visible_projects.items()
+                )
+            )
+        ),
+    )
+
+
+def _assert_list_row_visibility(
+    row: Any,
+    *,
+    authority: Any,
+    exact_actor: bool,
+) -> None:
+    """Fail closed if a repository implementation violates its SQL visibility contract."""
+    try:
+        _authorize_row(row)
+        if exact_actor and _authority_pin(row) != authority.pin:
+            raise MigrationAuthorityError("Migration plan actor pin mismatch.")
+    except (HTTPException, MigrationAuthorityError) as exc:
+        logger.warning("Migration list visibility invariant failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Migration access changed while the list was loading. Retry.",
+        ) from exc
 
 
 async def _authorize_row_current(
@@ -248,28 +324,19 @@ async def list_plans(
     authority = await _current_authority(user)
     rows, total = await _service_call(
         MigrationService(db).list_plans(
-            requester=authority.pin.identity.email, limit=limit, offset=offset
+            visibility=_list_visibility(authority),
+            limit=limit,
+            offset=offset,
         )
     )
-    visible: list[MigrationPlanResponse] = []
     for row in rows:
-        try:
-            await _authorize_plan_current(
-                row, authority=authority, user=user, db=db
-            )
-        except HTTPException:
-            continue
-        visible.append(plan_response(row))
-    # SQL narrows candidates by actor email; the exact identity pin above prevents account
-    # replacement from inheriting old plans. Skipped rows must not leak through count metadata.
-    skipped = len(rows) - len(visible)
-    visible_total = offset + len(visible) if skipped else total
+        _assert_list_row_visibility(row, authority=authority, exact_actor=True)
     return MigrationPlanListResponse(
-        items=visible,
-        total=max(0, visible_total),
+        items=[plan_response(row) for row in rows],
+        total=total,
         limit=limit,
         offset=offset,
-        has_more=False if skipped else offset + len(rows) < total,
+        has_more=offset + len(rows) < total,
     )
 
 
@@ -361,32 +428,21 @@ async def list_migrations(
     offset: int = Query(0, ge=0),
 ) -> MigrationListResponse:
     authority = await _current_authority(user)
-    role = authority.role
-    organization_ids = (
-        None if role == Role.ADMIN else set(await get_user_org_ids(user, db))
-    )
     rows, total = await _service_call(
         MigrationService(db).list_jobs(
-            organization_ids=organization_ids, limit=limit, offset=offset
+            visibility=_list_visibility(authority),
+            limit=limit,
+            offset=offset,
         )
     )
-    visible: list[MigrationJobResponse] = []
     for row in rows:
-        try:
-            await _authorize_row_current(
-                row, authority=authority, user=user, db=db
-            )
-        except HTTPException:
-            continue
-        visible.append(await job_response(db, row))
-    skipped = len(rows) - len(visible)
-    visible_total = offset + len(visible) if skipped else total
+        _assert_list_row_visibility(row, authority=authority, exact_actor=False)
     return MigrationListResponse(
-        items=visible,
-        total=max(0, visible_total),
+        items=[await job_response(db, row) for row in rows],
+        total=total,
         limit=limit,
         offset=offset,
-        has_more=False if skipped else offset + len(rows) < total,
+        has_more=offset + len(rows) < total,
     )
 
 

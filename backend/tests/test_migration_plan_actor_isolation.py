@@ -160,7 +160,7 @@ async def test_same_org_partner_cannot_read_patch_or_execute_another_actor_plan(
 
 
 @pytest.mark.asyncio
-async def test_plan_list_omits_a_same_email_replacement_actor_pin(
+async def test_plan_list_fails_closed_if_repository_returns_a_replacement_actor_pin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     row = _plan_row()
@@ -170,23 +170,21 @@ async def test_plan_list_omits_a_same_email_replacement_actor_pin(
         return _other_authority(reuse_owner_email=True)
 
     monkeypatch.setattr(migration_router, "_current_authority", current)
-    monkeypatch.setattr(
-        migration_router,
-        "_authorize_row_current",
-        _allow_endpoint_access,
-    )
     monkeypatch.setattr(migration_router, "MigrationService", lambda _db: service)
 
-    response = await migration_router.list_plans(
-        user=SimpleNamespace(),
-        db=object(),  # type: ignore[arg-type]
-        limit=25,
-        offset=0,
-    )
+    with pytest.raises(HTTPException) as raised:
+        await migration_router.list_plans(
+            user=SimpleNamespace(),
+            db=object(),  # type: ignore[arg-type]
+            limit=25,
+            offset=0,
+        )
 
-    assert response.items == []
-    assert response.total == 0
-    assert response.has_more is False
+    assert raised.value.status_code == 503
+    visibility = service.list_plans.await_args.kwargs["visibility"]
+    assert visibility.actor_email == OWNER_EMAIL
+    assert visibility.actor_subject == OTHER_SUBJECT
+    assert visibility.actor_provider_uuid == OTHER_PROVIDER_UUID
 
 
 @pytest.mark.asyncio

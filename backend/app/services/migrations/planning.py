@@ -516,10 +516,17 @@ class MigrationPlanningMixin:
         return row
 
     async def list_plans(
-        self, *, requester: str, limit: int, offset: int
+        self,
+        *,
+        visibility: repository.MigrationListVisibility,
+        limit: int,
+        offset: int,
     ) -> tuple[list[MigrationPlan], int]:
         return await repository.list_plans(
-            self.db, requester, limit=limit, offset=offset
+            self.db,
+            visibility,
+            limit=limit,
+            offset=offset,
         )
 
     async def patch_plan(
@@ -814,13 +821,13 @@ class MigrationPlanningMixin:
     async def list_jobs(
         self,
         *,
-        organization_ids: Optional[set[int]],
+        visibility: repository.MigrationListVisibility,
         limit: int,
         offset: int,
     ) -> tuple[list[MigrationJob], int]:
         return await repository.list_jobs(
             self.db,
-            organization_ids=organization_ids,
+            visibility=visibility,
             limit=limit,
             offset=offset,
         )

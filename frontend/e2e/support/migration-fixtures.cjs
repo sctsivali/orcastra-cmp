@@ -208,6 +208,7 @@ async function installMigrationFixtures(page, role, options = {}) {
     }
 
     if (method === "GET" && path === "/system/settings") {
+      if (options.settingsGate) await options.settingsGate;
       await json(route, {
         read_only_mode: options.readOnly === true,
         api_version: "e2e",
@@ -294,6 +295,10 @@ async function installMigrationFixtures(page, role, options = {}) {
       return;
     }
     if (method === "GET" && path === "/migrations/plans") {
+      if (options.authorityListError) {
+        await json(route, { detail: options.authorityListError.detail }, options.authorityListError.status);
+        return;
+      }
       const { limit, offset } = pagination(url);
       await json(route, list([...plans.values()], limit, offset));
       return;
@@ -367,7 +372,9 @@ async function installMigrationFixtures(page, role, options = {}) {
     }
     if (method === "GET" && path === "/migrations") {
       state.jobListReads += 1;
-      if (options.failInitialJobList && state.jobListReads === 1) {
+      if (options.authorityListError) {
+        await json(route, { detail: options.authorityListError.detail }, options.authorityListError.status);
+      } else if (options.failInitialJobList && state.jobListReads === 1) {
         await json(route, { detail: "Fixture migration queue unavailable" }, 429, { "Retry-After": "1" });
       } else if (options.failJobListAfterFirst && state.jobListReads > 1) {
         await json(route, { detail: "Fixture migration stream unavailable" }, 429, { "Retry-After": "1" });

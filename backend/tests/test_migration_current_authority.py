@@ -26,7 +26,8 @@ EMAIL = "operator@example.com"
 USER_UUID = "2f54d4e3-6029-4e9a-bdec-b93f9880053d"
 SECOND_UUID = "66e02a9a-7e16-4b93-900b-7adeb3453404"
 SUBJECT = USER_UUID
-NON_UUID_SUBJECT = "oidc-subject-that-is-not-a-uuid"
+HASHED_SUBJECT = "a" * 64
+SECOND_HASHED_SUBJECT = "b" * 64
 SECRET = "do-not-leak-this-admin-token"
 
 
@@ -64,12 +65,14 @@ def _user(
 def _record(
     *,
     user_uuid: str = USER_UUID,
+    uid: object = HASHED_SUBJECT,
     email: str = EMAIL,
     active: object = True,
     groups: object = None,
 ) -> dict[str, object]:
     return {
         "uuid": user_uuid,
+        "uid": uid,
         "email": email,
         "is_active": active,
         "groups_obj": [{"name": "role_partner"}] if groups is None else groups,
@@ -121,6 +124,93 @@ async def test_subject_uuid_pin_uses_exact_official_filter_and_keeps_no_token() 
     assert not hasattr(current.pin, "token")
 
 
+async def test_hashed_subject_pin_exact_matches_read_only_uid_and_pins_uuid() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_page(_record()))
+
+    current = await _verifier(handler).pin_user(_user(subject=HASHED_SUBJECT))
+
+    assert current.pin.identity == ActorIdentityPin(
+        issuer=ISSUER,
+        subject=HASHED_SUBJECT,
+        email=EMAIL,
+    )
+    assert current.pin.provider_uuid == USER_UUID
+    assert current.role is Role.PARTNER
+    assert dict(seen[0].url.params) == {
+        "email": EMAIL,
+        "include_groups": "true",
+        "page_size": "2",
+    }
+    projection = repr(current)
+    assert EMAIL not in projection
+    assert HASHED_SUBJECT not in projection
+    assert USER_UUID not in projection
+    assert "request-token-that-must-not-be-pinned" not in projection
+
+
+@pytest.mark.parametrize("replacement_group", ["role_partner", "role_tenant"])
+async def test_hashed_subject_does_not_disclose_replacement_role(
+    replacement_group: str,
+) -> None:
+    queries: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queries.append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json=_page(
+                _record(
+                    user_uuid=SECOND_UUID,
+                    uid=SECOND_HASHED_SUBJECT,
+                    email=EMAIL,
+                    groups=[{"name": replacement_group}],
+                )
+            ),
+        )
+
+    with pytest.raises(AuthorityDeniedError) as raised:
+        await _verifier(handler).pin_user(_user(subject=HASHED_SUBJECT))
+
+    assert raised.value.code == "actor_subject_user_mismatch"
+    assert queries == [
+        {"email": EMAIL, "include_groups": "true", "page_size": "2"}
+    ]
+
+
+async def test_hashed_subject_refuses_ambiguous_email_candidates() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["email"] == EMAIL
+        return httpx.Response(
+            200,
+            json=_page(
+                _record(),
+                _record(user_uuid=SECOND_UUID, uid=SECOND_HASHED_SUBJECT),
+            ),
+        )
+
+    with pytest.raises(AuthorityDeniedError) as raised:
+        await _verifier(handler).pin_user(_user(subject=HASHED_SUBJECT))
+
+    assert raised.value.code == "actor_identity_ambiguous"
+
+
+async def test_hashed_subject_requires_uid_in_the_authentik_response() -> None:
+    record = _record()
+    record.pop("uid")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_page(record))
+
+    with pytest.raises(AuthorityResponseError) as raised:
+        await _verifier(handler).pin_user(_user(subject=HASHED_SUBJECT))
+
+    assert raised.value.code == "authentik_user_uid_invalid"
+
+
 async def test_revalidation_queries_exact_provider_uuid_and_rechecks_email() -> None:
     queries: list[dict[str, str]] = []
 
@@ -137,6 +227,55 @@ async def test_revalidation_queries_exact_provider_uuid_and_rechecks_email() -> 
         {"uuid": USER_UUID, "include_groups": "true", "page_size": "2"},
         {"uuid": USER_UUID, "include_groups": "true", "page_size": "2"},
     ]
+
+
+async def test_hashed_subject_revalidation_uses_pinned_uuid_then_rechecks_uid() -> None:
+    queries: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queries.append(dict(request.url.params))
+        return httpx.Response(200, json=_page(_record()))
+
+    verifier = _verifier(handler)
+    initial = await verifier.pin_user(_user(subject=HASHED_SUBJECT))
+    current = await verifier.revalidate(initial.pin)
+
+    assert current.pin.provider_uuid == USER_UUID
+    assert current.role is Role.PARTNER
+    assert queries == [
+        {"email": EMAIL, "include_groups": "true", "page_size": "2"},
+        {"uuid": USER_UUID, "include_groups": "true", "page_size": "2"},
+    ]
+
+
+@pytest.mark.parametrize("current_group", ["role_partner", "role_tenant"])
+async def test_hashed_subject_revalidation_checks_uid_before_role(
+    current_group: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["uuid"] == USER_UUID
+        return httpx.Response(
+            200,
+            json=_page(
+                _record(
+                    uid=SECOND_HASHED_SUBJECT,
+                    groups=[{"name": current_group}],
+                )
+            ),
+        )
+
+    pin = MigrationAuthorityPin(
+        identity=ActorIdentityPin(
+            issuer=ISSUER,
+            subject=HASHED_SUBJECT,
+            email=EMAIL,
+        ),
+        provider_uuid=USER_UUID,
+    )
+    with pytest.raises(AuthorityDeniedError) as raised:
+        await _verifier(handler).revalidate(pin)
+
+    assert raised.value.code == "actor_identity_binding_changed"
 
 
 async def test_replacement_account_reusing_email_cannot_become_the_subject_pin() -> None:
@@ -201,6 +340,25 @@ async def test_role_downgrade_to_tenant_stops_the_worker() -> None:
         await _verifier(handler).pin_user(_user())
 
     assert raised.value.code == "actor_role_not_authorized"
+
+
+@pytest.mark.parametrize(
+    ("record", "expected_code"),
+    [
+        (_record(active=False), "actor_inactive"),
+        (_record(groups=[{"name": "role_tenant"}]), "actor_role_not_authorized"),
+    ],
+)
+async def test_hashed_subject_rechecks_active_state_and_current_groups(
+    record: dict[str, object], expected_code: str
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_page(record))
+
+    with pytest.raises(AuthorityDeniedError) as raised:
+        await _verifier(handler).pin_user(_user(subject=HASHED_SUBJECT))
+
+    assert raised.value.code == expected_code
 
 
 @pytest.mark.parametrize(
@@ -282,7 +440,11 @@ def test_plain_http_admin_api_is_only_available_in_explicit_debug_mode() -> None
     [
         (None, SUBJECT, "actor_issuer_missing"),
         (ISSUER, None, "actor_subject_missing"),
-        (ISSUER, NON_UUID_SUBJECT, "actor_subject_not_uuid"),
+        (ISSUER, "42", "actor_subject_mode_unsupported"),
+        (ISSUER, "mutable-username-subject", "actor_subject_mode_unsupported"),
+        (ISSUER, EMAIL, "actor_subject_mode_unsupported"),
+        (ISSUER, "A" * 64, "actor_subject_mode_unsupported"),
+        (ISSUER, "a" * 63, "actor_subject_mode_unsupported"),
         ("https://other-issuer.example/", SUBJECT, "actor_issuer_mismatch"),
     ],
 )
