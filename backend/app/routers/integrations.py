@@ -1519,6 +1519,15 @@ def _api_key_has_expired(expires_at: Any, now: Optional[datetime] = None) -> boo
     return (now or datetime.utcnow()) > moment
 
 
+def _api_key_is_unusable(metadata: Dict[str, Any]) -> bool:
+    """A revoked, inactive or expired key. Its integration is gone, so nothing calls it back."""
+    return bool(
+        metadata.get("is_revoked")
+        or not metadata.get("is_active", True)
+        or _api_key_has_expired(metadata.get("expires_at"))
+    )
+
+
 async def validate_api_key(
     x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
     x_api_key_secret: str = Header(..., alias="X-API-Key-Secret"),
@@ -3135,6 +3144,13 @@ async def refresh_organizations(
     except (BlockingTimeout, BlockingPoolFull):
         raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
     _assert_key_in_scope(metadata, allowed)
+    # important: the member push and the webhook already skip such a key. Refreshing it would send
+    # its stored credential hash to its callback URL and write the answer under its ownership.
+    if _api_key_is_unusable(metadata):
+        raise HTTPException(
+            status_code=409,
+            detail="This API key is revoked, inactive or expired, so it cannot be refreshed",
+        )
 
     app_url = metadata.get("app_url")
     if not app_url:

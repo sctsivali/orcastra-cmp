@@ -203,3 +203,31 @@ async def test_a_body_that_is_not_json_is_a_502(key, monkeypatch):
     with pytest.raises(HTTPException) as caught:
         await _refresh(None)
     assert caught.value.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"is_revoked": True},
+        {"is_active": False},
+        {"expires_at": "2020-01-01T00:00:00"},
+        {"expires_at": "not-a-date"},
+    ],
+    ids=["revoked", "inactive", "expired", "unreadable-expiry"],
+)
+async def test_an_unusable_key_is_refused_and_nothing_is_fetched(key, monkeypatch, state):
+    key["metadata"] = {**KEY_B, **state}
+    outbound = Outbound(body={"organizations": [{"id": "org-1", "name": "Org", "slug": "org"}]})
+    outbound.install(monkeypatch)
+    with pytest.raises(HTTPException) as caught:
+        await _refresh({"cluster-b"})
+    assert caught.value.status_code == 409
+    assert outbound.calls == [], "a revoked key's callback URL must never be called"
+
+
+async def test_a_key_that_has_not_expired_yet_proceeds(key, monkeypatch):
+    key["metadata"] = {**KEY_B, "is_active": True, "expires_at": "2999-01-01T00:00:00"}
+    outbound = Outbound(body={"organizations": []})
+    outbound.install(monkeypatch)
+    await _refresh({"cluster-b"})
+    assert len(outbound.calls) == 1

@@ -187,7 +187,7 @@ def _read_orcahub_credentials_blocking(api_key_id: str) -> Optional[Dict[str, An
     """
     from app.routers.integrations import (
         VAULT_INTEGRATIONS_PATH,
-        _api_key_has_expired,
+        _api_key_is_unusable,
         get_vault_integrations_client,
     )
 
@@ -195,11 +195,7 @@ def _read_orcahub_credentials_blocking(api_key_id: str) -> Optional[Dict[str, An
     metadata = vault_client.vault_read(
         f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/metadata"
     ) or {}
-    if (
-        metadata.get("is_revoked")
-        or not metadata.get("is_active", True)
-        or _api_key_has_expired(metadata.get("expires_at"))
-    ):
+    if _api_key_is_unusable(metadata):
         logger.info("OrcaHub callback skipped for api key %s: the key is revoked, inactive or expired", api_key_id)
         return None
     app_url = metadata.get("app_url")
