@@ -62,6 +62,12 @@ async def _world():
         _org(9, "l-home", L, None, source="local"),
         _member(9, L), _member(9, L2),
         _org(10, "l-buyer", L, "oak_l"),
+        # an org A2 once ran, now deactivated, keyed to a key nobody else carries
+        _org(14, "a2-retired", "system", "oak_retired"),
+        _member(14, A2),
+        # an org X runs through an admin row
+        _org(15, "x-second", "system", "oak_x2"),
+        _member(15, X, "admin"),
         # two partners whose orgs one admin created
         _org(12, "a-by-admin", ADMIN, None, source="local"),
         _org(13, "b-by-admin", ADMIN, None, source="local"),
@@ -76,6 +82,8 @@ async def _world():
         *_bind("x-bought", 3, 8),
         *_bind("local-sold", 9, 10),
         *_bind("admin-shared", 12, 13),
+        *_bind("retired", 1, 14),
+        *_bind("x-two", 8, 15),
         *_bind("squat", None, registered_by=B),
         *_bind("mine", None, registered_by=A),
     ])
@@ -147,7 +155,7 @@ async def test_unbound_rows_belong_to_whoever_registered_them() -> None:
 async def test_the_keys_a_caller_runs_are_the_ones_their_orgs_carry() -> None:
     db = await _world()
     assert await cluster_parties.run_org_keys(db, A) == {"oak_a"}
-    assert await cluster_parties.run_org_keys(db, X) == {"oak_x"}
+    assert await cluster_parties.run_org_keys(db, X) == {"oak_x", "oak_x2"}, "an admin row runs its org too"
     assert await cluster_parties.run_org_keys(db, "nobody@example.test") == set()
 
 
@@ -155,3 +163,18 @@ async def test_the_keys_a_caller_runs_are_the_ones_their_orgs_carry() -> None:
 async def test_no_email_runs_nothing(email) -> None:
     db = await _world()
     assert await cluster_parties.run_orgs(db, email) == {}
+
+
+async def test_an_inactive_org_is_not_run(monkeypatch) -> None:
+    db = await _world()
+    org = await db.get(Organization, 14)
+    org.is_active = False
+    await db.commit()
+    assert 14 not in await cluster_parties.run_orgs(db, A2)
+    assert await held(db, A2, "retired") == {"retired"}, "a deactivated org's key must not join A2's side"
+
+
+async def test_an_admin_row_runs_its_org() -> None:
+    db = await _world()
+    assert 15 in await cluster_parties.run_orgs(db, X)
+    assert await held(db, X, "x-two") == set()

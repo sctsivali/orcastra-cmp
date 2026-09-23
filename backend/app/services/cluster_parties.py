@@ -10,10 +10,16 @@ The caller's party is decided from the database alone:
   * any organization keyed to the same integration key as one of those (the key that syncs the
     partner's home organization is the key that provisioned its buyers)
 
-important: nothing here asks who minted a key. A minter can be an admin who is also a member of
-several partners' organizations, can have left, or the key can be deleted while its organizations
-stay, and each of those put one partner's organizations on another partner's side. The
-integration key an organization carries is a fact the database holds and a caller cannot move.
+important: nothing here asks Vault who minted a key. A minter can be an admin who is also a member
+of several partners' organizations, or the key can be deleted while its organizations stay, and
+both put one partner's organizations on another partner's side. The integration key an
+organization carries is a fact the database holds and a caller cannot move.
+
+note: known limits, all narrowing except the last. A teammate of a partner whose home org is local
+does not run the buyers that partner's key provisioned. A buyer created by a sync (created_by
+"system") under a key no run org carries is another party's. A rotation by a new key leaves the old
+orgs on the old key (rotate the secret in place instead). And provisioning stamps a buyer with its
+key's minter as created_by, so a minter who left the team still runs those buyers, as before.
 """
 
 from typing import Dict, Iterable, Optional, Set

@@ -129,3 +129,26 @@ def test_the_remove_dialog_shows_the_refusal() -> None:
     assert "toast(" in partial and "description: result.detail" in partial, (
         "a partial removal must say which organizations kept the user"
     )
+
+
+async def test_a_creator_whose_own_row_is_member_still_runs_the_org() -> None:
+    """create_organization writes the creator's own row as "member", so created_by is what runs it."""
+    from app.services.organization_service import OrganizationService
+
+    db = sqlite_session(*org_tables())
+    org = await OrganizationService(db).create_organization("Made Here", None, "maker@example.test")
+    rows = (await db.execute(select(OrganizationMember.role).where(OrganizationMember.organization_id == org.id))).scalars().all()
+    assert rows == ["member"], "precondition: the creator row is the legacy member role"
+    maker = _user("maker@example.test")
+    await organizations.add_member(org.id, organizations.MemberAddRequest(user_email=T), user=maker, db=db)
+    assert T in await _members(db, org.id)
+    await organizations.remove_member(org.id, T, user=maker, db=db)
+    assert T not in await _members(db, org.id)
+
+
+async def test_an_admin_row_runs_the_org() -> None:
+    db = await _db()
+    db.add(OrganizationMember(organization_id=1, user_email="orgadmin@example.test", role="admin"))
+    await db.commit()
+    await organizations.remove_member(1, T, user=_user("orgadmin@example.test"), db=db)
+    assert T not in await _members(db, 1)
