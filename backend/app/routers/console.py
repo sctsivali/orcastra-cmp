@@ -445,9 +445,10 @@ async def create_console_session(
     # as it is on every other router. Only the per-project ACL stays behind the flag, which is
     # off by default until every active project carries a policy.
     verify_cluster_access(host)
-    # important: the project bound is unconditional. With the flag off it is the only thing
-    # keeping a Partner on a shared cluster out of another organization's console.
-    project = verify_project_access(host, project)
+    # important: the project bound and the tenant view check are unconditional. With the flag
+    # off they are the only things keeping a Partner on a shared cluster out of another
+    # organization's console, and a tenant out of an instance its list never shows it.
+    project = verify_instance_view_access(host, project, instance_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, project, instance_name, "console")
     # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
@@ -1294,7 +1295,7 @@ async def console_websocket(
         from app.core.config import get_settings
 
         verify_cluster_access(host)
-        project = verify_project_access(host, project)
+        project = verify_instance_view_access(host, project, instance_name)
         if get_settings().tenant_perm_enforcement_enabled:
             verify_tenant_permission(host, project, instance_name, "console")
     except HTTPException as exc:

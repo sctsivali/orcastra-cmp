@@ -18,7 +18,7 @@ from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
 from app.core.dependencies import AuthenticatedUser, get_ws_user
 from app.core.org_scope import set_org_scope_for_ws
-from app.core.instance_access import verify_project_access
+from app.core.instance_access import verify_instance_view_access
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -433,11 +433,11 @@ async def terminal_websocket(
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
 
-    # important: the cluster and the project bound are checked here unconditionally, before the
-    # socket is accepted. A shell is the widest access there is, so without this the Partner
-    # and Tenant bounds on a shared cluster could be stepped around by opening a terminal.
+    # important: the cluster, the project bound and the tenant view check run here
+    # unconditionally, before the socket is accepted. A shell is the widest access there is, so
+    # it must never reach an instance its caller cannot power or even see in the list.
     try:
-        project = verify_project_access(host, project)
+        project = verify_instance_view_access(host, project, instance_name)
     except HTTPException as exc:
         await websocket.close(code=1008, reason="forbidden")
         logger.warning(
