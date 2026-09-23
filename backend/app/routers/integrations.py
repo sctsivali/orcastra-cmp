@@ -2588,22 +2588,57 @@ CLUSTER_PROXY_SLOTS = max(1, PROXY_POOL_WORKERS // 2)
 # (8 s) that is a 504 and a thread held for nothing, so the wait is answered earlier with the
 # operation as it stands and the caller polls, which the integrator already does.
 OPERATION_WAIT_CAP_SECONDS = 5
+# note: a healthy cluster answers in well under a second, so a burst from the integrator (it sends
+# 4 to 6 reads to one cluster in parallel) waits its turn briefly. A slot that stays taken this long
+# means the cluster is slow, and the caller gets 503 "busy" inside its own 8 s read timeout.
+CLUSTER_SLOT_WAIT_SECONDS = 5.0
 _OPERATION_WAIT_PATH = re.compile(r"^/operations/[^/]+/wait/?$")
 _cluster_slots: Dict[tuple, asyncio.Semaphore] = {}
 
 
 async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """run_blocking, holding one of the cluster's proxy slots until the call returns."""
-    key = (id(asyncio.get_running_loop()), cluster_id)
-    slots = _cluster_slots.setdefault(key, asyncio.Semaphore(CLUSTER_PROXY_SLOTS))
-    if slots.locked():
+    """run_blocking, holding one of the cluster's proxy slots until the worker thread finishes.
+
+    important: released by the thread, not by the await. run_blocking stops waiting at its cap
+    while the thread reads on until its socket gives up, and releasing on the await would let one
+    slow cluster take a fresh slot for every call that outlived the cap.
+    """
+    loop = asyncio.get_running_loop()
+    slots = _cluster_slots.setdefault((id(loop), cluster_id), asyncio.Semaphore(CLUSTER_PROXY_SLOTS))
+    try:
+        await asyncio.wait_for(slots.acquire(), CLUSTER_SLOT_WAIT_SECONDS)
+    except asyncio.TimeoutError:
         raise HTTPException(
             status_code=503,
             detail=f"Cluster {cluster_id} is busy with other requests, retry shortly",
             headers={"Retry-After": "2"},
-        )
-    async with slots:
-        return await run_blocking(fn, *args, **kwargs)
+        ) from None
+    state = {"started": False, "released": False}
+    lock = threading.Lock()
+
+    def release_once() -> None:
+        with lock:
+            if state["released"]:
+                return
+            state["released"] = True
+        loop.call_soon_threadsafe(slots.release)
+
+    def held(*a: Any, **k: Any) -> Any:
+        with lock:
+            state["started"] = True
+        try:
+            return fn(*a, **k)
+        finally:
+            release_once()
+
+    try:
+        return await run_blocking(held, *args, **kwargs)
+    except BaseException:
+        with lock:
+            started = state["started"]
+        if not started:
+            release_once()
+        raise
 
 
 def _capped_operation_wait(base_path: str, method: str, query_params: Dict[str, str]) -> None:
@@ -2612,7 +2647,7 @@ def _capped_operation_wait(base_path: str, method: str, query_params: Dict[str, 
         return
     try:
         requested = int(float(query_params.get("timeout", "")))
-    except ValueError:
+    except (ValueError, OverflowError):
         requested = -1
     capped = requested if 0 <= requested <= OPERATION_WAIT_CAP_SECONDS else OPERATION_WAIT_CAP_SECONDS
     query_params["timeout"] = str(capped)

@@ -60,6 +60,7 @@ class _Service:
 @pytest.fixture(autouse=True)
 def one_slot(monkeypatch):
     monkeypatch.setattr(integrations, "CLUSTER_PROXY_SLOTS", 1)
+    monkeypatch.setattr(integrations, "CLUSTER_SLOT_WAIT_SECONDS", 0.3)
     integrations._cluster_slots.clear()
     for cluster in ("cluster-slow", "cluster-fast"):
         health.clear(cluster)
@@ -127,3 +128,40 @@ async def test_other_paths_and_verbs_keep_their_timeout() -> None:
     await _call(service, "cluster-slow", "/1.0/operations/abc/wait?timeout=55", method="DELETE")
     assert session.calls[0].endswith("/instances?timeout=55")
     assert session.calls[1].endswith("/operations/abc/wait?timeout=55")
+
+
+async def test_a_healthy_burst_waits_its_turn_instead_of_failing() -> None:
+    session = _Session(None)
+    service = _Service({"cluster-slow": session, "cluster-fast": _Session(None)})
+    answers = await asyncio.gather(*[_call(service, "cluster-slow") for _ in range(6)])
+    assert [a.status_code for a in answers] == [200] * 6
+    assert len(session.calls) == 6
+
+
+async def test_the_slot_stays_taken_until_the_thread_finishes(monkeypatch) -> None:
+    monkeypatch.setattr(integrations, "RAW_PROXY_TIMEOUT", 0.2)
+    gate = threading.Event()
+    slow = _Session(gate)
+    service = _Service({"cluster-slow": slow, "cluster-fast": _Session(None)})
+    first = await _call(service, "cluster-slow")
+    assert first.status_code == 504, "the await gave up while the thread still reads"
+    with pytest.raises(HTTPException) as caught:
+        await _call(service, "cluster-slow")
+    assert caught.value.status_code == 503
+    gate.set()
+    for _ in range(50):
+        if not integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")].locked():
+            break
+        await asyncio.sleep(0.02)
+    slow.gate = None
+    assert (await _call(service, "cluster-slow")).status_code == 200
+
+
+async def test_an_infinite_wait_timeout_is_capped_not_a_500() -> None:
+    session = _Session(None)
+    service = _Service({"cluster-slow": session, "cluster-fast": _Session(None)})
+    for value in ("inf", "1e309", "nan"):
+        answer = await _call(service, "cluster-slow", f"/1.0/operations/abc/wait?timeout={value}")
+        assert answer.status_code == 200
+    assert all(url.endswith("wait?timeout=5") for url in session.calls)
+
