@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
+from app.services import cluster_parties
 from app.services.lxd import health
 from app.services.lxd.fanout import is_read_timeout
 from app.services.lxd.proxy import (
@@ -1786,17 +1787,8 @@ def _read_api_key_metadata_blocking(key_id: str) -> Dict[str, Any]:
 
 
 async def _org_mate_emails(db: AsyncSession, email: str) -> set[str]:
-    """Lowercased emails of everyone who belongs to, or created, one of this user's organizations."""
-    own = await get_org_ids_for_email(email, db)
-    if not own:
-        return set()
-    members = (await db.execute(
-        select(OrganizationMember.user_email).where(OrganizationMember.organization_id.in_(own))
-    )).scalars().all()
-    creators = (await db.execute(
-        select(Organization.created_by).where(Organization.id.in_(own))
-    )).scalars().all()
-    return {str(e).lower() for e in [*members, *creators] if e}
+    """Lowercased emails on the caller's side. See services.cluster_parties.side_of."""
+    return await cluster_parties.side_of(db, email)
 
 
 def _key_clusters(metadata: Dict[str, Any]) -> set[str]:
@@ -1852,73 +1844,11 @@ async def _authorize_api_key(key_id: str, user: AuthenticatedUser, db: AsyncSess
     return metadata
 
 
-def _read_key_creators_blocking(key_ids: set[str]) -> Dict[str, str]:
-    """created_by of each key id. Runs on auth_executor. An unreadable key maps to ''."""
-    vault_client = get_vault_integrations_client()
-    creators: Dict[str, str] = {}
-    for key_id in sorted(key_ids):
-        try:
-            metadata = vault_client.vault_read(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
-            )
-        except Exception:
-            metadata = {}
-        creators[key_id] = str((metadata or {}).get("created_by") or "")
-    return creators
-
-
 async def _clusters_held_by_another_party(
     db: AsyncSession, email: str, cluster_ids: set[str]
 ) -> set[str]:
-    """Clusters on which some holder is neither the caller's organization nor theirs by key.
-
-    note: provisioning binds every buyer organization to the partner's cluster, and a synced
-    buyer is stamped created_by="system" with api_key_id set. Counting those as foreign would
-    make every partner cluster with a sale look shared, so a keyed organization is attributed
-    to whoever minted its key. An unbound row registered by someone else counts as another
-    holder, which is how _clusters_with_several_orgs counts it too.
-    """
-    from app.models.db_models import OrganizationCluster
-
-    if not cluster_ids:
-        return set()
-    rows = (await db.execute(
-        select(
-            OrganizationCluster.cluster_id,
-            OrganizationCluster.organization_id,
-            OrganizationCluster.registered_by,
-            Organization.api_key_id,
-        )
-        .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
-        .where(OrganizationCluster.cluster_id.in_(sorted(cluster_ids)))
-    )).all()
-    own_orgs = await get_org_ids_for_email(email, db)
-    held_elsewhere: set[str] = set()
-    by_key: Dict[str, set[str]] = {}
-    for cluster_id, org_id, registered_by, org_key in rows:
-        if org_id is None:
-            if registered_by != email:
-                held_elsewhere.add(cluster_id)
-        elif org_id in own_orgs:
-            continue
-        elif org_key:
-            by_key.setdefault(org_key, set()).add(cluster_id)
-        else:
-            held_elsewhere.add(cluster_id)
-    if by_key:
-        try:
-            creators = await run_blocking(
-                _read_key_creators_blocking, set(by_key),
-                timeout=VALIDATE_KEY_TIMEOUT, label="api_key_creators", executor=auth_executor,
-            )
-        except (BlockingTimeout, BlockingPoolFull):
-            raise HTTPException(
-                status_code=503, detail="Could not confirm who holds these clusters. Try again."
-            ) from None
-        for key_id, clusters in by_key.items():
-            if creators.get(key_id) != email:
-                held_elsewhere |= clusters
-    return held_elsewhere
+    """Clusters some holder of which is not on the caller's side. See services.cluster_parties."""
+    return await cluster_parties.clusters_held_by_another_party(db, email, cluster_ids)
 
 
 async def _refuse_a_grant_past_the_project_bound(

@@ -30,6 +30,7 @@ from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.utils import find_instance_in_projects
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from app.services.lxd.lxd_service import LXDService
 
 logger = logging.getLogger(__name__)
@@ -58,17 +59,21 @@ def verify_project_access(cluster_id: str, project: Optional[str]) -> str:
     return name
 
 
-def verify_whole_cluster_access(cluster_id: str) -> None:
-    """Raise 403 unless this request may change state that belongs to the whole cluster.
+async def verify_whole_cluster_access(cluster_id: str, db: "AsyncSession", email: str) -> None:
+    """Raise 403 unless this request may read or change state that belongs to the whole cluster.
 
-    important: a caller held to a project bound on `cluster_id` shares it with another
-    organization. LXD auth groups, identities and server-level entitlements belong to no project,
-    so a server `admin` key, a group with any permission list, or an identity added to or deleted
-    from a group would reach the other organization's projects. On such a cluster only a caller
-    with no bound (an admin) may write them.
+    important: LXD auth groups, identities and server-level entitlements belong to no project, so
+    a server `admin` key, a group with any permission list, or an identity added to or deleted
+    from a group reach every project on the cluster. A caller held to a project bound may touch
+    them only when nobody outside their side holds the cluster. Decided by party, not by binding
+    count: a partner's own buyer organizations do not make the partner's cluster foreign.
     """
+    from app.services import cluster_parties
+
     verify_cluster_access(cluster_id)
-    if visible_projects_for(cluster_id) is not None:
+    if visible_projects_for(cluster_id) is None:
+        return
+    if cluster_id in await cluster_parties.clusters_held_by_another_party(db, email, {cluster_id}):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not permitted on a cluster shared with another organization",

@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from app.core import org_scope
 from app.core.auth import AuthenticatedUser
 from app.routers import integrations
+from app.services import cluster_parties
 from app.routers.integrations import APIKeyCreateRequest, ClusterPermission
 
 PARTNER = "partner-a@example.test"
@@ -48,6 +49,10 @@ class FakeSession:
     async def execute(self, stmt: Any, *_a: Any, **_k: Any) -> _Result:
         text = str(stmt)
         self.queries.append(text)
+        if text.startswith("SELECT organization_members.user_email"):
+            return _Result([PARTNER])
+        if text.startswith("SELECT organizations.created_by"):
+            return _Result([])
         if "organization_clusters" in text:
             return _Result(self.holders)
         if "organization_members" in text:
@@ -93,8 +98,8 @@ def env(monkeypatch):
 
     monkeypatch.setattr(integrations, "reconcile_personal_clusters", _no_reconcile)
     monkeypatch.setattr(
-        integrations,
-        "_read_key_creators_blocking",
+        cluster_parties,
+        "read_key_creators_blocking",
         lambda key_ids: {k: v for k, v in state["creators"].items() if k in key_ids},
     )
     state["vault"] = vault
@@ -214,7 +219,7 @@ async def test_a_vault_stall_resolving_creators_answers_503(env, monkeypatch):
     async def _stall(*_a: Any, **_k: Any) -> None:
         raise BlockingTimeout("api_key_creators", 1.0)
 
-    monkeypatch.setattr(integrations, "run_blocking", _stall)
+    monkeypatch.setattr(cluster_parties, "run_blocking", _stall)
     with pytest.raises(HTTPException) as caught:
         await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1}))
     assert caught.value.status_code == 503

@@ -10,6 +10,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
 import io
 import json
 from cryptography import x509
@@ -314,6 +316,7 @@ async def create_key(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Generate a new TLS identity key."""
     # A key is provisioned into a specific node's LXD trust store, so the node is the boundary.
@@ -321,7 +324,7 @@ async def create_key(
     # important: the key is an LXD credential, so it is held to what it grants as well. A server
     # admin key spans every project, and a standard key is operator on the project it names.
     if request.auth_level == "admin":
-        verify_whole_cluster_access(request.node)
+        await verify_whole_cluster_access(request.node, db, _rbac.email)
         project = normalize_project(request.project)
     else:
         project = verify_project_access(request.node, request.project)

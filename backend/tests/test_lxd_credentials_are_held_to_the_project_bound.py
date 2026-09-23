@@ -17,10 +17,26 @@ from typing import Any, Callable
 import pytest
 from fastapi import HTTPException
 
+from app.core.auth import AuthenticatedUser
 from app.routers import my_keys, permissions
+from app.services import cluster_parties
 from tests.instance_access_fakes import CLUSTER, partner, scoped
 
 FOREIGN = "other-db"
+USER = AuthenticatedUser(user_id="partner-a", email="partner-a@example.test", groups=["role_partner"])
+
+
+@pytest.fixture(autouse=True)
+def parties(monkeypatch):
+    """By default every bounded cluster is held by another party. A test flips it with own_side."""
+    state = {"held": True, "asked": []}
+
+    async def held(_db: Any, email: str, clusters: Any) -> set:
+        state["asked"].append((email, sorted(clusters)))
+        return set(clusters) if state["held"] else set()
+
+    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", held)
+    return state
 ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 
 
@@ -51,7 +67,7 @@ def _key(level: str, project: str) -> my_keys.KeyCreateRequest:
 
 async def _create(service: _Service, level: str, project: str) -> Any:
     return await my_keys.create_key(
-        request=_key(level, project), lxd_service=service, _=None, _rbac=None
+        request=_key(level, project), lxd_service=service, _=None, _rbac=USER, db=None
     )
 
 
@@ -95,37 +111,37 @@ def _create_group(service: _Service) -> Any:
     return permissions.create_group(
         name="g", description="", permissions=[{"entity_type": "server", "url": "/1.0",
                                                 "entitlement": "admin"}],
-        host=CLUSTER, lxd_service=service, _=None,
+        host=CLUSTER, lxd_service=service, _=None, db=None, user=USER,
     )
 
 
 def _update_group(service: _Service) -> Any:
     return permissions.update_group(
         group_name="g", request=permissions.GroupUpdateRequest(permissions=[]),
-        host=CLUSTER, lxd_service=service, _=None,
+        host=CLUSTER, lxd_service=service, _=None, db=None, user=USER,
     )
 
 
 def _delete_group(service: _Service) -> Any:
-    return permissions.delete_group(group_name="g", host=CLUSTER, lxd_service=service, _=None)
+    return permissions.delete_group(group_name="g", host=CLUSTER, lxd_service=service, _=None, db=None, user=USER)
 
 
 def _add_identity(service: _Service) -> Any:
     return permissions.add_identity_to_group(
         group_name="g", request=permissions.IdentityAddRequest(auth_type="tls", identity_id="i"),
-        host=CLUSTER, lxd_service=service, _=None,
+        host=CLUSTER, lxd_service=service, _=None, db=None, user=USER,
     )
 
 
 def _remove_identity(service: _Service) -> Any:
     return permissions.remove_identity_from_group(
-        group_name="g", auth_type="tls", identity_id="i", host=CLUSTER, lxd_service=service, _=None,
+        group_name="g", auth_type="tls", identity_id="i", host=CLUSTER, lxd_service=service, _=None, db=None, user=USER,
     )
 
 
 def _delete_identity(service: _Service) -> Any:
     return permissions.delete_identity(
-        auth_type="tls", identity_id="i", host=CLUSTER, lxd_service=service, _=None
+        auth_type="tls", identity_id="i", host=CLUSTER, lxd_service=service, _=None, db=None, user=USER
     )
 
 
@@ -212,7 +228,7 @@ def _shared_and_other() -> Any:
 async def test_an_auth_object_on_a_shared_cluster_is_not_shown(read, fleet: _Fleet) -> None:
     with _shared_and_other():
         with pytest.raises(HTTPException) as exc:
-            await read("g", host=CLUSTER, lxd_service=fleet)
+            await read("g", host=CLUSTER, lxd_service=fleet, db=None, user=USER)
     assert exc.value.status_code == 403
     assert fleet.asked == []
 
@@ -222,7 +238,7 @@ async def test_an_auth_object_on_a_shared_cluster_is_not_shown(read, fleet: _Fle
 async def test_a_listing_for_a_shared_cluster_is_refused(read, fleet: _Fleet) -> None:
     with _shared_and_other():
         with pytest.raises(HTTPException) as exc:
-            await read(host=CLUSTER, lxd_service=fleet)
+            await read(host=CLUSTER, lxd_service=fleet, db=None, user=USER)
     assert exc.value.status_code == 403
 
 
@@ -231,7 +247,7 @@ async def test_a_listing_for_a_shared_cluster_is_refused(read, fleet: _Fleet) ->
                          ids=["list_groups", "list_identities"])
 async def test_a_fleet_listing_leaves_the_shared_cluster_out(read, field: str, fleet: _Fleet) -> None:
     with _shared_and_other():
-        answer = await read(host=None, lxd_service=fleet)
+        answer = await read(host=None, lxd_service=fleet, db=None, user=USER)
     assert {row.node for row in getattr(answer, field)} == {OTHER}
     assert answer.nodes == [OTHER]
     assert CLUSTER not in answer.unreachable_nodes
@@ -242,7 +258,7 @@ async def test_a_fleet_listing_leaves_the_shared_cluster_out(read, field: str, f
                          ids=["list_groups", "list_identities"])
 async def test_an_unbounded_caller_still_lists_every_cluster(read, field: str, fleet: _Fleet) -> None:
     with scoped(allowed=None, acl=None, bound=None):
-        answer = await read(host=None, lxd_service=fleet)
+        answer = await read(host=None, lxd_service=fleet, db=None, user=USER)
     assert {row.node for row in getattr(answer, field)} == {CLUSTER, OTHER}
 
 
@@ -251,8 +267,40 @@ async def test_an_unbounded_caller_still_lists_every_cluster(read, field: str, f
 async def test_an_auth_object_on_an_unshared_cluster_is_still_read(read, fleet: _Fleet) -> None:
     with _shared_and_other():
         with pytest.raises(Exception):
-            await read("g", host=OTHER, lxd_service=fleet)
+            await read("g", host=OTHER, lxd_service=fleet, db=None, user=USER)
     assert fleet.asked == [OTHER]
+
+
+# -- a partner's own buyers do not make its cluster foreign --------------------------------------
+
+async def test_an_admin_key_on_a_cluster_only_the_partners_buyers_share_is_minted(service, parties) -> None:
+    parties["held"] = False
+    with partner({"default", "own-web"}):
+        with pytest.raises(HTTPException) as exc:
+            await _create(service, "admin", "default")
+    assert exc.value.status_code == 500
+    assert service.asked == [CLUSTER]
+    assert parties["asked"] == [(USER.email, [CLUSTER])]
+
+
+@pytest.mark.parametrize("write", WRITES, ids=IDS)
+async def test_an_auth_write_where_only_the_partners_buyers_share_goes_through(write, service, parties) -> None:
+    parties["held"] = False
+    with partner({"default", "own-web"}):
+        with pytest.raises(HTTPException) as exc:
+            await write(service)
+    assert exc.value.status_code == 500
+    assert service.asked == [CLUSTER]
+
+
+@pytest.mark.parametrize("read,field", [(permissions.list_groups, "groups"),
+                                        (permissions.list_identities, "identities")],
+                         ids=["list_groups", "list_identities"])
+async def test_a_fleet_listing_keeps_a_cluster_only_the_partners_buyers_share(read, field, fleet, parties) -> None:
+    parties["held"] = False
+    with _shared_and_other():
+        answer = await read(host=None, lxd_service=fleet, db=None, user=USER)
+    assert {row.node for row in getattr(answer, field)} == {CLUSTER, OTHER}
 
 
 # -- the class: a cluster check with a project and no project bound ----------------------------
