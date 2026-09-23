@@ -212,10 +212,6 @@ ACCEPTED_ON_LOOP_READS = {
     "routers/cert_manager.py::get_system_warnings::cert_path",
     "routers/cluster_registration.py::check_cluster_authentication::"
     "f'{settings.vault_clusters_path}/{cluster_id}/certs'",
-    "routers/integrations.py::refresh_organizations::"
-    "f'secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret'",
-    "services/orcahub_sync.py::_get_orcahub_credentials::"
-    "f'secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret'",
 }
 
 
@@ -266,4 +262,9 @@ def test_no_new_uncached_vault_read_runs_on_the_loop() -> None:
     assert not new, (
         "an async function calls vault_read on an uncached path directly, which blocks the event "
         "loop for a Vault round trip. Run it with asyncio.to_thread: " + ", ".join(new)
+    )
+    fixed = sorted(ACCEPTED_ON_LOOP_READS - {site for site, _ in reads})
+    assert not fixed, (
+        "these accepted sites no longer read Vault on the loop, so remove them from "
+        "ACCEPTED_ON_LOOP_READS and keep the ratchet tight: " + ", ".join(fixed)
     )
