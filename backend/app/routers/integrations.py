@@ -213,7 +213,16 @@ class APIKeyValidateResponse(BaseModel):
 
 class UserMappingRequest(BaseModel):
     """Request to create/update user mapping."""
-    external_user_id: str = Field(..., description="External user ID")
+    # important: this value becomes a Vault KV path segment in save_user_mapping_to_vault.
+    # ExternalUserMapping stays lenient on purpose: it is rebuilt from stored JSON, and a pattern
+    # there would silently drop legacy mappings from listings and counts.
+    external_user_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_](?:[A-Za-z0-9._@|-]*[A-Za-z0-9_])?$",
+        description="External user ID",
+    )
     external_email: str = Field(..., description="External user email")
     external_name: Optional[str] = Field(None, description="External user name")
     cluster_permissions: List[ClusterPermission] = Field(
