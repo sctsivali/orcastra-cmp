@@ -269,6 +269,12 @@ async function jwtCallback({ token, user, account }: JwtParams): Promise<JWT> {
   return await refreshAccessTokenDeduped(token);
 }
 
+// important: a static asset is recognised by its extension, never by "has a dot". The dot test
+// let any dotted page route (a network named br0.100, a console for web.01) skip the sign-in
+// redirect and the role gate. Only static asset extensions are listed, and only at the end.
+const PUBLIC_ASSET_EXTENSION =
+  /\.(?:js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|txt|webmanifest|wasm)$/i;
+
 // NextAuth configuration
 export const authConfig: NextAuthConfig = {
   providers: [authentikProvider],
@@ -314,7 +320,7 @@ export const authConfig: NextAuthConfig = {
       const isPublicAsset =
         nextUrl.pathname.startsWith("/_next") ||
         nextUrl.pathname.startsWith("/favicon") ||
-        nextUrl.pathname.includes(".");
+        PUBLIC_ASSET_EXTENSION.test(nextUrl.pathname);
 
       // Allow public assets and API routes
       if (isPublicAsset || isApiRoute) {
