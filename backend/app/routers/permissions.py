@@ -206,6 +206,8 @@ async def list_identities(
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing identities: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -359,6 +361,8 @@ async def list_groups(
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing groups: {e}")
         raise HTTPException(status_code=500, detail=str(e))

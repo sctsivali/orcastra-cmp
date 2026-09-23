@@ -342,3 +342,16 @@ def test_every_route_that_takes_a_project_holds_it_to_the_bound() -> None:
             if takes_project and not called & PROJECT_GUARDS and (path.name, node.name) not in EXEMPT:
                 unguarded.append(f"{path.name}:{node.lineno} {node.name}")
     assert unguarded == [], unguarded
+
+
+@pytest.mark.parametrize("read", [permissions.list_groups, permissions.list_identities],
+                         ids=["list_groups", "list_identities"])
+async def test_a_fleet_listing_keeps_its_own_http_status(read, fleet, monkeypatch) -> None:
+    async def unavailable(*_a: Any, **_k: Any) -> set:
+        raise HTTPException(status_code=503, detail="Could not confirm who holds these clusters. Try again.")
+
+    monkeypatch.setattr(permissions, "_held_elsewhere", unavailable)
+    with _shared_and_other():
+        with pytest.raises(HTTPException) as caught:
+            await read(host=None, lxd_service=fleet, db=None, user=USER)
+    assert caught.value.status_code == 503
