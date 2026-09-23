@@ -1023,10 +1023,17 @@ async def _upsert_synced_organizations(
                     api_key_id=api_key_id,
                     is_active=True,
                 ))
-            elif slug_owner.source == "orcahub" and slug_owner.external_id not in incoming_ids:
+            elif (
+                slug_owner.source == "orcahub"
+                and slug_owner.external_id not in incoming_ids
+                and (not slug_owner.api_key_id or slug_owner.api_key_id == api_key_id)
+            ):
                 # The row's OrcaHub identity is RETIRED (its external_id is absent from this
                 # push) and OrcaHub slugs are globally unique, so this row is the deleted
                 # predecessor of the incoming org that reused the slug. Re-link it in place.
+                # important: same ownership rule as Pass 1. Without it any key could take another
+                # integration's org by pushing its slug under a fresh external_id, and owning it
+                # then passes the member sync that pushes roles into Authentik.
                 slug_owner.name = org_data.name
                 slug_owner.description = org_data.description
                 slug_owner.external_id = org_data.id
@@ -1040,8 +1047,8 @@ async def _upsert_synced_organizations(
                 # the next sync retries once the clash is resolved.
                 logger.warning(
                     f"Skipped organization {org_data.id}: slug '{org_data.slug}' is held by a live "
-                    f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}); "
-                    f"resolve the slug clash to sync it"
+                    f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}, "
+                    f"api_key={slug_owner.api_key_id}). Resolve the slug clash to sync it."
                 )
                 continue
 
