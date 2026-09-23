@@ -39,13 +39,15 @@ class _Operation:
         self.metadata = {}
         self.waited = False
 
-    def wait(self, timeout: Any = None) -> None:
+    def wait(self) -> None:
+        """pylxd's own signature: Operation.wait takes no timeout."""
         self.waited = True
 
 
 class _Client:
     def __init__(self, operations: dict[str, _Operation]):
         self.deleted: list[str] = []
+        self.waited: list[tuple[str, dict]] = []
         self._operations = operations
         by_id = self._operations
 
@@ -55,7 +57,13 @@ class _Client:
             return by_id[op_id]
 
         def item(op_id: str) -> Any:
-            return SimpleNamespace(delete=lambda: self.deleted.append(op_id))
+            def wait_get(params: Optional[dict] = None, timeout: Any = None) -> Any:
+                self.waited.append((op_id, dict(params or {})))
+                return SimpleNamespace(json=lambda: {"metadata": {"status": "Success", "status_code": 200}})
+
+            return SimpleNamespace(
+                delete=lambda: self.deleted.append(op_id), wait=SimpleNamespace(get=wait_get)
+            )
 
         running = [_op_data(op.id, project) for op, project in (
             (by_id["op-own"], "default"), (by_id["op-foreign"], FOREIGN), (by_id["op-image"], None)
@@ -142,3 +150,4 @@ async def test_a_foreign_operation_cannot_be_waited_on(cluster):
             )
     assert exc.value.status_code == 404
     assert not cluster.operations["op-foreign"].waited
+    assert cluster.client.waited == []

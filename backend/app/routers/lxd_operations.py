@@ -9,6 +9,8 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from pylxd import exceptions as pylxd_exceptions
+
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
@@ -79,6 +81,21 @@ def _read_visible_operation(client: Any, host: str, operation_id: str) -> Any:
     if not _operation_is_visible(host, getattr(operation, "resources", None)):
         raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
     return operation
+
+
+def _wait_for_operation(client: Any, operation_id: str, seconds: int) -> Dict[str, Any]:
+    """The operation's state after waiting up to `seconds` for it to end. Blocking, so threaded.
+
+    note: pylxd's Operation.wait takes no timeout, so the raw wait endpoint is used, with a read
+    timeout that outlasts the wait. A wait that runs out answers with an error body rather than
+    the running operation, so the operation itself is read before anything is reported.
+    """
+    node = client.api.operations[safe_segment(operation_id)]
+    try:
+        response = node.wait.get(params={"timeout": seconds}, timeout=(5, seconds + 10))
+    except pylxd_exceptions.LXDAPIException:
+        response = node.get()
+    return response.json().get("metadata") or {}
 
 
 class OperationListResponse(BaseModel):
@@ -324,21 +341,22 @@ async def cancel_operation(
 async def wait_operation(
     operation_id: str,
     host: str = Query(..., description="Target host node"),
-    timeout: Optional[int] = Query(30, description="Timeout in seconds"),
+    timeout: int = Query(30, ge=0, le=300, description="Timeout in seconds"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Wait for an operation to complete."""
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        operation = await asyncio.to_thread(_read_visible_operation, client, host, operation_id)
-        operation.wait(timeout=timeout)
-        
+        await asyncio.to_thread(_read_visible_operation, client, host, operation_id)
+        state = await asyncio.to_thread(_wait_for_operation, client, operation_id, timeout)
+        status = state.get("status") or ""
         return {
-            "success": True,
-            "message": f"Operation {operation_id} completed",
-            "status": getattr(operation, 'status', ''),
-            "status_code": getattr(operation, 'status_code', 0)
+            "success": status == "Success",
+            "message": f"Operation {operation_id} status: {status or 'unknown'}",
+            "status": status,
+            "status_code": state.get("status_code") or 0,
+            "err": state.get("err") or "",
         }
     except HTTPException:
         # broad handler below converts it into a 500
