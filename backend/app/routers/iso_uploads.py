@@ -41,7 +41,7 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import append_request_body
 from app.models.db_models import IsoUploadSession
-from app.routers.image_uploads import assert_session_owner
+from app.routers.image_uploads import assert_session_owner, reserved_staging_bytes
 from app.routers.integrations import validate_api_key
 from app.services.lxd_service import get_lxd_service
 import logging
@@ -179,16 +179,24 @@ async def create_upload(
     _ensure_dir()
     await _gc_expired(db)
 
-    # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
+    # important: slots are counted per key. A global count let one key with write on any cluster
+    # hold every slot and starve every other integration and the dashboard for the session TTL.
     active = await db.execute(
-        select(func.count()).select_from(IsoUploadSession).where(IsoUploadSession.status.in_(_ACTIVE))
+        select(func.count()).select_from(IsoUploadSession).where(
+            IsoUploadSession.status.in_(_ACTIVE),
+            IsoUploadSession.api_key_id == x_api_key_id,
+        )
     )
     if (active.scalar_one() or 0) >= MAX_ACTIVE_SESSIONS:
-        raise HTTPException(status_code=503, detail="Another ISO upload is in progress; please retry shortly")
+        raise HTTPException(
+            status_code=503,
+            detail="Another ISO upload is in progress for this integration. Please retry shortly.",
+        )
 
-    # Disk-watermark: refuse if staging this file would not leave headroom.
+    # Disk-watermark: refuse if staging this file, on top of what open sessions still have to
+    # write, would not leave headroom.
     free = shutil.disk_usage(UPLOAD_DIR).free
-    if free < body.total_bytes + DISK_HEADROOM_BYTES:
+    if free - await reserved_staging_bytes(db) < body.total_bytes + DISK_HEADROOM_BYTES:
         raise HTTPException(status_code=507, detail="Insufficient staging space on the cluster manager")
 
     session_id = secrets.token_hex(16)

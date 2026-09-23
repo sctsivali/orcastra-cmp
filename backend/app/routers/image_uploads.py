@@ -71,6 +71,8 @@ RECOVERY_CONNECT_TIMEOUT = 30.0
 
 _ACTIVE = ("pending", "uploading", "uploaded", "importing")
 _TERMINAL = ("ready", "failed")
+# Sessions whose declared bytes have not all reached the staging dir yet.
+_UNWRITTEN = ("pending", "uploading")
 
 
 def _now() -> datetime:
@@ -97,6 +99,22 @@ async def _get_session(db: AsyncSession, session_id: str) -> ImageUploadSession:
     if row is None:
         raise HTTPException(status_code=404, detail="Upload session not found")
     return row
+
+
+async def reserved_staging_bytes(db: AsyncSession) -> int:
+    """Bytes promised to open uploads and not yet on disk, across both upload tables.
+
+    important: slot caps are per owner now, so they no longer bound staging disk. Free space alone
+    ignores what open sessions will still write. This is the global bound.
+    """
+    total = 0
+    for model in (ImageUploadSession, IsoUploadSession):
+        res = await db.execute(
+            select(func.coalesce(func.sum(model.total_bytes - model.upload_offset), 0))
+            .where(model.status.in_(_UNWRITTEN))
+        )
+        total += int(res.scalar_one() or 0)
+    return total
 
 
 def assert_session_owner(row: Union[ImageUploadSession, IsoUploadSession], key_id: str) -> None:
@@ -168,16 +186,24 @@ async def create_upload(
     _ensure_dir()
     await _gc_expired(db)
 
-    # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
+    # important: slots are counted per key. A global count let one key with write on any cluster
+    # hold every slot and starve every other integration and the dashboard for the session TTL.
     active = await db.execute(
-        select(func.count()).select_from(ImageUploadSession).where(ImageUploadSession.status.in_(_ACTIVE))
+        select(func.count()).select_from(ImageUploadSession).where(
+            ImageUploadSession.status.in_(_ACTIVE),
+            ImageUploadSession.api_key_id == x_api_key_id,
+        )
     )
     if (active.scalar_one() or 0) >= MAX_ACTIVE_SESSIONS:
-        raise HTTPException(status_code=503, detail="Another image upload is in progress; please retry shortly")
+        raise HTTPException(
+            status_code=503,
+            detail="Another image upload is in progress for this integration. Please retry shortly.",
+        )
 
-    # Disk-watermark: refuse if importing this file would not leave headroom.
+    # Disk-watermark: refuse if staging this file, on top of what open sessions still have to
+    # write, would not leave headroom.
     free = shutil.disk_usage(UPLOAD_DIR).free
-    if free < body.total_bytes + DISK_HEADROOM_BYTES:
+    if free - await reserved_staging_bytes(db) < body.total_bytes + DISK_HEADROOM_BYTES:
         raise HTTPException(status_code=507, detail="Insufficient staging space on the cluster manager")
 
     session_id = secrets.token_hex(16)

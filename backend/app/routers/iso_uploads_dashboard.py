@@ -9,8 +9,9 @@ staging dir, ``_run_import`` (verify -> stream into the pool as an LXD custom
 ``iso`` volume), and the crash-recovery sweep. Only the auth/authorization layer
 differs: ``require_partner()`` for writes, and ``verify_cluster_access`` (org
 scope) in place of the API-key cluster-permission check. Sessions created here
-share the same MAX_ACTIVE_SESSIONS / disk-headroom guards and the same recovery
-loop as the OrcaHub path.
+have their own MAX_ACTIVE_SESSIONS pool (API-key sessions are counted per key),
+share the disk-headroom guard and its reservation of unwritten bytes, and use the
+same recovery loop as the OrcaHub path.
 """
 import asyncio
 import os
@@ -48,13 +49,14 @@ from app.routers.iso_uploads import (
     TUS_VERSION,
     UPLOAD_DIR,
 )
+from app.routers.image_uploads import reserved_staging_bytes
 import logging
 
 logger = logging.getLogger(__name__)
 
 # A browser upload that is abandoned mid-flight (tab closed, page reloaded, network
 # dropped) leaves its session in an in-progress state, which counts against the
-# global MAX_ACTIVE_SESSIONS cap and is otherwise only reclaimed by the 6h TTL.
+# dashboard MAX_ACTIVE_SESSIONS pool and is otherwise only reclaimed by the 6h TTL.
 # Because updated_at is bumped on every chunk PATCH, a session with no activity for
 # this long is provably not a live upload, so its slot can be safely reclaimed.
 # The OrcaHub-facing path is unaffected: this sweep runs only in dashboard create.
@@ -162,15 +164,20 @@ async def create_upload(
     await _reclaim_idle_sessions(db)  # free slots held by abandoned browser uploads
 
     # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
+    # note: the dashboard has its own pool. API-key sessions are counted per key on their side.
     active = await db.execute(
-        select(func.count()).select_from(IsoUploadSession).where(IsoUploadSession.status.in_(_ACTIVE))
+        select(func.count()).select_from(IsoUploadSession).where(
+            IsoUploadSession.status.in_(_ACTIVE),
+            IsoUploadSession.api_key_id.is_(None),
+        )
     )
     if (active.scalar_one() or 0) >= MAX_ACTIVE_SESSIONS:
         raise HTTPException(status_code=503, detail="Another ISO upload is in progress; please retry shortly")
 
-    # Disk-watermark: refuse if staging this file would not leave headroom.
+    # Disk-watermark: refuse if staging this file, on top of what open sessions still have to
+    # write, would not leave headroom.
     free = shutil.disk_usage(UPLOAD_DIR).free
-    if free < body.total_bytes + DISK_HEADROOM_BYTES:
+    if free - await reserved_staging_bytes(db) < body.total_bytes + DISK_HEADROOM_BYTES:
         raise HTTPException(status_code=507, detail="Insufficient staging space on the cluster manager")
 
     session_id = secrets.token_hex(16)

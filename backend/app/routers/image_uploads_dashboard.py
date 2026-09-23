@@ -9,8 +9,9 @@ staging dir, ``_run_import`` (verify -> stream into the cluster's LXD image stor
 and create a private alias), and the crash-recovery sweep. Only the
 auth/authorization layer differs: ``require_partner()`` for writes, and
 ``verify_cluster_access`` (org scope) in place of the API-key cluster-permission
-check. Sessions created here share the same MAX_ACTIVE_SESSIONS / disk-headroom
-guards and the same recovery loop as the OrcaHub path.
+check. Sessions created here have their own MAX_ACTIVE_SESSIONS pool (API-key
+sessions are counted per key), share the disk-headroom guard and its reservation
+of unwritten bytes, and use the same recovery loop as the OrcaHub path.
 
 This is the exact analogue of ``iso_uploads_dashboard.py``. The only material
 differences are per-image: the session carries an ``alias`` + ``instance_type``
@@ -54,6 +55,7 @@ from app.routers.image_uploads import (
     SESSION_TTL_HOURS,
     TUS_VERSION,
     UPLOAD_DIR,
+    reserved_staging_bytes,
 )
 import logging
 
@@ -68,8 +70,8 @@ _ALIAS_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,254}\Z")
 _INSTANCE_TYPES = ("container", "virtual-machine")
 
 # A browser upload abandoned mid-flight (tab closed, reloaded, network dropped)
-# leaves its session in an in-progress state, holding a slot against the global
-# MAX_ACTIVE_SESSIONS cap until the 6h TTL. updated_at is bumped on every chunk
+# leaves its session in an in-progress state, holding a slot in the dashboard
+# MAX_ACTIVE_SESSIONS pool until the 6h TTL. updated_at is bumped on every chunk
 # PATCH, so a session idle this long is provably not live and its slot can be
 # reclaimed. The OrcaHub path is unaffected: this sweep runs only in dashboard
 # create. Mirrors iso_uploads_dashboard.
@@ -172,15 +174,20 @@ async def create_upload(
     await _reclaim_idle_sessions(db)  # free slots held by abandoned browser uploads
 
     # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
+    # note: the dashboard has its own pool. API-key sessions are counted per key on their side.
     active = await db.execute(
-        select(func.count()).select_from(ImageUploadSession).where(ImageUploadSession.status.in_(_ACTIVE))
+        select(func.count()).select_from(ImageUploadSession).where(
+            ImageUploadSession.status.in_(_ACTIVE),
+            ImageUploadSession.api_key_id.is_(None),
+        )
     )
     if (active.scalar_one() or 0) >= MAX_ACTIVE_SESSIONS:
         raise HTTPException(status_code=503, detail="Another image upload is in progress; please retry shortly")
 
-    # Disk-watermark: refuse if staging this file would not leave headroom.
+    # Disk-watermark: refuse if staging this file, on top of what open sessions still have to
+    # write, would not leave headroom.
     free = shutil.disk_usage(UPLOAD_DIR).free
-    if free < body.total_bytes + DISK_HEADROOM_BYTES:
+    if free - await reserved_staging_bytes(db) < body.total_bytes + DISK_HEADROOM_BYTES:
         raise HTTPException(status_code=507, detail="Insufficient staging space on the cluster manager")
 
     session_id = secrets.token_hex(16)
