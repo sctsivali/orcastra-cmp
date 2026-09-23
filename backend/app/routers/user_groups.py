@@ -282,8 +282,10 @@ async def remove_user_from_all(
 
     if highest == Role.ADMIN:
         # admin: remove from all orgs
-        await db.execute(
-            delete(OrganizationMember).where(OrganizationMember.user_email == user_email)
+        removed = await db.execute(
+            delete(OrganizationMember)
+            .where(OrganizationMember.user_email == user_email)
+            .returning(OrganizationMember.organization_id)
         )
     else:
         # partner: only remove from orgs they own/belong to
@@ -303,12 +305,15 @@ async def remove_user_from_all(
                 ),
             )
         )
-        await db.execute(
-            delete(OrganizationMember).where(
+        removed = await db.execute(
+            delete(OrganizationMember)
+            .where(
                 OrganizationMember.user_email == user_email,
                 OrganizationMember.organization_id.in_(partner_org_ids),
             )
+            .returning(OrganizationMember.organization_id)
         )
+    removed_org_ids = set(removed.scalars().all())
     await db.commit()
 
     # remove from Authentik (only admin should do this globally)
@@ -316,10 +321,10 @@ async def remove_user_from_all(
         sync_svc = get_authentik_sync()
         await sync_svc.remove_user_from_all_roles(user_email)
 
-    # push removal to OrcaHub (non-blocking, best-effort)
+    # push removal to OrcaHub (non-blocking, best-effort), only for the orgs just left
     try:
         from app.services.orcahub_sync import push_member_removal_to_orcahub
-        await push_member_removal_to_orcahub(db, user_email)
+        await push_member_removal_to_orcahub(db, user_email, removed_org_ids)
     except Exception as e:
         logger.warning(f"OrcaHub removal push failed (non-blocking): {e}")
 

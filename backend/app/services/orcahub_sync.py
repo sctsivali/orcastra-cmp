@@ -8,12 +8,13 @@ via the external API endpoints authenticated with API key credentials.
 import ipaddress
 import logging
 from functools import lru_cache
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.blocking import run_blocking
 from app.core.config import get_settings
 from app.core.error_sanitizer import sanitize_error
 from app.core.safe_http import guarded_request
@@ -81,46 +82,70 @@ _ROLE_TO_ORCAHUB = {
 }
 
 
+def _read_orcahub_credentials_blocking(api_key_id: str) -> Optional[Dict[str, Any]]:
+    """Both Vault reads a callback needs. Runs on the auth pool, never on the event loop.
+
+    A revoked, inactive or expired key gets no callbacks: its integration is gone, and the raw
+    secret it would carry should not leave the process for it.
+    """
+    from app.routers.integrations import (
+        VAULT_INTEGRATIONS_PATH,
+        _api_key_has_expired,
+        get_vault_integrations_client,
+    )
+
+    vault_client = get_vault_integrations_client()
+    metadata = vault_client.vault_read(
+        f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/metadata"
+    ) or {}
+    if (
+        metadata.get("is_revoked")
+        or not metadata.get("is_active", True)
+        or _api_key_has_expired(metadata.get("expires_at"))
+    ):
+        logger.info("OrcaHub callback skipped for api key %s: the key is revoked, inactive or expired", api_key_id)
+        return None
+    app_url = metadata.get("app_url")
+    if not app_url:
+        logger.warning(f"No app_url stored for API key {api_key_id}")
+        return None
+    secret_data = vault_client.vault_read(
+        f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret"
+    ) or {}
+    raw_secret = secret_data.get("raw")
+    if not raw_secret:
+        logger.warning(f"No raw secret stored for API key {api_key_id}, cannot call back OrcaHub")
+        return None
+    return {
+        "app_url": app_url,
+        "api_key_id": api_key_id,
+        "api_key_secret": raw_secret,
+    }
+
+
 async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]]:
     """
     Retrieve OrcaHub callback URL and API key credentials for an org.
     The org must have source='orcahub' and a stored api_key_id.
-    Returns dict with app_url, api_key_id, api_key_secret_hash or None.
+    Returns dict with app_url, api_key_id, api_key_secret or None.
     """
     if org.source != "orcahub" or not org.api_key_id:
         return None
 
+    from app.services.lxd.proxy import VALIDATE_KEY_TIMEOUT, auth_executor
+
     try:
-        from app.routers.integrations import (
-            get_vault_integrations_client,
-            VAULT_INTEGRATIONS_PATH,
+        return await run_blocking(
+            _read_orcahub_credentials_blocking,
+            org.api_key_id,
+            timeout=VALIDATE_KEY_TIMEOUT,
+            label=f"orcahub_credentials[{org.api_key_id}]",
+            executor=auth_executor,
         )
-
-        vault_client = get_vault_integrations_client()
-        metadata = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/metadata"
-        )
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret"
-        )
-        app_url = metadata.get("app_url")
-        raw_secret = secret_data.get("raw")
-
-        if not app_url:
-            logger.warning(f"No app_url stored for API key {org.api_key_id}")
-            return None
-
-        if not raw_secret:
-            logger.warning(f"No raw secret stored for API key {org.api_key_id} — cannot call back OrcaHub")
-            return None
-
-        return {
-            "app_url": app_url,
-            "api_key_id": org.api_key_id,
-            "api_key_secret": raw_secret,
-        }
     except Exception as e:
-        logger.warning(f"Failed to retrieve OrcaHub credentials for org {org.id}: {e}")
+        logger.warning(
+            "Failed to retrieve OrcaHub credentials for org %s: %s", org.id, sanitize_error(str(e))
+        )
         return None
 
 
@@ -200,15 +225,22 @@ async def push_members_to_orcahub(
 async def push_member_removal_to_orcahub(
     db: AsyncSession,
     user_email: str,
+    organization_ids: Iterable[int],
 ) -> bool:
     """
-    Push removal of a user from ALL orgs to OrcaHub.
-    Finds all OrcaHub-synced orgs this user was in and sends remove action.
+    Tell OrcaHub about a removal, only for the organizations the user actually left.
+
+    important: this used to select every orcahub organization and post the email to each one's
+    callback, so every integration, including one whose app_url points at a planted endpoint,
+    learned who was removed anywhere. The caller passes the ids its own delete returned.
     """
-    # find all orcahub-sourced orgs
+    ids = sorted({int(org_id) for org_id in organization_ids})
+    if not ids:
+        return True
     result = await db.execute(
         select(Organization).where(
             and_(
+                Organization.id.in_(ids),
                 Organization.source == "orcahub",
                 Organization.api_key_id.isnot(None),
             )
