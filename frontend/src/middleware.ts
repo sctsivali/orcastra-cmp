@@ -30,15 +30,18 @@ export const config = {
   // Match all routes except static assets and API routes handled by NextAuth
   matcher: [
     /*
-     * Match all request paths except for the ones starting with:
-     * - api (API routes: NextAuth + backend proxy)
-     * - health (readiness proxy) and healthz (the Docker liveness probe): both must stay
-     *   reachable without a session, so the prefix stays here
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
+     * Match all request paths except:
+     * - api/ (API routes: NextAuth + backend proxy)
+     * - /health (readiness proxy) and /healthz (the Docker liveness probe): both must stay
+     *   reachable without a session
+     * - _next/static (static files) and _next/image (image optimization files)
      * - favicon (favicon files)
-     * - public assets (images, fonts, etc.)
+     * - the files in public/: root-level images and JSON, geo/*.json and spice-html5/
+     *
+     * important: every exclusion is anchored. An unanchored ".*\.json" skipped this whole
+     * middleware, so no sign-in redirect, for any page path containing ".json" anywhere, such
+     * as a network named br0.json. A public asset sits at the root, so its pattern allows no "/".
      */
-    "/((?!api/|health|_next/static|_next/image|favicon|.*\\.ico|.*\\.png|.*\\.jpg|.*\\.svg|.*\\.webp|.*\\.json|spice-html5).*)",
+    "/((?!api/|health(?:z)?(?:/|$)|_next/static|_next/image|favicon|[^/]+\\.(?:ico|png|jpg|svg|webp|json)$|geo/[^/]+\\.json$|spice-html5/).*)",
   ],
 };

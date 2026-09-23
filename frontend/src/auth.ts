@@ -271,9 +271,11 @@ async function jwtCallback({ token, user, account }: JwtParams): Promise<JWT> {
 
 // important: a static asset is recognised by its extension, never by "has a dot". The dot test
 // let any dotted page route (a network named br0.100, a console for web.01) skip the sign-in
-// redirect and the role gate. Only static asset extensions are listed, and only at the end.
+// redirect and the role gate. Only static asset extensions are listed, only at the end, and only
+// for a root-level file: a nested path such as /inventory/networks/br0.svg is a page. Nested
+// assets live under /_next or are excluded by the matcher in middleware.ts.
 const PUBLIC_ASSET_EXTENSION =
-  /\.(?:js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|txt|webmanifest|wasm)$/i;
+  /^\/[^/]+\.(?:js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|txt|webmanifest|wasm)$/i;
 
 // NextAuth configuration
 export const authConfig: NextAuthConfig = {
