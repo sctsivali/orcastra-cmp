@@ -21,6 +21,7 @@ X = "partner-x@example.test"
 L = "local-partner@example.test"
 L2 = "local-partner2@example.test"
 ADMIN = "ops@example.test"
+M = "dashboard-added@example.test"
 
 
 def _org(org_id: int, slug: str, created_by: str, key: "str | None" = None, source: str = "orcahub") -> Organization:
@@ -43,6 +44,8 @@ async def _world():
         # account is a partner member too, as it is on the dev copy.
         _org(1, "a-home", "system", "oak_a"),
         _member(1, A), _member(1, A2), _member(1, ADMIN),
+        # a partner added to A's home org from the dashboard, stored as the legacy "member" role
+        _member(1, M, "member"),
         # a buyer A's key provisioned (provisioning stamps the minter), and one whose minter left
         _org(3, "a-buyer", A, "oak_a"),
         _org(7, "a-buyer-old-staff", "departed@example.test", "oak_a"),
@@ -117,6 +120,12 @@ async def test_buying_from_a_partner_does_not_join_the_buyer_to_the_seller() -> 
     db = await _world()
     assert await held(db, X, "x-bought") == {"x-bought"}
     assert 3 not in await cluster_parties.run_orgs(db, X)
+
+
+async def test_a_member_row_added_from_the_dashboard_does_not_run_the_org() -> None:
+    db = await _world()
+    assert 1 not in await cluster_parties.run_orgs(db, M)
+    assert await held(db, M, "sold") == {"sold"}
 
 
 async def test_a_local_home_partner_owns_the_buyers_it_created() -> None:

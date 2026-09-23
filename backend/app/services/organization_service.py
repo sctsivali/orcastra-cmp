@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.db_models import Organization, OrganizationMember, OrganizationCluster
+from app.services.cluster_parties import RUNNING_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +289,7 @@ class OrganizationService:
         return result.scalar_one_or_none() is not None
 
     async def user_runs_org(self, org_id: int, user_email: str, user_role: str) -> bool:
-        """Whether a user may change an organization's roster: admin, its creator, or a member above tenant.
+        """Whether a user may change an organization's roster: admin, its creator, or its partner or admin row.
 
         important: user_has_access answers "may this user see the organization" and is true for a tenant
         row too, so a partner who only buys from another partner could add, change and remove that
@@ -305,7 +306,7 @@ class OrganizationService:
             select(OrganizationMember.id).where(
                 OrganizationMember.organization_id == org_id,
                 OrganizationMember.user_email == user_email,
-                OrganizationMember.role != "tenant",
+                OrganizationMember.role.in_(RUNNING_ROLES),
             )
         )
         return result.first() is not None
@@ -324,7 +325,7 @@ class OrganizationService:
             .where(
                 OrganizationMember.user_email == member_email,
                 OrganizationMember.organization_id.in_(org_ids),
-                OrganizationMember.role.in_(("partner", "admin")),
+                OrganizationMember.role.in_(RUNNING_ROLES),
                 Organization.source == "orcahub",
                 Organization.api_key_id.isnot(None),
             )

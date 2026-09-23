@@ -6,7 +6,7 @@ cluster. The questions "may this partner grant, manage or reach the whole of thi
 the other answer: is any binding held by someone outside the caller's party.
 
 The caller's party is decided from the database alone:
-  * the organizations they run: created, or joined in a role above tenant
+  * the organizations they run: created, or joined as partner or admin
   * any organization keyed to the same integration key as one of those (the key that syncs the
     partner's home organization is the key that provisioned its buyers)
 
@@ -21,9 +21,13 @@ from typing import Dict, Iterable, Optional, Set
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# important: an allowlist, not "anything but tenant". A member added from the dashboard is stored as
+# the legacy "member" role, which org_scope and the user list both read as tenant.
+RUNNING_ROLES = ("partner", "admin")
+
 
 async def run_orgs(db: AsyncSession, email: str) -> Dict[int, Optional[str]]:
-    """Organizations this user runs, mapped to the integration key each carries.
+    """Organizations this user runs (created, or a partner or admin row), mapped to each one's key.
 
     important: not get_org_ids_for_email, which counts any membership. A partner who also buys from
     another partner is a tenant of that seller's buyer organization, and counting it would put the
@@ -40,7 +44,7 @@ async def run_orgs(db: AsyncSession, email: str) -> Dict[int, Optional[str]]:
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
             or_(
                 Organization.created_by == email,
-                (OrganizationMember.user_email == email) & (OrganizationMember.role != "tenant"),
+                (OrganizationMember.user_email == email) & OrganizationMember.role.in_(RUNNING_ROLES),
             ),
         )
     )).all()

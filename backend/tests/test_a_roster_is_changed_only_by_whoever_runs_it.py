@@ -23,6 +23,7 @@ RUNNER = "runner@example.test"
 BUYER = "buyer-partner@example.test"
 CO = "copartner@example.test"
 T = "tenant@example.test"
+DASH = "dashboard-added@example.test"
 
 
 def _user(email: str, group: str = "role_partner") -> AuthenticatedUser:
@@ -41,6 +42,7 @@ async def _db():
         OrganizationMember(organization_id=1, user_email=RUNNER, role="partner"),
         OrganizationMember(organization_id=1, user_email=BUYER, role="tenant"),
         OrganizationMember(organization_id=1, user_email=T, role="tenant"),
+        OrganizationMember(organization_id=1, user_email=DASH, role="member"),
         OrganizationMember(organization_id=2, user_email=RUNNER, role="partner"),
         OrganizationMember(organization_id=2, user_email=CO, role="partner"),
         OrganizationMember(organization_id=2, user_email=T, role="member"),
@@ -54,9 +56,11 @@ async def _members(db, org_id: int) -> List[str]:
     return sorted(rows.scalars().all())
 
 
-async def test_a_tenant_member_cannot_change_the_roster() -> None:
+@pytest.mark.parametrize("email", [BUYER, DASH], ids=["tenant-row", "legacy-member-row"])
+async def test_a_tenant_member_cannot_change_the_roster(email: str) -> None:
+    """A partner account whose row here is tenant, or the legacy "member" the add route writes."""
     db = await _db()
-    buyer = _user(BUYER)
+    buyer = _user(email)
     for call in (
         lambda: organizations.add_member(1, organizations.MemberAddRequest(user_email="new@example.test"), user=buyer, db=db),
         lambda: organizations.update_member(1, T, organizations.MemberUpdateRequest(role="member"), user=buyer, db=db),
@@ -65,7 +69,7 @@ async def test_a_tenant_member_cannot_change_the_roster() -> None:
         with pytest.raises(HTTPException) as caught:
             await call()
         assert caught.value.status_code == 403
-    assert await _members(db, 1) == sorted([RUNNER, BUYER, T])
+    assert await _members(db, 1) == sorted([RUNNER, BUYER, T, DASH])
 
 
 async def test_whoever_runs_the_org_changes_its_roster() -> None:
