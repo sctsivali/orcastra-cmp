@@ -77,6 +77,38 @@ def public_environment(environment: Optional[Dict[str, Any]]) -> Optional[Dict[s
     return {key: value for key, value in environment.items() if key in PUBLIC_ENVIRONMENT_KEYS}
 
 
+# Keys of the LXD server `config` block that may reach a client.
+#
+# important: allowlist, for the same reason PUBLIC_ENVIRONMENT_KEYS is one. The raw config block
+# is where an LXD daemon keeps core.trust_password, OIDC and Loki credentials and the OVN client
+# key. GET /server, GET /server/{node} and GET /server/{node}/config returned it whole. The
+# server page narrows what it draws, not what the response carries.
+#
+# Nothing in the backend reads ServerInfo.config, so narrowing this is contained to the wire.
+# The set matches the next release line so the two answer the same.
+PUBLIC_CONFIG_KEYS = frozenset(
+    {
+        "core.https_address",
+        "cluster.https_address",
+        "core.proxy_ignore_hosts",
+        "images.auto_update_cached",
+        "images.auto_update_interval",
+        "images.compression_algorithm",
+        "images.remote_cache_expiry",
+        "instances.nic.host_name",
+        "storage.backups_volume",
+        "storage.images_volume",
+    }
+)
+
+
+def public_config(config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The server config block minus anything a client has no business holding."""
+    if not config:
+        return config
+    return {key: value for key, value in config.items() if key in PUBLIC_CONFIG_KEYS}
+
+
 class ResourceManager:
     """
     Manages resource tracking and metrics for LXD instances and nodes.
