@@ -1153,10 +1153,10 @@ async def monitoring_websocket(ws: WebSocket):
     # Validate auth token from query param
     settings = get_settings()
     if settings.auth_enabled:
-        if not settings.authentik_issuer:
+        if not settings.authentik_issuer or not settings.authentik_audience:
             logger.error(
-                "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured. Refusing the "
-                "monitoring WebSocket"
+                "AUTH_ENABLED=true but AUTHENTIK_ISSUER or AUTHENTIK_AUDIENCE is not "
+                "configured. Refusing the monitoring WebSocket"
             )
             await ws.close(code=1011, reason="Authentication is enabled but not configured")
             return

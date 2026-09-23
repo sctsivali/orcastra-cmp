@@ -100,6 +100,13 @@ def test_the_websocket_refusal_closes_the_socket() -> None:
     )
 
 
+def test_the_websocket_refusal_closes_the_socket_when_the_audience_is_missing() -> None:
+    client = TestClient(_socket_app(_settings(authentik_audience="")))
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/ws?token=anything") as ws:
+            ws.receive_json()
+    assert exc.value.code == 1011, f"got close code {exc.value.code}"
+
 def test_no_websocket_guard_gates_itself_on_the_issuer() -> None:
     offenders = []
     for path in sorted(ROUTERS.glob("*.py")):
@@ -167,6 +174,15 @@ def test_the_monitoring_socket_refuses_a_misconfigured_server(monkeypatch: pytes
             ws.receive_text()
     assert exc.value.code == 1011, f"got close code {exc.value.code}"
 
+
+def test_the_monitoring_socket_refuses_a_server_without_an_audience(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _monitoring_client(monkeypatch, _settings(authentik_audience=""))
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/monitoring/ws?token=anything") as ws:
+            ws.receive_text()
+    assert exc.value.code == 1011, f"got close code {exc.value.code}"
 
 @pytest.mark.asyncio
 async def test_auth_disabled_still_returns_none_on_both_paths() -> None:

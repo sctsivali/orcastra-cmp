@@ -200,28 +200,49 @@ class AuthenticatedUser:
         return f"AuthenticatedUser(id={self.user_id}, email={self.email})"
 
 
+def _auth_is_configured(settings: Settings) -> bool:
+    return bool(settings.authentik_issuer) and bool(settings.authentik_audience)
+
+
+def _require_auth_configured(settings: Settings) -> None:
+    """Refuse with 503 when the server cannot tell whose token it is looking at.
+
+    important: without an audience any token the issuer signed for any other application
+    verifies here, so a missing AUTHENTIK_AUDIENCE is as much a misconfiguration as a
+    missing issuer. The fault is the server's, so 503 rather than a 401 that blames the
+    caller's token.
+    """
+    if not _auth_is_configured(settings):
+        logger.error(
+            "AUTH_ENABLED=true but AUTHENTIK_ISSUER or AUTHENTIK_AUDIENCE is not configured. "
+            "Refusing the request rather than verifying tokens for any audience"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is enabled but not fully configured on this server",
+        )
+
+
 def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
     """
     Validate a JWT access token against the Authentik JWKS.
     Returns an AuthenticatedUser on success, raises HTTPException on failure.
     """
+    _require_auth_configured(settings)
     signing_key = _jwks_client.get_signing_key(token, settings)
 
     try:
-        # build audience list - Authentik may issue tokens with client_id as audience
-        audience = settings.authentik_audience or None
-
         payload = jwt.decode(
             token,
             key=signing_key,
             algorithms=["RS256"],
-            audience=audience,
+            audience=settings.authentik_audience,
             issuer=settings.authentik_issuer,
             options={
                 "verify_exp": True,
                 "verify_iss": True,
-                "verify_aud": bool(audience),
-                "require": ["exp", "iss", "sub"],
+                "verify_aud": True,
+                "require": ["exp", "iss", "sub", "aud"],
             },
         )
 
@@ -282,15 +303,17 @@ async def get_current_user(
     if not settings.auth_enabled:
         return None
 
-    if not settings.authentik_issuer:
+    if not settings.authentik_issuer or not settings.authentik_audience:
         # important: this used to return None, and every RBAC dependency reads None as dev mode
         # and fabricates a full Admin. A single missing or misspelled AUTHENTIK_ISSUER therefore
         # turned an auth-enabled deployment into an open one for unauthenticated callers. A
         # deployment that asks for auth and cannot verify it must refuse, not wave people
-        # through; 503 says the fault is the server's configuration, not the caller's token.
+        # through. 503 says the fault is the server's configuration, not the caller's token.
+        # The audience is required for the same reason: without it a token minted for any
+        # other application on the same issuer verifies here.
         logger.error(
-            "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing every request "
-            "until it is set, rather than serving them unauthenticated"
+            "AUTH_ENABLED=true but AUTHENTIK_ISSUER or AUTHENTIK_AUDIENCE is not configured. "
+            "Refusing every request until both are set, rather than serving them unverified"
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -357,17 +380,18 @@ async def get_ws_user(
 
     important: a server with auth enabled and no issuer used to return ``None`` here, and
     every socket guard was gated on the issuer too, so the terminal, console, events and
-    monitoring sockets served anyone. It now refuses the handshake with 1011, which names
-    the server's configuration as the fault, the same way get_current_user answers 503.
+    monitoring sockets served anyone. A server missing the issuer or the audience now
+    refuses the handshake with 1011, which names the server's configuration as the fault,
+    the same way get_current_user answers 503.
     """
 
     if not settings.auth_enabled:
         return None
 
-    if not settings.authentik_issuer:
+    if not _auth_is_configured(settings):
         logger.error(
-            "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured. Refusing every "
-            "WebSocket until it is set, rather than serving them unauthenticated"
+            "AUTH_ENABLED=true but AUTHENTIK_ISSUER or AUTHENTIK_AUDIENCE is not configured. "
+            "Refusing every WebSocket until both are set, rather than serving them unverified"
         )
         raise WebSocketException(
             code=status.WS_1011_INTERNAL_ERROR,
