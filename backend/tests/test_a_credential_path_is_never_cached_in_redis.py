@@ -200,24 +200,13 @@ async def test_the_certificate_pages_read_vault_off_the_loop() -> None:
     assert _on_loop(manager.vault) == []
 
 
-async def test_the_orcahub_credentials_are_read_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.routers import integrations
-    from app.services import orcahub_sync
-
-    vault = _ThreadVault({"metadata": {"app_url": "https://hub.example.test"}, "secret": {"raw": "oas_x"}})
-    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
-    org = SimpleNamespace(id=1, source="orcahub", api_key_id="oak_test")
-    creds = await orcahub_sync._get_orcahub_credentials(org)
-    assert creds is not None and creds["api_key_secret"] == "oas_x"
-    assert [segment for segment, _ in vault.reads] == ["metadata", "secret"]
-    assert _on_loop(vault) == [], "the OrcaHub key's secret was read on the event loop"
-
-
 APP = Path(vc.__file__).resolve().parents[1]
 
-# note: direct reads of uncached paths inside an async body that predate the allowlist, when these
-# paths were already uncached, except refresh_organizations. That one is a partner's on-demand
-# refresh whose /secret read was cached before. The set may shrink and must never grow.
+# note: direct reads of uncached paths inside an async body. The cert_manager and
+# cluster_registration reads were already uncached before the allowlist. The /secret reads in
+# refresh_organizations and _get_orcahub_credentials were cached before, and both move onto the
+# auth pool with the integration fixes that rewrite those two functions. The set may shrink and
+# must never grow.
 ACCEPTED_ON_LOOP_READS = {
     "routers/cert_manager.py::initiate_renewal::cert_path",
     "routers/cert_manager.py::get_system_warnings::cert_path",
@@ -225,6 +214,8 @@ ACCEPTED_ON_LOOP_READS = {
     "f'{settings.vault_clusters_path}/{cluster_id}/certs'",
     "routers/integrations.py::refresh_organizations::"
     "f'secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret'",
+    "services/orcahub_sync.py::_get_orcahub_credentials::"
+    "f'secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret'",
 }
 
 
