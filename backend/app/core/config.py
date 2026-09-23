@@ -146,6 +146,18 @@ class Settings(BaseSettings):
         description="When member reconcile is enabled, only log intended removals instead of deleting. Default on (observe-only)."
     )
 
+    # Every OrcaHub callback carries a credential, so its stored app_url must reach a public
+    # address over https. This is the one relaxation: operator-listed networks (ex; a tailnet
+    # /32), where http is accepted only for a literal address inside one of them.
+    orcahub_callback_allowed_networks: str = Field(
+        default="",
+        alias="ORCAHUB_CALLBACK_ALLOWED_NETWORKS",
+        description=(
+            "Comma-separated CIDRs an OrcaHub app_url may reach besides public addresses. "
+            "http is accepted only for a literal address inside one of them. Empty: public https only."
+        ),
+    )
+
     # Authentication / Authentik OIDC Configuration
     auth_enabled: bool = Field(
         default=True,

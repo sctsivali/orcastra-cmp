@@ -5,16 +5,72 @@ Handles pushing member/branding changes from Orcastra back to OrcaHub
 via the external API endpoints authenticated with API key credentials.
 """
 
+import ipaddress
 import logging
-from typing import Optional, List, Dict, Any
+from functools import lru_cache
+from typing import Optional, List, Dict, Any, Tuple
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
+from app.core.url_safety import NEVER_ALLOWED, IPNetwork, validate_url_field
 from app.models.db_models import Organization
 
 logger = logging.getLogger(__name__)
+
+CALLBACK_RESPONSE_MAX_BYTES = 64 * 1024
+
+
+@lru_cache(maxsize=4)
+def _parse_networks(raw: str) -> Tuple[IPNetwork, ...]:
+    nets: List[IPNetwork] = []
+    for part in (p.strip() for p in raw.split(",")):
+        if not part:
+            continue
+        try:
+            net = ipaddress.ip_network(part, strict=False)
+        except ValueError:
+            logger.error("Ignoring ORCAHUB_CALLBACK_ALLOWED_NETWORKS entry %r: not a network", part)
+            continue
+        if net.prefixlen == 0 or any(a in net for a in NEVER_ALLOWED if a.version == net.version):
+            logger.error("Ignoring ORCAHUB_CALLBACK_ALLOWED_NETWORKS entry %r: too broad", part)
+            continue
+        nets.append(net)
+    return tuple(nets)
+
+
+def callback_networks() -> Tuple[IPNetwork, ...]:
+    """Operator-allowed non-public networks. A bad entry narrows the policy, never widens it."""
+    return _parse_networks(get_settings().orcahub_callback_allowed_networks or "")
+
+
+def callback_requires_https(url: str) -> bool:
+    """https everywhere, except a literal address inside an allowed network (ex; a tailnet)."""
+    try:
+        host = urlsplit(url).hostname or ""
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not any(addr.version == net.version and addr in net for net in callback_networks())
+
+
+def check_callback_url(value: str) -> str:
+    """Boundary check for a callback base URL. Pure, no DNS.
+
+    note: every caller appends a fixed path to this value, and a '?' or '#' anywhere would turn
+    that path into a query or a fragment of a URL the caller chose.
+    """
+    if "?" in value or "#" in value:
+        raise ValueError("app_url must be a base URL without a query or fragment")
+    return validate_url_field(
+        value,
+        field="app_url",
+        require_https=callback_requires_https(value),
+        allowed_networks=callback_networks(),
+    )
 
 # orcastra role -> orcahub member role mapping
 _ROLE_TO_ORCAHUB = {
