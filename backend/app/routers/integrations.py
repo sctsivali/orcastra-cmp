@@ -1498,6 +1498,18 @@ async def create_api_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _assert_key_in_scope(metadata: Dict[str, Any], allowed: Optional[set[str]]) -> None:
+    """The overlap rule list_api_keys uses. 404 so an out-of-scope id reads as a missing one."""
+    if not metadata:
+        raise HTTPException(status_code=404, detail="API key not found")
+    if allowed is None:
+        return
+    perms = metadata.get("cluster_permissions", []) or []
+    key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
+    if not (key_clusters & allowed):
+        raise HTTPException(status_code=404, detail="API key not found")
+
+
 def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
     """Return an API key's metadata only if it overlaps the caller's clusters.
 
@@ -1508,16 +1520,7 @@ def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
     list endpoint uses, so the two surfaces agree.
     """
     metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
-    if not metadata:
-        raise HTTPException(status_code=404, detail="API key not found")
-    allowed = get_current_allowed_clusters()
-    if allowed is not None:
-        perms = metadata.get("cluster_permissions", []) or []
-        key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
-        if not (key_clusters & allowed):
-            # Same shape as a missing key, so an out-of-scope id cannot be probed apart from a
-            # non-existent one.
-            raise HTTPException(status_code=404, detail="API key not found")
+    _assert_key_in_scope(metadata, get_current_allowed_clusters())
     return metadata
 
 
@@ -2874,19 +2877,28 @@ def _parse_refreshed_organizations(data: Any) -> List[SyncOrganization]:
     dependencies=[Depends(require_partner())],
 )
 async def refresh_organizations(
-    api_key_id: str = Query(..., description="API key ID of the external app to refresh from"),
+    api_key_id: str = Query(
+        ...,
+        pattern=r"^[A-Za-z0-9_-]{1,128}$",
+        description="API key ID of the external app to refresh from",
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """On-demand pull of organizations from external app via stored callback URL."""
     import httpx
 
-    vault_client = get_vault_integrations_client()
-
-    # Retrieve API key metadata including app_url and credentials
+    # important: read the scope here on the loop. run_blocking uses run_in_executor, which does not
+    # carry ContextVars, so the same check inside the thread would see None and pass everyone.
+    allowed = get_current_allowed_clusters()
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
-    except HTTPException:
-        raise HTTPException(status_code=404, detail="API key not found")
+        metadata, secret_hash = await run_blocking(
+            get_api_key_from_vault, get_vault_integrations_client(), api_key_id,
+            timeout=VALIDATE_KEY_TIMEOUT, label=f"refresh_orgs[{api_key_id}]",
+            executor=auth_executor,
+        )
+    except (BlockingTimeout, BlockingPoolFull):
+        raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
+    _assert_key_in_scope(metadata, allowed)
 
     app_url = metadata.get("app_url")
     if not app_url:
@@ -2894,15 +2906,6 @@ async def refresh_organizations(
             status_code=400,
             detail="No callback URL configured for this API key. Trigger a sync from the external app first."
         )
-
-    # Retrieve API key secret for authenticating the callback
-    try:
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret"
-        )
-        secret_hash = secret_data.get("hash", "")
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to read API key credentials")
 
     # Call external app's organizations endpoint
     callback_url = f"{app_url.rstrip('/')}/api/external/organizations"
@@ -2918,10 +2921,16 @@ async def refresh_organizations(
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPStatusError as e:
-        logger.error(f"External app returned {e.response.status_code}: {e.response.text}")
-        raise HTTPException(status_code=502, detail=f"External app returned {e.response.status_code}")
+        # note: status only. The body is whatever the stored URL answered, and the status in a
+        # client-facing detail would make this endpoint a scanner of that URL.
+        logger.error(
+            "External app returned HTTP %s for api key %s", e.response.status_code, api_key_id
+        )
+        raise HTTPException(status_code=502, detail="External app returned an error")
     except Exception as e:
-        logger.error(f"Failed to reach external app at {callback_url}: {e}")
+        logger.error(
+            "Failed to reach external app for api key %s: %s", api_key_id, sanitize_error(str(e))
+        )
         raise HTTPException(status_code=502, detail="Failed to reach external app")
 
     sync_orgs = _parse_refreshed_organizations(data)
