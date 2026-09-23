@@ -4,9 +4,8 @@ Application-level security middleware for request hardening.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import base64
-import json
 import math
 from dataclasses import dataclass
 import os
@@ -127,26 +126,20 @@ def _rate_limit_subject(request: Request, client_ip: str) -> str:
     """
     Bucket identity for the bypass budget.
 
-    note: the claim is read by decoding the payload segment directly, WITHOUT
-    verifying the signature and without a JWT library, so the hermetic test suite
-    keeps running on a host that has no crypto dependencies installed. That is safe for
-    this purpose and only this purpose: the value picks a counter, it grants nothing.
-    A forged token buys a fresh counter and then fails authentication downstream, so
-    it cannot be used to read data. Real abuse comes from a valid token, which
-    carries exactly one real subject.
+    important: keyed on a hash of the presented token, never on a claim read from it. Nothing
+    has verified the token at this point, so a subject decoded from its payload let anyone
+    forge a token carrying another operator's sub and spend that operator's budget. Hashing
+    the whole token gives each real session its own counter and gives a forged token only a
+    counter of its own. A refreshed token starts a new counter, which is acceptable for a
+    budget that rations forced refreshes. Without a bearer the bucket is the client IP.
     """
     header = request.headers.get("authorization", "")
     if header[:7].lower() == "bearer ":
-        try:
-            claims = header[7:].split(".")[1]
-            padded = claims + "=" * (-len(claims) % 4)
-            payload = json.loads(base64.urlsafe_b64decode(padded))
-            subject = payload.get("sub") or payload.get("email")
-            if subject:
-                return f"sub:{subject}"
-        except Exception:
-            pass
+        token = header[7:].strip()
+        if token:
+            return "tok:" + hashlib.sha256(token.encode()).hexdigest()[:32]
     return f"ip:{client_ip}"
+
 
 @dataclass(frozen=True)
 class RateLimitHit:
@@ -313,7 +306,7 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
             yield f"subnet:{subnet}", self.settings.rate_limit_subnet_requests
 
         # important: a forced cache bypass costs a full fan-out to every cluster in
-        # scope, so it gets its own much smaller budget. Keyed on the token subject
+        # scope, so it gets its own much smaller budget. Keyed on the presented token
         # rather than the IP: the dashboard proxies every browser through one
         # container, so every operator shares a client IP and an IP-keyed budget
         # would let one person's refreshes throttle the whole tenancy.

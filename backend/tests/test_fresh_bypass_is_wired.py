@@ -426,7 +426,7 @@ class BypassBudgetTests(unittest.TestCase):
         self.assertLess(limit, general, "the bypass budget must be smaller than the general one")
 
     def test_two_operators_behind_one_proxy_do_not_share_a_bypass_bucket(self):
-        # unsigned tokens: the middleware reads the claim to pick a counter, never to authorise
+        # unsigned tokens: the middleware hashes the token to pick a counter, never to authorise
         import base64
         import json as _json
 
