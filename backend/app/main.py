@@ -19,6 +19,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app.core import vault_status
 from app.core.config import get_settings
+from app.core.error_handlers import register_error_handlers
 from app.core.logging_config import setup_logging
 from app.middleware import (
     AccessLogMiddleware,
@@ -49,11 +50,7 @@ from app.routers import (
 from app.routers.terminal import router as terminal_router
 from app.routers.system import router as system_router
 from app.routers.cluster_registration import router as cluster_registration_router
-from app.services.lxd_service import (
-    get_lxd_service,
-    LXDConnectionError,
-    LXDLocalStorageError,
-)
+from app.services.lxd_service import get_lxd_service
 
 # Configure structured JSON logging
 settings_for_logging = get_settings()
@@ -612,44 +609,10 @@ Ensure your client certificates are properly configured.
             response["docs"] = "/docs"
         return response
     
-    # Global exception handler
-    @app.exception_handler(LXDLocalStorageError)
-    async def lxd_local_storage_error_handler(
-        request: Request,
-        exc: LXDLocalStorageError
-    ):
-        """Handle a backend-side failure to write LXD TLS material.
+    # note: server faults answer with a reference, 502/503/504 keep their sentence without
+    # addresses or paths, and a 4xx is untouched. See core/error_handlers.py.
+    register_error_handlers(app)
 
-        Separate from the connection handler below on purpose. This is the backend's own disk,
-        not the cluster's reachability, and conflating the two told operators every hypervisor
-        was offline while they were all healthy.
-        """
-        logger.error(f"LXD local storage error: {exc}")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "Backend Storage Unavailable",
-                "detail": str(exc),
-                "code": "BACKEND_TEMP_STORAGE_FULL",
-            },
-        )
-
-    @app.exception_handler(LXDConnectionError)
-    async def lxd_connection_error_handler(
-        request: Request, 
-        exc: LXDConnectionError
-    ):
-        """Handle LXD connection errors."""
-        logger.error(f"LXD connection error: {exc}")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "LXD Connection Error",
-                "detail": str(exc),
-                "code": "LXD_CONNECTION_ERROR",
-            },
-        )
-    
     return app
 
 
