@@ -526,6 +526,8 @@ Ensure your client certificates are properly configured.
     # Organization Router (Three-Tier RBAC)
     from app.routers.organizations import router as organizations_router
     app.include_router(organizations_router, prefix=settings.api_prefix)
+    from app.routers.organization_clusters import router as organization_clusters_router
+    app.include_router(organization_clusters_router, prefix=settings.api_prefix)
 
     # Break-Glass Router (least-privilege admin access to tenant console/terminal)
     from app.routers.break_glass import router as break_glass_router

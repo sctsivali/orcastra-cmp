@@ -15,7 +15,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.auth import AuthenticatedUser
-from app.routers import organizations
+from app.routers import organization_clusters as organizations
 
 
 class _RecordingService:
