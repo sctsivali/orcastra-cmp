@@ -32,7 +32,9 @@ from app.services.lxd.exceptions import LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
-from app.core.instance_access import verify_project_access
+from app.core.instance_access import verify_project_access, verify_whole_cluster_access
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
@@ -118,6 +120,16 @@ def _refuse_cap_above_hardware(
             ),
         )
 
+def _listable(host: str, names: List[str]) -> List[str]:
+    """The project names this request may list: the tenant ACL and the project bound.
+
+    important: the single-project read already refused a project outside the bound, while the
+    list showed it with its config and used_by, so a Partner on a cluster shared with another
+    organization read that organization's projects through the list. Both now ask the same rule.
+    """
+    return [name for name in filter_projects_by_acl(host, names) if project_is_visible(host, name)]
+
+
 @router.get(
     "",
     response_model=List[ProjectListResponse],
@@ -182,8 +194,7 @@ async def list_all_projects(
             if isinstance(result, ProjectListResponse):
                 if result.reachable:
                     answered += 1
-                # apply tenant ACL filtering per host
-                allowed_names = filter_projects_by_acl(result.host, [p.name for p in result.projects])
+                allowed_names = _listable(result.host, [p.name for p in result.projects])
                 filtered = [p for p in result.projects if p.name in allowed_names]
                 all_projects.append(ProjectListResponse(
                     host=result.host,
@@ -239,8 +250,7 @@ async def list_projects(
         
         projects = [ProjectInfo(**proj) for proj in projects_data]
         
-        # apply tenant ACL filtering
-        allowed_names = filter_projects_by_acl(host, [p.name for p in projects])
+        allowed_names = _listable(host, [p.name for p in projects])
         projects = [p for p in projects if p.name in allowed_names]
         
         return ProjectListResponse(
@@ -333,9 +343,13 @@ async def create_project(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new project on a specific LXD host."""
     verify_cluster_access(request.host)
+    # important: a caller held to a project bound on a cluster another party holds would create
+    # a project it can then neither see nor name in a policy. Refused up front, with the reason.
+    await verify_whole_cluster_access(request.host, db, _rbac.email)
     try:
         # important: a project limit is a cap, not a reservation. LXD allows any limit and any
         # over-commit, so the only figure that makes a cap nonsensical is the hardware total.

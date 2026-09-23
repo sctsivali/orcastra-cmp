@@ -80,7 +80,13 @@ def _client(service, monkeypatch):
     app.dependency_overrides[get_current_user] = lambda: None
     app.dependency_overrides[org_scope_dependency] = lambda: None
     app.dependency_overrides[require_tenant()] = lambda: None
-    app.dependency_overrides[require_partner()] = lambda: None
+    from app.core.auth import AuthenticatedUser
+    from app.core.database import get_db
+
+    app.dependency_overrides[require_partner()] = lambda: AuthenticatedUser(
+        user_id="partner", email="partner@example.test", groups=["role_partner"]
+    )
+    app.dependency_overrides[get_db] = lambda: None
     app.dependency_overrides[check_read_only_mode] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
 
