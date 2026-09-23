@@ -550,9 +550,9 @@ async def get_visible_projects(
     Returns None when nothing needs restricting, and otherwise a map of cluster to the set of
     project names that may be shown. A cluster absent from the map is unrestricted.
 
-    Only Partners need this. A Tenant is already filtered by their ACL on every one of these
-    lists, and an Admin reaching a cluster they do not own is gated by break-glass at the
-    cluster level. A Partner, though, is scoped by cluster alone, so on a cluster shared with
+    Only Partners need this. A Tenant's bound comes from its confined ACL instead (see
+    _project_bound_for), and an Admin reaching a cluster they do not own is gated by
+    break-glass at the cluster level. A Partner, though, is scoped by cluster alone, so on a cluster shared with
     another organization the only safe default is the behaviour they have today: the default
     project, widened by whatever their own policies name.
     """
@@ -661,8 +661,10 @@ async def get_tenant_acl_rules(
     Build the resolved ACL map for a tenant user.
     """
     from app.core.rbac import resolve_roles, get_highest_role, Role
+    from app.core.tenant_wildcard import RuleGrant, confine_wildcards
     from app.models.db_models import (
         OrganizationMember,
+        TenantAccessPolicy,
         TenantPolicyAssignment,
         TenantPolicyRule,
     )
@@ -703,25 +705,34 @@ async def get_tenant_acl_rules(
     if not active_policy_ids:
         return {}  # no active policies = no access
 
-    # load policy rules
+    # load policy rules with the organization of their policy attached
     rules_stmt = (
-        select(TenantPolicyRule)
+        select(TenantPolicyRule, TenantAccessPolicy.organization_id)
+        .join(TenantAccessPolicy, TenantAccessPolicy.id == TenantPolicyRule.policy_id)
         .where(TenantPolicyRule.policy_id.in_(active_policy_ids))
     )
     result = await db.execute(rules_stmt)
-    rules = result.scalars().all()
+    grants = [
+        RuleGrant(
+            organization_id=organization_id,
+            cluster_id=rule.cluster_id,
+            project_name=rule.project_name,
+            instance_name=rule.instance_name,
+            permissions=tuple(rule.permissions if isinstance(rule.permissions, list) else []),
+        )
+        for rule, organization_id in result.all()
+    ]
+
+    # important: a '*' project on a cluster bound to several organizations named the other
+    # organizations' projects too. Each wildcard is expanded with its own organization's
+    # projects here, before the merge below loses which organization it came from.
+    grants = await confine_wildcards(db, grants, _clusters_with_several_orgs)
 
     # build ACL map: merge permissions across policies
     acl: dict[str, dict[tuple[str, str], set[str]]] = {}
-    for rule in rules:
-        cluster_id = rule.cluster_id
-        if cluster_id not in acl:
-            acl[cluster_id] = {}
-        key = (rule.project_name, rule.instance_name)
-        perms = rule.permissions if isinstance(rule.permissions, list) else []
-        if key not in acl[cluster_id]:
-            acl[cluster_id][key] = set()
-        acl[cluster_id][key].update(perms)
+    for grant in grants:
+        key = (grant.project_name, grant.instance_name)
+        acl.setdefault(grant.cluster_id, {}).setdefault(key, set()).update(grant.permissions)
 
     logger.debug(
         f"Tenant ACL for {user.email}: {len(acl)} clusters, "
@@ -733,6 +744,26 @@ async def get_tenant_acl_rules(
 # ---------------------------------------------------------------------------
 # Tenant ACL narrowing (shared by the HTTP dependency and the WS setter)
 # ---------------------------------------------------------------------------
+
+async def _project_bound_for(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+    acl: Optional[dict],
+) -> Optional[dict[str, set[str]]]:
+    """The project bound for this request, for both scope setters.
+
+    A Partner or Admin (no tenant ACL) gets get_visible_projects. A tenant on a shared cluster
+    is held to default plus the projects its confined ACL names, so every project_is_visible
+    gate applies to them as well and not only the flag-gated ACL check.
+    """
+    from app.core.tenant_wildcard import tenant_project_bound
+
+    if acl is None:
+        return await get_visible_projects(user, db)
+    if not acl:
+        return None
+    return tenant_project_bound(acl, await _clusters_with_several_orgs(db))
+
 
 def _narrow_by_tenant_acl(
     allowed: Optional[set[str]],
@@ -785,9 +816,9 @@ async def org_scope_dependency(
     acl = await get_tenant_acl_rules(user, db)
     _tenant_acl_var.set(acl)
 
-    # a Partner is scoped by cluster alone, so a cluster shared with another organization
-    # needs a project bound as well. See get_visible_projects.
-    _visible_projects_var.set(await get_visible_projects(user, db))
+    # a cluster shared with another organization needs a project bound as well, for a Partner
+    # (scoped by cluster alone) and for a tenant. See _project_bound_for.
+    _visible_projects_var.set(await _project_bound_for(user, db, acl))
 
     # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
@@ -829,7 +860,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         acl = await get_tenant_acl_rules(user, db)
         _tenant_acl_var.set(acl)
 
-        _visible_projects_var.set(await get_visible_projects(user, db))
+        _visible_projects_var.set(await _project_bound_for(user, db, acl))
 
         # important: the same narrowing as the HTTP dependency, through the same helper. These
         # were two duplicated blocks, so fixing one copy would leave console, terminal and
