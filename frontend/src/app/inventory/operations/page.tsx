@@ -38,6 +38,7 @@ import { useLiveRecord } from "@/hooks/use-live-record";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
+import { sessionKillError } from "@/lib/console-session-kill";
 import type { OperationInfo } from "@/types/api";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
@@ -239,9 +240,9 @@ function OperationsContent() {
             ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
       
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: "Failed to kill session" }));
-        throw new Error(error.detail || "Failed to kill session");
+      const failure = await sessionKillError(response);
+      if (failure !== null) {
+        throw new Error(failure);
       }
       
       toast({

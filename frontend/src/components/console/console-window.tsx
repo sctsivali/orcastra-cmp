@@ -38,6 +38,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useConsoleStore, ConsoleTab } from "@/lib/console-store";
 import { API_URL, getAccessToken } from "@/lib/api";
+import { sessionKillError } from "@/lib/console-session-kill";
+import { toast } from "@/hooks/use-toast";
 import { ConsoleTabs } from "./console-tabs";
 import { ConsoleToolbar } from "./console-toolbar";
 import { TextConsole, TextConsoleHandle } from "./text-console";
@@ -132,13 +134,16 @@ export function ConsoleWindow({
         { method: "DELETE", headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
       
-      if (response.ok) {
+      const failure = await sessionKillError(response);
+      if (failure === null) {
         // Remove killed session from list
         setSessionConflict((prev) => ({
           ...prev,
           sessions: prev.sessions.filter((s) => s.operation_id !== operationId),
           show: prev.sessions.length > 1,
         }));
+      } else {
+        toast({ title: "Session not terminated", description: failure, variant: "destructive" });
       }
     } catch (err) {
       console.error("[Console] Failed to kill session:", err);
