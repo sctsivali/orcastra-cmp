@@ -362,32 +362,6 @@ async def get_current_user(
     return user
 
 
-async def get_optional_user(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme),
-    settings: Settings = Depends(get_settings),
-) -> Optional[AuthenticatedUser]:
-    """
-    Like get_current_user but never raises 401.
-    Returns None if no valid token is present.
-    Useful for endpoints that work for both authenticated and anonymous users.
-    """
-    if not settings.auth_enabled or not settings.authentik_issuer:
-        return None
-
-    if not credentials:
-        return None
-
-    try:
-        user = validate_jwt(credentials.credentials, settings)
-        request.state.user_id = user.user_id
-        request.state.user_email = user.email
-        request.state.user_groups = user.groups
-        return user
-    except HTTPException:
-        return None
-
-
 async def get_ws_user(
     websocket: "WebSocket",
     settings: Settings = Depends(get_settings),

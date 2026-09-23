@@ -202,3 +202,36 @@ def test_auth_disabled_still_opens_the_socket() -> None:
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json() == {"user": None}
 
+
+
+# ---------------------------------------------------------------------------
+# No optional-auth path: it answered None, which every RBAC dependency reads as dev mode
+# ---------------------------------------------------------------------------
+
+COVERED_PRINCIPAL_SOURCES = {"get_current_user", "get_ws_user", "validate_jwt", "verify_token"}
+
+
+def test_the_fail_open_optional_user_is_gone() -> None:
+    from app.core import dependencies
+
+    assert not hasattr(auth_module, "get_optional_user")
+    assert "get_optional_user" not in dependencies.__all__
+    assert not hasattr(dependencies, "get_optional_user")
+
+
+def test_every_source_of_a_principal_is_one_the_suite_covers() -> None:
+    import ast
+
+    tree = ast.parse(Path(auth_module.__file__).read_text())
+    producers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.returns is not None
+        and "AuthenticatedUser" in ast.unparse(node.returns)
+    }
+    assert producers <= COVERED_PRINCIPAL_SOURCES, (
+        "a new function in core/auth.py hands out a principal. Cover its fail-closed behaviour "
+        f"here before adding it to the set: {sorted(producers - COVERED_PRINCIPAL_SOURCES)}"
+    )
+    assert producers, "the scan found nothing, so it is looking at the wrong file"

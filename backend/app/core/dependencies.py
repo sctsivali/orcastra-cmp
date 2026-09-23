@@ -8,7 +8,6 @@ from app.core.config import get_settings
 # re-export auth dependencies for convenient imports
 from app.core.auth import (
     get_current_user,
-    get_optional_user,
     get_ws_user,
     AuthenticatedUser,
 )
@@ -32,7 +31,6 @@ from app.core.rbac import (
 # F401 honest rather than silenced.
 __all__ = [
     "get_current_user",
-    "get_optional_user",
     "get_ws_user",
     "AuthenticatedUser",
     "Role",
