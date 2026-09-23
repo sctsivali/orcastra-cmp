@@ -13,6 +13,7 @@ Secret VALUES are NEVER logged - only access paths and operation results.
 import logging
 import time
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -104,6 +105,26 @@ class VaultClientError(Exception):
     pass
 
 
+def safe_vault_url(vault_addr: str, path: str) -> str:
+    """Build a Vault URL whose path cannot leave the segments the caller asked for.
+
+    important: several paths carry request data, such as a user-mapping id or an API key id from
+    a header or a path parameter. Interpolated raw, `..` segments were collapsed by requests
+    before the request left the process, so a user-mapping write could land on any KV path this
+    token can write, and a `?` started a query string. Dot and empty segments are refused and
+    every other segment is percent-encoded. Vault decodes the path, so a well-formed path reaches
+    the same secret it always did.
+    """
+    clean = (path or "").strip("/")
+    if not clean:
+        raise VaultClientError("Empty Vault path")
+    segments = clean.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        logger.warning("Refused a Vault path with a traversal or empty segment: %r", path)
+        raise VaultClientError(f"Refusing a Vault path with a traversal or empty segment: {path!r}")
+    return f"{vault_addr}/v1/" + "/".join(quote(segment, safe="") for segment in segments)
+
+
 class VaultClient:
     """
     Client for interacting with HashiCorp Vault.
@@ -168,6 +189,9 @@ class VaultClient:
         from Vault each time so it never reaches the cache.
         """
         start = time.perf_counter()
+        # important: validated before the cache lookup, so a refused path is never served from an
+        # entry cached before this guard existed.
+        url = safe_vault_url(self.vault_addr, path)
         cacheable = self._is_cacheable_path(path)
         should_cache = use_cache and cacheable
         
@@ -177,9 +201,7 @@ class VaultClient:
             cached_data = cache.get("vault", path)
             if cached_data is not None:
                 return cached_data
-        
-        url = f"{self.vault_addr}/v1/{path}"
-        
+
         try:
             # Use faster timeout: (connect_timeout, read_timeout)
             response = self.session.get(url, headers=self.headers, timeout=(2, 3))
@@ -256,7 +278,7 @@ class VaultClient:
         Write data to Vault (general purpose, including PKI operations).
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.post(url, headers=self.headers, json=data, timeout=(2, 3))
@@ -287,7 +309,7 @@ class VaultClient:
         Invalidates cache for the path.
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = safe_vault_url(self.vault_addr, path)
         
         payload = {"data": data}
         
@@ -330,7 +352,7 @@ class VaultClient:
         Invalidates cache for the path.
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.delete(url, headers=self.headers, timeout=10)
@@ -381,7 +403,7 @@ class VaultClient:
             path: Vault metadata path to delete (ex; "secret/metadata/clusters/cluster-id")
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.delete(url, headers=self.headers, timeout=10)
@@ -428,14 +450,15 @@ class VaultClient:
             path: Vault path to list (ex; "secret/metadata/clusters")
         """
         start = time.perf_counter()
+        # important: validated before the cache lookup, so a refused path is never served from an
+        # entry cached before this guard existed.
+        url = safe_vault_url(self.vault_addr, path)
         # Try cache first
         cache = get_cache()
         if use_cache and cache:
             cached_data = cache.get("vault_list", path)
             if cached_data is not None:
                 return cached_data
-        
-        url = f"{self.vault_addr}/v1/{path}"
         
         try:
             response = self.session.request('LIST', url, headers=self.headers, timeout=VAULT_LIST_TIMEOUT)

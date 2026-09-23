@@ -43,7 +43,7 @@ from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
-from app.core.vault_client import get_vault_client
+from app.core.vault_client import get_vault_client, safe_vault_url
 from app.core.config import get_settings
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -483,7 +483,10 @@ def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[External
     try:
         response = vault_client.session.request(
             "LIST",
-            f"{vault_client.vault_addr}/v1/secret/metadata/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/users",
+            safe_vault_url(
+                vault_client.vault_addr,
+                f"secret/metadata/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/users",
+            ),
             headers=vault_client.headers,
             timeout=(2, 5)
         )
