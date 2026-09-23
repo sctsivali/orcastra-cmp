@@ -276,3 +276,38 @@ async def test_a_caller_that_disconnects_while_queued_never_reaches_the_cluster(
     assert ran == [], "the client left, and its queued request still went out"
     await asyncio.sleep(0.05)
     assert not integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")].locked()
+
+
+def test_a_cluster_may_use_the_whole_pool_by_default(monkeypatch) -> None:
+    """The integrator fans out one read per project, so a half-pool share answered a wide fan-out busy."""
+    import importlib
+
+    from app.services.lxd import proxy
+
+    monkeypatch.delenv("ORCASTRA_CLUSTER_PROXY_SLOTS", raising=False)
+    fresh = importlib.reload(proxy)
+    try:
+        assert fresh.CLUSTER_PROXY_SLOTS == fresh.PROXY_POOL_WORKERS
+    finally:
+        importlib.reload(proxy)
+
+
+async def test_a_request_takes_one_slot_not_two() -> None:
+    """The client lookup no longer queues for a slot, so a request waits once, for its LXD call."""
+    gate = threading.Event()
+    slow = _Session(gate)
+    lookups: List[str] = []
+    clients = {c: _Client(s, c) for c, s in (("cluster-slow", slow), ("cluster-fast", _Session(None)))}
+    service = type("Svc", (), {"connection_manager": type("CM", (), {
+        "get_client": staticmethod(lambda c: lookups.append(c) or clients[c])})()})()
+    first = asyncio.create_task(_call(service, "cluster-slow"))
+    while not slow.calls:
+        await asyncio.sleep(0.01)
+    try:
+        with pytest.raises(HTTPException) as caught:
+            await _call(service, "cluster-slow")
+        assert caught.value.status_code == 503 and "busy" in caught.value.detail
+        assert lookups == ["cluster-slow", "cluster-slow"], "the second lookup waited on the slot"
+    finally:
+        gate.set()
+        await first

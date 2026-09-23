@@ -28,6 +28,7 @@ from app.services.lxd.proxy import (
     ALLOWED_METHODS,
     API_KEY_CACHE_TTL,
     AUTH_POOL_WORKERS,
+    CLUSTER_PROXY_SLOTS as _PROXY_CLUSTER_SLOTS,
     LAST_USED_WRITE_INTERVAL,
     PROXY_CONNECT_TIMEOUT,
     PROXY_MAX_IN_FLIGHT,
@@ -2666,10 +2667,9 @@ def _envelope_error(exc: BaseException) -> str:
     return sanitize_error(str(exc), limit=1000)
 
 
-# note: per worker, like the pool it guards. One slow cluster may hold at most this many proxy
-# threads, so a cluster that reads slowly (a read no longer trips the breaker) cannot fill the
-# shared pool and fail every other cluster's calls and every concurrent /sync.
-CLUSTER_PROXY_SLOTS = max(1, PROXY_POOL_WORKERS // 2)
+# note: per worker, like the pool it guards (services/lxd/proxy.py sets the share). A request takes
+# one slot, for its LXD call only, so a wide fan-out to one cluster waits once, not twice.
+CLUSTER_PROXY_SLOTS = _PROXY_CLUSTER_SLOTS
 # note: LXD holds GET /operations/<id>/wait open for `timeout` seconds. Past the pooled read timeout
 # (8 s) that is a 504 and a thread held for nothing, so the wait is answered earlier with the
 # operation as it stands and the caller polls, which the integrator already does.
@@ -2843,8 +2843,7 @@ async def raw_proxy(
         # request and may rebuild the client, so it needs the same offload as the verb call
         # below. Wrapping only the verb call would leave this on the event loop.
         try:
-            client = await _run_for_cluster(
-                request.cluster_id,
+            client = await _run_unless_abandoned(
                 lxd_service.connection_manager.get_client,
                 request.cluster_id,
                 timeout=PROXY_CONNECT_TIMEOUT,

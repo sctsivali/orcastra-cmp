@@ -43,6 +43,10 @@ def _env_float(name: str, default: float) -> float:
 # console. The thread_name_prefix means the next thread dump names the pool.
 PROXY_POOL_WORKERS = _env_int("ORCASTRA_PROXY_POOL_WORKERS", 8)
 PROXY_MAX_IN_FLIGHT = _env_int("ORCASTRA_PROXY_MAX_IN_FLIGHT", PROXY_POOL_WORKERS * 4)
+# note: how many of the pool's threads one cluster may hold, per worker. The whole pool by default:
+# the integrator fans out one read per project in parallel, and a smaller share turned a wide, slow
+# fan-out into "busy" answers. Lower it where one slow cluster must not starve the others.
+CLUSTER_PROXY_SLOTS = max(1, _env_int("ORCASTRA_CLUSTER_PROXY_SLOTS", PROXY_POOL_WORKERS))
 
 proxy_executor = ThreadPoolExecutor(
     max_workers=PROXY_POOL_WORKERS, thread_name_prefix="integrations_proxy"
