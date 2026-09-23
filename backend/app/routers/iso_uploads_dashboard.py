@@ -121,6 +121,9 @@ async def _authz_session(db: AsyncSession, session_id: str) -> IsoUploadSession:
     org-scope additionally confines it to clusters in the caller's organization.
     """
     row = await _get_session(db, session_id)
+    # important: an API-key session belongs to its integration, the dashboard only knows its own ids
+    if row.api_key_id is not None:
+        raise HTTPException(status_code=404, detail="Upload session not found")
     verify_cluster_access(row.cluster_id)
     return row
 

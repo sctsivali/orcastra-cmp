@@ -41,6 +41,7 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import append_request_body
 from app.models.db_models import IsoUploadSession
+from app.routers.image_uploads import assert_session_owner
 from app.routers.integrations import validate_api_key
 from app.services.lxd_service import get_lxd_service
 import logging
@@ -150,7 +151,7 @@ async def create_upload(
     body: CreateUploadRequest,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
-    x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     _assert_cluster_permission(api_key, body.cluster_id, "write")
     if not _VOLUME_NAME_RE.match(body.volume_name):
@@ -229,8 +230,10 @@ async def head_upload(
     session_id: str,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
     return Response(
         status_code=200,
@@ -262,8 +265,10 @@ async def patch_upload(
     request: Request,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
 
     if row.status in _TERMINAL or row.status in ("uploaded", "importing"):
@@ -300,8 +305,10 @@ async def finalize_upload(
     session_id: str,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
 
     if row.status in ("ready", "failed", "importing"):
@@ -320,8 +327,10 @@ async def get_upload_status(
     session_id: str,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "read")
     return _status_payload(row)
 

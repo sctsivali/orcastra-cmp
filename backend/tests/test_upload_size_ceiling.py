@@ -40,7 +40,9 @@ def _client(module) -> TestClient:
     app.include_router(module.router, prefix="/api/v1")
     app.dependency_overrides[validate_api_key] = lambda: API_KEY
     app.dependency_overrides[get_db] = _stub_db
-    return TestClient(app)
+    # note: validate_api_key is overridden, but a real caller always sends the key id header it
+    # authenticated, and the upload routes now require it to stamp the session's owner.
+    return TestClient(app, headers={"X-API-Key-ID": "oak_test"})
 
 
 def _iso_body(**over):

@@ -26,7 +26,7 @@ import secrets
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import append_request_body
-from app.models.db_models import ImageUploadSession
+from app.models.db_models import ImageUploadSession, IsoUploadSession
 from app.routers.integrations import validate_api_key
 from app.services.lxd_service import get_lxd_service
 import logging
@@ -99,6 +99,17 @@ async def _get_session(db: AsyncSession, session_id: str) -> ImageUploadSession:
     return row
 
 
+def assert_session_owner(row: Union[ImageUploadSession, IsoUploadSession], key_id: str) -> None:
+    """A session belongs to the key that opened it.
+
+    important: fail closed on a NULL owner. Dashboard sessions carry no api_key_id, so treating
+    NULL as unowned would hand them to every key with a grant on the cluster. 404 rather than 403
+    so a foreign id cannot be told apart from a missing one.
+    """
+    if row.api_key_id is None or row.api_key_id != key_id:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+
 async def _gc_expired(db: AsyncSession) -> None:
     """Best-effort sweep of stale, non-terminal sessions + their staging files."""
     res = await db.execute(
@@ -142,7 +153,7 @@ async def create_upload(
     body: CreateUploadRequest,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
-    x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     _assert_cluster_permission(api_key, body.cluster_id, "write")
     # Both figures come from the client, so clamp against the server ceiling too.
@@ -208,8 +219,10 @@ async def head_upload(
     session_id: str,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
     return Response(
         status_code=200,
@@ -241,8 +254,10 @@ async def patch_upload(
     request: Request,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
 
     if row.status in _TERMINAL or row.status in ("uploaded", "importing"):
@@ -281,8 +296,10 @@ async def finalize_upload(
     session_id: str,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
 
     if row.status in ("ready", "failed", "importing"):
@@ -303,8 +320,10 @@ async def get_upload_status(
     session_id: str,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     db: AsyncSession = Depends(get_db),
+    x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
     row = await _get_session(db, session_id)
+    assert_session_owner(row, x_api_key_id)
     _assert_cluster_permission(api_key, row.cluster_id, "read")
     return _status_payload(row)
 
