@@ -67,6 +67,7 @@ from app.core.proxy_paths import (
 from app.core.type_utils import normalize_cluster_type
 from app.core.safe_http import guarded_request
 from app.core.url_safety import UnsafeURLError
+from app.services.integration_roles import apply_upsert_role, revoke_if_orphaned
 from app.services.orcahub_sync import callback_networks, callback_requires_https, check_callback_url
 
 logger = logging.getLogger(__name__)
@@ -1098,19 +1099,17 @@ _ORCAHUB_ROLE_MAP = {
 
 async def _revoke_role_if_orphaned(db: AsyncSession, sync_svc, email: str) -> None:
     """
-    Revoke a user's GLOBAL Authentik role only if they no longer belong to ANY org.
+    Strip a user's role_tenant only if they no longer belong to ANY org.
     Orcastra roles are global system roles (one per user), so stripping them on leaving a
     single org would wrongly de-role a user still active in another org. Best-effort: the
     caller has already deleted the membership row (which is what actually cuts org-scope
     access), so a failed IdP revoke leaves only an inert role group, logged for cleanup.
+
+    important: an integration never removes role_admin or role_partner here. It used to strip
+    every role group, so pushing an Admin into a fresh org and removing them demoted the Admin.
     """
-    remaining = len((await db.execute(
-        select(OrganizationMember.id).where(OrganizationMember.user_email == email)
-    )).scalars().all())
-    if remaining > 0:
-        return
     try:
-        await sync_svc.remove_user_from_all_roles(email)
+        await revoke_if_orphaned(db, sync_svc, email)
     except Exception as e:
         logger.warning(f"Authentik role revoke failed for offboarded user {email}: {e}")
 
@@ -1204,8 +1203,10 @@ async def _upsert_synced_members(
             upserted_emails.add(m.email)
 
             # push system role to Authentik
+            # important: an integration may grant a role, never demote one or touch role_admin.
+            # sync_user_role removed every other role group, so any key could demote an Admin.
             try:
-                await sync_svc.sync_user_role(m.email, orcastra_role)
+                await apply_upsert_role(db, sync_svc, m.email, orcastra_role, api_key_id)
             except Exception as e:
                 logger.warning(f"Authentik sync failed for {m.email} → {orcastra_role}: {e}")
 
@@ -1281,6 +1282,14 @@ async def _reconcile_synced_members(
             )).scalar_one_or_none()
             if not org:
                 continue  # org not synced (ex; slug clash skipped it); nothing to reconcile
+            # important: same ownership rule as the member upsert. Without it a key could name
+            # another integration's organization and purge its roster.
+            if org.api_key_id != api_key_id:
+                logger.warning(
+                    "Reconcile refused for organization %s: owned by api key %s, caller is %s",
+                    org.slug, org.api_key_id, api_key_id,
+                )
+                continue
 
             desired_emails = {
                 m.email for m in members

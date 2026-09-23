@@ -86,7 +86,13 @@ def sqlite_session(*models: Type[Any]) -> AsyncSessionFacade:
 
 
 def org_tables() -> tuple:
-    """Organization and the two tables its relationships load eagerly."""
-    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+    """Organization, the two tables its relationships load eagerly, and the assignment table a
+    member delete cascades to through the ORM."""
+    from app.models.db_models import (
+        Organization,
+        OrganizationCluster,
+        OrganizationMember,
+        TenantPolicyAssignment,
+    )
 
-    return (Organization, OrganizationMember, OrganizationCluster)
+    return (Organization, OrganizationMember, OrganizationCluster, TenantPolicyAssignment)

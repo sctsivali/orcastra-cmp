@@ -14,7 +14,7 @@ Config env vars:
 """
 
 import logging
-from typing import Optional
+from typing import Iterable, Optional
 
 import httpx
 
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Authentik groups that map to our three-tier roles
 ROLE_GROUPS = ["role_admin", "role_partner", "role_tenant"]
+# The only groups an integration key may add or remove. role_admin is never among them.
+INTEGRATION_ROLE_GROUPS = frozenset({"role_partner", "role_tenant"})
 
 
 class AuthentikSyncService:
@@ -54,14 +56,16 @@ class AuthentikSyncService:
     # Group helpers
     # ------------------------------------------------------------------
 
-    async def _ensure_role_groups_exist(self, client: httpx.AsyncClient) -> dict[str, str]:
+    async def _ensure_role_groups_exist(
+        self, client: httpx.AsyncClient, names: Iterable[str] = tuple(ROLE_GROUPS)
+    ) -> dict[str, str]:
         """
-        Ensure role_admin, role_partner, role_tenant groups exist in Authentik.
+        Ensure the named role groups (all three by default) exist in Authentik.
         Returns mapping: group_name -> pk (UUID string).
         """
         group_map: dict[str, str] = {}
 
-        for group_name in ROLE_GROUPS:
+        for group_name in names:
             # search by name
             resp = await client.get(
                 f"{self.api_url}/core/groups/",
@@ -207,6 +211,56 @@ class AuthentikSyncService:
 
             logger.info(f"Removed {user_email} from all role groups in Authentik")
             return True
+
+    async def change_integration_role_groups(
+        self,
+        user_email: str,
+        add: Optional[str] = None,
+        remove: Iterable[str] = frozenset(),
+    ) -> bool:
+        """Add or remove only role_partner and role_tenant, for an integration key's member sync.
+
+        important: refuses role_admin, or any other group, before any request is made. Unlike
+        sync_user_role this never removes a group it was not asked to, so an integration can
+        grant a role but cannot use a grant to strip another one.
+        """
+        removing = frozenset(remove)
+        named = removing | ({add} if add else frozenset())
+        illegal = named - INTEGRATION_ROLE_GROUPS
+        if illegal:
+            raise ValueError(f"an integration may not change the role groups {sorted(illegal)}")
+        if not named:
+            return True
+        if not self.enabled:
+            logger.warning("Authentik sync skipped, not configured")
+            return False
+
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            group_map = await self._ensure_role_groups_exist(client, sorted(named))
+            user_pk = await self._find_user_pk(client, user_email)
+            if not user_pk:
+                logger.warning(f"User {user_email} not found in Authentik, role change skipped")
+                return False
+            ok = True
+            for group_name in sorted(removing):
+                if group_name not in group_map:
+                    continue
+                resp = await client.post(
+                    f"{self.api_url}/core/groups/{group_map[group_name]}/remove_user/",
+                    json={"pk": user_pk},
+                    headers=self._headers(),
+                )
+                ok = ok and resp.status_code in (200, 204)
+            if add:
+                if add not in group_map:
+                    return False
+                resp = await client.post(
+                    f"{self.api_url}/core/groups/{group_map[add]}/add_user/",
+                    json={"pk": user_pk},
+                    headers=self._headers(),
+                )
+                ok = ok and resp.status_code in (200, 204)
+            return ok
 
     async def get_sync_status(self) -> dict:
         """Check Authentik API connectivity and group status."""
