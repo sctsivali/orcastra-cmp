@@ -12,7 +12,7 @@ import hmac
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
@@ -1311,6 +1311,25 @@ async def _reconcile_synced_members(
 # API Key Validation Dependency
 # ============================================
 
+def _api_key_has_expired(expires_at: Any, now: Optional[datetime] = None) -> bool:
+    """Whether a stored API key expiry has passed.
+
+    important: only None means the key never expires. The old truthiness test read an empty
+    string as never-expiring, and an offset-bearing or unparseable value raised out of the auth
+    path. A naive value is UTC, as create_api_key writes it. A value that cannot be read counts
+    as expired.
+    """
+    if expires_at is None:
+        return False
+    try:
+        moment = datetime.fromisoformat(str(expires_at).strip())
+        if moment.tzinfo is not None:
+            moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, OverflowError):
+        return True
+    return (now or datetime.utcnow()) > moment
+
+
 async def validate_api_key(
     x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
     x_api_key_secret: str = Header(..., alias="X-API-Key-Secret"),
@@ -1360,11 +1379,8 @@ async def validate_api_key(
         raise HTTPException(status_code=401, detail="API key is not active")
 
     # Check expiration
-    expires_at = metadata.get("expires_at")
-    if expires_at:
-        exp_date = datetime.fromisoformat(expires_at)
-        if datetime.utcnow() > exp_date:
-            raise HTTPException(status_code=401, detail="API key has expired")
+    if _api_key_has_expired(metadata.get("expires_at")):
+        raise HTTPException(status_code=401, detail="API key has expired")
 
     _schedule_last_used_update(x_api_key_id)
 
@@ -1846,11 +1862,8 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             return APIKeyValidateResponse(valid=False, error="API key not active")
         
         # Check expiration
-        expires_at = metadata.get("expires_at")
-        if expires_at:
-            exp_date = datetime.fromisoformat(expires_at)
-            if datetime.utcnow() > exp_date:
-                return APIKeyValidateResponse(valid=False, error="API key expired")
+        if _api_key_has_expired(metadata.get("expires_at")):
+            return APIKeyValidateResponse(valid=False, error="API key expired")
         
         # Valid!
         raw_permissions = metadata.get("cluster_permissions", [])

@@ -133,6 +133,9 @@ async def test_revocation_is_immediate_not_ttl_delayed(monkeypatch) -> None:
         ({"is_revoked": True}, "revoked"),
         ({"is_active": False}, "inactive"),
         ({"expires_at": "2000-01-01T00:00:00"}, "expired"),
+        ({"expires_at": ""}, "empty expiry"),
+        ({"expires_at": "not-a-date"}, "unreadable expiry"),
+        ({"expires_at": "2000-01-01T00:00:00Z"}, "expired with an offset"),
     ],
 )
 async def test_state_is_rechecked_on_cache_hits(monkeypatch, overrides, reason) -> None:
@@ -225,3 +228,66 @@ def test_a_cache_outage_cannot_break_authentication(monkeypatch) -> None:
 
     assert integrations._cached_key_metadata(digest) is not None
     evict_api_key_cache(KEY_ID)  # must not raise
+
+
+async def test_a_future_expiry_with_an_offset_is_honoured(monkeypatch) -> None:
+    """An offset-bearing value compared naive against aware raised TypeError, a 500."""
+    metadata = _metadata(expires_at="2099-01-01T00:00:00+00:00")
+    monkeypatch.setattr(integrations, "_validate_api_key_blocking", _Recorder(metadata))
+
+    assert await validate_api_key(KEY_ID, KEY_SECRET) == metadata
+
+
+@pytest.mark.parametrize(
+    "expires_at,expired",
+    [
+        (None, False),
+        ("2099-01-01T00:00:00", False),
+        ("2000-01-01T00:00:00", True),
+        ("2099-01-01T00:00:00+07:00", False),
+        ("2000-01-01T00:00:00-05:00", True),
+        ("", True),
+        ("   ", True),
+        ("garbage", True),
+        (0, True),
+    ],
+)
+def test_the_expiry_reading(expires_at, expired) -> None:
+    assert integrations._api_key_has_expired(expires_at) is expired
+
+
+def test_an_offset_is_converted_to_utc_before_comparing() -> None:
+    from datetime import datetime
+
+    now = datetime(2030, 1, 1, 12, 0, 0)
+    # 18:00 at +07:00 is 11:00 UTC, one hour before `now`.
+    assert integrations._api_key_has_expired("2030-01-01T18:00:00+07:00", now=now) is True
+    # 18:00 at -01:00 is 19:00 UTC, still ahead of `now`.
+    assert integrations._api_key_has_expired("2030-01-01T18:00:00-01:00", now=now) is False
+
+
+@pytest.mark.parametrize(
+    "expires_at,valid",
+    [("", False), ("not-a-date", False), ("2099-01-01T00:00:00+00:00", True)],
+)
+async def test_validate_endpoint_reports_an_unreadable_expiry_as_expired(
+    monkeypatch, expires_at, valid
+) -> None:
+    from types import SimpleNamespace
+
+    from app.routers.integrations import APIKeyValidateRequest, validate_api_key_endpoint
+
+    metadata = _metadata(expires_at=expires_at)
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
+    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _client, _kid: (metadata, "h"))
+    monkeypatch.setattr(integrations, "verify_api_key_secret", lambda _secret, _hash: True)
+    monkeypatch.setattr(
+        integrations, "get_settings", lambda: SimpleNamespace(vault_enabled=False, vault_token=None)
+    )
+
+    response = await validate_api_key_endpoint(
+        APIKeyValidateRequest(api_key_id=KEY_ID, api_key_secret=KEY_SECRET)
+    )
+    assert response.valid is valid
+    if not valid:
+        assert response.error == "API key expired"
