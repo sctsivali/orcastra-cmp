@@ -124,6 +124,24 @@ def strip_operation_secrets(metadata: Any) -> Dict[str, Any]:
     return {key: value for key, value in metadata.items() if key not in OPERATION_SECRET_KEYS}
 
 
+def read_running_operations(client: Any) -> Any:
+    """GET /1.0/operations at recursion 1 for every project, where the daemon honours it.
+
+    note: LXD scopes /1.0/operations by project and answers for default when none is named, so a
+    console or a create in any other project never appeared. `all-projects=true` is the
+    documented way to ask for all of them, and a daemon that refuses it with 400 is asked again
+    without it. The pooled client carries no project, which all-projects requires.
+    """
+    try:
+        return client.api.operations.get(
+            params={"recursion": "1", "all-projects": "true"}, timeout=(5, 30)
+        )
+    except pylxd_exceptions.LXDAPIException as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) != 400:
+            raise
+        return client.api.operations.get(params={"recursion": "1"}, timeout=(5, 30))
+
+
 def find_instance_in_projects(
     client: pylxd.Client,
     name: str,

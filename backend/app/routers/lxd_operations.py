@@ -25,7 +25,7 @@ from app.core.org_scope import (
 from app.core.instance_access import operation_projects
 from pydantic import BaseModel, Field, PrivateAttr
 from app.core.lxd_names import safe_segment
-from app.services.lxd.utils import strip_operation_secrets
+from app.services.lxd.utils import read_running_operations, strip_operation_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
             # turns into a partial result and the node is never named.
             raise LXDConnectionError(f"Could not connect to {node_name}")
         # Use recursion=1 to get full operation details
-        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+        response = read_running_operations(client)
         if response.status_code == 200:
             operations_data = response.json().get('metadata', {})
             # Operations are returned in 'running' and 'success' keys

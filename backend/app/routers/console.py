@@ -43,6 +43,7 @@ from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
 from app.core.lxd_names import safe_segment
+from app.services.lxd.utils import read_running_operations
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -745,7 +746,7 @@ async def check_active_sessions(
             return ActiveConsoleCheckResponse(has_active_session=False, sessions=[])
         
         # Get running operations
-        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+        response = await asyncio.to_thread(read_running_operations, client)
         if response.status_code == 200:
             operations_data = response.json().get('metadata', {})
             running_ops = operations_data.get('running', [])
@@ -820,7 +821,7 @@ async def kill_all_sessions(
             return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
         
         # Get running operations
-        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+        response = await asyncio.to_thread(read_running_operations, client)
         if response.status_code == 200:
             operations_data = response.json().get('metadata', {})
             running_ops = operations_data.get('running', [])
