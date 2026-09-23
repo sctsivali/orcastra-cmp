@@ -48,6 +48,7 @@ from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.core.lxd_names import safe_segment
+from app.core.type_utils import normalize_cluster_type
 
 logger = logging.getLogger(__name__)
 
@@ -700,17 +701,38 @@ def _execute_proxy_operation(
 def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
     """Blocking half of the sync cluster-info fan-out. Reads Vault, so it must not run on the
     event loop. Returns a single-item list so it composes with the shared gather helper.
+
+    important: the family comes from `type`, the key save_cluster_metadata and check-auth write.
+    This read `server_type`, which nothing writes, so every cluster reached integrators as "lxd".
+    Every lookup tolerates odd metadata, because a raise drops the cluster from the payload and
+    the integrator then deletes a cluster that still exists.
     """
     cluster_info = cert_manager.get_cluster_info(cluster_id)
-    metadata = cluster_info.get("metadata", {})
-    location_data = metadata.get("location", {})
+    metadata = cluster_info.get("metadata") if isinstance(cluster_info, dict) else None
+    metadata = metadata if isinstance(metadata, dict) else {}
+    location_data = metadata.get("location")
+    location_data = location_data if isinstance(location_data, dict) else {}
     public_location = _public_location_data(location_data)
     zone_name = location_data.get("region_name") or location_data.get("city") or None
+    stored_type = metadata.get("type")
+    cluster_type = (
+        normalize_cluster_type(stored_type)
+        if isinstance(stored_type, str) and stored_type.strip()
+        else None
+    )
+    display_name = metadata.get("display_name")
     return [{
         "id": cluster_id,
+        # note: `name` stays the id integrators key on. The human name travels as display_name.
         "name": metadata.get("name", cluster_id),
+        "display_name": (
+            display_name if isinstance(display_name, str) and display_name.strip() else cluster_id
+        ),
         "endpoint": metadata.get("endpoint"),
-        "server_type": metadata.get("server_type", "lxd"),
+        "server_type": (cluster_type or "LXD").lower(),
+        "cluster_type": cluster_type,
+        # note: nothing on this line writes `clustered`, so it is reported as unknown.
+        "clustered": None,
         "registered_at": metadata.get("registered_at"),
         "zone": zone_name,
         "location_data": public_location or None,
