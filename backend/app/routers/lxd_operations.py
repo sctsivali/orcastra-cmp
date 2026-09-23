@@ -22,8 +22,8 @@ from app.core.org_scope import (
     check_tenant_permission,
     project_is_visible,
 )
-from app.core.instance_access import operation_targets
-from pydantic import BaseModel, Field
+from app.core.instance_access import operation_projects
+from pydantic import BaseModel, Field, PrivateAttr
 from app.core.lxd_names import safe_segment
 from app.services.lxd.utils import strip_operation_secrets
 
@@ -41,6 +41,11 @@ _executor = ThreadPoolExecutor(max_workers=5)
 
 class OperationInfo(BaseModel):
     """Operation information."""
+
+    # note: the raw resources, kept off the response, so the list can apply the project bound on
+    # the event loop where the scope is set. The fetch runs in an executor, which has none.
+    _resources: Dict[str, Any] = PrivateAttr(default_factory=dict)
+
     id: str = Field(..., description="Operation ID")
     class_name: str = Field("", description="Operation class")
     created_at: str = Field("", description="Creation timestamp")
@@ -57,14 +62,15 @@ class OperationInfo(BaseModel):
 
 
 def _operation_is_visible(host: str, resources: Any) -> bool:
-    """Whether every instance an operation names sits inside this caller's project bound.
+    """Whether every resource an operation names sits inside this caller's project bound.
 
     important: an operation id is enough to read, wait on or cancel any operation on a host, and
-    on a cluster bound to two organizations the other organization's console sessions and
-    instance creates are operations too. An operation that names no instance is cluster-level.
+    on a cluster bound to two organizations the other organization's console sessions, instance
+    creates, volume, image and network work and project deletes are operations too. Every
+    reference is checked, not only instances. One that names no project is cluster-level.
     """
-    targets = operation_targets({"resources": resources if isinstance(resources, dict) else {}})
-    return all(project_is_visible(host, project) for project, _instance in targets)
+    projects = operation_projects({"resources": resources if isinstance(resources, dict) else {}})
+    return all(project_is_visible(host, project) for project in projects)
 
 
 def _read_visible_operation(client: Any, host: str, operation_id: str) -> Any:
@@ -127,7 +133,7 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                             if 'project=' in instance_path:
                                 project = instance_path.split('project=')[-1].split('&')[0]
                     
-                    operations.append(OperationInfo(
+                    info = OperationInfo(
                         id=op_data.get('id', ''),
                         class_name=op_data.get('class', ''),
                         created_at=op_data.get('created_at', ''),
@@ -141,7 +147,9 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                         node_name=node_name,
                         project=project,
                         instance_name=instance_name,
-                    ))
+                    )
+                    info._resources = resources if isinstance(resources, dict) else {}
+                    operations.append(info)
                 except LXDConnectionError:
                     # a missing client IS unreachability: let it through
                     raise
@@ -206,7 +214,8 @@ async def list_operations(
         # a shared cluster listed the other organization's operations, instance names included.
         all_operations = [
             operation for operation in all_operations
-            if project_is_visible(operation.node_name, operation.project or "default")
+            if _operation_is_visible(operation.node_name, operation._resources)
+            and project_is_visible(operation.node_name, operation.project or "default")
             and check_tenant_permission(
                 operation.node_name,
                 operation.project or "default",

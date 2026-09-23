@@ -149,6 +149,21 @@ async def resolve_instance_project(
     return found
 
 
+def operation_projects(operation: dict[str, Any]) -> set[str]:
+    """Every LXD project an operation's resources name, whatever kind of resource they are.
+
+    note: a reference with no `?project=` is the default project for a project resource and
+    names no project at all for a cluster-level one such as a storage pool. Both read as
+    default, which every bound holds, so neither kind widens or narrows what a caller sees.
+    """
+    resources = operation.get("resources") or {}
+    projects: set[str] = set()
+    for references in resources.values() if isinstance(resources, dict) else []:
+        for reference in references if isinstance(references, list) else []:
+            if isinstance(reference, str):
+                projects.add(normalize_project(parse_lxd_reference(reference)[0]))
+    return projects
+
 
 def operation_targets(operation: dict[str, Any]) -> set[tuple[str, str]]:
     """The (project, instance) pairs an LXD operation names in its resources.
