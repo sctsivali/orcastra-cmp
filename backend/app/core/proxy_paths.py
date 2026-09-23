@@ -32,6 +32,15 @@ logger = logging.getLogger(__name__)
 # (`/auth/groups`). Either one lets a `write` grant mint a credential that outlives the key.
 _REFUSED_PROXY_PREFIXES = ("/certificates", "/auth")
 
+# Server-wide state no integration may change, whatever its grant. Reads stay open: the
+# integrator reads GET /1.0/cluster/members for a node count and never writes either one.
+#
+# important: a write to the bare /1.0 sets server configuration, which includes the OIDC issuer
+# and, before LXD 6, core.trust_password, and either one hands out trust like the trust store
+# does. `/cluster` holds the cluster certificate, join tokens (POST /1.0/cluster/members admits a
+# new trusted member), member state and member removal.
+_SERVER_WRITE_PREFIXES = ("/cluster",)
+
 # The only resources a project grant bounds, so the only ones a key that is not `*` may change.
 #
 # important: a grant of `projects: ["tenant-a"]` is enforced by binding the request to that
@@ -136,6 +145,22 @@ def assert_proxy_path_allowed(path: str) -> None:
         if _is_under(segments, prefix):
             logger.warning("Refusing proxy request to %s", prefix)
             raise HTTPException(status_code=403, detail=f"The proxy does not expose {prefix}")
+
+
+def assert_server_state_unchanged(path: str, method: str) -> None:
+    """Raise 403 for a write to the server configuration or the cluster, for every grant.
+
+    Paired with assert_proxy_path_allowed, which refuses the trust store for every method. These
+    two resources are refused only for writes, because the integrator reads them.
+    """
+    if method.upper() not in _MUTATING_METHODS:
+        return
+    segments = resource_segments(path)
+    if segments and not any(_is_under(segments, prefix) for prefix in _SERVER_WRITE_PREFIXES):
+        return
+    resource = "/" + segments[0] if segments else "the server configuration"
+    logger.warning("Refusing a %s to %s through the proxy", method.upper(), resource)
+    raise HTTPException(status_code=403, detail=f"The proxy does not change {resource}")
 
 
 def query_key_name(key: str) -> str:

@@ -17,7 +17,7 @@ import pytest
 import requests
 from fastapi import HTTPException
 
-from app.core.proxy_paths import assert_proxy_path_allowed
+from app.core.proxy_paths import assert_proxy_path_allowed, assert_server_state_unchanged
 from app.routers.integrations import RawProxyRequest, raw_proxy
 from app.services.lxd import health
 
@@ -142,6 +142,75 @@ def test_the_integrator_paths_are_allowed(path: str) -> None:
     assert_proxy_path_allowed(path)
 
 
+# Server configuration and the cluster: writes hand out trust (the OIDC issuer, a trust password,
+# a join token for a new member), so they are refused for every grant. Reads stay open.
+SERVER_WRITES = [
+    "/1.0",
+    "/1.0/",
+    "",
+    "/1.0?target=m1",
+    "/1.0/cluster",
+    "/1.0/cluster/certificate",
+    "/1.0/cluster/members",
+    "/1.0/cluster/members/m1",
+    "/1.0/cluster/members/m1/state",
+    "/1.0/cluster/groups/default",
+    "/1.0/CLUSTER/members",
+    "/1.0/%63luster/members",
+    "/1.0/%2563luster/members",
+    "/cluster/members",
+    "/1.0/cluster/members#x",
+]
+WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
+
+# Every write the integrator sends, verb and path shape as its client builds them.
+INTEGRATOR_WRITES = [
+    ("POST", "/1.0/images"),
+    ("DELETE", "/1.0/images/0f3c9a1b2c3d"),
+    ("POST", "/1.0/images/aliases"),
+    ("DELETE", "/1.0/images/aliases/ubuntu-24.04"),
+    ("POST", "/1.0/instances"),
+    ("PUT", "/1.0/instances/web-1"),
+    ("PATCH", "/1.0/instances/web-1"),
+    ("DELETE", "/1.0/instances/web-1"),
+    ("PUT", "/1.0/instances/web-1/state"),
+    ("POST", "/1.0/instances/web-1/snapshots"),
+    ("DELETE", "/1.0/instances/web-1/snapshots/snap0"),
+    ("POST", "/1.0/projects"),
+    ("PATCH", "/1.0/projects/cust-buyer-0f3c9a"),
+    ("DELETE", "/1.0/projects/cust-buyer-0f3c9a"),
+    ("POST", "/1.0/storage-pools/default/volumes/custom"),
+    ("PUT", "/1.0/storage-pools/default/volumes/custom/data-1"),
+    ("PATCH", "/1.0/storage-pools/default/volumes/custom/data-1"),
+    ("DELETE", "/1.0/storage-pools/default/volumes/custom/data-1"),
+    ("POST", "/1.0/storage-pools/default/volumes/custom/data-1/snapshots"),
+    ("DELETE", "/1.0/storage-pools/default/volumes/custom/data-1/snapshots/snap0"),
+]
+
+
+@pytest.mark.parametrize("method", WRITE_METHODS)
+@pytest.mark.parametrize("path", SERVER_WRITES)
+def test_a_server_or_cluster_write_is_refused_for_every_grant(path: str, method: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        assert_server_state_unchanged(path, method)
+    assert caught.value.status_code == 403
+    assert caught.value.detail in {
+        "The proxy does not change the server configuration",
+        "The proxy does not change /cluster",
+    }
+
+
+@pytest.mark.parametrize("path", SERVER_WRITES)
+def test_a_server_or_cluster_read_is_allowed(path: str) -> None:
+    assert_server_state_unchanged(path, "GET")
+
+
+@pytest.mark.parametrize("method,path", INTEGRATOR_WRITES)
+def test_the_integrator_writes_are_allowed(method: str, path: str) -> None:
+    assert_proxy_path_allowed(path)
+    assert_server_state_unchanged(path, method)
+
+
 class RecordingSession:
     def __init__(self) -> None:
         self.calls: List[str] = []
@@ -233,6 +302,26 @@ async def test_the_endpoint_never_calls_the_session_for_the_auth_api(method: str
         await _call(FakeService(_Client(session)), path, method=method)
     assert caught.value.status_code == 403
     assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("POST", "/1.0/cluster/members"), ("PUT", "/1.0"), ("PATCH", "/1.0/"),
+     ("PUT", "/1.0/cluster/certificate"), ("DELETE", "/1.0/cluster/members/m1")],
+)
+async def test_the_endpoint_never_calls_the_session_for_a_server_write(method: str, path: str) -> None:
+    session = RecordingSession()
+    with pytest.raises(HTTPException) as caught:
+        await _call(FakeService(_Client(session)), path, method=method)
+    assert caught.value.status_code == 403
+    assert session.calls == []
+
+
+async def test_the_member_count_read_still_reaches_the_cluster() -> None:
+    session = RecordingSession()
+    response = await _call(FakeService(_Client(session)), "/1.0/cluster/members")
+    assert response.status_code == 200
+    assert session.calls == ["https://cluster-a.example.test:8443/1.0/cluster/members"]
 
 
 async def test_the_endpoint_never_calls_the_session_for_traversal() -> None:

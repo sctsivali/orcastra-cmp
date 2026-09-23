@@ -63,6 +63,7 @@ from app.core.lxd_names import safe_segment
 from app.core.proxy_paths import (
     assert_project_scope_allows_path,
     assert_proxy_path_allowed,
+    assert_server_state_unchanged,
     project_allowed_by_grant,
     query_key_name,
     split_proxy_path,
@@ -2606,6 +2607,7 @@ async def raw_proxy(
         # important: out here in the outer try for the same reason, so a refusal stays a real
         # 400 or 403 and the session is never called.
         assert_proxy_path_allowed(request.path)
+        assert_server_state_unchanged(request.path, method)
         assert_project_scope_allows_path(request.path, method, allowed_projects)
 
         required_permission = "read"

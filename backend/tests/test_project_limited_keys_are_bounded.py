@@ -19,7 +19,7 @@ import pytest
 import requests
 from fastapi import HTTPException
 
-from app.core.proxy_paths import assert_project_scope_allows_path
+from app.core.proxy_paths import assert_project_scope_allows_path, resource_segments
 from app.routers.integrations import (
     ProxyRequest,
     RawProxyRequest,
@@ -187,11 +187,29 @@ async def test_a_narrow_key_cannot_read_all_projects(path: str) -> None:
     assert session.calls == []
 
 
-@pytest.mark.parametrize("method,path", UNBOUNDABLE_WRITES)
+def _is_server_state(path: str) -> bool:
+    """The bare /1.0 or /cluster: refused for every grant by assert_server_state_unchanged."""
+    segments = resource_segments(path)
+    return not segments or segments[0] == "cluster"
+
+
+@pytest.mark.parametrize(
+    "method,path", [(m, p) for m, p in UNBOUNDABLE_WRITES if not _is_server_state(p)]
+)
 async def test_a_wildcard_key_is_untouched_by_the_write_rule(method: str, path: str) -> None:
     outcome, session = await _raw(WILDCARD, method, path)
     assert outcome.status_code == 200
     assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "method,path", [(m, p) for m, p in UNBOUNDABLE_WRITES if _is_server_state(p)]
+)
+async def test_a_wildcard_key_still_cannot_change_the_server_or_cluster(method: str, path: str) -> None:
+    outcome, session = await _raw(WILDCARD, method, path)
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
+    assert session.calls == []
 
 
 @pytest.mark.parametrize("path", ALL_PROJECTS)
