@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
+import { RotateSecretButton } from "@/components/integrations/rotate-secret-button";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -231,10 +232,14 @@ function APIKeySecretDialog({
   open,
   onClose,
   response,
+  title = "API Key Created Successfully",
+  description = "Save these credentials now. The secret will not be shown again.",
 }: {
   open: boolean;
   onClose: () => void;
   response: APIKeyCreateResponse | null;
+  title?: string;
+  description?: string;
 }) {
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -263,12 +268,8 @@ function APIKeySecretDialog({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>
-            API Key Created Successfully
-          </DialogTitle>
-          <DialogDescription>
-            Save these credentials now. The secret will not be shown again.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
@@ -332,6 +333,7 @@ export function IntegrationsSettings() {
   const queryClient = useQueryClient();
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKeyCreateResponse | null>(null);
+  const [rotatedKey, setRotatedKey] = useState<APIKeyCreateResponse | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -631,6 +633,13 @@ export function IntegrationsSettings() {
                   
                   <div className="flex items-center justify-end gap-2 border-t pt-3">
                     {!apiKey.is_revoked && (
+                      <RotateSecretButton
+                        keyId={apiKey.id}
+                        keyName={String(apiKey.name || "this key")}
+                        onRotated={setRotatedKey}
+                      />
+                    )}
+                    {!apiKey.is_revoked && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button variant="outline" size="sm" className="text-yellow-600">
@@ -695,6 +704,13 @@ export function IntegrationsSettings() {
         open={createdKey !== null}
         onClose={() => setCreatedKey(null)}
         response={createdKey}
+      />
+      <APIKeySecretDialog
+        open={rotatedKey !== null}
+        onClose={() => setRotatedKey(null)}
+        response={rotatedKey}
+        title="Secret Rotated"
+        description="The previous secret no longer works. Update the OrcaHub connection with this secret now. It will not be shown again."
       />
     </div>
   );

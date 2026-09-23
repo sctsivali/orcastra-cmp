@@ -108,6 +108,7 @@ def _handlers() -> List[Any]:
             "oak_theirs", [integrations.ClusterPermission(cluster_id=SHARED)], None, user, None
         ),
         lambda: integrations.revoke_api_key("oak_theirs", None, user, None),
+        lambda: integrations.rotate_api_key_secret("oak_theirs", None, user, None),
         lambda: integrations.delete_api_key("oak_theirs", None, user, None),
         lambda: integrations.add_user_mapping(
             "oak_theirs",
@@ -118,7 +119,9 @@ def _handlers() -> List[Any]:
     ]
 
 
-@pytest.mark.parametrize("index", range(6), ids=["get", "permissions", "revoke", "delete", "add-mapping", "mappings"])
+@pytest.mark.parametrize(
+    "index", range(7), ids=["get", "permissions", "revoke", "rotate", "delete", "add-mapping", "mappings"]
+)
 async def test_the_other_partys_key_reads_as_missing(stored, index: int) -> None:
     with pytest.raises(HTTPException) as caught:
         await _handlers()[index]()

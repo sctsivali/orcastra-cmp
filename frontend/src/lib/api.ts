@@ -1849,6 +1849,12 @@ export const integrationsAPI = {
     });
   },
 
+  rotateAPIKeySecret: async (keyId: string): Promise<APIKeyCreateResponse> => {
+    return fetchAPI<APIKeyCreateResponse>(`/integrations/api-keys/${encodeURIComponent(keyId)}/rotate-secret`, {
+      method: "POST",
+    });
+  },
+
   deleteAPIKey: async (keyId: string): Promise<{ success: boolean; message: string }> => {
     return fetchAPI(`/integrations/api-keys/${encodeURIComponent(keyId)}`, {
       method: "DELETE",

@@ -429,14 +429,15 @@ def generate_api_key_pair() -> tuple[str, str, str]:
     """
     # Generate key ID (public identifier)
     key_id = f"oak_{secrets.token_hex(16)}"  # orcastra api key
-    
-    # Generate key secret (private, shown only once)
-    key_secret = f"oas_{secrets.token_urlsafe(32)}"  # orcastra api secret
-    
-    # Hash the secret using HMAC-SHA256 (keyed hash prevents rainbow table attacks)
-    secret_hash = hmac.new(_get_hmac_key(), key_secret.encode(), hashlib.sha256).hexdigest()
-    
+    key_secret, secret_hash = generate_api_key_secret()
     return key_id, key_secret, secret_hash
+
+
+def generate_api_key_secret() -> tuple[str, str]:
+    """A new secret (shown only once) and its HMAC-SHA256 hash, keyed so a rainbow table is useless."""
+    key_secret = f"oas_{secrets.token_urlsafe(32)}"  # orcastra api secret
+    secret_hash = hmac.new(_get_hmac_key(), key_secret.encode(), hashlib.sha256).hexdigest()
+    return key_secret, secret_hash
 
 
 def verify_api_key_secret(secret: str, stored_hash: str) -> bool:
@@ -1727,6 +1728,7 @@ def _assert_key_in_scope(metadata: Dict[str, Any], allowed: Optional[set[str]]) 
 API_KEY_CREATE = "integration.api_key.create"
 API_KEY_PERMISSIONS_UPDATE = "integration.api_key.permissions.update"
 API_KEY_REVOKE = "integration.api_key.revoke"
+API_KEY_ROTATE = "integration.api_key.secret.rotate"
 API_KEY_DELETE = "integration.api_key.delete"
 
 
@@ -2141,6 +2143,61 @@ async def revoke_api_key(
     except Exception as e:
         logger.error(f"Error revoking API key: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/api-keys/{key_id}/rotate-secret",
+    response_model=APIKeyCreateResponse,
+    summary="Rotate an API key's secret",
+    description=(
+        "Issue a new secret for the same key id. The old secret stops working at once, on every "
+        "worker, and the new one is shown only once."
+    ),
+)
+async def rotate_api_key_secret(
+    key_id: str,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rotate a key's secret in place.
+
+    important: the key id is what every synced organization records as its owner, so rotating by
+    minting a new key left all of them refusing the new one and stopped their sync. Keeping the
+    id keeps the orgs, the member push and the key's party exactly as they were.
+    """
+    await _authorize_api_key(key_id, _rbac, db)
+    vault_client = get_vault_integrations_client()
+    metadata, _hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+    if _api_key_is_unusable(metadata):
+        raise HTTPException(
+            status_code=409,
+            detail="A revoked, inactive or expired key cannot be rotated. Create a new key instead.",
+        )
+    key_secret, secret_hash = generate_api_key_secret()
+    try:
+        await asyncio.to_thread(
+            vault_client.vault_kv_put,
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
+            {"hash": secret_hash, "raw": key_secret},
+        )
+    except Exception as e:
+        logger.error(f"Failed to rotate the secret of API key {key_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to rotate the API key secret")
+    # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
+    # drop its copy, so the old secret fails on the next request wherever it lands
+    evict_api_key_cache(key_id)
+    cache = get_cache_manager()
+    cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+    cache.delete("api_responses", f"integrations:api_key:{key_id}")
+    _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata)
+    logger.info(f"API key {key_id} secret rotated")
+    user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
+    return APIKeyCreateResponse(
+        api_key=APIKeyInfo(**metadata, user_mappings_count=len(user_mappings)),
+        api_key_id=key_id,
+        api_key_secret=key_secret,
+    )
 
 
 @router.delete(
