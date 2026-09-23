@@ -297,7 +297,7 @@ class OrganizationService:
         return result.scalar_one_or_none() is not None
 
     async def user_runs_org(self, org_id: int, user_email: str, user_role: str) -> bool:
-        """Whether a user may change an organization's roster: admin, its creator, or its partner or admin row.
+        """Whether a user may change an organization's roster: admin, its creator, or its partner row.
 
         important: user_has_access answers "may this user see the organization" and is true for a tenant
         row too, so a partner who only buys from another partner could add, change and remove that
@@ -320,7 +320,7 @@ class OrganizationService:
         return result.first() is not None
 
     async def synced_partner_orgs(self, member_email: str, org_ids: list[int]) -> dict[int, str]:
-        """OrcaHub-synced organizations, among org_ids, where member_email is a partner or admin (id to slug).
+        """OrcaHub-synced organizations, among org_ids, where member_email is a partner (id to slug).
 
         note: OrcaHub owns those rosters and lets only a platform admin remove a partner. A dashboard
         change to such a row is not sent there, so the next sync would quietly undo it.

@@ -146,9 +146,14 @@ async def test_a_creator_whose_own_row_is_member_still_runs_the_org() -> None:
     assert T not in await _members(db, org.id)
 
 
-async def test_an_admin_row_runs_the_org() -> None:
+async def test_a_stale_admin_row_does_not_run_the_org() -> None:
+    """A platform admin passes by role, so an admin row held by a non-admin is left over from a demotion."""
+    from fastapi import HTTPException as _HTTPException
+
     db = await _db()
     db.add(OrganizationMember(organization_id=1, user_email="orgadmin@example.test", role="admin"))
     await db.commit()
-    await organizations.remove_member(1, T, user=_user("orgadmin@example.test"), db=db)
-    assert T not in await _members(db, 1)
+    with pytest.raises(_HTTPException) as caught:
+        await organizations.remove_member(1, T, user=_user("orgadmin@example.test"), db=db)
+    assert caught.value.status_code == 403
+    assert T in await _members(db, 1)

@@ -152,8 +152,10 @@ async def test_a_buyer_partner_cannot_remove_from_the_sellers_org_it_only_buys_f
     assert left == [20]
 
 
-async def test_an_admin_row_runs_its_org_for_the_list_removal_too(removal_spy):
-    """The member routes and the user list agree on who runs an org (RUNNING_ROLES)."""
+async def test_a_stale_admin_row_does_not_run_its_org_for_the_list_removal(removal_spy):
+    """The member routes and the user list agree: an admin row held by a non-admin runs nothing."""
+    from fastapi import HTTPException
+
     db = await _seeded()
     db.add(Organization(id=30, name="Run", slug="run", source="local", created_by="founder@example.test"))
     await db.commit()
@@ -163,12 +165,13 @@ async def test_an_admin_row_runs_its_org_for_the_list_removal_too(removal_spy):
     ])
     await db.commit()
     partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
-    await user_groups.remove_user_from_all("target@example.test", user=partner, db=db)
+    with pytest.raises(HTTPException) as caught:
+        await user_groups.remove_user_from_all("target@example.test", user=partner, db=db)
+    assert caught.value.status_code == 404
     left = (await db.execute(
         select(OrganizationMember.organization_id).where(OrganizationMember.user_email == "target@example.test")
     )).scalars().all()
-    assert left == []
-    assert removal_spy == [{30}]
+    assert left == [30]
 
 
 async def test_a_partner_cannot_remove_a_co_partner_from_an_org_orcahub_manages(removal_spy):
@@ -301,7 +304,7 @@ class _Authentik:
         return True
 
 
-@pytest.mark.parametrize("row_role,allowed", [("admin", True), ("partner", True), ("tenant", False), ("member", False)])
+@pytest.mark.parametrize("row_role,allowed", [("partner", True), ("admin", False), ("tenant", False), ("member", False)])
 async def test_assign_needs_a_row_that_runs_the_org(monkeypatch, row_role: str, allowed: bool) -> None:
     from fastapi import HTTPException
 
