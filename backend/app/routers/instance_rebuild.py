@@ -32,6 +32,12 @@ from app.core.dependencies import (
     AuthenticatedUser,
 )
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.instance_access import (
+    can_view_instance,
+    normalize_project,
+    verify_instance_view_access,
+    verify_project_access,
+)
 from app.models.db_models import RebuildJob
 from app.services.lxd_service import (
     LXDService,
@@ -137,7 +143,7 @@ async def _wait_for_provisioning(lxd_service: LXDService, name: str, host: str, 
     waited = 0
     while waited < _PROVISION_TIMEOUT_SECONDS:
         try:
-            vm = await lxd_service.get_vm(name, host)
+            vm = await lxd_service.get_vm(name, host, project=project)
             if vm and vm.status == "Running" and (vm.ip_addresses or []):
                 return
         except Exception:  # noqa: BLE001 - provisioning wait is best-effort
@@ -219,6 +225,9 @@ async def rebuild_instance(
     user: AuthenticatedUser = Depends(require_partner()),
 ):
     verify_cluster_access(body.host)
+    # important: before the confirm check, so a refused project answers 403 whatever else the
+    # body says, and the job row records the project that was authorized
+    project = verify_project_access(body.host, body.project)
 
     # Destructive-action confirmation: the client must echo the instance name.
     if body.confirm_name != instance_name:
@@ -232,7 +241,7 @@ async def rebuild_instance(
     # Preflight: status + snapshots + config/volume snapshot. Snapshots block the
     # rebuild (LXD rejects it), so surface a clear 409 before doing anything.
     try:
-        pf = await lxd_service.get_rebuild_preflight(instance_name, body.host, body.project)
+        pf = await lxd_service.get_rebuild_preflight(instance_name, body.host, project)
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
@@ -254,7 +263,7 @@ async def rebuild_instance(
     row = RebuildJob(
         job_id=job_id,
         cluster_id=body.host,
-        project=pf.get("project") or body.project or "default",
+        project=pf.get("project") or project,
         instance_name=instance_name,
         mode=body.mode,
         requested_image=(body.image if body.mode != "empty" else None),
@@ -287,6 +296,7 @@ async def rebuild_preflight(
     """Read-only pre-check for the rebuild dialog: current status, snapshots (the
     block condition), the custom volumes that will survive, and the base image."""
     verify_cluster_access(host)
+    project = verify_instance_view_access(host, project, instance_name)
     try:
         pf = await lxd_service.get_rebuild_preflight(instance_name, host, project)
     except LXDConnectionError as e:
@@ -318,6 +328,10 @@ async def get_rebuild_job(
     if row is None or row.instance_name != instance_name:
         raise HTTPException(status_code=404, detail="Rebuild job not found")
     verify_cluster_access(row.cluster_id)
+    # note: 404, the same answer as a missing job, so a job id reveals nothing about an
+    # instance in a project this caller may not view
+    if not can_view_instance(row.cluster_id, row.project, row.instance_name):
+        raise HTTPException(status_code=404, detail="Rebuild job not found")
     return _job_payload(row)
 
 
@@ -325,17 +339,18 @@ async def get_rebuild_job(
 async def get_latest_rebuild_job(
     instance_name: str,
     host: str,
+    project: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     verify_cluster_access(host)
+    stmt = select(RebuildJob).where(
+        RebuildJob.instance_name == instance_name, RebuildJob.cluster_id == host
+    )
+    if project is not None:
+        stmt = stmt.where(RebuildJob.project == normalize_project(project))
     row = (
-        await db.execute(
-            select(RebuildJob)
-            .where(RebuildJob.instance_name == instance_name, RebuildJob.cluster_id == host)
-            .order_by(RebuildJob.created_at.desc())
-            .limit(1)
-        )
+        await db.execute(stmt.order_by(RebuildJob.created_at.desc()).limit(1))
     ).scalar_one_or_none()
-    if row is None:
+    if row is None or not can_view_instance(row.cluster_id, row.project, row.instance_name):
         return {"job": None}
     return {"job": _job_payload(row)}

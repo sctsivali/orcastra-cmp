@@ -18,6 +18,7 @@ from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
 from app.core.dependencies import require_tenant, AuthenticatedUser, get_ws_user
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
+from app.core.instance_access import verify_project_access
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -503,6 +504,19 @@ async def terminal_websocket(
 
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
+
+    # important: the cluster and the project bound are checked here unconditionally, before the
+    # socket is accepted. A shell is the widest access there is, so without this the Partner
+    # and Tenant bounds on a shared cluster could be stepped around by opening a terminal.
+    try:
+        project = verify_project_access(host, project)
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason="forbidden")
+        logger.warning(
+            "Terminal WS blocked (%s): %s@%s user=%s",
+            exc.detail, instance_name, host, getattr(user, "email", "?"),
+        )
+        return
 
     # Per-project enforcement (flag-gated). No-op for admin/partner (acl is None); for a tenant a
     # missing/insufficient 'console' rule closes the socket with 1008 rather than raising.

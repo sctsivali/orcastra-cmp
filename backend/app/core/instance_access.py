@@ -13,7 +13,7 @@ and then passes the concrete project it authorized to the service, never the raw
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException, status
 
@@ -23,6 +23,7 @@ from app.core.org_scope import (
     verify_cluster_access,
     verify_tenant_permission,
 )
+from app.core.tenant_visibility import parse_lxd_reference
 from app.services.lxd.availability import unreachable_detail
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.utils import find_instance_in_projects
@@ -129,3 +130,19 @@ async def resolve_instance_project(
         )
     return found
 
+
+
+def operation_targets(operation: dict[str, Any]) -> set[tuple[str, str]]:
+    """The (project, instance) pairs an LXD operation names in its resources.
+
+    LXD writes each as `/1.0/instances/<name>?project=<project>`, with no query for default.
+    Matching on the pair, not on a substring of the path, is what keeps one organization's
+    console session out of another's kill or active-session read on a shared cluster.
+    """
+    resources = operation.get("resources") or {}
+    targets: set[tuple[str, str]] = set()
+    for reference in resources.get("instances") or []:
+        project, instance = parse_lxd_reference(reference)
+        if instance:
+            targets.add((normalize_project(project), instance))
+    return targets

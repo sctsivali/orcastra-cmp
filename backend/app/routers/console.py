@@ -28,6 +28,12 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verify_cluster_access
+from app.core.instance_access import (
+    can_view_instance,
+    operation_targets,
+    verify_instance_view_access,
+    verify_project_access,
+)
 from app.services.console_service import get_console_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
@@ -398,6 +404,7 @@ async def get_capabilities(
 ):
     """Get console capabilities for an instance."""
     verify_cluster_access(host)
+    project = verify_instance_view_access(host, project, instance_name)
     console_service = get_console_service()
     
     caps, error = await console_service.get_instance_capabilities(
@@ -438,6 +445,9 @@ async def create_console_session(
     # as it is on every other router. Only the per-project ACL stays behind the flag, which is
     # off by default until every active project carries a policy.
     verify_cluster_access(host)
+    # important: the project bound is unconditional. With the flag off it is the only thing
+    # keeping a Partner on a shared cluster out of another organization's console.
+    project = verify_project_access(host, project)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, project, instance_name, "console")
     # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
@@ -506,6 +516,7 @@ async def get_startup_order(
 ):
     """Get startup order for instances."""
     verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
     entries, error = await console_service.get_startup_order(
@@ -516,9 +527,13 @@ async def get_startup_order(
     if error:
         return StartupOrderResponse(success=False, error=error)
     
+    # note: a tenant sees the boot order of the instances it may view, not the whole project
     return StartupOrderResponse(
         success=True,
-        entries=[StartupOrderEntry(**e.to_dict()) for e in entries]
+        entries=[
+            StartupOrderEntry(**e.to_dict()) for e in entries
+            if can_view_instance(host, project, e.instance_name)
+        ]
     )
 
 
@@ -538,6 +553,7 @@ async def update_startup_order(
 ):
     """Update startup order for instances."""
     verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
     updates = [u.model_dump(exclude_none=True) for u in request.updates]
@@ -595,6 +611,7 @@ async def get_attached_iso(
 ):
     """Get attached ISO for an instance."""
     verify_cluster_access(host)
+    project = verify_instance_view_access(host, project, instance_name)
     console_service = get_console_service()
     
     attached, error = await console_service.get_instance_iso(
@@ -636,6 +653,7 @@ async def attach_iso(
 ):
     """Attach an ISO to an instance."""
     verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
     success, message = await console_service.attach_iso(
@@ -671,6 +689,7 @@ async def eject_iso(
 ):
     """Eject an ISO from an instance."""
     verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
     success, message = await console_service.eject_iso(
@@ -708,6 +727,7 @@ async def check_active_sessions(
     Useful for warning users before opening a new console.
     """
     verify_cluster_access(host)
+    project = verify_instance_view_access(host, project, instance_name)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -725,6 +745,10 @@ async def check_active_sessions(
             running_ops = operations_data.get('running', [])
             
             for op in running_ops:
+                # important: the operations list spans every project on the host, so an
+                # operation counts only when it names this instance in this project
+                if (project, instance_name) not in operation_targets(op):
+                    continue
                 description = op.get('description', '')
                 op_class = op.get('class', '')
                 
@@ -772,11 +796,13 @@ async def check_active_sessions(
 async def kill_all_sessions(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill all active console sessions for an instance."""
     verify_cluster_access(host)
+    project = verify_project_access(host, project)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -794,6 +820,10 @@ async def kill_all_sessions(
             running_ops = operations_data.get('running', [])
             
             for op in running_ops:
+                # important: a same-named instance in another organization's project on a
+                # shared cluster is not this instance, and its console must survive this call
+                if (project, instance_name) not in operation_targets(op):
+                    continue
                 _description = op.get('description', '')
                 op_class = op.get('class', '')
                 resources = op.get('resources', {})
@@ -834,11 +864,13 @@ async def kill_active_session(
     instance_name: str,
     operation_id: str,
     host: str = Query(..., description="Target host node"),
+    project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill an active console session by cancelling the operation."""
     verify_cluster_access(host)
+    project = verify_project_access(host, project)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -847,6 +879,16 @@ async def kill_active_session(
         client = lxd_service.connection_manager.get_client(host)
         if not client:
             return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
+
+        # important: an operation id alone named any operation on the host, so a caller could
+        # cancel another organization's session. It must name this instance in this project.
+        try:
+            op_response = client.api.operations[safe_segment(operation_id)].get()
+            operation = op_response.json().get("metadata") or {}
+        except Exception:
+            return ActionResponse(success=True, message=f"Session {operation_id[:8]}... already ended")
+        if (project, instance_name) not in operation_targets(operation):
+            return ActionResponse(success=False, error="Session not found for this instance")
         
         # For websocket operations, use direct API DELETE
         # operation.cancel() doesn't work for websocket class operations
@@ -1252,6 +1294,7 @@ async def console_websocket(
         from app.core.config import get_settings
 
         verify_cluster_access(host)
+        project = verify_project_access(host, project)
         if get_settings().tenant_perm_enforcement_enabled:
             verify_tenant_permission(host, project, instance_name, "console")
     except HTTPException as exc:
