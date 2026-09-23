@@ -125,6 +125,28 @@ async def test_a_removal_that_removed_nothing_passes_nothing(removal_spy):
     assert removal_spy == [set()]
 
 
+async def test_a_partner_removing_a_co_partner_is_not_sent_to_orcahub(removal_spy):
+    db = await _seeded()
+    db.add(OrganizationMember(organization_id=7, user_email="copartner@example.test", role="partner"))
+    await db.commit()
+    partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
+    await user_groups.remove_user_from_all("copartner@example.test", user=partner, db=db)
+    assert removal_spy == [set()]
+    left = (await db.execute(
+        select(OrganizationMember.user_email).where(OrganizationMember.user_email == "copartner@example.test")
+    )).scalars().all()
+    assert left == [], "the dashboard removal itself is unchanged"
+
+
+async def test_an_admin_removing_a_partner_is_sent_to_orcahub(removal_spy):
+    db = await _seeded()
+    db.add(OrganizationMember(organization_id=7, user_email="copartner@example.test", role="partner"))
+    await db.commit()
+    admin = AuthenticatedUser(user_id="a", email="admin@example.test", groups=["role_admin"])
+    await user_groups.remove_user_from_all("copartner@example.test", user=admin, db=db)
+    assert removal_spy == [{7}]
+
+
 class _FakeVault:
     def __init__(self, metadata: Dict[str, Any], secret: Dict[str, Any]) -> None:
         self.metadata = metadata

@@ -285,7 +285,7 @@ async def remove_user_from_all(
         removed = await db.execute(
             delete(OrganizationMember)
             .where(OrganizationMember.user_email == user_email)
-            .returning(OrganizationMember.organization_id)
+            .returning(OrganizationMember.organization_id, OrganizationMember.role)
         )
     else:
         # partner: only remove from orgs they own/belong to
@@ -311,9 +311,10 @@ async def remove_user_from_all(
                 OrganizationMember.user_email == user_email,
                 OrganizationMember.organization_id.in_(partner_org_ids),
             )
-            .returning(OrganizationMember.organization_id)
+            .returning(OrganizationMember.organization_id, OrganizationMember.role)
         )
-    removed_org_ids = set(removed.scalars().all())
+    removed_rows = removed.all()
+    removed_org_ids = {org_id for org_id, _role in removed_rows}
     await db.commit()
 
     # remove from Authentik (only admin should do this globally)
@@ -321,10 +322,18 @@ async def remove_user_from_all(
         sync_svc = get_authentik_sync()
         await sync_svc.remove_user_from_all_roles(user_email)
 
+    # important: OrcaHub lets only a platform admin remove a partner from an organization, and
+    # its group sync then takes their role_partner away. So a non-admin's removal is sent only for
+    # the organizations where the removed row was a tenant. The dashboard removal itself is
+    # unchanged.
+    pushed_org_ids = (
+        removed_org_ids if highest == Role.ADMIN
+        else {org_id for org_id, role in removed_rows if role == "tenant"}
+    )
     # push removal to OrcaHub (non-blocking, best-effort), only for the orgs just left
     try:
         from app.services.orcahub_sync import push_member_removal_to_orcahub
-        await push_member_removal_to_orcahub(db, user_email, removed_org_ids)
+        await push_member_removal_to_orcahub(db, user_email, pushed_org_ids)
     except Exception as e:
         logger.warning(f"OrcaHub removal push failed (non-blocking): {e}")
 
