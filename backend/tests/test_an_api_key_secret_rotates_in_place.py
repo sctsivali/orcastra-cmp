@@ -161,7 +161,7 @@ async def test_a_write_whose_reply_is_lost_still_drops_every_cached_copy(world, 
     monkeypatch.setattr(world["vault"], "vault_kv_put", lost)
     with pytest.raises(HTTPException) as caught:
         await integrations.rotate_api_key_secret(KEY, None, OWNER, None)
-    assert caught.value.status_code == 500 and "Rotate again" in caught.value.detail
+    assert caught.value.status_code == 503 and "Rotate again" in caught.value.detail
     assert not await _valid(world["old"]), "a cached copy of the old secret outlived a rotation that landed"
 
 
@@ -239,3 +239,11 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
         assert (await integrations.rotate_api_key_secret(KEY, None, admin, None)).api_key_id == KEY
     finally:
         org_scope._allowed_clusters_var.reset(token)
+
+
+
+def test_a_rotation_is_filed_with_its_siblings() -> None:
+    from app.services import activity_logger
+
+    assert activity_logger.ACTION_CATEGORIES[integrations.API_KEY_ROTATE] == activity_logger.ACTION_CATEGORIES[integrations.API_KEY_REVOKE]
+    assert integrations.API_KEY_ROTATE in activity_logger.HIGH_SEVERITY_ACTIONS

@@ -50,6 +50,7 @@ ACTION_CATEGORIES = {
     "integration.api_key.create": EventCategory.IDENTITY,
     "integration.api_key.permissions.update": EventCategory.IDENTITY,
     "integration.api_key.revoke": EventCategory.IDENTITY,
+    "integration.api_key.secret.rotate": EventCategory.IDENTITY,
     "integration.api_key.delete": EventCategory.IDENTITY,
     
     # LXD Infrastructure
@@ -146,6 +147,7 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.api_key.create",
     "integration.api_key.permissions.update",
     "integration.api_key.revoke",
+    "integration.api_key.secret.rotate",
     "integration.api_key.delete",
     "vault.cert.generate",
     "vault.secret.write",

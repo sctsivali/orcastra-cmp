@@ -2211,8 +2211,9 @@ async def rotate_api_key_secret(
         # its cached copy and checks Vault again
         evict_api_key_cache(key_id)
         logger.error(f"Failed to rotate the secret of API key {key_id}: {e}")
+        # note: 503, so the sentence reaches the operator (other 5xx answers become a reference)
         raise HTTPException(
-            status_code=500,
+            status_code=503,
             detail="The secret rotation did not confirm. Rotate again before using this key.",
         )
     # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
