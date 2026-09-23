@@ -7,7 +7,7 @@ Supports integration with Orcahub and other external applications (soon with Orc
 import asyncio
 import secrets
 import hashlib
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 import hmac
 import logging
 import threading
@@ -301,9 +301,22 @@ class SyncDataRequest(BaseModel):
     def _app_url_is_a_safe_callback(cls, value: Optional[str]) -> Optional[str]:
         # important: stored, then fetched by three outbound calls, one carrying the plaintext secret.
         # Use time re-checks it too, so a value stored before this check is not trusted either.
+        # note: a value the policy refuses is dropped, not refused. Refusing failed the whole sync
+        # (organizations, members, clusters) for an OrcaHub whose BACKEND_URL is plain http, the
+        # shape its own env template ships. Dropped, the sync goes through, the stored value is left
+        # as it was, and no callback reaches an address the policy refuses.
         if value is None:
             return None
-        return check_callback_url(value)
+        try:
+            return check_callback_url(value)
+        except ValueError as exc:
+            parts = urlsplit(value)
+            logger.warning(
+                "Ignoring the app_url of a sync (%s://%s): %s. OrcaHub callbacks stay off until its "
+                "BACKEND_URL is public https or its address is in ORCAHUB_CALLBACK_ALLOWED_NETWORKS",
+                parts.scheme, parts.hostname or "?", exc,
+            )
+            return None
 
 
 class SyncDataResponse(BaseModel):

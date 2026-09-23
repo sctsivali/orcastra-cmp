@@ -104,10 +104,26 @@ from pydantic import ValidationError  # noqa: E402
 from app.routers.integrations import SyncDataRequest  # noqa: E402
 
 
-@pytest.mark.parametrize("value", REFUSED_BY_DEFAULT + ["https://example.test/" + "a" * 2048])
-def test_sync_refuses_an_unsafe_app_url(allow, value):
+@pytest.mark.parametrize("value", REFUSED_BY_DEFAULT)
+def test_sync_drops_an_unsafe_app_url_and_goes_on(allow, value, caplog):
+    with caplog.at_level("WARNING", logger="app.routers.integrations"):
+        assert SyncDataRequest(app_url=value).app_url is None
+    assert any("Ignoring the app_url of a sync" in r.getMessage() for r in caplog.records)
+
+
+def test_sync_refuses_an_app_url_over_the_length_cap(allow):
     with pytest.raises(ValidationError):
-        SyncDataRequest(app_url=value)
+        SyncDataRequest(app_url="https://example.test/" + "a" * 2048)
+
+
+def test_a_dropped_app_url_leaves_the_stored_one_alone(allow, monkeypatch):
+    """The handler stores app_url only when the request carries one."""
+    import inspect
+
+    from app.routers import integrations
+
+    source = inspect.getsource(integrations.sync_data)
+    assert "if request.app_url:" in source
 
 
 @pytest.mark.parametrize("value", ["https://example.test", None])
@@ -122,5 +138,4 @@ def test_sync_without_app_url_is_unchanged(allow):
 def test_sync_honours_the_allowlist(allow):
     allow("10.0.0.5/32")
     assert SyncDataRequest(app_url="http://10.0.0.5:3001").app_url == "http://10.0.0.5:3001"
-    with pytest.raises(ValidationError):
-        SyncDataRequest(app_url="http://example.test")
+    assert SyncDataRequest(app_url="http://example.test").app_url is None
