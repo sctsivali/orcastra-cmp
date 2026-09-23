@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -238,6 +238,14 @@ class UserMappingRequest(BaseModel):
     )
 
 
+# note: each element costs its own commit, members also cost Authentik calls.
+# One real OrcaHub push is its org plus buyer orgs and their members, far below these.
+MAX_SYNC_ORGANIZATIONS = 1000
+MAX_SYNC_MEMBERS = 5000
+MAX_SYNC_POLICIES = 1000
+MAX_SYNC_POLICY_RULES = 1000
+
+
 class SyncOrganization(BaseModel):
     """Organization data pushed from external app during sync."""
     id: str = Field(..., description="External organization UUID")
@@ -264,6 +272,7 @@ class SyncDataRequest(BaseModel):
     # Organization data pushed from external app (ex; OrcaHub)
     organizations: List[SyncOrganization] = Field(
         default_factory=list,
+        max_length=MAX_SYNC_ORGANIZATIONS,
         description="Organizations to sync from external app"
     )
     # Callback URL for on-demand data pull
@@ -271,6 +280,7 @@ class SyncDataRequest(BaseModel):
     # Member data pushed from external app (ex; OrcaHub)
     members: List[SyncMember] = Field(
         default_factory=list,
+        max_length=MAX_SYNC_MEMBERS,
         description="Organization members to sync from external app"
     )
 
@@ -2837,6 +2847,26 @@ async def list_synced_organizations(
         raise HTTPException(status_code=500, detail="Failed to list synced organizations")
 
 
+_UNUSABLE_ORG_LIST = "External app returned an unusable organization list"
+
+
+def _parse_refreshed_organizations(data: Any) -> List[SyncOrganization]:
+    """The organization list a refresh fetched, under the same cap a pushed sync has.
+
+    important: the body comes from a URL the integration chose. A malformed entry raised out of
+    the handler as a 500, and an oversized list cost one commit per entry with no ceiling.
+    """
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail=_UNUSABLE_ORG_LIST)
+    orgs_data = data.get("organizations") or []
+    if not isinstance(orgs_data, list) or len(orgs_data) > MAX_SYNC_ORGANIZATIONS:
+        raise HTTPException(status_code=502, detail=_UNUSABLE_ORG_LIST)
+    try:
+        return [SyncOrganization(**entry) for entry in orgs_data]
+    except (TypeError, ValidationError):
+        raise HTTPException(status_code=502, detail=_UNUSABLE_ORG_LIST) from None
+
+
 @router.post(
     "/refresh-organizations",
     summary="Refresh organizations from external app",
@@ -2894,12 +2924,10 @@ async def refresh_organizations(
         logger.error(f"Failed to reach external app at {callback_url}: {e}")
         raise HTTPException(status_code=502, detail="Failed to reach external app")
 
-    # Parse and upsert organizations
-    orgs_data = data.get("organizations", [])
-    if not orgs_data:
+    sync_orgs = _parse_refreshed_organizations(data)
+    if not sync_orgs:
         return {"message": "No organizations returned from external app", "organizations_synced": 0}
 
-    sync_orgs = [SyncOrganization(**o) for o in orgs_data]
     synced = await _upsert_synced_organizations(db, sync_orgs, api_key_id)
 
     return {
@@ -2932,13 +2960,15 @@ class SyncPolicy(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
     org_external_id: str = Field(..., description="Organization's external_id")
-    rules: List[SyncPolicyRule] = []
-    assignments: List[SyncPolicyAssignment] = []
+    rules: List[SyncPolicyRule] = Field(default_factory=list, max_length=MAX_SYNC_POLICY_RULES)
+    assignments: List[SyncPolicyAssignment] = Field(
+        default_factory=list, max_length=MAX_SYNC_MEMBERS
+    )
 
 
 class SyncPoliciesRequest(BaseModel):
     """Request body for syncing policies from OrcaHub."""
-    policies: List[SyncPolicy]
+    policies: List[SyncPolicy] = Field(..., max_length=MAX_SYNC_POLICIES)
 
 
 @external_router.post(
