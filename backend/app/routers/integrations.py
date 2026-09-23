@@ -2068,6 +2068,16 @@ async def get_integration_regions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _envelope_error(exc: BaseException) -> str:
+    """The `error` text of a proxy envelope, with hosts, URLs, paths and secrets removed.
+
+    important: the envelope is answered with HTTP 200, so the application's 5xx sanitiser never
+    sees it, and the raw exception text named the cluster's address, port and TLS detail. Only
+    `error` is rewritten. `data` is LXD's own answer and the integrator reads refusals from it.
+    """
+    return sanitize_error(str(exc), limit=1000)
+
+
 @external_router.post(
     "/raw-proxy",
     response_model=RawProxyResponse,
@@ -2282,13 +2292,13 @@ async def raw_proxy(
             return RawProxyResponse(
                 status_code=504,
                 data=None,
-                error=str(timeout_error),
+                error=_envelope_error(timeout_error),
             )
         except BlockingPoolFull as pool_error:
             return RawProxyResponse(
                 status_code=503,
                 data=None,
-                error=str(pool_error),
+                error=_envelope_error(pool_error),
             )
         except HTTPException:
             # note: re-raised so a real transport status is never downgraded to a 200 envelope
@@ -2314,7 +2324,7 @@ async def raw_proxy(
                 return RawProxyResponse(
                     status_code=504,
                     data=None,
-                    error=sanitize_error(str(api_error), limit=1000),
+                    error=_envelope_error(api_error),
                 )
             if isinstance(api_error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
                 health.record_failure(request.cluster_id, str(api_error))
@@ -2322,7 +2332,7 @@ async def raw_proxy(
             return RawProxyResponse(
                 status_code=500,
                 data=None,
-                error=str(api_error),
+                error=_envelope_error(api_error),
             )
 
     except HTTPException:
@@ -2332,7 +2342,7 @@ async def raw_proxy(
         return RawProxyResponse(
             status_code=500,
             data=None,
-            error=str(e),
+            error=_envelope_error(e),
         )
 
 
@@ -2435,9 +2445,9 @@ async def proxy_operation(
             # This path mutates cluster state on behalf of an external system, where nobody is
             # watching a UI to notice a stale list. Drop the cached reads it just invalidated.
             get_cache_manager().invalidate_resource_cache("instances", "vms", "monitoring")
-            return ProxyResponse(success=False, error=str(timeout_error))
+            return ProxyResponse(success=False, error=_envelope_error(timeout_error))
         except BlockingPoolFull as pool_error:
-            return ProxyResponse(success=False, error=str(pool_error))
+            return ProxyResponse(success=False, error=_envelope_error(pool_error))
         
         # Log the operation for audit
         logger.info(
@@ -2457,7 +2467,7 @@ async def proxy_operation(
         logger.error(f"Error in proxy operation: {e}", exc_info=True)
         return ProxyResponse(
             success=False,
-            error=str(e),
+            error=_envelope_error(e),
         )
 
 
