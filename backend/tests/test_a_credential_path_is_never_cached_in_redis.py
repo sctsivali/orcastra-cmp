@@ -13,7 +13,7 @@ import ast
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 from cryptography.fernet import Fernet

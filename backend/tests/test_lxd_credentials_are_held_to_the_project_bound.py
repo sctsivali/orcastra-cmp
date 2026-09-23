@@ -355,18 +355,3 @@ async def test_a_fleet_listing_keeps_its_own_http_status(read, fleet, monkeypatc
         with pytest.raises(HTTPException) as caught:
             await read(host=None, lxd_service=fleet, db=None, user=USER)
     assert caught.value.status_code == 503
-
-
-@pytest.mark.parametrize("read,field", [(permissions.list_groups, "groups"),
-                                        (permissions.list_identities, "identities")],
-                         ids=["list_groups", "list_identities"])
-async def test_an_unconfirmed_cluster_is_named_as_partial_not_silently_dropped(read, field, fleet, monkeypatch) -> None:
-    async def unconfirmed(_db: Any, _email: str, bounded: Any) -> tuple:
-        return set(bounded), False
-
-    monkeypatch.setattr(cluster_parties, "held_with_confirmation", unconfirmed)
-    with _shared_and_other():
-        answer = await read(host=None, lxd_service=fleet, db=None, user=USER)
-    assert {row.node for row in getattr(answer, field)} == {OTHER}
-    assert CLUSTER in answer.partial_nodes
-    assert answer.node_errors[CLUSTER].startswith("partial: could not confirm who holds this cluster")

@@ -1792,9 +1792,9 @@ def _read_api_key_metadata_blocking(key_id: str) -> Dict[str, Any]:
         return {}
 
 
-async def _org_mate_emails(db: AsyncSession, email: str) -> set[str]:
-    """Lowercased emails on the caller's side. See services.cluster_parties.side_of."""
-    return await cluster_parties.side_of(db, email)
+async def _run_org_keys(db: AsyncSession, email: str) -> set[str]:
+    """Integration keys carried by the organizations this user runs. See services.cluster_parties."""
+    return await cluster_parties.run_org_keys(db, email)
 
 
 def _key_clusters(metadata: Dict[str, Any]) -> set[str]:
@@ -1812,8 +1812,9 @@ async def _keys_the_caller_manages(
 
     important: cluster overlap alone let a Partner on a cluster bound to another organization read,
     revoke and delete that organization's keys, which breaks its OrcaHub sync and provisioning. A
-    key granting a cluster another party holds is managed only by its creator or the creator's
-    organization. An Admin, and a key whose clusters are all the caller's own, keep the old rule.
+    key granting a cluster another party holds is managed only by its creator, or by whoever runs
+    an organization that key syncs. An Admin, and a key whose clusters are all the caller's own,
+    keep the old rule.
     """
     from app.core.rbac import Role, get_highest_role, resolve_roles
 
@@ -1827,11 +1828,8 @@ async def _keys_the_caller_manages(
     held = await _clusters_held_by_another_party(
         db, user.email, set().union(*(_key_clusters(k) for k in rest))
     )
-    mates = await _org_mate_emails(db, user.email) if held else set()
-    kept = [
-        k for k in rest
-        if not (_key_clusters(k) & held) or str(k.get("created_by") or "").lower() in mates
-    ]
+    linked = await _run_org_keys(db, user.email) if held else set()
+    kept = [k for k in rest if not (_key_clusters(k) & held) or str(k.get("id") or "") in linked]
     return [k for k in keys if k in mine or k in kept]
 
 

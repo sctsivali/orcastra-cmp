@@ -15,7 +15,6 @@ from fastapi import HTTPException
 from app.core import org_scope
 from app.core.auth import AuthenticatedUser
 from app.routers import integrations
-from app.services import cluster_parties
 from app.routers.integrations import APIKeyCreateRequest, ClusterPermission
 
 PARTNER = "partner-a@example.test"
@@ -41,22 +40,25 @@ class _Result:
 
 
 class FakeSession:
-    def __init__(self, holders: List[tuple], own_ids: set) -> None:
+    """Answers the three queries the grant bound makes: holders, the caller's run orgs, org ids.
+
+    `own` maps each org the caller runs to the integration key it carries (None for none).
+    """
+
+    def __init__(self, holders: List[tuple], own: Any) -> None:
         self.holders = holders
-        self.own_ids = own_ids
+        self.own = own if isinstance(own, dict) else {org_id: None for org_id in own}
         self.queries: List[str] = []
 
     async def execute(self, stmt: Any, *_a: Any, **_k: Any) -> _Result:
         text = str(stmt)
         self.queries.append(text)
-        if text.startswith("SELECT organization_members.user_email"):
-            return _Result([PARTNER])
-        if text.startswith("SELECT organizations.created_by"):
-            return _Result([])
         if "organization_clusters" in text:
             return _Result(self.holders)
+        if text.startswith("SELECT organizations.id, organizations.api_key_id"):
+            return _Result(sorted(self.own.items()))
         if "organization_members" in text:
-            return _Result(sorted(self.own_ids))
+            return _Result(sorted(self.own))
         raise AssertionError(f"unexpected query: {text}")
 
 
@@ -97,11 +99,6 @@ def env(monkeypatch):
         return 0
 
     monkeypatch.setattr(integrations, "reconcile_personal_clusters", _no_reconcile)
-    monkeypatch.setattr(
-        cluster_parties,
-        "read_key_creators_blocking",
-        lambda key_ids: {k: v for k, v in state["creators"].items() if k in key_ids},
-    )
     state["vault"] = vault
     return state
 
@@ -172,25 +169,20 @@ async def test_projects_inside_the_bound_mint(env):
 
 
 async def test_a_wildcard_where_only_the_partner_and_their_buyers_hold_mints(env):
-    """OrcaHub compatibility: the connection key carries '*' on the partner's own cluster."""
-    response = await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1}))
+    """OrcaHub compatibility: the connection key carries '*' on the partner's own cluster.
+
+    The buyer org carries the key that syncs the partner's home org.
+    """
+    response = await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1: "oak_test"}))
     assert response.api_key.cluster_permissions[0].projects == ["*"]
     assert env["vault"].writes, "the key must be written"
 
 
-async def test_a_buyer_org_owned_by_someone_elses_key_is_another_holder(env):
-    env["creators"] = {"oak_test": "partner-b@example.test"}
+async def test_a_buyer_org_on_a_key_that_syncs_none_of_the_partners_orgs_is_another_holder(env):
     with pytest.raises(HTTPException) as caught:
-        await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1}))
+        await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1: "oak_mine"}))
     assert caught.value.status_code == 403
     assert "cluster-c/*" in str(caught.value.detail)
-
-
-async def test_an_unreadable_key_creator_counts_as_another_holder(env):
-    env["creators"] = {}
-    with pytest.raises(HTTPException) as caught:
-        await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1}))
-    assert caught.value.status_code == 403
 
 
 async def test_an_unbound_row_registered_by_someone_else_is_another_holder(env):
@@ -211,19 +203,6 @@ async def test_an_admin_is_not_bound(env):
     response = await _mint("cluster-a", ["*"], db, scope=(None, None))
     assert response.api_key.cluster_permissions[0].projects == ["*"]
     assert db.queries == [], "the admin path must not query holders at all"
-
-
-async def test_a_vault_stall_resolving_creators_answers_503(env, monkeypatch):
-    from app.core.blocking import BlockingTimeout
-
-    async def _stall(*_a: Any, **_k: Any) -> None:
-        raise BlockingTimeout("api_key_creators", 1.0)
-
-    monkeypatch.setattr(cluster_parties, "run_blocking", _stall)
-    with pytest.raises(HTTPException) as caught:
-        await _mint("cluster-c", ["*"], FakeSession(HOLDERS, {1}))
-    assert caught.value.status_code == 503
-    assert env["vault"].writes == []
 
 
 def _stored(cluster_id: str, projects: List[str], permissions: Optional[List[str]] = None) -> Dict[str, Any]:

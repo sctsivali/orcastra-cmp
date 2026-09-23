@@ -13,9 +13,7 @@ from fastapi import HTTPException
 
 from app.core import org_scope
 from app.core.auth import AuthenticatedUser
-from app.models.db_models import Organization, OrganizationMember
 from app.routers import integrations
-from tests._sqlite_session import sqlite_session
 
 SHARED = "cluster-shared"
 OWN = "cluster-own"
@@ -49,11 +47,12 @@ def world(monkeypatch):
         state["held_calls"] += 1
         return {c for c in clusters if c == SHARED}
 
-    async def mates(_db: Any, email: str) -> set:
-        return {ME, TEAMMATE} if email in (ME, TEAMMATE) else {OTHER}
+    async def linked(_db: Any, email: str) -> set:
+        """The integration keys carried by the orgs the caller runs: ME's team key is oak_team."""
+        return {"oak_team"} if email in (ME, TEAMMATE) else set()
 
     monkeypatch.setattr(integrations, "_clusters_held_by_another_party", held)
-    monkeypatch.setattr(integrations, "_org_mate_emails", mates)
+    monkeypatch.setattr(integrations, "_run_org_keys", linked)
     return state
 
 
@@ -62,12 +61,13 @@ def world(monkeypatch):
     [
         (ME, _key("oak_mine", ME, SHARED), True),
         (ME, _key("oak_team", TEAMMATE, SHARED), True),
+        (ME, _key("oak_admin_made", "ops@example.test", SHARED), False),
         (ME, _key("oak_theirs", OTHER, SHARED), False),
         (ME, _key("oak_own_cluster", OTHER, OWN), True),
         (ME, _key("oak_case", ME.upper(), SHARED), True),
         (ME, _key("oak_nobody", "", SHARED), False),
     ],
-    ids=["creator", "same-organization", "other-party", "own-cluster", "case", "no-creator"],
+    ids=["creator", "key-syncs-my-org", "admin-minted-elsewhere", "other-party", "own-cluster", "case", "no-creator"],
 )
 async def test_who_manages_a_key(world, caller: str, key: Dict[str, Any], kept: bool) -> None:
     got = await integrations._keys_the_caller_manages(None, _user(caller), [key])
@@ -166,23 +166,6 @@ async def test_refresh_refuses_the_other_partys_key(monkeypatch, world) -> None:
         org_scope._allowed_clusters_var.reset(token)
     assert caught.value.status_code == 404
     assert called == []
-
-
-# -- who counts as the caller's organization ----------------------------------------------------
-
-async def test_org_mates_are_members_and_creators_of_the_callers_organizations(monkeypatch) -> None:
-    db = sqlite_session(Organization, OrganizationMember)
-    db.add_all([
-        Organization(id=1, name="A", slug="a", created_by="Founder-A@example.test", is_active=True),
-        Organization(id=2, name="B", slug="b", created_by="founder-b@example.test", is_active=True),
-        OrganizationMember(organization_id=1, user_email=ME, role="partner"),
-        OrganizationMember(organization_id=1, user_email=TEAMMATE, role="partner"),
-        OrganizationMember(organization_id=2, user_email=OTHER, role="partner"),
-    ])
-    await db.commit()
-    mates = await integrations._org_mate_emails(db, ME)
-    assert mates == {ME, TEAMMATE}, "an org's creator is not its team"
-    assert await integrations._org_mate_emails(db, "nobody@example.test") == {"nobody@example.test"}
 
 
 # -- the management reads run off the loop -----------------------------------------------------

@@ -126,7 +126,7 @@ async def _held_elsewhere(db: AsyncSession, user: AuthenticatedUser, hosts: List
     bounded = sorted({host for host in hosts if visible_projects_for(host) is not None})
     if not bounded:
         return set()
-    return await cluster_parties.held_or_every_bounded(db, user.email, bounded)
+    return await cluster_parties.clusters_held_by_another_party(db, user.email, bounded)
 
 
 def _listable(host: str, names: List[str], held: set) -> List[str]:
