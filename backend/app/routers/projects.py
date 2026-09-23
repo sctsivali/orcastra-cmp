@@ -31,7 +31,8 @@ from app.services.lxd_service import (
 from app.services.lxd.exceptions import LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible, visible_projects_for
+from app.services import cluster_parties
 from app.core.instance_access import verify_project_access, verify_whole_cluster_access
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -120,14 +121,26 @@ def _refuse_cap_above_hardware(
             ),
         )
 
-def _listable(host: str, names: List[str]) -> List[str]:
-    """The project names this request may list: the tenant ACL and the project bound.
+async def _held_elsewhere(db: AsyncSession, user: AuthenticatedUser, hosts: List[str]) -> set:
+    """Clusters among `hosts` that another party holds, where this caller is held to a bound."""
+    bounded = sorted({host for host in hosts if visible_projects_for(host) is not None})
+    if not bounded:
+        return set()
+    return await cluster_parties.clusters_held_by_another_party(db, user.email, bounded)
 
-    important: the single-project read already refused a project outside the bound, while the
-    list showed it with its config and used_by, so a Partner on a cluster shared with another
-    organization read that organization's projects through the list. Both now ask the same rule.
+
+def _listable(host: str, names: List[str], held: set) -> List[str]:
+    """The project names this request may list: the tenant ACL, and the bound where it matters.
+
+    important: the list showed a project outside the Partner's bound with its config and used_by,
+    so on a cluster another party holds a Partner read that party's projects through it. The bound
+    is applied there. A cluster that only the partner's own buyer organizations share keeps the
+    list it always had, because the count-based bound would also hide the partner's own projects.
     """
-    return [name for name in filter_projects_by_acl(host, names) if project_is_visible(host, name)]
+    allowed = filter_projects_by_acl(host, names)
+    if host not in held:
+        return allowed
+    return [name for name in allowed if project_is_visible(host, name)]
 
 
 @router.get(
@@ -144,11 +157,15 @@ def _listable(host: str, names: List[str]) -> List[str]:
 async def list_all_projects(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+    user: AuthenticatedUser = Depends(require_tenant()),
+    db: AsyncSession = Depends(get_db),
 ):
     """List all projects across all LXD nodes."""
+    held = await _held_elsewhere(db, user, lxd_service.get_node_names())
     # Try cache first (180 second cache)
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key("projects:list:all")
+    # note: which clusters another party holds depends on the caller, so it is part of the key.
+    cache_key = get_scope_cache_key("projects:list:all") + (f":held={','.join(sorted(held))}" if held else "")
     cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached projects list")
@@ -194,7 +211,7 @@ async def list_all_projects(
             if isinstance(result, ProjectListResponse):
                 if result.reachable:
                     answered += 1
-                allowed_names = _listable(result.host, [p.name for p in result.projects])
+                allowed_names = _listable(result.host, [p.name for p in result.projects], held)
                 filtered = [p for p in result.projects if p.name in allowed_names]
                 all_projects.append(ProjectListResponse(
                     host=result.host,
@@ -242,15 +259,18 @@ async def list_all_projects(
 async def list_projects(
     host: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    user: AuthenticatedUser = Depends(require_tenant()),
+    db: AsyncSession = Depends(get_db),
 ):
     """List all projects on a specific LXD host."""
     verify_cluster_access(host)
+    held = await _held_elsewhere(db, user, [host])
     try:
         projects_data = await lxd_service.list_projects(host)
         
         projects = [ProjectInfo(**proj) for proj in projects_data]
         
-        allowed_names = _listable(host, [p.name for p in projects])
+        allowed_names = _listable(host, [p.name for p in projects], held)
         projects = [p for p in projects if p.name in allowed_names]
         
         return ProjectListResponse(

@@ -49,27 +49,48 @@ def no_cache(monkeypatch):
     monkeypatch.setattr(projects, "get_cache_manager", lambda: _Cache())
 
 
+@pytest.fixture(autouse=True)
+def parties(monkeypatch):
+    """By default a bounded cluster is held by another party. A test flips it to the partner's side."""
+    state = {"held": True}
+
+    async def held(_db: Any, _email: str, clusters: Any) -> set:
+        return set(clusters) if state["held"] else set()
+
+    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", held)
+    return state
+
+
 async def test_the_host_list_leaves_out_another_orgs_project() -> None:
     with partner({"default", "own-web"}):
-        answer = await projects.list_projects(CLUSTER, lxd_service=_Service())
+        answer = await projects.list_projects(CLUSTER, lxd_service=_Service(), user=USER, db=None)
     assert [p.name for p in answer.projects] == ["default", "own-web"]
 
 
 async def test_the_fleet_list_leaves_out_another_orgs_project() -> None:
     with partner({"default", "own-web"}):
-        answer = await projects.list_all_projects(lxd_service=_Service(), fresh=True)
+        answer = await projects.list_all_projects(lxd_service=_Service(), fresh=True, user=USER, db=None)
     assert [p.name for p in answer[0].projects] == ["default", "own-web"]
+
+
+async def test_a_cluster_only_the_partners_buyers_share_keeps_its_full_list(parties) -> None:
+    parties["held"] = False
+    with partner({"default", "own-web"}):
+        answer = await projects.list_projects(CLUSTER, lxd_service=_Service(), user=USER, db=None)
+        fleet = await projects.list_all_projects(lxd_service=_Service(), fresh=True, user=USER, db=None)
+    assert [p.name for p in answer.projects] == ["default", "own-web", "other-org"]
+    assert [p.name for p in fleet[0].projects] == ["default", "own-web", "other-org"]
 
 
 async def test_an_unbounded_caller_lists_every_project() -> None:
     with scoped(allowed={CLUSTER}):
-        answer = await projects.list_projects(CLUSTER, lxd_service=_Service())
+        answer = await projects.list_projects(CLUSTER, lxd_service=_Service(), user=USER, db=None)
     assert [p.name for p in answer.projects] == ["default", "own-web", "other-org"]
 
 
 async def test_the_tenant_acl_still_applies() -> None:
     with tenant({("own-web", "*"): {"view"}}):
-        answer = await projects.list_projects(CLUSTER, lxd_service=_Service())
+        answer = await projects.list_projects(CLUSTER, lxd_service=_Service(), user=USER, db=None)
     assert [p.name for p in answer.projects] == ["own-web"]
 
 
