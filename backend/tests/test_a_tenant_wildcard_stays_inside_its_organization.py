@@ -78,9 +78,9 @@ def test_no_query_runs_without_a_wildcard(monkeypatch: pytest.MonkeyPatch) -> No
     from app.services import cluster_parties
 
     async def outside(*_a: Any) -> dict:
-        raise AssertionError("the party query ran for a grant list with no wildcard")
+        raise AssertionError("the holder query ran for a grant list with no wildcard")
 
-    monkeypatch.setattr(cluster_parties, "clusters_outside_org_party", outside)
+    monkeypatch.setattr(cluster_parties, "clusters_another_org_holds", outside)
     grants = [_grant(1, SHARED, "own-web")]
     assert asyncio.run(confine_wildcards(object(), grants)) == grants
 
@@ -139,6 +139,9 @@ class FakeSession:
         self.queries.append(sql)
         if "tenant_policy_rules" in sql and "organization_clusters" in sql:
             return _Result(self.org_projects)
+        if sql.startswith("SELECT organization_clusters.organization_id, organization_clusters.cluster_id"):
+            # every rule here is its organization's own, on a cluster that organization holds
+            return _Result(sorted({(org, cluster) for org, cluster, _project, _perms in self.rules}))
         if "tenant_policy_rules" in sql:
             return _Result(
                 [
@@ -172,15 +175,15 @@ def _tenant() -> AuthenticatedUser:
 
 @pytest.fixture(autouse=True)
 def every_shared_cluster_is_another_partys(request, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fakes model two parties on SHARED, the shape confinement exists for. Party membership
-    itself runs on real rows in test_a_wildcard_follows_its_organizations_party."""
+    """The fakes model two organizations on SHARED, the shape confinement exists for. Who holds a
+    cluster runs on real rows in test_a_wildcard_follows_its_organization."""
     from app.services import cluster_parties
 
     async def outside(_db: Any, orgs: Any, clusters: Any) -> dict:
         return {org: {SHARED} & set(clusters) for org in orgs}
 
-    if request.node.name != "test_a_wildcard_follows_its_organizations_party":
-        monkeypatch.setattr(cluster_parties, "clusters_outside_org_party", outside)
+    if request.node.name != "test_a_wildcard_follows_its_organization":
+        monkeypatch.setattr(cluster_parties, "clusters_another_org_holds", outside)
 
 
 def _acl_for(session: FakeSession) -> dict:
@@ -233,11 +236,15 @@ def test_a_partner_bound_still_comes_from_get_visible_projects(
 ) -> None:
     sentinel = {SHARED: {"default", "partner-proj"}}
 
-    async def fake_visible(_user: Any, _db: Any) -> dict:
+    passed: list = []
+
+    async def fake_visible(_user: Any, _db: Any, allowed: Any = None) -> dict:
+        passed.append(allowed)
         return sentinel
 
     monkeypatch.setattr(org_scope, "get_visible_projects", fake_visible)
-    assert asyncio.run(org_scope._project_bound_for(object(), object(), None)) is sentinel
+    assert asyncio.run(org_scope._project_bound_for(object(), object(), None, {"c1"})) is sentinel
+    assert passed == [{"c1"}], "the caller's cluster scope must reach the partner bound"
 
 
 def test_a_tenant_bound_comes_from_its_acl(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -321,31 +328,38 @@ def test_a_tenant_on_a_shared_cluster_is_bound_on_both_paths(
 # -- the party decides, on real rows ------------------------------------------------------------
 
 
-async def test_a_wildcard_follows_its_organizations_party() -> None:
-    """A home org and the buyers its key provisioned are one party, another partner's org is not."""
-    from app.models.db_models import Organization, OrganizationCluster
-    from app.services.cluster_parties import clusters_outside_org_party
+async def test_a_wildcard_follows_its_organization() -> None:
+    """Any other holder confines a '*', the partner's own buyers included: nothing in the database
+    tells a home from a buyer, and a buyer synced from OrcaHub even carries a partner row."""
+    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+    from app.services.cluster_parties import clusters_another_org_holds
     from tests._sqlite_session import sqlite_session
 
-    db = sqlite_session(Organization, OrganizationCluster)
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster)
     db.add_all([
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_a"),
-        Organization(id=2, name="buyer", slug="buyer", created_by="system", is_active=True, api_key_id="oak_a"),
+        Organization(id=2, name="buyer", slug="buyer", created_by="p@example.com", is_active=True, api_key_id="oak_a"),
+        Organization(id=5, name="buyer-b", slug="buyer-b", created_by="p@example.com", is_active=True, api_key_id="oak_a"),
         Organization(id=3, name="other", slug="other", created_by="system", is_active=True, api_key_id="oak_b"),
-        Organization(id=4, name="local", slug="local", created_by="x@example.test", is_active=True),
+        Organization(id=4, name="solo", slug="solo", created_by="x@example.com", is_active=True),
     ])
     await db.commit()
     db.add_all([
+        OrganizationMember(organization_id=1, user_email="p@example.com", role="partner"),
+        OrganizationMember(organization_id=2, user_email="founder@example.com", role="partner"),
         OrganizationCluster(organization_id=1, cluster_id="own"), OrganizationCluster(organization_id=2, cluster_id="own"),
+        OrganizationCluster(organization_id=5, cluster_id="own"),
         OrganizationCluster(organization_id=1, cluster_id="mixed"), OrganizationCluster(organization_id=3, cluster_id="mixed"),
-        OrganizationCluster(organization_id=4, cluster_id="local"), OrganizationCluster(organization_id=2, cluster_id="local"),
+        OrganizationCluster(organization_id=4, cluster_id="alone"),
     ])
     await db.commit()
-    outside = await clusters_outside_org_party(db, {1, 2, 4}, {"own", "mixed", "local"})
-    assert outside[1] == {"mixed", "local"}, "own is the home org's party, mixed carries another partner"
-    assert outside[2] == {"mixed", "local"}
-    assert outside[4] == {"own", "mixed", "local"}, "an unkeyed org is its own party only"
-    grants = [_grant(1, "own", "*"), _grant(1, "mixed", "*")]
-    confined = confine(grants, outside, {(1, "mixed"): {"home-web"}})
-    assert [g for g in confined if g.cluster_id == "own"] == [grants[0]]
-    assert {g.project_name for g in confined if g.cluster_id == "mixed"} == {"default", "home-web"}
+    outside = await clusters_another_org_holds(db, {1, 2, 4}, {"own", "mixed", "alone"})
+    assert outside[1] == {"own", "mixed", "alone"}, "the home's own buyers hold own too"
+    assert outside[2] == {"own", "mixed", "alone"}, "a buyer with a synced founder row is still one org"
+    assert outside[4] == {"own", "mixed"}, "alone carries org 4 only"
+    grants = [_grant(1, "own", "*"), _grant(4, "alone", "*")]
+    confined = confine(grants, outside, {(1, "own"): {"home-web"}})
+    assert {g.project_name for g in confined if g.cluster_id == "own"} == {"default", "home-web"}
+    assert [g for g in confined if g.cluster_id == "alone"] == [grants[1]], "a '*' on a cluster its org alone holds stands"
+    buyer = confine([_grant(2, "own", "*")], outside, {(2, "own"): {"a-shop"}})
+    assert {g.project_name for g in buyer} == {"default", "a-shop"}, "a buyer's '*' reached its sibling"

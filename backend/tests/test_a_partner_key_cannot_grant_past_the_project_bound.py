@@ -55,6 +55,11 @@ class FakeSession:
         self.queries.append(text)
         if "organization_clusters" in text:
             return _Result(self.holders)
+        if text.startswith("SELECT organizations.api_key_id \nFROM organizations") and "created_by" in text:
+            # side_keys: the caller created every org it runs here, so each one's key is held
+            return _Result(sorted({key for key in self.own.values() if key}))
+        if text.startswith("SELECT organizations.api_key_id, organizations.id"):
+            return _Result([])
         if text.startswith("SELECT organizations.id, organizations.api_key_id"):
             return _Result(sorted(self.own.items()))
         if "organization_members" in text:

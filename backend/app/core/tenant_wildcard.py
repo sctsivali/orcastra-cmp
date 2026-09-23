@@ -5,12 +5,14 @@ cluster bound to one organization that is the intended meaning. On a cluster bou
 organizations it also named the other organizations' projects, so a tenant holding a wildcard
 could list, read and (with the flag off) power another customer's instances.
 
-The schema has no project owner record. The ownership evidence used here is the same one the
-Partner bound uses (org_scope.get_visible_projects): the default project plus every concrete
-project that the organization's own policies name on that cluster while it is still bound to
-it. Each wildcard is expanded with its own organization's projects BEFORE grants from several
-organizations are merged into the ACL map, because after the merge the map can no longer say
-which organization a wildcard came from.
+The schema has no project owner record. The ownership evidence used here is the default project
+plus every concrete project that the organization's own policies name on that cluster while it is
+still bound to it. Each wildcard is expanded with its own organization's projects BEFORE grants
+from several organizations are merged into the ACL map, because after the merge the map can no
+longer say which organization a wildcard came from.
+
+A rule on a cluster its organization no longer holds grants nothing (grants_their_org_holds):
+unbinding a cluster leaves the rules behind, since cluster_id is not a foreign key.
 """
 
 from dataclasses import dataclass, replace
@@ -44,10 +46,10 @@ def confine(
     outside: dict[int, set[str]],
     owned: dict[OrgCluster, set[str]],
 ) -> list[RuleGrant]:
-    """Rewrite each wildcard project into its organization's projects where another party holds the cluster.
+    """Rewrite each wildcard project into its organization's projects where another organization holds the cluster.
 
-    outside maps an organization to the clusters that carry a binding outside its party. A grant on
-    any other cluster, or one naming a concrete project, is returned unchanged.
+    outside maps an organization to the clusters another organization holds too. A grant on any
+    other cluster, or one naming a concrete project, is returned unchanged.
     """
     confined: list[RuleGrant] = []
     for grant in grants:
@@ -57,6 +59,26 @@ def confine(
         projects = {DEFAULT_PROJECT} | owned.get((grant.organization_id, grant.cluster_id), set())
         confined.extend(replace(grant, project_name=name) for name in sorted(projects))
     return confined
+
+
+async def grants_their_org_holds(db: AsyncSession, grants: list[RuleGrant]) -> list[RuleGrant]:
+    """The grants whose policy organization is still bound to the rule's cluster.
+
+    important: a rule outlives its organization's binding, and an organization's policy is how it
+    lets its tenants into its own cluster. A stale rule would still carry the tenant into a cluster
+    another organization now holds, where no bound follows it because the cluster has one holder.
+    """
+    from app.models.db_models import OrganizationCluster
+
+    if not grants:
+        return grants
+    held = set((await db.execute(
+        select(OrganizationCluster.organization_id, OrganizationCluster.cluster_id).where(
+            OrganizationCluster.organization_id.in_(sorted({grant.organization_id for grant in grants})),
+            OrganizationCluster.cluster_id.in_(sorted({grant.cluster_id for grant in grants})),
+        )
+    )).all())
+    return [grant for grant in grants if (grant.organization_id, grant.cluster_id) in held]
 
 
 async def organization_projects(
@@ -109,18 +131,19 @@ async def organization_projects(
 
 
 async def confine_wildcards(db: AsyncSession, grants: list[RuleGrant]) -> list[RuleGrant]:
-    """Confine every wildcard grant on a cluster another party holds. No query runs without a wildcard.
+    """Confine every wildcard grant on a cluster another organization holds. No query runs without a wildcard.
 
-    important: by the policy organization's party, not by binding count. A partner's home
-    organization and its buyers carry one integration key, so a '*' rule of the home organization
-    on the partner's own cluster keeps meaning every project there, as it did before.
+    important: per organization, not by party. A party answer would need to tell a partner's home
+    from its buyers, which the database cannot do reliably, and a buyer's '*' would then reach its
+    sibling buyers. So a '*' rule of the home organization on the partner's own cluster covers the
+    home's named projects and default once a buyer is bound there too.
     """
-    from app.services.cluster_parties import clusters_outside_org_party
+    from app.services.cluster_parties import clusters_another_org_holds
 
     wildcards = [grant for grant in grants if grant.project_name == WILDCARD]
     if not wildcards:
         return grants
-    outside = await clusters_outside_org_party(
+    outside = await clusters_another_org_holds(
         db, {grant.organization_id for grant in wildcards}, {grant.cluster_id for grant in wildcards}
     )
     pairs = {
@@ -141,8 +164,8 @@ def tenant_project_bound(
 
     Setting the bound makes project_is_visible, and every gate built on it, hold the tenant to these
     projects even where the enforcement flag leaves the ACL check off. The ACL has already been
-    confined, so a wildcard still standing is one inside its organization's party, where it means
-    every project, and that cluster gets no bound.
+    confined, so a wildcard still standing is on a cluster its organization alone holds, where it
+    means every project, and that cluster gets no bound.
     """
     bound = {
         cluster_id: {DEFAULT_PROJECT}
@@ -161,6 +184,7 @@ async def project_bound_for(
     user: "AuthenticatedUser",
     db: AsyncSession,
     acl: Optional[dict],
+    allowed: Optional[set[str]] = None,
 ) -> Optional[dict[str, set[str]]]:
     """The project bound for this request, for both scope setters.
 
@@ -172,7 +196,7 @@ async def project_bound_for(
     from app.core import org_scope
 
     if acl is None:
-        return await org_scope.get_visible_projects(user, db)
+        return await org_scope.get_visible_projects(user, db, allowed)
     if not acl:
         return None
     return tenant_project_bound(acl, await org_scope._clusters_with_several_orgs(db))

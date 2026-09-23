@@ -518,15 +518,6 @@ async def _query_user_org_ids(user_email: str, db: AsyncSession) -> set[int]:
     return set((await db.execute(stmt)).scalars().all())
 
 
-async def get_org_ids_for_email(user_email: str, db: AsyncSession) -> set[int]:
-    """Organization ids an email belongs to or created.
-
-    The same set get_visible_projects widens a Partner's bound from, exposed so a grant check
-    elsewhere asks the identical question.
-    """
-    return await _query_user_org_ids(user_email, db)
-
-
 async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
     """Clusters bound to more than one organization.
 
@@ -557,8 +548,11 @@ async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
 async def get_visible_projects(
     user: AuthenticatedUser,
     db: AsyncSession,
+    allowed: Optional[set[str]] = None,
 ) -> Optional[dict[str, set[str]]]:
-    """Which LXD projects this user may see, on clusters that carry more than one org.
+    """Which LXD projects this user may see, on the clusters they reach that another party holds.
+
+    `allowed` is the caller's cluster scope (get_user_allowed_clusters), read here when not given.
 
     Returns None when nothing needs restricting, and otherwise a map of cluster to the set of
     project names that may be shown. A cluster absent from the map is unrestricted.
@@ -577,42 +571,52 @@ async def get_visible_projects(
 
     # important: by party, not by binding count. Provisioning binds every buyer organization to the
     # partner's cluster, so counting bindings bounded a partner on its own cluster after its first
-    # sale and refused its own and its buyers' projects on every gate built on this bound.
+    # sale and refused its own and its buyers' projects on every gate built on this bound. Asked of
+    # every cluster the caller reaches, not only those with two bindings: a partner with a member
+    # row in another partner's organization reaches that partner's single-binding cluster too.
     from app.services.cluster_parties import clusters_held_by_another_party
 
-    shared = await clusters_held_by_another_party(db, user.email, await _clusters_with_several_orgs(db))
+    if allowed is None:
+        allowed = await get_user_allowed_clusters(user, db)
+    shared = await clusters_held_by_another_party(db, user.email, allowed or set())
     if not shared:
         return None
 
-    org_ids = await _query_user_org_ids(user.email, db)
-    mapping: dict[str, set[str]] = {}
-    for cluster_id in shared:
-        allowed = {"default"}
-        if org_ids:
-            stmt = (
-                select(TenantPolicyRule.project_name)
-                .join(
-                    TenantAccessPolicy,
-                    TenantAccessPolicy.id == TenantPolicyRule.policy_id,
-                )
-                .where(
-                    and_(
-                        TenantPolicyRule.cluster_id == cluster_id,
-                        TenantAccessPolicy.organization_id.in_(org_ids),
-                    )
-                )
-                .distinct()
-            )
-            named = set((await db.execute(stmt)).scalars().all())
-            # important: '*' does NOT lift the bound. project_name defaults to '*' on the
-            # model and on the create schema, so any organization that had ever written a
-            # single tenant policy for this cluster would have been unrestricted, which is the
-            # control switched off by default rather than an edge case. A wildcard also cannot
-            # answer the question being asked here, which is WHICH projects belong to this
-            # organization; on a cluster shared with another org it names theirs too.
-            allowed |= {n for n in named if n and n != "*"}
-        mapping[cluster_id] = allowed
+    from app.models.db_models import OrganizationMember, TenantPolicyAssignment
+    from app.services.cluster_parties import run_orgs
 
+    # important: widened only by the policies of the organizations the caller runs and by the
+    # policies assigned to the caller's own member rows. A member row in another partner's
+    # organization is how a partner reaches that partner's cluster at all, and the projects that
+    # organization's policies name belong to its tenants, not to the caller.
+    # important: '*' does NOT lift the bound. project_name defaults to '*' on the model and on
+    # the create schema, so any organization that had ever written a single tenant policy for
+    # this cluster would have been unrestricted. A wildcard also cannot answer the question
+    # asked here, which is WHICH projects belong to the caller; on a shared cluster it names
+    # the other party's too.
+    now = datetime.now(timezone.utc)
+    assigned = (
+        select(TenantPolicyAssignment.policy_id)
+        .join(OrganizationMember, OrganizationMember.id == TenantPolicyAssignment.org_member_id)
+        .where(
+            OrganizationMember.user_email == user.email,
+            or_(TenantPolicyAssignment.expires_at.is_(None), TenantPolicyAssignment.expires_at > now),
+        )
+    )
+    runs = sorted(await run_orgs(db, user.email))
+    stmt = (
+        select(TenantPolicyRule.cluster_id, TenantPolicyRule.project_name)
+        .join(TenantAccessPolicy, TenantAccessPolicy.id == TenantPolicyRule.policy_id)
+        .where(
+            TenantPolicyRule.cluster_id.in_(sorted(shared)),
+            or_(TenantAccessPolicy.organization_id.in_(runs), TenantPolicyRule.policy_id.in_(assigned)),
+        )
+        .distinct()
+    )
+    mapping: dict[str, set[str]] = {cluster_id: {"default"} for cluster_id in shared}
+    for cluster_id, project in (await db.execute(stmt)).all():
+        if project and project != "*":
+            mapping[cluster_id].add(project)
     return mapping or None
 
 
@@ -679,7 +683,7 @@ async def get_tenant_acl_rules(
     Build the resolved ACL map for a tenant user.
     """
     from app.core.rbac import resolve_roles, get_highest_role, Role
-    from app.core.tenant_wildcard import RuleGrant, confine_wildcards
+    from app.core.tenant_wildcard import RuleGrant, confine_wildcards, grants_their_org_holds
     from app.models.db_models import (
         OrganizationMember,
         TenantAccessPolicy,
@@ -743,8 +747,9 @@ async def get_tenant_acl_rules(
 
     # important: a '*' project on a cluster bound to several organizations named the other
     # organizations' projects too. Each wildcard is expanded with its own organization's
-    # projects here, before the merge below loses which organization it came from.
-    grants = await confine_wildcards(db, grants)
+    # projects here, before the merge below loses which organization it came from. A rule on a
+    # cluster its organization no longer holds is dropped first.
+    grants = await confine_wildcards(db, await grants_their_org_holds(db, grants))
 
     # build ACL map: merge permissions across policies
     acl: dict[str, dict[tuple[str, str], set[str]]] = {}
@@ -787,7 +792,7 @@ async def org_scope_dependency(
 
     # a cluster shared with another organization needs a project bound as well, for a Partner
     # (scoped by cluster alone) and for a tenant. See _project_bound_for.
-    _visible_projects_var.set(await _project_bound_for(user, db, acl))
+    _visible_projects_var.set(await _project_bound_for(user, db, acl, allowed))
 
     # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
@@ -829,7 +834,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         acl = await get_tenant_acl_rules(user, db)
         _tenant_acl_var.set(acl)
 
-        _visible_projects_var.set(await _project_bound_for(user, db, acl))
+        _visible_projects_var.set(await _project_bound_for(user, db, acl, allowed))
 
         # important: the same narrowing as the HTTP dependency, through the same helper. These
         # were two duplicated blocks, so fixing one copy would leave console, terminal and

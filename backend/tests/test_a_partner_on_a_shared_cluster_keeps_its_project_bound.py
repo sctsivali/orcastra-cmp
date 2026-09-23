@@ -14,11 +14,13 @@ name. Everywhere else nothing is restricted, because a Tenant is already filtere
 and an Admin is gated by break-glass at the cluster level.
 """
 
-import asyncio
 import contextvars
-from typing import Any, List
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
 
 import pytest
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 
 from app.core import org_scope
 from app.core.org_scope import (
@@ -26,109 +28,100 @@ from app.core.org_scope import (
     project_is_visible,
     visible_projects_for,
 )
+from app.models.db_models import (
+    Organization,
+    OrganizationCluster,
+    OrganizationMember,
+    TenantAccessPolicy,
+    TenantPolicyAssignment,
+    TenantPolicyRule,
+)
+from tests._sqlite_session import sqlite_session
 
 
-class _Scalars:
-    def __init__(self, rows: List[Any]):
-        self._rows = rows
-
-    def all(self) -> List[Any]:
-        return list(self._rows)
+@compiles(JSONB, "sqlite")
+def _jsonb_as_json_on_sqlite(_element, _compiler, **_kw):  # the policy tables carry a JSONB column
+    return "JSON"
 
 
-class _Result:
-    def __init__(self, rows: List[Any]):
-        self._rows = rows
-
-    def scalars(self) -> _Scalars:
-        return _Scalars(self._rows)
-
-
-class FakeSession:
-    """Answers by which table the statement reads, not by call order."""
-
-    def __init__(self, shared_clusters=(), org_ids=(), rules_by_cluster=None):
-        self.shared_clusters = list(shared_clusters)
-        self.org_ids = list(org_ids)
-        self.rules_by_cluster = rules_by_cluster or {}
-        self.queries: List[str] = []
-
-    async def execute(self, stmt):
-        sql = str(stmt)
-        self.queries.append(sql)
-        if "tenant_policy_rules" in sql:
-            # the cluster is bound into the statement, so recover it from the parameters
-            params = stmt.compile().params
-            cluster = next(
-                (v for k, v in params.items() if str(v) in self.rules_by_cluster), None
-            )
-            return _Result(list(self.rules_by_cluster.get(cluster, [])))
-        if "organization_clusters" in sql:
-            return _Result(self.shared_clusters)
-        if "organizations" in sql:
-            return _Result(self.org_ids)
-        raise AssertionError(f"unexpected query: {sql[:120]}")
-
-
-@pytest.fixture(autouse=True)
-def every_shared_cluster_is_held_elsewhere(monkeypatch):
-    """These pin the bound's arithmetic on a cluster another party holds. Which clusters another
-    party holds runs on real rows in test_a_cluster_is_foreign_only_to_another_party."""
-    from app.services import cluster_parties
-
-    async def held(_db, _email, cluster_ids):
-        return set(cluster_ids)
-
-    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", held)
+PARTNER = "p@example.test"
 
 
 class FakeUser:
-    def __init__(self, email="p@example.test", groups=("role_partner",)):
+    def __init__(self, email=PARTNER, groups=("role_partner",)):
         self.email = email
         self.groups = list(groups)
         self.roles = list(groups)
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 def _as(role: str) -> FakeUser:
     return FakeUser(groups=(f"role_{role}",))
 
 
-def test_an_admin_is_not_project_restricted_because_break_glass_gates_the_cluster():
-    session = FakeSession(shared_clusters=["nuc2"])
-    assert _run(get_visible_projects(_as("admin"), session)) is None
+async def _world(rules: Optional[Dict[str, List[str]]] = None, shared: bool = True,
+                 foreign_rules: Optional[List[str]] = None, assigned: bool = False,
+                 expired: bool = False, assigned_to_other: bool = False):
+    """The partner runs org 6 on nuc1 and nuc2. Another partner's org 7 holds nuc2 as well unless
+    `shared` is False. `rules` are org 6's policy rules per cluster. `foreign_rules` are org 7's
+    rules on nuc2, where the partner holds a tenant row, assigned to that row when `assigned`."""
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy,
+                        TenantPolicyRule, TenantPolicyAssignment)
+    db.add_all([
+        Organization(id=6, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_6"),
+        Organization(id=7, name="other", slug="other", created_by="system", is_active=True, api_key_id="oak_7"),
+    ])
+    await db.commit()
+    member = OrganizationMember(organization_id=7, user_email=PARTNER, role="tenant")
+    other = OrganizationMember(organization_id=7, user_email="t7@example.test", role="tenant")
+    db.add_all([
+        OrganizationMember(organization_id=6, user_email=PARTNER, role="partner"),
+        OrganizationMember(organization_id=7, user_email="q@example.test", role="partner"),
+        OrganizationCluster(organization_id=6, cluster_id="nuc1"),
+        OrganizationCluster(organization_id=6, cluster_id="nuc2"),
+    ] + ([OrganizationCluster(organization_id=7, cluster_id="nuc2")] if shared else [])
+      + ([member, other] if foreign_rules is not None else []))
+    await db.commit()
+    policies = [(6, cluster, projects) for cluster, projects in (rules or {}).items()]
+    if foreign_rules is not None:
+        policies.append((7, "nuc2", foreign_rules))
+    for n, (org, cluster, projects) in enumerate(policies, start=1):
+        db.add(TenantAccessPolicy(id=n, organization_id=org, name=f"p{n}", created_by="system"))
+        await db.commit()
+        db.add_all([TenantPolicyRule(policy_id=n, cluster_id=cluster, project_name=project, instance_name="*",
+                                     permissions=["view"]) for project in projects])
+        if org == 7 and assigned:
+            ends = datetime.now(timezone.utc) - timedelta(days=1) if expired else None
+            db.add(TenantPolicyAssignment(policy_id=n, org_member_id=member.id, assigned_by="q@example.test",
+                                          expires_at=ends))
+        if org == 7 and assigned_to_other:
+            db.add(TenantPolicyAssignment(policy_id=n, org_member_id=other.id, assigned_by="q@example.test"))
+        await db.commit()
+    return db
 
 
-def test_a_tenant_is_not_project_restricted_here_because_their_acl_already_filters():
-    session = FakeSession(shared_clusters=["nuc2"])
-    assert _run(get_visible_projects(_as("tenant"), session)) is None
+async def test_an_admin_is_not_project_restricted_because_break_glass_gates_the_cluster():
+    assert await get_visible_projects(_as("admin"), await _world()) is None
 
 
-def test_a_partner_is_unrestricted_when_no_cluster_is_shared():
-    session = FakeSession(shared_clusters=[])
-    assert _run(get_visible_projects(_as("partner"), session)) is None
+async def test_a_tenant_is_not_project_restricted_here_because_their_acl_already_filters():
+    assert await get_visible_projects(_as("tenant"), await _world()) is None
 
 
-def test_a_partner_on_a_shared_cluster_is_held_to_default_plus_their_own_policies():
-    session = FakeSession(
-        shared_clusters=["nuc2"],
-        org_ids=[6],
-        rules_by_cluster={"nuc2": ["sivali-prod", "sivali-uat"]},
-    )
-    mapping = _run(get_visible_projects(_as("partner"), session))
-    assert mapping == {"nuc2": {"default", "sivali-prod", "sivali-uat"}}
+async def test_a_partner_is_unrestricted_when_no_cluster_is_shared():
+    assert await get_visible_projects(_as("partner"), await _world(shared=False)) is None
 
 
-def test_a_partner_with_no_policies_on_a_shared_cluster_sees_only_default():
+async def test_a_partner_on_a_shared_cluster_is_held_to_default_plus_their_own_policies():
+    db = await _world({"nuc2": ["home-prod", "home-uat"]})
+    assert await get_visible_projects(_as("partner"), db) == {"nuc2": {"default", "home-prod", "home-uat"}}
+
+
+async def test_a_partner_with_no_policies_on_a_shared_cluster_sees_only_default():
     """Exactly the behaviour they have today, which is the point: no regression, no leak."""
-    session = FakeSession(shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={})
-    assert _run(get_visible_projects(_as("partner"), session)) == {"nuc2": {"default"}}
+    assert await get_visible_projects(_as("partner"), await _world()) == {"nuc2": {"default"}}
 
 
-def test_a_wildcard_rule_does_not_lift_the_bound():
+async def test_a_wildcard_rule_does_not_lift_the_bound():
     """This test asserted the opposite until a security review pointed out that it was
     encoding the vulnerability rather than the rule.
 
@@ -138,28 +131,40 @@ def test_a_wildcard_rule_does_not_lift_the_bound():
     answer the question being asked, which is WHICH projects belong to this organization; on a
     shared cluster it names the other organization's projects too.
     """
-    session = FakeSession(
-        shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*"]}
-    )
-    assert _run(get_visible_projects(_as("partner"), session)) == {"nuc2": {"default"}}
+    assert await get_visible_projects(_as("partner"), await _world({"nuc2": ["*"]})) == {"nuc2": {"default"}}
 
 
-def test_a_wildcard_beside_named_projects_contributes_nothing_of_its_own():
-    session = FakeSession(
-        shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*", "sivali-prod"]}
-    )
-    assert _run(get_visible_projects(_as("partner"), session)) == {
-        "nuc2": {"default", "sivali-prod"}
-    }
+async def test_a_wildcard_beside_named_projects_contributes_nothing_of_its_own():
+    db = await _world({"nuc2": ["*", "home-prod"]})
+    assert await get_visible_projects(_as("partner"), db) == {"nuc2": {"default", "home-prod"}}
 
 
-def test_only_the_shared_cluster_is_restricted_not_the_partners_own_one():
-    session = FakeSession(
-        shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": []}
-    )
-    mapping = _run(get_visible_projects(_as("partner"), session))
+async def test_only_the_shared_cluster_is_restricted_not_the_partners_own_one():
+    mapping = await get_visible_projects(_as("partner"), await _world({"nuc1": ["home-dev"]}))
     assert set(mapping) == {"nuc2"}
     assert visible_projects_for_in(mapping, "nuc1") is None
+
+
+async def test_another_partners_policies_do_not_widen_the_bound():
+    """The partner reaches nuc2 through a tenant row in org 7 too. Org 7's policies name its own
+    tenants' projects, and none of them is the partner's unless assigned to the partner's row."""
+    db = await _world(foreign_rules=["other-web", "other-db"])
+    assert await get_visible_projects(_as("partner"), db) == {"nuc2": {"default"}}
+
+
+async def test_an_expired_assignment_does_not_widen_it():
+    db = await _world(foreign_rules=["other-web"], assigned=True, expired=True)
+    assert await get_visible_projects(_as("partner"), db) == {"nuc2": {"default"}}
+
+
+async def test_another_users_assignment_does_not_widen_it():
+    db = await _world(foreign_rules=["other-web"], assigned_to_other=True)
+    assert await get_visible_projects(_as("partner"), db) == {"nuc2": {"default"}}
+
+
+async def test_a_policy_assigned_to_the_partners_own_row_widens_it():
+    db = await _world(foreign_rules=["other-web"], assigned=True)
+    assert await get_visible_projects(_as("partner"), db) == {"nuc2": {"default", "other-web"}}
 
 
 def visible_projects_for_in(mapping, cluster):

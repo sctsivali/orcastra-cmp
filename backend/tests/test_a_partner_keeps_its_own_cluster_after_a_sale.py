@@ -18,6 +18,7 @@ from app.models.db_models import (
     OrganizationCluster,
     OrganizationMember,
     TenantAccessPolicy,
+    TenantPolicyAssignment,
     TenantPolicyRule,
 )
 from tests._sqlite_session import sqlite_session
@@ -32,7 +33,8 @@ PARTNER = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["
 
 
 async def _world():
-    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule)
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule,
+                        TenantPolicyAssignment)
     db.add_all([
         # the partner's home org and a buyer its key provisioned: one party
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, source="orcahub", api_key_id="oak_a"),
@@ -43,7 +45,7 @@ async def _world():
     await db.commit()
     db.add_all([
         OrganizationMember(organization_id=1, user_email=PARTNER.email, role="partner"),
-        OrganizationCluster(organization_id=1, cluster_id="own"),
+        OrganizationCluster(organization_id=1, cluster_id="own", registered_by=PARTNER.email),
         OrganizationCluster(organization_id=2, cluster_id="own"),
         OrganizationCluster(organization_id=1, cluster_id="mixed"),
         OrganizationCluster(organization_id=3, cluster_id="mixed"),
@@ -66,7 +68,8 @@ async def test_a_cluster_another_partner_holds_keeps_the_bound() -> None:
 
 @pytest.mark.parametrize("extra_binding", [None, 3])
 async def test_nothing_is_bounded_when_no_other_party_holds_anything(extra_binding) -> None:
-    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule)
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule,
+                        TenantPolicyAssignment)
     db.add_all([
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_a"),
         Organization(id=2, name="buyer", slug="buyer", created_by="system", is_active=True, api_key_id="oak_a"),
@@ -75,7 +78,7 @@ async def test_nothing_is_bounded_when_no_other_party_holds_anything(extra_bindi
     await db.commit()
     db.add_all([
         OrganizationMember(organization_id=1, user_email=PARTNER.email, role="partner"),
-        OrganizationCluster(organization_id=1, cluster_id="own"),
+        OrganizationCluster(organization_id=1, cluster_id="own", registered_by=PARTNER.email),
         OrganizationCluster(organization_id=2, cluster_id="own"),
     ] + ([OrganizationCluster(organization_id=extra_binding, cluster_id="own")] if extra_binding else []))
     await db.commit()

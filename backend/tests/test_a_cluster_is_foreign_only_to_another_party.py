@@ -57,6 +57,7 @@ async def _world():
         _org(5, "orphan", "system", "oak_gone"),
         # X runs its own org and also buys from A as a tenant of A's buyer org
         _org(8, "x-home", "system", "oak_x"),
+        _org(16, "x-buyer", "system", "oak_x"),
         _member(8, X), _member(3, X, "tenant"),
         # a partner whose home org is local, with a buyer its own key provisioned
         _org(9, "l-home", L, None, source="local"),
@@ -75,7 +76,7 @@ async def _world():
     ])
     await db.commit()
     db.add_all([
-        *_bind("sold", 1, 3, 7),
+        *_bind("sold", 1, registered_by=A), *_bind("sold", 3, 7),
         *_bind("shared", 1, 2),
         *_bind("resold", 1, 4),
         *_bind("orphaned", 1, 5),
@@ -86,6 +87,10 @@ async def _world():
         *_bind("x-two", 8, 15),
         *_bind("squat", None, registered_by=B),
         *_bind("mine", None, registered_by=A),
+        # each home holds a cluster its own partner registered and its key sold on, as every home
+        # with a sale does on the dev copy (A's is "sold" above)
+        *_bind("b-sold", 2, registered_by=B), *_bind("b-sold", 4),
+        *_bind("x-sold", 8, registered_by=X), *_bind("x-sold", 16),
     ])
     await db.commit()
     return db

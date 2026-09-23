@@ -48,7 +48,6 @@ from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import (
     get_current_allowed_clusters,
-    get_org_ids_for_email,
     get_scope_cache_key,
     org_scope_dependency,
     project_is_visible,
@@ -3993,7 +3992,8 @@ async def _refuse_a_project_another_party_holds(
     important: a '*' grant covers every project on the cluster, including another
     organization's. The rule written here widens the Partner bound of whoever minted the key
     (a new org is created_by them) and hands the listed emails that project. The key's own side
-    is the organizations it synced or provisioned and those its creator belongs to or created.
+    is the organizations it synced or provisioned and those its creator runs (created, or holds a
+    partner row in), the orgs the creator's Partner bound widens from. A tenant row does not count.
     A project nobody names yet, which is every freshly created one, still provisions.
 
     note: org_scope.project_is_visible cannot stand in for this. The external router carries no
@@ -4015,7 +4015,7 @@ async def _refuse_a_project_another_party_holds(
         return
     key_id = api_key.get("id", "")
     creator = api_key.get("created_by") or ""
-    own_orgs = await get_org_ids_for_email(creator, db) if creator else set()
+    own_orgs = set(await cluster_parties.run_orgs(db, creator)) if creator else set()
     if any(org_key != key_id and org_id not in own_orgs for org_id, org_key in holders):
         raise HTTPException(
             status_code=403,

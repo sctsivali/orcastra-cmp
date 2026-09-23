@@ -44,7 +44,7 @@ def resolvers(monkeypatch: pytest.MonkeyPatch):
     async def fake_acl(_user: AuthenticatedUser, _db: Any) -> Optional[dict]:
         return answers["acl"]
 
-    async def fake_none(_user: AuthenticatedUser, _db: Any) -> None:
+    async def fake_none(_user: AuthenticatedUser, _db: Any, _allowed: Any = None) -> None:
         return None
 
     async def fake_shared(_db: Any) -> set:
