@@ -1,6 +1,6 @@
 {
   "name": "orcastra-dashboard-frontend",
-  "version": "1.0.0-RC4-hotfix1",
+  "version": "1.0.0-RC4-hotfix2",
   "private": true,
   "scripts": {
     "dev": "next dev -p 2025",
