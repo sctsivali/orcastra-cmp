@@ -20,6 +20,7 @@ app.routers, so any layer can use it without an import cycle.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import threading
 import time
@@ -115,11 +116,15 @@ async def run_blocking(
     loop = asyncio.get_running_loop()
     started = time.monotonic()
 
-    call = partial(fn, *args, **kwargs) if kwargs else None
-    if call is not None:
-        future = loop.run_in_executor(executor, call)
-    else:
-        future = loop.run_in_executor(executor, fn, *args)
+    # important: carry the caller's context into the worker. `loop.run_in_executor` does not, so
+    # every ContextVar read in the thread returned its default, while `asyncio.to_thread` copies
+    # the context. Three readers fail open on that default: the org-scope filter in
+    # connection.get_client (None means no filter), org_scope.project_is_visible (None means
+    # unbounded, which let a project-bound check inside an offloaded create pass everyone), and
+    # check_tenant_permission (None ACL allows). It also keeps the request id on worker log lines.
+    ctx = contextvars.copy_context()
+    call = partial(ctx.run, fn, *args, **kwargs) if kwargs else partial(ctx.run, fn, *args)
+    future = loop.run_in_executor(executor, call)
 
     if tracked:
         # note: shield below keeps `future` pending until the thread really finishes, so this

@@ -556,6 +556,10 @@ async def create_network(
 ):
     """Create a new network."""
     verify_cluster_access(host)
+    # note: also checked on the loop before the offload, so the bound holds whatever the worker
+    # sees. The resolved owner below is this project or default, and default is always visible.
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
 
     def _create_blocking():
         """All the pylxd work for one create, in one hop off the loop.

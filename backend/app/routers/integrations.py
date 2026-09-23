@@ -3207,8 +3207,8 @@ async def refresh_organizations(
     user: AuthenticatedUser = Depends(require_partner()),
 ):
     """On-demand pull of organizations from external app via stored callback URL."""
-    # important: read the scope here on the loop. run_blocking uses run_in_executor, which does not
-    # carry ContextVars, so the same check inside the thread would see None and pass everyone.
+    # note: the scope is read here on the loop and the check runs here too, so it never depends on
+    # what a worker thread can see.
     allowed = get_current_allowed_clusters()
     try:
         metadata, secret_hash = await run_blocking(

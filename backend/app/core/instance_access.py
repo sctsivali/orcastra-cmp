@@ -157,9 +157,8 @@ async def resolve_instance_project(
     is looked for only among the projects this request may view, so the answer can never be
     another organization's same-named instance, and nothing found is a 404.
 
-    important: the search runs through asyncio.to_thread, which copies the request context,
-    because can_view_instance reads the org-scope ContextVars. run_blocking uses
-    run_in_executor, which does not carry them, so the same search there would run unscoped.
+    important: the search runs in a worker that carries the request context (asyncio.to_thread),
+    because can_view_instance reads the org-scope ContextVars and an unscoped search would pass.
     """
     if (project or "").strip():
         return verify_instance_view_access(cluster_id, project, instance_name)
