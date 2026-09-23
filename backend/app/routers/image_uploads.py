@@ -93,11 +93,6 @@ def _staging_path(session_id: str) -> str:
     return os.path.join(UPLOAD_DIR, f"{session_id}.img")
 
 
-def _assert_cluster_permission(api_key: Dict[str, Any], cluster_id: str, required: str) -> None:
-    """Thin alias so the call sites below read unchanged. The check itself is shared."""
-    assert_cluster_permission(api_key, cluster_id, required)
-
-
 async def _get_session(db: AsyncSession, session_id: str) -> ImageUploadSession:
     res = await db.execute(select(ImageUploadSession).where(ImageUploadSession.session_id == session_id))
     row = res.scalar_one_or_none()
@@ -285,7 +280,7 @@ async def head_upload(
 ):
     row = await _get_session(db, session_id)
     assert_session_owner(row, x_api_key_id)
-    _assert_cluster_permission(api_key, row.cluster_id, "write")
+    assert_project_granted(assert_cluster_permission(api_key, row.cluster_id, "write"), row.project)
     return Response(
         status_code=200,
         headers={
@@ -320,7 +315,7 @@ async def patch_upload(
 ):
     row = await _get_session(db, session_id)
     assert_session_owner(row, x_api_key_id)
-    _assert_cluster_permission(api_key, row.cluster_id, "write")
+    assert_project_granted(assert_cluster_permission(api_key, row.cluster_id, "write"), row.project)
 
     if row.status in _TERMINAL or row.status in ("uploaded", "importing"):
         # Upload already complete; report the final offset so the client stops.
@@ -362,7 +357,7 @@ async def finalize_upload(
 ):
     row = await _get_session(db, session_id)
     assert_session_owner(row, x_api_key_id)
-    _assert_cluster_permission(api_key, row.cluster_id, "write")
+    assert_project_granted(assert_cluster_permission(api_key, row.cluster_id, "write"), row.project)
 
     if row.status in ("ready", "failed", "importing"):
         return _status_payload(row)
@@ -386,7 +381,7 @@ async def get_upload_status(
 ):
     row = await _get_session(db, session_id)
     assert_session_owner(row, x_api_key_id)
-    _assert_cluster_permission(api_key, row.cluster_id, "read")
+    assert_project_granted(assert_cluster_permission(api_key, row.cluster_id, "read"), row.project)
     return _status_payload(row)
 
 

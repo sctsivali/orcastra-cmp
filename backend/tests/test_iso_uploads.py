@@ -10,9 +10,9 @@ import unittest
 
 from fastapi import HTTPException
 
+from app.core.api_key_permissions import assert_cluster_permission
 from app.routers.iso_uploads import (
     _VOLUME_NAME_RE,
-    _assert_cluster_permission,
     _volume_project_q,
     _staging_path,
     _status_payload,
@@ -35,18 +35,18 @@ class ClusterPermissionTests(unittest.TestCase):
 
     def test_allows_when_level_sufficient(self) -> None:
         # write required, key has write -> no raise; admin key also satisfies write.
-        _assert_cluster_permission(self._key("c1", ["write"]), "c1", "write")
-        _assert_cluster_permission(self._key("c1", ["admin"]), "c1", "write")
-        _assert_cluster_permission(self._key("c1", ["read"]), "c1", "read")
+        assert_cluster_permission(self._key("c1", ["write"]), "c1", "write")
+        assert_cluster_permission(self._key("c1", ["admin"]), "c1", "write")
+        assert_cluster_permission(self._key("c1", ["read"]), "c1", "read")
 
     def test_denies_unknown_cluster(self) -> None:
         with self.assertRaises(HTTPException) as ctx:
-            _assert_cluster_permission(self._key("c1", ["admin"]), "other", "read")
+            assert_cluster_permission(self._key("c1", ["admin"]), "other", "read")
         self.assertEqual(ctx.exception.status_code, 403)
 
     def test_denies_insufficient_level(self) -> None:
         with self.assertRaises(HTTPException) as ctx:
-            _assert_cluster_permission(self._key("c1", ["read"]), "c1", "write")
+            assert_cluster_permission(self._key("c1", ["read"]), "c1", "write")
         self.assertEqual(ctx.exception.status_code, 403)
 
 

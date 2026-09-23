@@ -122,3 +122,48 @@ def test_the_grant_rule_matches_the_raw_proxy(grant: Dict[str, Any], project: An
         with pytest.raises(HTTPException) as caught:
             assert_project_granted(grant, project)
         assert caught.value.status_code == 403
+
+
+# -- a key narrowed after create cannot carry on into the project it lost ----------------------
+
+async def _session_in_tenant_b(db):
+    wide = _key(["tenant-a", "tenant-b"])
+    created = await image_uploads.create_upload(_image("tenant-b"), api_key=wide, db=db, x_api_key_id=KEY)
+    return created["session_id"]
+
+
+async def test_a_narrowed_key_cannot_read_or_finish_its_old_session() -> None:
+    db = await _db()
+    session_id = await _session_in_tenant_b(db)
+    narrow = _key(["tenant-a"])
+    for call in (
+        lambda: image_uploads.head_upload(session_id, api_key=narrow, db=db, x_api_key_id=KEY),
+        lambda: image_uploads.get_upload_status(session_id, api_key=narrow, db=db, x_api_key_id=KEY),
+        lambda: image_uploads.finalize_upload(session_id, api_key=narrow, db=db, x_api_key_id=KEY),
+    ):
+        with pytest.raises(HTTPException) as caught:
+            await call()
+        assert caught.value.status_code == 403
+
+
+async def test_the_key_that_still_holds_the_project_reads_its_session() -> None:
+    db = await _db()
+    session_id = await _session_in_tenant_b(db)
+    wide = _key(["tenant-a", "tenant-b"])
+    status = await image_uploads.get_upload_status(session_id, api_key=wide, db=db, x_api_key_id=KEY)
+    assert status["session_id"] == session_id
+
+
+def test_every_continuation_route_rechecks_the_project() -> None:
+    """Both upload routers: every route that loads a session checks the key's grant on its project."""
+    import ast
+    import inspect
+
+    for module in (image_uploads, iso_uploads):
+        tree = ast.parse(inspect.getsource(module))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            body = ast.unparse(fn)
+            if "_get_session(" in body and "api_key" in body:
+                assert "assert_project_granted(" in body, f"{module.__name__}.{fn.name}"
