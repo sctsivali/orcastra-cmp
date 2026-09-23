@@ -34,7 +34,7 @@ from app.core.instance_access import (
     verify_instance_view_access,
     verify_project_access,
 )
-from app.services.console_service import get_console_service
+from app.services.console_service import get_console_service, public_session_info
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
@@ -499,7 +499,7 @@ async def create_console_session(
         target_organization_slug=_target_org_slug,
     )
     
-    return ConsoleSessionResponse(success=True, session=session_info)
+    return ConsoleSessionResponse(success=True, session=public_session_info(session_info))
 
 
 @router.get(

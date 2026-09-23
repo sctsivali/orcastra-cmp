@@ -135,6 +135,27 @@ class AttachedISO:
         }
 
 
+# important: ws_url and control_url carry the LXD operation secrets, and a secret opens the
+# console websocket with no further authentication. They stay inside the backend, where the
+# console proxy reads them, and a client is told only what identifies the session.
+_PUBLIC_SESSION_FIELDS = (
+    "operation_id",
+    "instance_name",
+    "host",
+    "project",
+    "console_type",
+    "width",
+    "height",
+)
+
+
+def public_session_info(session_info: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The fields of a console session that are safe to return to a client."""
+    if not session_info:
+        return session_info
+    return {key: session_info[key] for key in _PUBLIC_SESSION_FIELDS if key in session_info}
+
+
 class ConsoleService:
     """
     Service for managing console access to LXD instances.
