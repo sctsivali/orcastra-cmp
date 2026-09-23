@@ -107,6 +107,23 @@ def extract_ip_addresses_from_state(state_data: dict) -> List[str]:
     return []
 
 
+# important: every one of these is a one-time secret that opens an LXD operation websocket (or,
+# for a token, joins a client or a cluster member) with no further authentication. `fds` is what
+# an exec or console operation carries, `secret` a token operation, and `control`, `fs` and
+# `criu` a migration source. The console and terminal proxies read their own secrets from the
+# operation they create, so no client ever needs these from the operations list.
+OPERATION_SECRET_KEYS = frozenset(
+    {"fds", "secret", "secrets", "token", "trust_token", "control", "fs", "criu"}
+)
+
+
+def strip_operation_secrets(metadata: Any) -> Dict[str, Any]:
+    """An LXD operation's metadata without the fields that grant access to the operation."""
+    if not isinstance(metadata, dict):
+        return {}
+    return {key: value for key, value in metadata.items() if key not in OPERATION_SECRET_KEYS}
+
+
 def find_instance_in_projects(
     client: pylxd.Client,
     name: str,

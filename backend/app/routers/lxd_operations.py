@@ -19,6 +19,7 @@ from app.core.dependencies import check_read_only_mode, require_partner, Authent
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
 from pydantic import BaseModel, Field
 from app.core.lxd_names import safe_segment
+from app.services.lxd.utils import strip_operation_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                         description=op_data.get('description', ''),
                         err=op_data.get('err', ''),
                         may_cancel=op_data.get('may_cancel', False),
-                        metadata=op_data.get('metadata', {}),
+                        metadata=strip_operation_secrets(op_data.get('metadata')),
                         node_name=node_name,
                         project=project,
                         instance_name=instance_name,
@@ -229,7 +230,7 @@ async def get_operation(
             description=getattr(operation, 'description', ''),
             err=getattr(operation, 'err', ''),
             may_cancel=getattr(operation, 'may_cancel', False),
-            metadata=getattr(operation, 'metadata', {})
+            metadata=strip_operation_secrets(getattr(operation, 'metadata', None)),
         )
     except HTTPException:
         # broad handler below converts it into a 500
