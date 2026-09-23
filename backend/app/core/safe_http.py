@@ -55,10 +55,13 @@ class GuardedResponse:
         return jsonlib.loads(self.body.decode("utf-8") or "null")
 
 
-def _pinned(url: str, address: str) -> tuple:
-    """(connect_url, host_header, sni_name) for connecting to `address` while naming `url`'s host."""
+def _pinned(url: str, host: str, address: str) -> tuple:
+    """(connect_url, host_header, sni_name) for connecting to `address` while naming `host`.
+
+    `host` is the A-label check_url returned, never the raw hostname, because a Unicode name
+    cannot go into a header or the TLS handshake.
+    """
     parts = urlsplit(url)
-    host = parts.hostname or ""
     literal = ipaddress.ip_address(address)
     netloc = f"[{address}]" if literal.version == 6 else address
     if parts.port:
@@ -129,7 +132,7 @@ async def guarded_request(
             addresses = await resolve_public_addresses(
                 target.host, target.port, allowed_networks=allowed_networks
             )
-            connect_url, host_header, sni = _pinned(current, addresses[0])
+            connect_url, host_header, sni = _pinned(current, target.host, addresses[0])
             request = client.build_request(
                 method,
                 connect_url,

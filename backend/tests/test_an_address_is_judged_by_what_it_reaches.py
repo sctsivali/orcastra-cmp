@@ -181,6 +181,31 @@ async def test_the_connection_is_pinned_to_the_judged_address(public_dns: List[s
     assert public_dns == ["example.test"]
 
 
+async def test_a_unicode_host_is_called_by_its_a_label(public_dns: List[str]) -> None:
+    assert check_url("https://B\u00dcCHER.example.test/").host == "xn--bcher-kva.example.test"
+    recorder = Recorder({"xn--bcher-kva.example.test/logo.png": httpx.Response(200, content=b"ok")})
+    response = await guarded_request(
+        "GET", "https://b\u00fccher.example.test/logo.png", max_bytes=1024,
+        transport=httpx.MockTransport(recorder),
+    )
+    assert response.body == b"ok"
+    sent = recorder.requests[0]
+    assert sent.url.host == PUBLIC_V4
+    assert sent.headers["host"] == "xn--bcher-kva.example.test"
+    assert sent.extensions.get("sni_hostname") == "xn--bcher-kva.example.test"
+    assert public_dns == ["xn--bcher-kva.example.test"], "DNS must see the name the header carries"
+
+
+@pytest.mark.parametrize("url", ["https://\u2603.example.test/x.png", "https://b\u00fccher..example.test/"])
+async def test_a_unicode_host_without_an_a_label_is_malformed(public_dns: List[str], url: str) -> None:
+    with pytest.raises(UnsafeURLError, match="malformed"):
+        check_url(url)
+    recorder = Recorder({})
+    with pytest.raises(UnsafeURLError, match="malformed"):
+        await guarded_request("GET", url, max_bytes=10, transport=httpx.MockTransport(recorder))
+    assert recorder.requests == [] and public_dns == []
+
+
 async def test_a_redirect_to_an_internal_address_is_refused_at_the_hop(public_dns: List[str]) -> None:
     recorder = Recorder({
         "example.test/start": httpx.Response(302, headers={"location": "http://169.254.169.254/latest"}),

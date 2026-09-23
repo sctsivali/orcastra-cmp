@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from typing import FrozenSet, Optional, Sequence, Tuple, Union
 from urllib.parse import urlsplit
 
+import idna
+
 logger = logging.getLogger(__name__)
 
 IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
@@ -140,6 +142,20 @@ def address_risk(
     return None
 
 
+def _ascii_host(host: str) -> str:
+    """The A-label form of a host, which DNS, the Host header and the TLS server name all carry.
+
+    note: this is the IDNA 2008 encoding httpx applies itself, so a Unicode host names the same
+    server it did before this guard existed. A host that has no A-label is malformed.
+    """
+    if host.isascii():
+        return host
+    try:
+        return idna.encode(host.lower()).decode("ascii")
+    except UnicodeError:
+        raise UnsafeURLError("malformed URL") from None
+
+
 def check_url(
     url: str,
     *,
@@ -175,6 +191,7 @@ def check_url(
     host = (parts.hostname or "").strip()
     if not host:
         raise UnsafeURLError("no host")
+    host = _ascii_host(host)
     if host.lower().rstrip(".") in BLOCKED_HOSTNAMES:
         raise UnsafeURLError("host is not routable from this server")
     try:

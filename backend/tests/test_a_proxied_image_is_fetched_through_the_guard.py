@@ -87,6 +87,18 @@ def test_a_public_image_comes_back_as_a_data_uri(
     assert resolved == ["cdn.example.test"]
 
 
+def test_a_unicode_image_host_works_as_before(
+    monkeypatch: pytest.MonkeyPatch, resolved: List[str]
+) -> None:
+    client, recorder = _client(monkeypatch, _png)
+    response = _post(client, "https://b\u00fccher.example.test/logo.png")
+    assert response.status_code == 200, response.text
+    assert response.json()["data"].startswith("data:image/png;base64,")
+    (sent,) = recorder.requests
+    assert sent.headers["host"] == "xn--bcher-kva.example.test"
+    assert resolved == ["xn--bcher-kva.example.test"]
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -101,6 +113,7 @@ def test_a_public_image_comes_back_as_a_data_uri(
         "file:///etc/passwd",
         "gopher://cdn.example.test/x",
         "https://user:pass@cdn.example.test/x.png",
+        "https://\u2603.example.test/x.png",
         "   ",
     ],
 )
