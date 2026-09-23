@@ -95,3 +95,32 @@ def test_the_metadata_address_is_refused_even_inside_an_allowed_network(allow):
     allow("169.254.169.0/24")
     with pytest.raises(ValueError):
         check_callback_url("http://169.254.169.254")
+
+
+# --- the /sync boundary ---------------------------------------------------------------------
+
+from pydantic import ValidationError  # noqa: E402
+
+from app.routers.integrations import SyncDataRequest  # noqa: E402
+
+
+@pytest.mark.parametrize("value", REFUSED_BY_DEFAULT + ["https://example.test/" + "a" * 2048])
+def test_sync_refuses_an_unsafe_app_url(allow, value):
+    with pytest.raises(ValidationError):
+        SyncDataRequest(app_url=value)
+
+
+@pytest.mark.parametrize("value", ["https://example.test", None])
+def test_sync_accepts_a_public_https_app_url_or_none(allow, value):
+    assert SyncDataRequest(app_url=value).app_url == value
+
+
+def test_sync_without_app_url_is_unchanged(allow):
+    assert SyncDataRequest().app_url is None
+
+
+def test_sync_honours_the_allowlist(allow):
+    allow("10.0.0.5/32")
+    assert SyncDataRequest(app_url="http://10.0.0.5:3001").app_url == "http://10.0.0.5:3001"
+    with pytest.raises(ValidationError):
+        SyncDataRequest(app_url="http://example.test")

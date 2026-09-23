@@ -65,6 +65,7 @@ from app.core.proxy_paths import (
     query_key_name,
 )
 from app.core.type_utils import normalize_cluster_type
+from app.services.orcahub_sync import check_callback_url
 
 logger = logging.getLogger(__name__)
 
@@ -276,13 +277,24 @@ class SyncDataRequest(BaseModel):
         description="Organizations to sync from external app"
     )
     # Callback URL for on-demand data pull
-    app_url: Optional[str] = Field(None, description="External app base URL for callbacks")
+    app_url: Optional[str] = Field(
+        None, max_length=2048, description="External app base URL for callbacks"
+    )
     # Member data pushed from external app (ex; OrcaHub)
     members: List[SyncMember] = Field(
         default_factory=list,
         max_length=MAX_SYNC_MEMBERS,
         description="Organization members to sync from external app"
     )
+
+    @field_validator("app_url")
+    @classmethod
+    def _app_url_is_a_safe_callback(cls, value: Optional[str]) -> Optional[str]:
+        # important: stored, then fetched by three outbound calls, one carrying the plaintext secret.
+        # Use time re-checks it too, so a value stored before this check is not trusted either.
+        if value is None:
+            return None
+        return check_callback_url(value)
 
 
 class SyncDataResponse(BaseModel):
