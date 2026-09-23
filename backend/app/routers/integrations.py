@@ -2598,6 +2598,47 @@ _OPERATION_WAIT_PATH = re.compile(r"^/operations/[^/]+/wait/?$")
 _cluster_slots: Dict[tuple, asyncio.Semaphore] = {}
 
 
+class NeverSent(BlockingTimeout):
+    """The call's cap passed while it was still queued, so it was dropped and never reached the cluster."""
+
+
+async def _run_unless_abandoned(fn: Any, *args: Any, on_finish: Any = None, **kwargs: Any) -> Any:
+    """run_blocking, except that a job still queued when its caller gave up is dropped, never run.
+
+    important: the caller has already answered by then, and a late request (possibly a write)
+    must not reach the cluster. Such a timeout is raised as NeverSent, so the caller can say the
+    request was not sent and leave the cluster's breaker alone. on_finish runs exactly once,
+    when the job ends or when it is dropped.
+    """
+    state = {"started": False, "abandoned": False}
+    lock = threading.Lock()
+
+    def held(*a: Any, **k: Any) -> Any:
+        with lock:
+            if state["abandoned"]:
+                return None
+            state["started"] = True
+        try:
+            return fn(*a, **k)
+        finally:
+            if on_finish:
+                on_finish()
+
+    try:
+        return await run_blocking(held, *args, **kwargs)
+    except BaseException as exc:
+        with lock:
+            if not state["started"]:
+                state["abandoned"] = True
+            abandoned = state["abandoned"]
+        if abandoned:
+            if on_finish:
+                on_finish()
+            if isinstance(exc, BlockingTimeout):
+                raise NeverSent(exc.label, exc.timeout) from exc
+        raise
+
+
 async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
     """run_blocking, holding one of the cluster's proxy slots until the worker thread finishes.
 
@@ -2615,37 +2656,17 @@ async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) 
             detail=f"Cluster {cluster_id} is busy with other requests, retry shortly",
             headers={"Retry-After": "2"},
         ) from None
-    state = {"started": False, "abandoned": False, "released": False}
+    released = threading.Event()
     lock = threading.Lock()
 
     def release_once() -> None:
         with lock:
-            if state["released"]:
+            if released.is_set():
                 return
-            state["released"] = True
+            released.set()
         loop.call_soon_threadsafe(slots.release)
 
-    def held(*a: Any, **k: Any) -> Any:
-        # note: a job still queued when its caller gave up is dropped here, never run. The caller
-        # already answered, and a late request (possibly a write) must not reach the cluster.
-        with lock:
-            if state["abandoned"]:
-                return None
-            state["started"] = True
-        try:
-            return fn(*a, **k)
-        finally:
-            release_once()
-
-    try:
-        return await run_blocking(held, *args, **kwargs)
-    except BaseException:
-        with lock:
-            if not state["started"]:
-                state["abandoned"] = True
-        if state["abandoned"]:
-            release_once()
-        raise
+    return await _run_unless_abandoned(fn, *args, on_finish=release_once, **kwargs)
 
 
 def _capped_operation_wait(base_path: str, method: str, query_params: Dict[str, str]) -> None:
@@ -2746,6 +2767,12 @@ async def raw_proxy(
                 label=f"get_client[{request.cluster_id}]",
                 executor=proxy_executor,
                 max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+        except NeverSent:
+            raise HTTPException(
+                status_code=503,
+                detail="The proxy is busy and the request was not sent, retry shortly",
+                headers={"Retry-After": "2"},
             )
         except BlockingTimeout:
             health.record_failure(request.cluster_id, "connect timed out")
@@ -2853,6 +2880,12 @@ async def raw_proxy(
                 headers={},
             )
 
+        except NeverSent:
+            raise HTTPException(
+                status_code=503,
+                detail="The proxy is busy and the request was not sent, retry shortly",
+                headers={"Retry-After": "2"},
+            )
         except BlockingTimeout as timeout_error:
             # important: a read that outlived the cap is a slow cluster, not an unreachable one.
             # Tripping the breaker for it turned one heavy list into sixty seconds of 503 for
@@ -2997,7 +3030,7 @@ async def proxy_operation(
         # operation to completion. Inline on the loop that is the same failure mode as the
         # raw proxy, with a longer tail.
         try:
-            result_data = await run_blocking(
+            result_data = await _run_unless_abandoned(
                 _execute_proxy_operation,
                 lxd_service,
                 request.cluster_id,
@@ -3011,6 +3044,10 @@ async def proxy_operation(
                 max_in_flight=PROXY_MAX_IN_FLIGHT,
             )
             health.clear(request.cluster_id)
+        except NeverSent:
+            return ProxyResponse(
+                success=False, error="The proxy is busy and the operation was not sent, retry shortly"
+            )
         except BlockingTimeout as timeout_error:
             health.record_failure(request.cluster_id, str(timeout_error))
             logger.warning(

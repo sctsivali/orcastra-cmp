@@ -16,7 +16,7 @@ import requests
 from fastapi import HTTPException
 
 from app.routers import integrations
-from app.routers.integrations import RawProxyRequest, raw_proxy
+from app.routers.integrations import ProxyRequest, RawProxyRequest, proxy_operation, raw_proxy
 from app.services.lxd import health
 
 KEY = {
@@ -185,12 +185,50 @@ async def test_a_call_that_gave_up_while_queued_never_reaches_the_cluster(monkey
 
     service = type("Svc", (), {"connection_manager": type("CM", (), {"get_client": staticmethod(get_client)})()})()
     try:
-        answer = await _call(service, "cluster-slow", "/1.0/instances", method="POST")
-        assert answer.status_code == 504, "the caller gave up on the queued request"
+        with pytest.raises(HTTPException) as caught:
+            await _call(service, "cluster-slow", "/1.0/instances", method="POST")
+        assert caught.value.status_code == 503
+        assert "not sent" in caught.value.detail, "the caller must learn the request never left"
+        assert caught.value.headers.get("Retry-After") == "2"
     finally:
         blocker.set()
     tiny.shutdown(wait=True)
     assert queued.calls == [], "a request whose caller already gave up reached the cluster"
+    assert not health.is_tripped("cluster-slow"), "a cluster that was never contacted cannot be unreachable"
     await asyncio.sleep(0.05)  # the release is scheduled onto the loop
     slots = integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")]
     assert not slots.locked()
+
+
+async def test_a_proxy_operation_that_gave_up_while_queued_is_never_sent(monkeypatch) -> None:
+    """The operation route shares the pool. A start queued past its cap must not run later."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    tiny = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(integrations, "proxy_executor", tiny)
+    monkeypatch.setattr(integrations, "PROXY_OP_TIMEOUT", 0.2)
+    ran: List[str] = []
+    monkeypatch.setattr(integrations, "_execute_proxy_operation", lambda *a, **_k: ran.append(a[2]) or {"ok": True})
+    blocker = threading.Event()
+    tiny.submit(blocker.wait, 5)
+    try:
+        answer = await proxy_operation(
+            request=ProxyRequest(cluster_id="cluster-slow", operation="start_instance", params={"name": "vm"}),
+            api_key=KEY, lxd_service=_Service({"cluster-slow": _Session(None), "cluster-fast": _Session(None)}), _=None,
+        )
+        assert answer.success is False and "not sent" in answer.error
+    finally:
+        blocker.set()
+    tiny.shutdown(wait=True)
+    assert ran == [], "an operation whose caller already gave up reached the cluster"
+    assert not health.is_tripped("cluster-slow")
+
+
+async def test_a_proxy_operation_that_started_still_runs_to_its_answer(monkeypatch) -> None:
+    ran: List[str] = []
+    monkeypatch.setattr(integrations, "_execute_proxy_operation", lambda *a, **_k: ran.append(a[2]) or {"ok": True})
+    answer = await proxy_operation(
+        request=ProxyRequest(cluster_id="cluster-slow", operation="start_instance", params={"name": "vm"}),
+        api_key=KEY, lxd_service=_Service({"cluster-slow": _Session(None), "cluster-fast": _Session(None)}), _=None,
+    )
+    assert answer.success is True and ran == ["start_instance"]
