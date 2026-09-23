@@ -125,17 +125,37 @@ async def test_a_removal_that_removed_nothing_passes_nothing(removal_spy):
     assert removal_spy == [set()]
 
 
-async def test_a_partner_removing_a_co_partner_is_not_sent_to_orcahub(removal_spy):
+async def test_a_partner_cannot_remove_a_co_partner_from_an_org_orcahub_manages(removal_spy):
+    from fastapi import HTTPException
+
     db = await _seeded()
     db.add(OrganizationMember(organization_id=7, user_email="copartner@example.test", role="partner"))
     await db.commit()
     partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
-    await user_groups.remove_user_from_all("copartner@example.test", user=partner, db=db)
-    assert removal_spy == [set()]
+    with pytest.raises(HTTPException) as caught:
+        await user_groups.remove_user_from_all("copartner@example.test", user=partner, db=db)
+    assert caught.value.status_code == 409
+    assert "OrcaHub" in caught.value.detail and "mine" in caught.value.detail
+    assert removal_spy == []
     left = (await db.execute(
-        select(OrganizationMember.user_email).where(OrganizationMember.user_email == "copartner@example.test")
+        select(OrganizationMember.organization_id).where(OrganizationMember.user_email == "copartner@example.test")
     )).scalars().all()
-    assert left == [], "the dashboard removal itself is unchanged"
+    assert left == [7], "nothing was removed"
+
+
+async def test_a_partner_still_removes_a_co_partner_from_a_local_org(removal_spy):
+    db = await _seeded()
+    db.add(Organization(id=9, name="Local", slug="local", source="local", created_by="partner@example.test"))
+    await db.commit()
+    db.add(OrganizationMember(organization_id=9, user_email="copartner@example.test", role="partner"))
+    await db.commit()
+    partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
+    await user_groups.remove_user_from_all("copartner@example.test", user=partner, db=db)
+    assert removal_spy == [set()], "a partner row is never sent to OrcaHub by a non-admin"
+    left = (await db.execute(
+        select(OrganizationMember.organization_id).where(OrganizationMember.user_email == "copartner@example.test")
+    )).scalars().all()
+    assert left == []
 
 
 async def test_an_admin_removing_a_partner_is_sent_to_orcahub(removal_spy):

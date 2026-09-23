@@ -305,6 +305,28 @@ async def remove_user_from_all(
                 ),
             )
         )
+        # important: OrcaHub owns the roster of an organization it synced and lets only a platform
+        # admin remove a partner there. A dashboard removal is not sent there for a partner (see
+        # below), so the next sync would quietly bring them back. Refused, with the reason.
+        synced_partner = (await db.execute(
+            select(Organization.slug)
+            .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+            .where(
+                OrganizationMember.user_email == user_email,
+                OrganizationMember.organization_id.in_(partner_org_ids),
+                OrganizationMember.role != "tenant",
+                Organization.source == "orcahub",
+                Organization.api_key_id.isnot(None),
+            )
+        )).scalars().all()
+        if synced_partner:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{user_email} is a partner of {', '.join(sorted(synced_partner))}, which OrcaHub "
+                    "manages. A platform admin removes a partner there, or an Orcastra admin here."
+                ),
+            )
         removed = await db.execute(
             delete(OrganizationMember)
             .where(
