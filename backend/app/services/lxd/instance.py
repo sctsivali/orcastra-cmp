@@ -537,15 +537,17 @@ class InstanceManager:
             logger.warning(f"Error fetching VMs from {node_name}: {e}")
             return [], False
     
-    async def get_vm(self, name: str, host: str) -> Optional[VMInfo]:
-        """Get a specific VM by name and host (searches all projects)."""
+    async def get_vm(
+        self, name: str, host: str, project: Optional[str] = None
+    ) -> Optional[VMInfo]:
+        """Get a specific VM by name and host, in `project` or else the first project holding it."""
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
             
-            instance, project_name = find_instance_in_projects(client, name)
+            instance, project_name = find_instance_in_projects(client, name, project)
             
             if instance is None:
                 return None

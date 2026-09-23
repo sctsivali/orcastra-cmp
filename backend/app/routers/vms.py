@@ -40,6 +40,7 @@ from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
 from app.core.org_scope import project_is_visible
+from app.core.instance_access import resolve_instance_project
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -206,19 +207,22 @@ async def list_vms(
 async def get_vm(
     vm_name: str,
     host: str = Query(..., description="LXD host node where the VM resides"),
+    project: Optional[str] = Query(
+        None, description="LXD project, or omit to search the projects this caller may see"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get detailed information about a specific VM."""
     verify_cluster_access(host)
+    project = await resolve_instance_project(lxd_service, host, vm_name, project)
     try:
-        vm = await lxd_service.get_vm(vm_name, host)
+        vm = await lxd_service.get_vm(vm_name, host, project=project)
         
         if not vm:
             raise HTTPException(
                 status_code=404, 
                 detail=f"VM '{vm_name}' not found on host '{host}'"
             )
-        verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         
         return vm
         
@@ -366,14 +370,16 @@ async def start_vm(
     """Start a VM."""
     verify_cluster_access(request.host)
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
+    # The service acts on the project authorized here, never the raw request value.
+    project = await resolve_instance_project(lxd_service, request.host, vm_name, request.project)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
+        verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
         vm = await lxd_service.start_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -445,15 +451,16 @@ async def stop_vm(
 ):
     """Stop a VM."""
     verify_cluster_access(request.host)
+    project = await resolve_instance_project(lxd_service, request.host, vm_name, request.project)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
+        verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
         vm = await lxd_service.stop_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -542,15 +549,16 @@ async def restart_vm(
 ):
     """Restart a VM."""
     verify_cluster_access(request.host)
+    project = await resolve_instance_project(lxd_service, request.host, vm_name, request.project)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
+        verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
         vm = await lxd_service.restart_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -642,6 +650,7 @@ async def delete_vm(
 ):
     """Delete a VM."""
     verify_cluster_access(host)
+    project = await resolve_instance_project(lxd_service, host, vm_name, project)
     try:
         await lxd_service.delete_vm(
             name=vm_name,
@@ -656,7 +665,7 @@ async def delete_vm(
         try:
             await tag_service.remove_resource_assignments(
                 "instance", vm_name,
-                resource_host=host, resource_project=project or "default",
+                resource_host=host, resource_project=project,
             )
         except Exception as tag_err:
             logger.warning(
@@ -726,11 +735,16 @@ async def delete_vm(
 async def get_instance_metrics(
     host: str,
     instance_name: str,
-    project: str = Query("default", description="LXD project name"),
+    project: Optional[str] = Query(
+        None, description="LXD project, or omit to search the projects this caller may see"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get real-time metrics for an instance."""
     verify_cluster_access(host)
+    # important: unconditional, not behind the tenant permission flag. Metrics carry the
+    # instance's addresses and load, so they need the same view right as the instance itself.
+    project = await resolve_instance_project(lxd_service, host, instance_name, project)
     try:
         metrics = await lxd_service.get_instance_metrics(
             host=host,

@@ -41,6 +41,7 @@ from app.core.org_scope import (
     project_is_visible,
 )
 from app.core.config import get_settings
+from app.core.instance_access import resolve_instance_project
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
@@ -209,16 +210,21 @@ async def list_instances(
 async def get_instance(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: Optional[str] = Query(
+        None, description="LXD project, or omit to search the projects this caller may see"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific instance."""
     verify_cluster_access(host)
+    # important: resolved before the read and searched only within what the caller may view,
+    # so a Partner on a shared cluster never receives another organization's same-named
+    # instance. The tenant view check is part of the resolution.
+    project = await resolve_instance_project(lxd_service, host, instance_name, project)
     try:
-        vm = await lxd_service.get_vm(instance_name, host)
+        vm = await lxd_service.get_vm(instance_name, host, project=project)
         if not vm:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
-        # enforce tenant ACL on individual instance access
-        verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         return vm
     except HTTPException:
         # 404 (not found) / 403 (ACL) — don't let the generic handler mask these.
@@ -386,14 +392,16 @@ async def start_instance(
     """Start an instance."""
     verify_cluster_access(request.host)
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
+    # The service acts on the project authorized here, never the raw request value.
+    project = await resolve_instance_project(lxd_service, request.host, instance_name, request.project)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
+        verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
         vm = await lxd_service.start_vm(
             instance_name,
             request.host,
             force=False,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -448,15 +456,16 @@ async def stop_instance(
 ):
     """Stop an instance."""
     verify_cluster_access(request.host)
+    project = await resolve_instance_project(lxd_service, request.host, instance_name, request.project)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
+        verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
         await lxd_service.stop_vm(
             instance_name, 
             request.host, 
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -527,15 +536,16 @@ async def restart_instance(
 ):
     """Restart an instance."""
     verify_cluster_access(request.host)
+    project = await resolve_instance_project(lxd_service, request.host, instance_name, request.project)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
+        verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
         await lxd_service.restart_vm(
             instance_name,
             request.host,
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -610,6 +620,9 @@ async def delete_instance(
 ):
     """Delete an instance."""
     verify_cluster_access(host)
+    # note: resolved first, so the tag cleanup, the audit row and the OrcaHub event all name the
+    # project that was actually deleted from, never None
+    project = await resolve_instance_project(lxd_service, host, instance_name, project)
     try:
         await lxd_service.delete_vm(instance_name, host, force=force, project=project)
         get_cache_manager().invalidate_instance_cache()
@@ -619,7 +632,7 @@ async def delete_instance(
         try:
             await tag_service.remove_resource_assignments(
                 "instance", instance_name,
-                resource_host=host, resource_project=project or "default",
+                resource_host=host, resource_project=project,
             )
         except Exception as tag_err:
             logger.warning(
@@ -692,12 +705,17 @@ async def delete_instance(
 async def get_instance_metrics(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: Optional[str] = Query(
+        None, description="LXD project, or omit to search the projects this caller may see"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get metrics for a specific instance."""
     verify_cluster_access(host)
+    # important: unconditional, not behind the tenant permission flag
+    project = await resolve_instance_project(lxd_service, host, instance_name, project)
     try:
-        metrics = await lxd_service.get_instance_metrics(host, instance_name)
+        metrics = await lxd_service.get_instance_metrics(host, instance_name, project=project)
         if not metrics:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
         return metrics

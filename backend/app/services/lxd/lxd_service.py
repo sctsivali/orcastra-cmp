@@ -349,9 +349,11 @@ class LXDService:
         """
         return await self.instance_manager.list_all_vms()
     
-    async def get_vm(self, name: str, host: str) -> Optional[VMInfo]:
-        """Get a specific VM by name and host (searches all projects)."""
-        return await self.instance_manager.get_vm(name, host)
+    async def get_vm(
+        self, name: str, host: str, project: Optional[str] = None
+    ) -> Optional[VMInfo]:
+        """Get a specific VM by name and host, in `project` or else the first project holding it."""
+        return await self.instance_manager.get_vm(name, host, project)
     
     async def start_vm(
         self,

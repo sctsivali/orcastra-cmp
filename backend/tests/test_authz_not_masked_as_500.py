@@ -29,7 +29,15 @@ from pathlib import Path
 from typing import List
 
 ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
-GUARDS = {"verify_cluster_access", "verify_tenant_permission"}
+# note: the instance_access helpers raise the same 403 (and a 404 or 503 from the resolver), so
+# they sit under the same rule as the two checks they wrap
+GUARDS = {
+    "verify_cluster_access",
+    "verify_tenant_permission",
+    "verify_project_access",
+    "verify_instance_view_access",
+    "resolve_instance_project",
+}
 
 
 def _is_websocket_handler(fn: ast.AST) -> bool:

@@ -449,8 +449,10 @@ class ResourceManager:
         Returns CPU, memory, disk, network usage with timestamps.
         """
         try:
-            # Find instance across all projects
-            instance, found_project = find_instance_in_projects(client, instance_name)
+            # important: the router authorized exactly this project, so the read stays in it. A
+            # search across every project could return another organization's same-named
+            # instance on a shared cluster.
+            instance, found_project = find_instance_in_projects(client, instance_name, project)
             
             if not instance:
                 raise LXDOperationError(f"Instance '{instance_name}' not found on {host}")
@@ -477,7 +479,8 @@ class ResourceManager:
                 current_usage_ns = state.cpu.get("usage")
                 current_time = time.time()
                 
-                cache_key = f"{host}:{instance_name}"
+                # note: keyed by project too, so two same-named instances never share a CPU delta
+                cache_key = f"{host}:{found_project or project}:{instance_name}"
                 
                 if cache_key in self._cpu_history:
                     # Calculate delta
