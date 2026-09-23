@@ -156,3 +156,20 @@ async def test_a_tenant_reads_tags_of_its_own_instance():
             project="own-web", tag_service=service,
         )
     assert service.calls[0][2]["resource_project"] == "own-web"
+
+
+async def test_a_tenant_cannot_read_tags_of_a_project_it_holds_no_view_on():
+    """Project tag reads apply the tenant ACL whatever the flag says, as instance reads do."""
+    service = AsyncRecorder()
+    with tenant({("own-web", "*"): {"view"}}):
+        with pytest.raises(HTTPException) as exc:
+            await tags.get_resource_tags(
+                resource_type="project", resource_id=FOREIGN, host=CLUSTER, project=None,
+                tag_service=service,
+            )
+        await tags.get_resource_tags(
+            resource_type="project", resource_id="own-web", host=CLUSTER, project=None,
+            tag_service=service,
+        )
+    assert exc.value.status_code == 403
+    assert len(service.calls) == 1

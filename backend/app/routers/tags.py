@@ -20,7 +20,7 @@ import logging
 
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, verify_tenant_permission
 from app.core.instance_access import verify_instance_view_access, verify_project_access
 from app.services.tag_service import TagService
 from app.services.lxd_service import get_lxd_service
@@ -86,7 +86,9 @@ def _authorize_tag_target(
     if resource_type == "node":
         verify_cluster_access(resource_id)
     elif host and resource_type == "project":
-        verify_project_access(host, resource_id)
+        name = verify_project_access(host, resource_id)
+        if read:
+            verify_tenant_permission(host, name, None, "view")
     elif host and resource_type == "instance":
         if read:
             verify_instance_view_access(host, project, resource_id)
