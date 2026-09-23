@@ -167,6 +167,7 @@ export function ConsoleToolbar({
           },
           body: JSON.stringify({
             host,
+            project,
             force,
             timeout: 30,
           }),

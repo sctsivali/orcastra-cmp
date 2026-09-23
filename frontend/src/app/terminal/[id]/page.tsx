@@ -299,6 +299,7 @@ function TerminalContent() {
         headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
         body: JSON.stringify({
           host,
+          project,
           force: false,
           timeout: 30,
         }),

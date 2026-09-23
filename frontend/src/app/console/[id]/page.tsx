@@ -910,7 +910,7 @@ function ConsoleContent() {
             "Content-Type": "application/json",
             ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
           },
-          body: JSON.stringify({ host, force, timeout: 30 }),
+          body: JSON.stringify({ host, project, force, timeout: 30 }),
         }
       );
 

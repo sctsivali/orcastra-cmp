@@ -101,3 +101,39 @@ def test_the_event_stream_refetch_names_the_project() -> None:
     assert "api.instances.get(name, host, project)" in source
     assert "fetchAndUpsert(host, name, msg.project)" in source
     assert "fetchAndUpsert(host, p.name, msg.project || p.project)" in source
+
+
+POWER_FETCH = re.compile(r"/instances/\$\{encodeURIComponent\(instanceName\)\}/\$\{operation\}`")
+
+
+def _power_fetch_bodies() -> list:
+    """Every direct power POST in the frontend, with the JSON body it sends."""
+    found = []
+    for path in sorted(FRONTEND.rglob("*.tsx")):
+        source = path.read_text(encoding="utf-8")
+        for match in POWER_FETCH.finditer(source):
+            body_at = source.index("body: JSON.stringify(", match.end())
+            body = source[body_at : source.index(")", body_at)]
+            found.append((path.relative_to(FRONTEND).as_posix(), body))
+    return found
+
+
+def test_the_scan_finds_the_console_and_terminal_power_buttons() -> None:
+    files = {name for name, _ in _power_fetch_bodies()}
+    assert {
+        "components/console/console-toolbar.tsx",
+        "app/console/[id]/page.tsx",
+        "app/terminal/[id]/page.tsx",
+        "components/terminal/instance-operations.tsx",
+    } <= files
+
+
+def test_every_direct_power_request_sends_the_project() -> None:
+    missing = [name for name, body in _power_fetch_bodies() if not re.search(r"\bproject\b", body)]
+    assert missing == [], "a power button that omits the project can act on a same-named instance elsewhere"
+
+
+def test_the_terminal_window_hands_its_project_to_the_power_buttons() -> None:
+    source = _read("components", "terminal", "terminal-window.tsx")
+    block = source[source.index("<InstanceOperations") : source.index("/>", source.index("<InstanceOperations"))]
+    assert "project={terminal.project}" in block

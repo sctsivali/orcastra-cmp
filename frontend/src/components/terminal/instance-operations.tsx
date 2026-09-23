@@ -40,6 +40,7 @@ interface InstanceOperationsProps {
   terminalId: string;
   instanceName: string;
   host: string;
+  project: string;
   instanceStatus: LXDInstanceStatus;
 }
 
@@ -56,6 +57,7 @@ export function InstanceOperations({
   terminalId,
   instanceName,
   host,
+  project,
   instanceStatus,
 }: InstanceOperationsProps) {
   const updateInstanceStatus = useTerminalStore(s => s.updateInstanceStatus);
@@ -90,6 +92,7 @@ export function InstanceOperations({
         },
         body: JSON.stringify({
           host,
+          project,
           force: false,
           timeout: 30,
         }),

@@ -335,6 +335,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
               terminalId={terminal.id}
               instanceName={terminal.instanceName}
               host={terminal.host}
+              project={terminal.project}
               instanceStatus={terminal.instanceStatus}
             />
 
