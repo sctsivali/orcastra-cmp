@@ -32,6 +32,7 @@ from app.services.lxd.exceptions import LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
+from app.core.instance_access import verify_project_access
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
@@ -453,6 +454,9 @@ async def update_project(
 ):
     """Update a project's description and resource limits."""
     verify_cluster_access(host)
+    # important: the list, the usage read and the single read already hold a Partner to the
+    # project bound, so a write must too or another organization's project stays writable
+    verify_project_access(host, project_name)
     try:
         # Get current project to ensure it exists
         projects = await lxd_service.list_projects(host)
@@ -564,6 +568,7 @@ async def delete_project(
 ):
     """Delete a project from a specific LXD host."""
     verify_cluster_access(host)
+    verify_project_access(host, project_name)
     try:
         await lxd_service.delete_project(host, project_name)
         

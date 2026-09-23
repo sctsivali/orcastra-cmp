@@ -34,7 +34,7 @@ from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
 from app.core.node_metadata import get_node_metadata_store
 from app.models.cluster_status import ClusterStatus, derive_status
 from app.core.dependencies import require_tenant
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, project_is_visible
 from app.core.tenant_visibility import tenant_acl_active
 
 logger = logging.getLogger(__name__)
@@ -900,9 +900,12 @@ async def get_node_metrics(
             raise HTTPException(status_code=500, detail="Node resources not available")
         
         # instance count already fetched in parallel above
+        # note: the counts carry the project bound too, so a Partner on a shared cluster does
+        # not count the other organization's instances as theirs
         node_instances = [
             vm for vm in all_vms
             if vm.host == node_name
+            and project_is_visible(vm.host, vm.project or "default")
             and check_tenant_permission(vm.host, vm.project or "default", vm.name, "view")
         ]
         

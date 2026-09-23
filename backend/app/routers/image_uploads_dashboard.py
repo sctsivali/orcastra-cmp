@@ -35,6 +35,7 @@ from app.core.database import get_db
 from app.core.upload_stream import append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.instance_access import verify_project_access
 from app.routers.image_uploads import (
     CreateUploadRequest,
     ImageUploadSession,
@@ -148,6 +149,8 @@ async def create_upload(
     _ro: None = Depends(check_read_only_mode),
 ):
     verify_cluster_access(body.cluster_id)
+    # note: the image lands in this project's store, so the project is held to the bound
+    project = verify_project_access(body.cluster_id, body.project)
     if not _ALIAS_RE.match(body.alias):
         raise HTTPException(status_code=422, detail="Invalid image alias")
     if body.instance_type not in _INSTANCE_TYPES:
@@ -188,7 +191,7 @@ async def create_upload(
     row = ImageUploadSession(
         session_id=session_id,
         cluster_id=body.cluster_id,
-        project=body.project,
+        project=project,
         alias=body.alias,
         instance_type=body.instance_type,
         image_ref=body.image_ref,

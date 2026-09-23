@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionError
 from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.instance_access import verify_project_access
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_names import safe_segment
 
@@ -118,6 +119,9 @@ async def push_file_to_instance(
     - Instance must be running
     """
     verify_cluster_access(host)
+    # important: before the upload is read. A push writes into the instance, so a project
+    # outside the caller's bound is refused whatever the file is.
+    project = verify_project_access(host, project)
     # Read file content with size check
     file_data = await file.read()
     if len(file_data) > MAX_UPLOAD_SIZE:
