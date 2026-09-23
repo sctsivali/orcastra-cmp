@@ -20,6 +20,7 @@ import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd import health
+from app.services.lxd.fanout import is_read_timeout
 from app.services.lxd.proxy import (
     ALLOWED_METHODS,
     API_KEY_CACHE_TTL,
@@ -37,6 +38,7 @@ from app.services.lxd.proxy import (
 )
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
@@ -2154,9 +2156,17 @@ async def raw_proxy(
             raise HTTPException(status_code=503, detail="Proxy saturated, retry shortly")
 
         if not client:
+            # note: "not connected" alone covered a tripped breaker, a failed reconnect and an
+            # untrusted certificate alike, and an integrator cannot act on any of them unnamed.
+            reason = health.get_reason(request.cluster_id)
             raise HTTPException(
                 status_code=503,
-                detail=f"Cluster {request.cluster_id} is not connected"
+                detail=(
+                    f"Cluster {request.cluster_id} is not connected: {reason}"
+                    if reason
+                    else f"Cluster {request.cluster_id} is not connected "
+                    "(the connection could not be re-established)"
+                ),
             )
 
         # Use pylxd client's API directly
@@ -2255,7 +2265,11 @@ async def raw_proxy(
             )
 
         except BlockingTimeout as timeout_error:
-            health.record_failure(request.cluster_id, str(timeout_error))
+            # important: a read that outlived the cap is a slow cluster, not an unreachable one.
+            # Tripping the breaker for it turned one heavy list into sixty seconds of 503 for
+            # every caller of the cluster, provisioning included. A write still trips it.
+            if method not in ("GET", "HEAD"):
+                health.record_failure(request.cluster_id, str(timeout_error))
             logger.warning(
                 f"Raw proxy timeout: {method} {request.path} on {request.cluster_id}/{project} "
                 f"after {RAW_PROXY_TIMEOUT}s"
@@ -2281,6 +2295,22 @@ async def raw_proxy(
             # bug in our own response handling marked the cluster dead for 60s. That now costs
             # more than it did: connection.get_client consults the same breaker, so a wrongly
             # tripped cluster disappears from the dashboard's own read paths too.
+            # important: a read timeout means TCP and TLS completed and LXD is still working, so
+            # it answers 504 and leaves the breaker alone. Not isinstance(ReadTimeout): the
+            # pooled session mounts Retry(read=0), so a GET read timeout arrives as
+            # ConnectionError(MaxRetryError(ReadTimeoutError)) and a stalled body as
+            # ConnectionError(ReadTimeoutError). is_read_timeout names every shape and still
+            # refuses a connect failure, which trips the breaker below.
+            if is_read_timeout(api_error):
+                logger.warning(
+                    f"Raw proxy read timeout: {method} {request.path} on "
+                    f"{request.cluster_id}/{project}"
+                )
+                return RawProxyResponse(
+                    status_code=504,
+                    data=None,
+                    error=sanitize_error(str(api_error), limit=1000),
+                )
             if isinstance(api_error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
                 health.record_failure(request.cluster_id, str(api_error))
             logger.error(f"LXD API error: {api_error}")
