@@ -2979,6 +2979,8 @@ async def sync_policies_from_external(
         raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     # verify secret
+    # important: plain sha256 never matches the HMAC every key since RC1 stores, so this answers
+    # 401 to all current keys. A repair must also check each rule's cluster_id against the key grant.
     computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
     if not hmac.compare_digest(computed_hash, stored_hash):
         raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
@@ -2994,6 +2996,7 @@ async def sync_policies_from_external(
             # find org by external_id
             org_stmt = select(Organization).where(
                 and_(
+                    Organization.source == "orcahub",
                     Organization.external_id == sync_policy.org_external_id,
                     Organization.is_active == True,
                 )
@@ -3008,10 +3011,11 @@ async def sync_policies_from_external(
             # tenant access policies, which are authorization data. Without binding the key to
             # the org, any valid key could write policies into another integration's tenants.
             # Reported as not-found so a caller cannot probe which external ids exist.
-            if org.api_key_id and org.api_key_id != api_key_id:
+            # important: a NULL owner is not "anyone's". Tenant policies are authorization data.
+            if org.api_key_id != api_key_id:
                 logger.warning(
                     "Refusing policy sync into organization %s: owned by api key %s, caller is %s",
-                    org.slug, org.api_key_id, api_key_id,
+                    org.slug, org.api_key_id or "<none>", api_key_id,
                 )
                 errors.append(f"Organization with external_id '{sync_policy.org_external_id}' not found")
                 continue
