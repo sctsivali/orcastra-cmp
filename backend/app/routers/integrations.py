@@ -2615,7 +2615,7 @@ async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) 
             detail=f"Cluster {cluster_id} is busy with other requests, retry shortly",
             headers={"Retry-After": "2"},
         ) from None
-    state = {"started": False, "released": False}
+    state = {"started": False, "abandoned": False, "released": False}
     lock = threading.Lock()
 
     def release_once() -> None:
@@ -2626,7 +2626,11 @@ async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) 
         loop.call_soon_threadsafe(slots.release)
 
     def held(*a: Any, **k: Any) -> Any:
+        # note: a job still queued when its caller gave up is dropped here, never run. The caller
+        # already answered, and a late request (possibly a write) must not reach the cluster.
         with lock:
+            if state["abandoned"]:
+                return None
             state["started"] = True
         try:
             return fn(*a, **k)
@@ -2637,8 +2641,9 @@ async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) 
         return await run_blocking(held, *args, **kwargs)
     except BaseException:
         with lock:
-            started = state["started"]
-        if not started:
+            if not state["started"]:
+                state["abandoned"] = True
+        if state["abandoned"]:
             release_once()
         raise
 

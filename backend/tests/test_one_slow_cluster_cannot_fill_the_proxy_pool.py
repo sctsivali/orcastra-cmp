@@ -165,3 +165,32 @@ async def test_an_infinite_wait_timeout_is_capped_not_a_500() -> None:
         assert answer.status_code == 200
     assert all(url.endswith("wait?timeout=5") for url in session.calls)
 
+
+
+async def test_a_call_that_gave_up_while_queued_never_reaches_the_cluster(monkeypatch) -> None:
+    """The client lookup runs at once, then other work takes the only thread, so the request's own
+    job waits in the queue past its cap. When the thread frees up, that job must not run."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    tiny = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(integrations, "proxy_executor", tiny)
+    monkeypatch.setattr(integrations, "RAW_PROXY_TIMEOUT", 0.2)
+    blocker = threading.Event()
+    queued = _Session(None)
+    client = _Client(queued, "cluster-slow")
+
+    def get_client(_cluster: str) -> Any:
+        tiny.submit(blocker.wait, 5)  # queued ahead of the request's job
+        return client
+
+    service = type("Svc", (), {"connection_manager": type("CM", (), {"get_client": staticmethod(get_client)})()})()
+    try:
+        answer = await _call(service, "cluster-slow", "/1.0/instances", method="POST")
+        assert answer.status_code == 504, "the caller gave up on the queued request"
+    finally:
+        blocker.set()
+    tiny.shutdown(wait=True)
+    assert queued.calls == [], "a request whose caller already gave up reached the cluster"
+    await asyncio.sleep(0.05)  # the release is scheduled onto the loop
+    slots = integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")]
+    assert not slots.locked()
