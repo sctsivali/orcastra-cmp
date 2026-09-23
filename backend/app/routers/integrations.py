@@ -2186,6 +2186,19 @@ async def rotate_api_key_secret(
             status_code=409,
             detail="This key's stored grants no longer validate. Update its permissions, then rotate it.",
         )
+    # important: revoking, deleting or narrowing a key someone else minted hands the caller nothing,
+    # but a rotation hands them a working secret. A non-admin gets one only for a key they minted
+    # (they held its secret already) or a key they could mint now: every cluster inside their scope
+    # and every project inside their bound.
+    allowed = get_current_allowed_clusters()
+    if allowed is not None and str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
+        outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
+        if outside:
+            raise HTTPException(
+                status_code=403,
+                detail=f"This key also grants {outside}, which you cannot reach. An administrator can rotate it.",
+            )
+        await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
     key_secret, secret_hash = generate_api_key_secret()
     try:
         await asyncio.to_thread(

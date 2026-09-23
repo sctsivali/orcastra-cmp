@@ -182,3 +182,60 @@ def test_the_raw_backfill_never_writes_over_a_rotation(world, monkeypatch) -> No
     monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k: (dict(world["metadata"]), old_hash))
     integrations._validate_api_key_blocking(KEY, world["old"])
     assert world["vault"].writes == [], "the backfill wrote the old secret over the rotated hash"
+
+
+@pytest.fixture
+def partner_scope():
+    from app.core import org_scope
+
+    token = org_scope._allowed_clusters_var.set({"c1"})
+    yield
+    org_scope._allowed_clusters_var.reset(token)
+
+
+OTHER = AuthenticatedUser(user_id="q", email="teammate@example.test", groups=["role_partner"])
+
+
+async def test_a_partner_cannot_take_the_secret_of_a_key_reaching_past_their_scope(world, partner_scope) -> None:
+    """An admin-minted key granting the partner's cluster and one they cannot reach."""
+    grants = [{"cluster_id": "c1", "permissions": ["read"], "projects": ["*"]},
+              {"cluster_id": "c9", "permissions": ["read", "write"], "projects": ["*"]}]
+    for doc in (world["metadata"], world["vault"].docs[f"{BASE}/metadata"]):
+        doc.update({"created_by": "ops@example.test", "cluster_permissions": grants})
+    with pytest.raises(HTTPException) as caught:
+        await integrations.rotate_api_key_secret(KEY, None, OTHER, None)
+    assert caught.value.status_code == 403 and "c9" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+
+
+async def test_a_non_creator_rotation_is_held_to_the_grant_bound(world, partner_scope, monkeypatch) -> None:
+    seen: List[str] = []
+
+    async def bound(_db: Any, email: str, grants: Any, *_a: Any) -> None:
+        seen.append(email)
+        raise HTTPException(status_code=403, detail="Not permitted to grant these projects")
+
+    monkeypatch.setattr(integrations, "_refuse_a_grant_past_the_project_bound", bound)
+    for doc in (world["metadata"], world["vault"].docs[f"{BASE}/metadata"]):
+        doc["created_by"] = "ops@example.test"
+    with pytest.raises(HTTPException) as caught:
+        await integrations.rotate_api_key_secret(KEY, None, OTHER, None)
+    assert caught.value.status_code == 403 and seen == [OTHER.email]
+    assert world["vault"].writes == []
+
+
+async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, partner_scope, monkeypatch) -> None:
+    async def refuse(*_a: Any, **_k: Any) -> None:
+        raise AssertionError("the mint check ran for a caller who already held the secret")
+
+    monkeypatch.setattr(integrations, "_refuse_a_grant_past_the_project_bound", refuse)
+    answer = await integrations.rotate_api_key_secret(KEY, None, OWNER, None)
+    assert answer.api_key_id == KEY
+    from app.core import org_scope
+
+    token = org_scope._allowed_clusters_var.set(None)
+    try:
+        admin = AuthenticatedUser(user_id="a", email="ops@example.test", groups=["role_admin"])
+        assert (await integrations.rotate_api_key_secret(KEY, None, admin, None)).api_key_id == KEY
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
