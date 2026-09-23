@@ -2670,7 +2670,8 @@ def _envelope_error(exc: BaseException) -> str:
 
 
 # note: per worker, like the pool it guards (services/lxd/proxy.py sets the share). A request takes
-# one slot, for its LXD call only, so a wide fan-out to one cluster waits once, not twice.
+# one slot before its client lookup and keeps it through its LXD call, so it waits once, and the
+# lookups to a slow cluster count against that cluster's share as well.
 CLUSTER_PROXY_SLOTS = _PROXY_CLUSTER_SLOTS
 # note: LXD holds GET /operations/<id>/wait open for `timeout` seconds. Past the pooled read timeout
 # (8 s) that is a 504 and a thread held for nothing, so the wait is answered earlier with the
@@ -2725,13 +2726,34 @@ async def _run_unless_abandoned(fn: Any, *args: Any, on_finish: Any = None, **kw
         raise
 
 
-async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """run_blocking, holding one of the cluster's proxy slots until the worker thread finishes.
+class _ClusterSlot:
+    """One of a cluster's proxy slots, held by one request across its client lookup and its call.
 
-    important: released by the thread, not by the await. run_blocking stops waiting at its cap
-    while the thread reads on until its socket gives up, and releasing on the await would let one
-    slow cluster take a fresh slot for every call that outlived the cap.
+    important: given back once the request is done and every worker thread it started has ended,
+    never on the await alone. run_blocking stops waiting at its cap while the thread reads on
+    until its socket gives up, and giving the slot back then would let one slow cluster take a
+    fresh slot for every call that outlived the cap.
     """
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, slots: asyncio.Semaphore) -> None:
+        self._loop, self._slots = loop, slots
+        self._users = 1  # the request itself, until its handler ends
+        self._lock = threading.Lock()
+
+    def enter(self) -> None:
+        with self._lock:
+            self._users += 1
+
+    def leave(self) -> None:
+        with self._lock:
+            self._users -= 1
+            last = self._users == 0
+        if last:
+            self._loop.call_soon_threadsafe(self._slots.release)
+
+
+async def _take_cluster_slot(cluster_id: str) -> _ClusterSlot:
+    """Wait for one of the cluster's proxy slots, or answer 503 busy before anything is sent."""
     loop = asyncio.get_running_loop()
     slots = _cluster_slots.setdefault((id(loop), cluster_id), asyncio.Semaphore(CLUSTER_PROXY_SLOTS))
     try:
@@ -2742,17 +2764,13 @@ async def _run_for_cluster(cluster_id: str, fn: Any, *args: Any, **kwargs: Any) 
             detail=f"Cluster {cluster_id} is busy with other requests, retry shortly",
             headers={"Retry-After": "2"},
         ) from None
-    released = threading.Event()
-    lock = threading.Lock()
+    return _ClusterSlot(loop, slots)
 
-    def release_once() -> None:
-        with lock:
-            if released.is_set():
-                return
-            released.set()
-        loop.call_soon_threadsafe(slots.release)
 
-    return await _run_unless_abandoned(fn, *args, on_finish=release_once, **kwargs)
+async def _run_in_slot(slot: _ClusterSlot, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """_run_unless_abandoned, with the worker thread counted as a user of the request's slot."""
+    slot.enter()
+    return await _run_unless_abandoned(fn, *args, on_finish=slot.leave, **kwargs)
 
 
 def _capped_operation_wait(base_path: str, method: str, query_params: Dict[str, str]) -> None:
@@ -2780,6 +2798,7 @@ async def raw_proxy(
     _: None = Depends(check_read_only_mode),
 ):
     """Raw HTTP proxy for external applications to access LXD API."""
+    slot: Optional[_ClusterSlot] = None
     try:
         # Check cluster permission
         cluster_permissions = {
@@ -2841,11 +2860,13 @@ async def raw_proxy(
                 ),
             )
 
-        # note: get_client blocks too. It revalidates the pooled connection with a live
-        # request and may rebuild the client, so it needs the same offload as the verb call
-        # below. Wrapping only the verb call would leave this on the event loop.
+        # important: one slot for the whole request, taken before the lookup. get_client blocks
+        # too: it revalidates the pooled connection with a live request and may rebuild the
+        # client, so against a slow cluster the lookups alone could hold every proxy thread.
+        slot = await _take_cluster_slot(request.cluster_id)
         try:
-            client = await _run_unless_abandoned(
+            client = await _run_in_slot(
+                slot,
                 lxd_service.connection_manager.get_client,
                 request.cluster_id,
                 timeout=PROXY_CONNECT_TIMEOUT,
@@ -2920,8 +2941,8 @@ async def raw_proxy(
         # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
         # and then goes silent must degrade this one cluster, never the whole process.
         try:
-            response = await _run_for_cluster(
-                request.cluster_id,
+            response = await _run_in_slot(
+                slot,
                 raw_request,
                 client.api.session,
                 method,
@@ -3036,6 +3057,9 @@ async def raw_proxy(
             data=None,
             error=_envelope_error(e),
         )
+    finally:
+        if slot is not None:
+            slot.leave()
 
 
 @external_router.post(

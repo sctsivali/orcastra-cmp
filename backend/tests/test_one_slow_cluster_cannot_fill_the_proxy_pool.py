@@ -5,6 +5,9 @@ and each held a proxy thread for the whole socket timeout. Nothing bounded how m
 could hold, so a slow cluster could fill the shared pool and every other cluster's calls and every
 concurrent /sync answered 503. An operation wait with a long `timeout` held a thread past the read
 timeout for a 504.
+
+A request takes its slot before the client lookup and keeps it through the call, since a lookup to
+a slow cluster holds a thread as well. The shipped share leaves two threads of the pool free.
 """
 
 import asyncio
@@ -68,6 +71,18 @@ def one_slot(monkeypatch):
     integrations._cluster_slots.clear()
 
 
+async def _share_is_whole(cluster: str = "cluster-slow") -> None:
+    """Every slot is back and none came back twice: a double release would widen the share for good."""
+    key = (id(asyncio.get_running_loop()), cluster)
+    for _ in range(100):
+        slots = integrations._cluster_slots.get(key)
+        if slots is None or slots._value == integrations.CLUSTER_PROXY_SLOTS:
+            break
+        await asyncio.sleep(0.01)
+    assert slots is None or slots._value == integrations.CLUSTER_PROXY_SLOTS, (
+        f"share is {slots._value}, expected {integrations.CLUSTER_PROXY_SLOTS}")
+
+
 def _call(service: _Service, cluster: str, path: str = "/1.0/instances", method: str = "GET") -> Any:
     return raw_proxy(
         request=RawProxyRequest(cluster_id=cluster, method=method, path=path),
@@ -95,6 +110,7 @@ async def test_a_busy_cluster_answers_503_without_touching_the_pool_and_others_g
         gate.set()
         assert (await first).status_code == 200
     assert not health.is_tripped("cluster-slow")
+    await _share_is_whole()
 
 
 async def test_the_slot_is_given_back_after_the_call() -> None:
@@ -103,6 +119,7 @@ async def test_the_slot_is_given_back_after_the_call() -> None:
     for _ in range(3):
         assert (await _call(service, "cluster-slow")).status_code == 200
     assert len(session.calls) == 3
+    await _share_is_whole()
 
 
 @pytest.mark.parametrize(
@@ -155,6 +172,7 @@ async def test_the_slot_stays_taken_until_the_thread_finishes(monkeypatch) -> No
         await asyncio.sleep(0.02)
     slow.gate = None
     assert (await _call(service, "cluster-slow")).status_code == 200
+    await _share_is_whole()
 
 
 async def test_an_infinite_wait_timeout_is_capped_not_a_500() -> None:
@@ -196,8 +214,7 @@ async def test_a_call_that_gave_up_while_queued_never_reaches_the_cluster(monkey
     assert queued.calls == [], "a request whose caller already gave up reached the cluster"
     assert not health.is_tripped("cluster-slow"), "a cluster that was never contacted cannot be unreachable"
     await asyncio.sleep(0.05)  # the release is scheduled onto the loop
-    slots = integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")]
-    assert not slots.locked()
+    await _share_is_whole()
 
 
 async def test_a_proxy_operation_that_gave_up_while_queued_is_never_sent(monkeypatch) -> None:
@@ -255,6 +272,7 @@ async def test_a_client_lookup_that_gave_up_while_queued_is_not_a_cluster_failur
     tiny.shutdown(wait=True)
     assert looked_up == [], "a lookup whose caller already gave up still ran"
     assert not health.is_tripped("cluster-slow")
+    await _share_is_whole()
 
 
 async def test_a_caller_that_disconnects_while_queued_never_reaches_the_cluster(monkeypatch) -> None:
@@ -262,24 +280,25 @@ async def test_a_caller_that_disconnects_while_queued_never_reaches_the_cluster(
 
     tiny = ThreadPoolExecutor(max_workers=1)
     monkeypatch.setattr(integrations, "proxy_executor", tiny)
-    ran: List[str] = []
+    session = _Session(None)
+    looked_up: List[str] = []
+    service = type("Svc", (), {"connection_manager": type("CM", (), {
+        "get_client": staticmethod(lambda c: looked_up.append(c) or _Client(session, c))})()})()
     blocker = threading.Event()
     tiny.submit(blocker.wait, 5)
-    task = asyncio.create_task(integrations._run_for_cluster(
-        "cluster-slow", lambda: ran.append("sent"), timeout=5, label="probe", executor=tiny, max_in_flight=8))
+    task = asyncio.create_task(_call(service, "cluster-slow", method="POST"))
     await asyncio.sleep(0.1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     blocker.set()
     tiny.shutdown(wait=True)
-    assert ran == [], "the client left, and its queued request still went out"
-    await asyncio.sleep(0.05)
-    assert not integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")].locked()
+    assert looked_up == [] and session.calls == [], "the client left, and its queued request still went out"
+    await _share_is_whole()
 
 
-def test_a_cluster_may_use_the_whole_pool_by_default(monkeypatch) -> None:
-    """The integrator fans out one read per project, so a half-pool share answered a wide fan-out busy."""
+def test_a_cluster_leaves_two_threads_for_the_others_by_default(monkeypatch) -> None:
+    """The integrator fans out one read per project, so the share stays wide, but never the whole pool."""
     import importlib
 
     from app.services.lxd import proxy
@@ -287,27 +306,62 @@ def test_a_cluster_may_use_the_whole_pool_by_default(monkeypatch) -> None:
     monkeypatch.delenv("ORCASTRA_CLUSTER_PROXY_SLOTS", raising=False)
     fresh = importlib.reload(proxy)
     try:
-        assert fresh.CLUSTER_PROXY_SLOTS == fresh.PROXY_POOL_WORKERS
+        assert fresh.CLUSTER_PROXY_SLOTS == max(1, fresh.PROXY_POOL_WORKERS - 2)
     finally:
         importlib.reload(proxy)
 
 
-async def test_a_request_takes_one_slot_not_two() -> None:
-    """The client lookup no longer queues for a slot, so a request waits once, for its LXD call."""
+async def test_a_request_takes_its_slot_before_its_lookup() -> None:
+    """A lookup to a slow cluster holds a thread, so it counts against the share, and a request waits once."""
     gate = threading.Event()
-    slow = _Session(gate)
     lookups: List[str] = []
-    clients = {c: _Client(s, c) for c, s in (("cluster-slow", slow), ("cluster-fast", _Session(None)))}
-    service = type("Svc", (), {"connection_manager": type("CM", (), {
-        "get_client": staticmethod(lambda c: lookups.append(c) or clients[c])})()})()
+
+    def get_client(cluster: str) -> Any:
+        lookups.append(cluster)
+        gate.wait(5)
+        return _Client(_Session(None), cluster)
+
+    service = type("Svc", (), {"connection_manager": type("CM", (), {"get_client": staticmethod(get_client)})()})()
     first = asyncio.create_task(_call(service, "cluster-slow"))
-    while not slow.calls:
+    while not lookups:
         await asyncio.sleep(0.01)
     try:
         with pytest.raises(HTTPException) as caught:
             await _call(service, "cluster-slow")
         assert caught.value.status_code == 503 and "busy" in caught.value.detail
-        assert lookups == ["cluster-slow", "cluster-slow"], "the second lookup waited on the slot"
+        assert lookups == ["cluster-slow"], "the second lookup ran past a full share"
     finally:
         gate.set()
-        await first
+        assert (await first).status_code == 200
+    await _share_is_whole()
+
+
+async def test_at_the_shipped_share_a_stalled_cluster_leaves_threads_for_the_others(monkeypatch) -> None:
+    """The shipped pool and share, not one slot: a stalled fan-out holds its share and no more."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.lxd import proxy
+
+    pool = ThreadPoolExecutor(max_workers=proxy.PROXY_POOL_WORKERS)
+    monkeypatch.setattr(integrations, "proxy_executor", pool)
+    monkeypatch.setattr(integrations, "CLUSTER_PROXY_SLOTS", proxy.CLUSTER_PROXY_SLOTS)
+    gate = threading.Event()
+    slow, fast = _Session(gate), _Session(None)
+    service = _Service({"cluster-slow": slow, "cluster-fast": fast})
+    wide = proxy.PROXY_POOL_WORKERS + 2
+    stalled = [asyncio.create_task(_call(service, "cluster-slow")) for _ in range(wide)]
+    try:
+        while len(slow.calls) < proxy.CLUSTER_PROXY_SLOTS:
+            await asyncio.sleep(0.01)
+        answer = await asyncio.wait_for(_call(service, "cluster-fast"), 2)
+        assert answer.status_code == 200, "another cluster got no thread while one cluster stalled"
+        await asyncio.sleep(integrations.CLUSTER_SLOT_WAIT_SECONDS + 0.2)  # the rest give up waiting
+        assert len(slow.calls) == proxy.CLUSTER_PROXY_SLOTS
+    finally:
+        gate.set()
+        outcomes = await asyncio.gather(*stalled, return_exceptions=True)
+        pool.shutdown(wait=True)
+    busy = [o for o in outcomes if isinstance(o, HTTPException)]
+    assert busy and all(o.status_code == 503 and "busy" in o.detail for o in busy)
+    assert len(busy) + len(slow.calls) == wide
+    await _share_is_whole()
