@@ -10,6 +10,7 @@ Hermetic: the resolver is url_safety._getaddrinfo and HTTP goes to an httpx.Mock
 
 import ast
 import ipaddress
+import re
 import socket
 from pathlib import Path
 from typing import Any, List
@@ -24,6 +25,7 @@ from app.core.auth import AuthenticatedUser
 from app.routers import user_preferences
 
 APP = Path(__file__).resolve().parents[1] / "app"
+FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src"
 PUBLIC_V4 = "93.184.215.14"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
@@ -221,4 +223,16 @@ def test_nothing_resolves_a_name_outside_url_safety() -> None:
     assert not offenders, (
         "a resolver outside url_safety decides on an address the connection may never use: "
         + ", ".join(offenders)
+    )
+
+
+def test_the_settings_form_enforces_the_same_url_limit() -> None:
+    form = (FRONTEND / "components" / "personalization-settings.tsx").read_text()
+    match = re.search(r"const MAX_IMAGE_URL_LENGTH = (\d+);", form)
+    assert match, "the settings form no longer bounds the image URL before sending it"
+    field = user_preferences.ProxyImageRequest.model_fields["url"]
+    limits = [m.max_length for m in field.metadata if getattr(m, "max_length", None)]
+    assert limits == [int(match.group(1))], "the form and the endpoint disagree on the URL limit"
+    assert 'typeof err?.detail === "string"' in form, (
+        "a 422 list detail must not reach the user as [object Object]"
     )

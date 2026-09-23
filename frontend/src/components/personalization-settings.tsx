@@ -57,6 +57,8 @@ async function fileToBase64(file: File): Promise<string> {
 import { getAccessToken } from "@/lib/api";
 // Use relative URLs - Next.js rewrites proxy to backend
 const API_BASE = "";
+// Mirrors ProxyImageRequest.url on the backend.
+const MAX_IMAGE_URL_LENGTH = 2048;
 
 async function fetchImageAsBase64(url: string): Promise<string> {
   const token = getAccessToken();
@@ -70,8 +72,10 @@ async function fetchImageAsBase64(url: string): Promise<string> {
     body: JSON.stringify({ url }),
   });
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
-    throw new Error(err.detail || `Failed to fetch image: ${response.status}`);
+    const err = await response.json().catch(() => ({}));
+    // note: a 422 carries a list of field errors, which would render as "[object Object]"
+    const detail = typeof err?.detail === "string" ? err.detail : null;
+    throw new Error(detail || `Failed to fetch image: HTTP ${response.status}`);
   }
   const data = await response.json();
   return data.data; // base64 data URI
@@ -128,6 +132,10 @@ function ImageUploader({
   const handleUrlFetch = async () => {
     if (!urlValue.trim()) {
       setError("Please enter a valid URL");
+      return;
+    }
+    if (urlValue.trim().length > MAX_IMAGE_URL_LENGTH) {
+      setError(`URL is too long (${MAX_IMAGE_URL_LENGTH} characters at most)`);
       return;
     }
 
