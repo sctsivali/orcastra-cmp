@@ -55,3 +55,18 @@ def assert_cluster_permission(
             status_code=403, detail=f"Operation requires {required} permission"
         )
     return grant
+
+
+def assert_project_granted(grant: Dict[str, Any], project: Optional[str]) -> str:
+    """Raise 403 unless a cluster grant covers ``project``, and return the name checked.
+
+    important: the upload routers stored the caller's project and imported into it with the
+    cluster's own certificate, so a key granted one project could plant an image in, or repoint
+    an alias of, any other project on that cluster. Same rule as the raw proxy: ``*`` covers every
+    project, a missing ``projects`` means ``default`` only.
+    """
+    name = project or "default"
+    allowed = grant.get("projects", ["default"])
+    if "*" not in allowed and name not in allowed:
+        raise HTTPException(status_code=403, detail=f"No permission for project {name}")
+    return name

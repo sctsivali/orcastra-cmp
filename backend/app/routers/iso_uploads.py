@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
-from app.core.api_key_permissions import assert_cluster_permission
+from app.core.api_key_permissions import assert_cluster_permission, assert_project_granted
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -157,7 +157,8 @@ async def create_upload(
     db: AsyncSession = Depends(get_db),
     x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
 ):
-    _assert_cluster_permission(api_key, body.cluster_id, "write")
+    grant = assert_cluster_permission(api_key, body.cluster_id, "write")
+    assert_project_granted(grant, body.project)
     if not _VOLUME_NAME_RE.match(body.volume_name):
         raise HTTPException(status_code=422, detail="Invalid ISO volume name")
     if not _POOL_NAME_RE.match(body.pool):
