@@ -21,7 +21,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, and_, delete
+from sqlalchemy import Select, select, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -243,6 +243,11 @@ async def _verify_org_access(
     return org
 
 
+def _member_ids_of(email: str) -> Select:
+    """The organization-member ids that belong to one email, across every organization."""
+    return select(OrganizationMember.id).where(OrganizationMember.user_email == email)
+
+
 async def _policy_to_response(policy: TenantAccessPolicy) -> PolicyResponse:
     """Convert ORM model to response schema."""
     return PolicyResponse(
@@ -314,6 +319,16 @@ async def list_policies(
         stmt = stmt.where(
             TenantAccessPolicy.organization_id.in_(
                 member_orgs.union(created_orgs)
+            )
+        )
+
+    if highest == Role.TENANT:
+        # important: scoping stopped at the organization, which handed every tenant the org's
+        # full access matrix. A tenant sees only the policies assigned to them, the same answer
+        # /my-access gives. Partner and Admin keep the org-wide view they administer with.
+        stmt = stmt.where(
+            TenantAccessPolicy.assignments.any(
+                TenantPolicyAssignment.org_member_id.in_(_member_ids_of(user.email))
             )
         )
 
@@ -462,6 +477,14 @@ async def get_policy(
         raise HTTPException(status_code=404, detail="Policy not found")
 
     await _verify_org_access(user, policy.organization_id, db)
+
+    if get_highest_role(resolve_roles(user)) == Role.TENANT:
+        # important: the same bound as list_policies. A tenant reads only a policy assigned to
+        # them, and anything else answers exactly like a missing policy so ids cannot be probed.
+        mine = set((await db.execute(_member_ids_of(user.email))).scalars().all())
+        if not any(a.org_member_id in mine for a in (policy.assignments or [])):
+            raise HTTPException(status_code=404, detail="Policy not found")
+
     return await _policy_to_response(policy)
 
 
@@ -627,6 +650,11 @@ async def list_assignments(
 
     if user_email:
         stmt = stmt.where(OrganizationMember.user_email == user_email)
+
+    if highest == Role.TENANT:
+        # important: org scoping alone listed every other member's assignments and email to
+        # a tenant. A tenant sees only their own.
+        stmt = stmt.where(OrganizationMember.user_email == user.email)
 
     result = await db.execute(stmt)
     assignments = result.scalars().unique().all()
