@@ -80,7 +80,7 @@ class _Recorder:
         if self.raises:
             raise self.raises
         if key_secret != KEY_SECRET:
-            raise HTTPException(status_code=401, detail="Invalid API key secret")
+            raise HTTPException(status_code=401, detail=integrations.INVALID_API_KEY_MESSAGE)
         return self.metadata
 
 

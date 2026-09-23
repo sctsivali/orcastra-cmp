@@ -78,6 +78,11 @@ external_router = APIRouter(
 # Vault path for integration data
 VAULT_INTEGRATIONS_PATH = "integrations"
 
+# important: one answer for an unknown key id and a wrong secret, on every external endpoint.
+# Two texts told a caller which key ids exist. Revoked, inactive and expired keep their own
+# texts, because reaching them already needs the correct secret.
+INVALID_API_KEY_MESSAGE = "Invalid API key or secret"
+
 
 # ============================================
 # Pydantic Models
@@ -874,7 +879,7 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
 
     if not verify_api_key_secret(key_secret, secret_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
+        raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     # Backfill raw secret if not already stored (for callback auth)
     try:
@@ -1327,7 +1332,7 @@ async def validate_api_key(
             # get_api_key_from_vault reports a missing key as 404. Externally that is an
             # authentication failure, and must not leak whether the id exists.
             if exc.status_code == 404:
-                raise HTTPException(status_code=401, detail="Invalid API key") from None
+                raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE) from None
             raise
         _store_key_metadata(digest, x_api_key_id, metadata)
 
@@ -1818,7 +1823,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         
         # Verify secret
         if not verify_api_key_secret(request.api_key_secret, secret_hash):
-            return APIKeyValidateResponse(valid=False, error="Invalid secret")
+            return APIKeyValidateResponse(valid=False, error=INVALID_API_KEY_MESSAGE)
         
         # Check if revoked
         if metadata.get("is_revoked", False):
@@ -1880,7 +1885,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         )
         
     except HTTPException:
-        return APIKeyValidateResponse(valid=False, error="API key not found")
+        return APIKeyValidateResponse(valid=False, error=INVALID_API_KEY_MESSAGE)
     except Exception as e:
         logger.error(f"Error validating API key: {e}")
         return APIKeyValidateResponse(valid=False, error="Validation failed")
@@ -2815,12 +2820,12 @@ async def sync_policies_from_external(
         vault_client = get_vault_integrations_client()
         metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
     except HTTPException:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     # verify secret
     computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
     if not hmac.compare_digest(computed_hash, stored_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
+        raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     if metadata.get("is_revoked"):
         raise HTTPException(status_code=403, detail="API key has been revoked")
@@ -2976,11 +2981,11 @@ async def get_policies_for_external(
         vault_client = get_vault_integrations_client()
         metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
     except HTTPException:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
     if not hmac.compare_digest(computed_hash, stored_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
+        raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     # build query
     stmt = (
