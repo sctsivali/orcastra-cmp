@@ -214,6 +214,19 @@ def describe_usage() -> Dict[str, Any]:
     }
 
 
+
+# Fields of describe_usage an unauthenticated caller of /health may see.
+PUBLIC_USAGE_FIELDS = ("available", "used_mib", "total_mib", "percent_used", "degraded")
+
+
+def public_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
+    """The part of describe_usage that /health may publish.
+
+    important: /health answers anyone. `path` names the backend's scratch directory and `error`
+    is the OSError text, which names it again, so both stay in the server log only.
+    """
+    return {key: usage[key] for key in PUBLIC_USAGE_FIELDS if key in usage}
+
 def describe_disk_usage(path: str) -> str:
     """One-line human summary of free space, shared with the WebSocket path in lxd_ssl.
 

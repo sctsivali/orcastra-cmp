@@ -559,6 +559,12 @@ Ensure your client certificates are properly configured.
         from app.services.lxd import cert_files
 
         temp_storage = cert_files.describe_usage()
+        if temp_storage.get("available") is False:
+            logger.warning(
+                "Backend temp storage at %s is unreadable: %s",
+                temp_storage.get("path"),
+                temp_storage.get("error"),
+            )
         if temp_storage.get("degraded"):
             logger.warning(
                 "Backend temp storage at %s%% of %s MiB (%s). LXD TLS credential writes fail "
@@ -590,7 +596,7 @@ Ensure your client certificates are properly configured.
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",
-            "temp_storage": temp_storage,
+            "temp_storage": cert_files.public_usage(temp_storage),
             "vault": vault,
         }
     
@@ -601,8 +607,8 @@ Ensure your client certificates are properly configured.
         response = {
             "name": settings.api_title,
             "version": settings.app_version,
-            "build_date": getattr(settings, 'build_date', None),
-            "build_commit": getattr(settings, 'build_commit', None),
+            # note: build_date and build_commit are only on the authenticated /system/version.
+            # This answers anyone, and a commit tells a caller which fixes the build lacks.
             "health": "/health",
         }
         if is_debug:
