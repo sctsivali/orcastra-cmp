@@ -883,7 +883,7 @@ async def kill_active_session(
         # important: an operation id alone named any operation on the host, so a caller could
         # cancel another organization's session. It must name this instance in this project.
         try:
-            op_response = client.api.operations[safe_segment(operation_id)].get()
+            op_response = await asyncio.to_thread(client.api.operations[safe_segment(operation_id)].get)
             operation = op_response.json().get("metadata") or {}
         except Exception:
             return ActionResponse(success=True, message=f"Session {operation_id[:8]}... already ended")

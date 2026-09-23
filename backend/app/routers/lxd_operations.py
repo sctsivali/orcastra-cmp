@@ -16,7 +16,13 @@ from app.services.lxd_service import (
     require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    check_tenant_permission,
+    project_is_visible,
+)
+from app.core.instance_access import operation_targets
 from pydantic import BaseModel, Field
 from app.core.lxd_names import safe_segment
 from app.services.lxd.utils import strip_operation_secrets
@@ -48,6 +54,25 @@ class OperationInfo(BaseModel):
     node_name: str = Field("", description="Node where operation is running")
     project: str = Field("default", description="Project for this operation")
     instance_name: str = Field("", description="Instance name if applicable")
+
+
+def _operation_is_visible(host: str, resources: Any) -> bool:
+    """Whether every instance an operation names sits inside this caller's project bound.
+
+    important: an operation id is enough to read, wait on or cancel any operation on a host, and
+    on a cluster bound to two organizations the other organization's console sessions and
+    instance creates are operations too. An operation that names no instance is cluster-level.
+    """
+    targets = operation_targets({"resources": resources if isinstance(resources, dict) else {}})
+    return all(project_is_visible(host, project) for project, _instance in targets)
+
+
+def _read_visible_operation(client: Any, host: str, operation_id: str) -> Any:
+    """The operation, or a 404 the same as a missing one when it is outside the bound."""
+    operation = client.operations.get(safe_segment(operation_id))
+    if not _operation_is_visible(host, getattr(operation, "resources", None)):
+        raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
+    return operation
 
 
 class OperationListResponse(BaseModel):
@@ -177,9 +202,12 @@ async def list_operations(
                 logger.error(f"Error fetching operations: {result}")
                 unreachable_nodes.append(node_name)
 
+        # note: the project bound as well as the ACL. A Partner has no ACL, so without the bound
+        # a shared cluster listed the other organization's operations, instance names included.
         all_operations = [
             operation for operation in all_operations
-            if check_tenant_permission(
+            if project_is_visible(operation.node_name, operation.project or "default")
+            and check_tenant_permission(
                 operation.node_name,
                 operation.project or "default",
                 operation.instance_name or None,
@@ -218,7 +246,7 @@ async def get_operation(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        operation = client.operations.get(safe_segment(operation_id))
+        operation = await asyncio.to_thread(_read_visible_operation, client, host, operation_id)
         
         return OperationInfo(
             id=operation.id,
@@ -259,6 +287,7 @@ async def cancel_operation(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
+        await asyncio.to_thread(_read_visible_operation, client, host, operation_id)
         # pylxd Operation objects don't have a cancel() method;
         # use the raw API to send DELETE to /1.0/operations/<uuid>
         client.api.operations[safe_segment(operation_id)].delete()
@@ -293,7 +322,7 @@ async def wait_operation(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        operation = client.operations.get(safe_segment(operation_id))
+        operation = await asyncio.to_thread(_read_visible_operation, client, host, operation_id)
         operation.wait(timeout=timeout)
         
         return {
