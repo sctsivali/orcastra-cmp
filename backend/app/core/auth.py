@@ -89,12 +89,20 @@ class JWKSClient:
             async with self._lock:
                 self._cache_ttl = settings.auth_jwks_cache_ttl
                 self._jwks_uri = await self._discover_jwks_uri_async(settings.authentik_issuer)
-                self._jwks = await self._fetch_jwks_async(self._jwks_uri)
+                fetched = await self._fetch_jwks_async(self._jwks_uri)
+                if not self._has_keys(fetched):
+                    raise ValueError("the JWKS endpoint answered with no usable signing key")
+                self._jwks = fetched
                 self._last_fetched = self._clock()
                 self._warmed_up = True
             logger.info("JWKS cache pre-warmed successfully")
         except Exception as e:
             logger.warning(f"JWKS pre-warm failed (will retry on first request): {e}")
+
+    @staticmethod
+    def _has_keys(jwks: object) -> bool:
+        keys = jwks.get("keys") if isinstance(jwks, dict) else None
+        return isinstance(keys, list) and bool(keys) and all(isinstance(k, dict) for k in keys)
 
     def _find_key(self, kid: object) -> Optional[dict]:
         for key_data in self._jwks.get("keys", []):
@@ -141,10 +149,19 @@ class JWKSClient:
             try:
                 if not self._jwks_uri:
                     self._jwks_uri = await self._discover_jwks_uri_async(settings.authentik_issuer)
-                self._jwks = await self._fetch_jwks_async(self._jwks_uri)
-                self._last_fetched = self._clock()
+                fetched = await self._fetch_jwks_async(self._jwks_uri)
             except Exception:  # noqa: BLE001 - the lookup that follows answers 401 or 503
                 self._last_failed_refresh = self._clock()
+                return
+            # important: an answer with no usable key is a failed refresh. Stored, it left the
+            # cache keyless, so every request found it stale and refetched and the interval
+            # never engaged. The keys already held stay in use.
+            if not self._has_keys(fetched):
+                logger.warning("JWKS endpoint answered with no usable signing key, keeping the cache")
+                self._last_failed_refresh = self._clock()
+                return
+            self._jwks = fetched
+            self._last_fetched = self._clock()
 
     def get_signing_key(self, token: str) -> jwt.algorithms.RSAAlgorithm:
         """Look up the key for this token's kid in the cache. Never touches the network."""

@@ -265,6 +265,67 @@ async def test_stale_keys_stay_in_use_while_a_refresh_fails(
     assert spy.calls == 1
 
 
+class _BodySpy:
+    """A fetch that succeeds with whatever body the identity provider sends."""
+
+    def __init__(self, body: Any) -> None:
+        self.body = body
+        self.calls = 0
+
+    async def __call__(self, jwks_uri: str) -> Any:
+        self.calls += 1
+        return self.body
+
+
+@pytest.mark.parametrize("body", [{"keys": []}, {}, {"keys": "not-a-list"}, {"keys": ["x"]}])
+async def test_an_answer_without_keys_counts_as_a_failed_refresh(
+    jwks: auth.JWKSClient, clock: _Clock, signing_key: rsa.RSAPrivateKey, body: Any
+) -> None:
+    jwks._jwks = {}
+    spy = _BodySpy(body)
+    jwks._fetch_jwks_async = spy
+    for _ in range(50):
+        with pytest.raises(HTTPException) as exc:
+            await auth.verify_token(_token(signing_key, kid=f"kid-{uuid.uuid4().hex}"), _settings())
+        assert exc.value.status_code == 503
+    assert spy.calls == 1, f"50 random kids made {spy.calls} fetches against a keyless answer"
+
+    clock.now += auth.JWKSClient.FAILED_REFRESH_BACKOFF + 0.1
+    with pytest.raises(HTTPException):
+        await auth.verify_token(_token(signing_key), _settings())
+    assert spy.calls == 2
+
+
+async def test_a_keyless_answer_does_not_wipe_the_keys_in_use(
+    jwks: auth.JWKSClient, clock: _Clock, signing_key: rsa.RSAPrivateKey
+) -> None:
+    clock.now += 7200
+    spy = _BodySpy({"keys": []})
+    jwks._fetch_jwks_async = spy
+    for _ in range(20):
+        user = await auth.verify_token(_token(signing_key), _settings())
+        assert user.email == "tenant@example.test"
+    assert spy.calls == 1
+    assert jwks._find_key(KID) is not None
+
+
+async def test_a_keyless_warm_up_leaves_the_cache_empty(
+    jwks: auth.JWKSClient, clock: _Clock, signing_key: rsa.RSAPrivateKey
+) -> None:
+    jwks._jwks = {}
+
+    async def _discover(issuer: str) -> str:
+        return "https://idp.example.test/jwks/"
+
+    jwks._discover_jwks_uri_async = _discover
+    jwks._fetch_jwks_async = _BodySpy({"keys": "not-a-list"})
+    await jwks.warm_up(_settings())
+    assert jwks._jwks == {} and not jwks._warmed_up
+    with pytest.raises(HTTPException) as exc:
+        await auth.verify_token(_token(signing_key), _settings())
+    assert exc.value.status_code == 503
+
+
 def test_an_unknown_kid_is_refused_without_touching_the_network(
     jwks: auth.JWKSClient, no_network: None, signing_key: rsa.RSAPrivateKey
 ) -> None:
