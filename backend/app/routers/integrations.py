@@ -7,7 +7,7 @@ Supports integration with Orcahub and other external applications (soon with Orc
 import asyncio
 import secrets
 import hashlib
-from urllib.parse import unquote
+from urllib.parse import urlencode
 import hmac
 import logging
 import threading
@@ -64,6 +64,7 @@ from app.core.proxy_paths import (
     assert_proxy_path_allowed,
     project_allowed_by_grant,
     query_key_name,
+    split_proxy_path,
 )
 from app.core.type_utils import normalize_cluster_type
 from app.core.safe_http import guarded_request
@@ -2624,29 +2625,10 @@ async def raw_proxy(
                 ),
             )
 
-        # Use pylxd client's API directly
-        # The path should be relative to /1.0, ex;, "/1.0/instances" or just "/instances"
-        path = request.path
-        
-        # Normalize path - remove leading /1.0 if present since client.api is already at /1.0
-        if path.startswith("/1.0"):
-            path = path[4:]  # Remove "/1.0"
-        if not path.startswith("/"):
-            path = "/" + path
-        
-        # Parse query parameters from path
-        base_path = path
-        query_params = {}
-        if "?" in path:
-            base_path, query_string = path.split("?", 1)
-            for param in query_string.split("&"):
-                if "=" in param:
-                    key, value = param.split("=", 1)
-                    # important: compare on the DECODED key. The raw split leaves "%70roject"
-                    # distinct from "project", so the pop below missed it while LXD's own HTTP
-                    # layer decoded it and honoured the smuggled project. Normalising here means
-                    # one spelling reaches the check.
-                    query_params[unquote(key)] = value
+        # important: the path and query come from the same split_proxy_path the guards above
+        # decided on, so no spelling is judged in one form and sent in another. The path is
+        # relative to client.api's /1.0 endpoint.
+        base_path, query_params = split_proxy_path(request.path)
 
         # important: `project` is authorised above from request.project, so a copy of it
         # inside `path` is not the caller's to set. Dropping it closes a scope bypass: a key
@@ -2654,9 +2636,8 @@ async def raw_proxy(
         # check, and skipping the override below because it IS default) while sending
         # ?project=<other> in the path, which LXD honours because these certs are registered
         # unrestricted. Every other query key is legitimate passthrough and is left alone.
-        # important: matched on the fully decoded name. The key above is decoded once and
-        # re-emitted, and requests then unescapes unreserved characters, so `%2570roject`
-        # survived a one-decode pop and reached LXD as `project`.
+        # note: matched on the fully decoded name, which removes more than LXD would read as
+        # `project` (`%2570roject` included) and never less.
         for key in [name for name in query_params if query_key_name(name) == "project"]:
             query_params.pop(key)
 
@@ -2666,12 +2647,14 @@ async def raw_proxy(
 
         # Build endpoint URL directly using client's session
         endpoint = client.api._api_endpoint
-        
-        # Reconstruct full URL
+
+        # important: encoded, never joined raw. A name decoded to `x&all-projects` or `a#` and
+        # written back as it is adds a key LXD reads or turns the enforced project into a
+        # fragment that requests never sends.
         full_path = base_path
         if query_params:
-            full_path += "?" + "&".join(f"{k}={v}" for k, v in query_params.items())
-        
+            full_path += "?" + urlencode(list(query_params.items()))
+
         full_url = f"{endpoint}{full_path}"
         
         # important: this reaches into client.api.session, which bypasses pylxd's _APINode and

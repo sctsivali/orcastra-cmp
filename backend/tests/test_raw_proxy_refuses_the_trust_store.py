@@ -11,6 +11,7 @@ trust store unless the check decides on the form that is actually sent.
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Iterator, List
+from urllib.parse import unquote, urlsplit
 
 import pytest
 import requests
@@ -194,6 +195,43 @@ async def test_the_endpoint_never_calls_the_session_for_traversal() -> None:
         await _call(FakeService(_Client(session)), "/1.0/instances/%2e%2e/certificates")
     assert caught.value.status_code == 400
     assert session.calls == []
+
+
+# A version glued to the next segment. raw_proxy once stripped the string `/1.0` while the guard
+# stripped only a whole segment, so the guard judged `1.0certificates` and LXD got /certificates.
+GLUED_VERSION = [
+    "/1.0certificates",
+    "/1.0%63ertificates",
+    "/1.0%2563ertificates",
+    "/1.0Certificates?public=1",
+    "/1.0certificates#x",
+]
+
+
+def _sent_resource(url: str) -> List[str]:
+    """The segments under /1.0 that requests puts on the wire for this URL, lowercased."""
+    sent = requests.Request("GET", url).prepare().url
+    segments = [unquote(segment).lower() for segment in urlsplit(sent).path.split("/") if segment]
+    assert segments[0] == "1.0", sent
+    return segments[1:]
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("path", GLUED_VERSION)
+async def test_a_glued_version_never_reaches_the_trust_store(path: str, method: str) -> None:
+    session = RecordingSession()
+    try:
+        await _call(FakeService(_Client(session)), path, method=method)
+    except HTTPException as exc:
+        assert exc.status_code in (400, 403)
+    for url in session.calls:
+        assert _sent_resource(url)[:1] != ["certificates"], url
+
+
+async def test_a_glued_version_is_sent_as_it_was_judged() -> None:
+    session = RecordingSession()
+    await _call(FakeService(_Client(session)), "/1.0certificates", method="POST")
+    assert session.calls == ["https://cluster-a.example.test:8443/1.0/1.0certificates"]
 
 
 async def test_an_allowed_path_still_reaches_the_cluster() -> None:

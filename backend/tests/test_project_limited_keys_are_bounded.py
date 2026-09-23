@@ -12,7 +12,8 @@ answered for another project.
 """
 
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 import requests
@@ -202,6 +203,48 @@ async def test_a_smuggled_project_key_never_reaches_lxd(path: str) -> None:
     assert outcome.status_code == 200
     sent = requests.Request("GET", session.calls[0]).prepare().url
     assert sent == "https://cluster-a.example.test:8443/1.0/instances?project=tenant-a"
+
+
+def _query_lxd_reads(url: str) -> List[Tuple[str, str]]:
+    """The query LXD parses from what requests puts on the wire: no fragment, decoded once."""
+    sent = requests.Request("GET", url).prepare().url
+    return parse_qsl(urlsplit(sent).query, keep_blank_values=True)
+
+
+# A name or fragment that changes the query once raw_proxy has decoded it. The guard decided on
+# the raw split, where `x%26all-projects` is one longer name, while the old join wrote it back as
+# `x&all-projects`, and a `#` turned the enforced `&project=tenant-a` into a fragment.
+SMUGGLED_QUERIES = [
+    "/1.0/instances?x%26all-projects=true",
+    "/1.0/instances?x%26project=tenant-b",
+    "/1.0/instances?x%3Dy%26project=tenant-b",
+    "/1.0/instances?a%23=1",
+    "/1.0/instances?a%3F%26project=tenant-b",
+    "/1.0/instances?x=1%26project%3Dtenant-b",
+    "/1.0/instances#x",
+    "/1.0/instances?recursion=1#x",
+    "/1.0/instances?recursion=1#&project=tenant-b",
+]
+
+
+@pytest.mark.parametrize("path", SMUGGLED_QUERIES)
+async def test_a_smuggled_name_never_changes_the_query_lxd_reads(path: str) -> None:
+    outcome, session = await _raw(NARROW, "GET", path, project="tenant-a")
+    assert outcome.status_code == 200
+    pairs = _query_lxd_reads(session.calls[0])
+    assert "all-projects" not in [name for name, _ in pairs], session.calls[0]
+    assert [value for name, value in pairs if name == "project"] == ["tenant-a"], session.calls[0]
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("PUT", "/1.0projects/tenant-b"), ("PATCH", "/1.0profiles/default"), ("POST", "/1.0networks")],
+)
+async def test_a_glued_version_never_reaches_an_unbounded_resource(method: str, path: str) -> None:
+    outcome, session = await _raw(NARROW, method, path, project="tenant-a")
+    for url in session.calls:
+        resource = urlsplit(requests.Request(method, url).prepare().url).path.split("/")[2]
+        assert resource not in ("projects", "profiles", "networks", "storage-pools"), url
 
 
 def test_the_guard_leaves_a_missing_grant_closed() -> None:
