@@ -134,6 +134,31 @@ UNBOUNDABLE_WRITES = [
     ("POST", "/1.0/storage-pools"),
     ("DELETE", "/1.0/Storage-Pools/default/"),
     ("PUT", "/1.0/%70rofiles/default"),
+    ("PUT", "/1.0"),
+    ("PATCH", "/1.0/"),
+    ("PUT", "/1.0/cluster"),
+    ("PUT", "/1.0/cluster/certificate"),
+    ("POST", "/1.0/cluster/members"),
+    ("POST", "/1.0/cluster/members/m1/state"),
+    ("PUT", "/1.0/warnings/0f3c9a"),
+    ("POST", "/1.0/network-acls"),
+    ("POST", "/1.0/storage-pools/default/volumes/custom"),
+    ("PUT", "/1.0projects/tenant-b"),
+    ("POST", "/1.0/instances-archive"),
+]
+
+# What a project grant does bound. A narrow key keeps every one of these.
+BOUNDED_WRITES = [
+    ("POST", "/1.0/instances"),
+    ("PATCH", "/1.0/instances/web-1"),
+    ("PUT", "/1.0/instances/web-1/state"),
+    ("DELETE", "/1.0/instances/web-1"),
+    ("POST", "/1.0/instances/web-1/snapshots"),
+    ("DELETE", "/1.0/instances/web-1/snapshots/snap0"),
+    ("POST", "/1.0/images"),
+    ("POST", "/1.0/images/aliases"),
+    ("DELETE", "/1.0/images/0f3c9a1b2c3d"),
+    ("DELETE", "/1.0/operations/5b1e0a4c-0000-4000-8000-000000000001"),
 ]
 
 ALL_PROJECTS = [
@@ -174,6 +199,13 @@ async def test_a_wildcard_key_still_reads_all_projects(path: str) -> None:
     outcome, session = await _raw(WILDCARD, "GET", path)
     assert outcome.status_code == 200
     assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("method,path", BOUNDED_WRITES)
+async def test_a_narrow_key_may_change_what_its_project_bounds(method: str, path: str) -> None:
+    outcome, session = await _raw(NARROW, method, path, project="tenant-a")
+    assert outcome.status_code == 200
+    assert session.calls == [f"https://cluster-a.example.test:8443{path}?project=tenant-a"]
 
 
 async def test_a_narrow_key_still_works_inside_its_project() -> None:

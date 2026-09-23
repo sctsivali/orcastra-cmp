@@ -32,14 +32,22 @@ logger = logging.getLogger(__name__)
 # (`/auth/groups`). Either one lets a `write` grant mint a credential that outlives the key.
 _REFUSED_PROXY_PREFIXES = ("/certificates", "/auth")
 
-# Resources a project grant cannot bound.
+# The only resources a project grant bounds, so the only ones a key that is not `*` may change.
 #
 # important: a grant of `projects: ["tenant-a"]` is enforced by binding the request to that
-# project, which is a real boundary for instances, images and snapshots. It is not one for a
-# resource whose identity is a project name, nor for one that lives above projects. So changing
-# these needs a `*` grant. Reads are left alone: refusing `GET /1.0/networks` would break
+# project, which is a real boundary for instances (and their snapshots), images and operations.
+# It is not one for the server itself, the cluster, projects, profiles, networks or storage
+# pools, all of which live above a project or are shared with `default`. An allowlist, not a
+# refusal list, because LXD keeps adding resources above projects and a narrow key must not
+# gain each new one by default. Reads are left alone: refusing `GET /1.0/networks` would break
 # integrations that enumerate topology, and disclosure is a smaller harm than destruction.
-_PROJECT_UNBOUNDABLE_PREFIXES = ("/projects", "/storage-pools", "/networks", "/profiles")
+# note: images are bounded only while the project keeps its own image store (features.images,
+# which services/lxd/projects.py turns on for a project created without a config). A project
+# without one shares the images of `default`, and telling the two apart needs a cluster read,
+# so that case is a known limit here.
+# note: storage volumes stay refused although they can be project-scoped, because
+# `/storage-pools` also holds the pools themselves, and this release does not widen a grant.
+_PROJECT_BOUNDED_WRITE_PREFIXES = ("/instances", "/images", "/operations")
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _ALL_PROJECTS_KEY = "all-projects"
 _API_VERSION = "/1.0"
@@ -152,7 +160,7 @@ def assert_project_scope_allows_path(
 
     Paired with assert_proxy_path_allowed, which refuses paths nobody may reach. This one refuses
     paths this grant may not reach: `all-projects` in any spelling, which reads every project on
-    the cluster, and a change to a resource no project bounds.
+    the cluster, and a change to anything outside _PROJECT_BOUNDED_WRITE_PREFIXES.
     """
     if project_grant_is_unrestricted(allowed_projects):
         return
@@ -170,12 +178,14 @@ def assert_project_scope_allows_path(
     if method.upper() not in _MUTATING_METHODS:
         return
     segments = resource_segments(path)
-    for prefix in _PROJECT_UNBOUNDABLE_PREFIXES:
-        if _is_under(segments, prefix):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"{prefix} is not bounded by a project, so changing it needs a key granted "
-                    f"all projects on this cluster. This key is limited to {granted}."
-                ),
-            )
+    if any(_is_under(segments, prefix) for prefix in _PROJECT_BOUNDED_WRITE_PREFIXES):
+        return
+    resource = "/" + (segments[0] if segments else "")
+    logger.warning("Refusing a %s to %s for a key limited to %s", method.upper(), resource, granted)
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"{resource} is not bounded by a project, so changing it needs a key granted "
+            f"all projects on this cluster. This key is limited to {granted}."
+        ),
+    )
