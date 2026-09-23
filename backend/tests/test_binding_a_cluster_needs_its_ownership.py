@@ -109,3 +109,14 @@ def test_an_admin_binding_a_cluster_they_own_keeps_the_stamp(
     _bind("admin", "cluster-a")
     assert service.calls[0]["registered_by"] == "admin@example.test"
 
+
+
+def test_the_frontend_types_the_registrant_as_nullable() -> None:
+    """An admin's binding of a foreign cluster now returns registered_by null to the UI."""
+    from pathlib import Path
+
+    types = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types" / "api.ts"
+    source = types.read_text(encoding="utf-8")
+    block = source[source.index("export interface OrganizationCluster {"):]
+    block = block[: block.index("}")]
+    assert "registered_by: string | null;" in block

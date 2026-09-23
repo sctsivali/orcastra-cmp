@@ -2185,7 +2185,8 @@ export interface OrganizationCluster {
   id: string;
   organization_id: string;
   cluster_id: string;
-  registered_by: string;
+  // null when an admin bound a cluster it does not own: the stamp is an ownership claim
+  registered_by: string | null;
   registered_at: string;
 }
 
