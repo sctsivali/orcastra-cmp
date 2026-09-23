@@ -103,15 +103,20 @@ def raw_request(
     body: Optional[Dict[str, Any]],
     timeout: Tuple[int, int],
 ) -> requests.Response:
-    """Blocking half of raw_proxy. Only ever runs on proxy_executor, never on the event loop."""
+    """Blocking half of raw_proxy. Only ever runs on proxy_executor, never on the event loop.
+
+    important: redirects are never followed. A followed redirect carries the cluster's client
+    certificate to wherever LXD's answer points, which is outside every path check raw_proxy made.
+    The integrator gets the 3xx itself.
+    """
     if method == "GET":
-        return session.get(url, verify=False, timeout=timeout)
+        return session.get(url, verify=False, timeout=timeout, allow_redirects=False)
     if method == "POST":
-        return session.post(url, json=body, verify=False, timeout=timeout)
+        return session.post(url, json=body, verify=False, timeout=timeout, allow_redirects=False)
     if method == "PUT":
-        return session.put(url, json=body, verify=False, timeout=timeout)
+        return session.put(url, json=body, verify=False, timeout=timeout, allow_redirects=False)
     if method == "PATCH":
-        return session.patch(url, json=body, verify=False, timeout=timeout)
+        return session.patch(url, json=body, verify=False, timeout=timeout, allow_redirects=False)
     if method == "DELETE":
-        return session.delete(url, verify=False, timeout=timeout)
+        return session.delete(url, verify=False, timeout=timeout, allow_redirects=False)
     raise ValueError(f"Unsupported method: {method}")

@@ -50,6 +50,7 @@ from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.core.lxd_names import safe_segment
+from app.core.proxy_paths import assert_proxy_path_allowed
 from app.core.type_utils import normalize_cluster_type
 
 logger = logging.getLogger(__name__)
@@ -2111,6 +2112,10 @@ async def raw_proxy(
         # to HTTP 200 carrying status_code 500.
         if method not in ALLOWED_METHODS:
             raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
+
+        # important: out here in the outer try for the same reason, so a refusal stays a real
+        # 400 or 403 and the session is never called.
+        assert_proxy_path_allowed(request.path)
 
         required_permission = "read"
 
