@@ -3107,6 +3107,11 @@ async def proxy_operation(
                 ),
             )
 
+        # important: create_instance sends params to LXD as the instance body, so a project-limited
+        # key is held to the same body rule as the raw proxy: no other project, nothing host-reaching
+        if operation == "create_instance":
+            assert_body_within_grant("/1.0/instances", "POST", request.params or {}, allowed_projects)
+
         operation_id = None
 
         # Every branch below is a blocking pylxd call, and the wait=True ones poll an LXD

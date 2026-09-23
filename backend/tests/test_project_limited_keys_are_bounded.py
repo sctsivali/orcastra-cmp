@@ -20,6 +20,7 @@ import requests
 from fastapi import HTTPException
 
 from app.core.proxy_paths import assert_project_scope_allows_path, resource_segments
+from app.routers import integrations
 from app.routers.integrations import (
     ProxyRequest,
     RawProxyRequest,
@@ -405,3 +406,41 @@ async def test_a_wildcard_key_body_is_untouched(method: str, path: str, body: Di
     assert outcome.status_code == 200
     assert len(session.calls) == 1
 
+
+
+@pytest.mark.parametrize(
+    "params,reason",
+    [
+        ({"name": "vm", "source": {"type": "none"}, "config": {"security.privileged": "true"}}, "security.privileged"),
+        ({"name": "vm", "source": {"type": "copy", "source": "x", "project": "tenant-b"}}, "tenant-b"),
+        ({"name": "vm", "source": {"type": "none"}, "devices": {"h": {"type": "disk", "source": "/", "path": "/h"}}}, "host path"),
+    ],
+)
+async def test_proxy_create_holds_a_narrow_key_to_the_body_rule(monkeypatch, params: Dict[str, Any], reason: str) -> None:
+    """/proxy create_instance sends params as the instance body, so it gets the raw proxy's body rule."""
+    sent: List[Any] = []
+    monkeypatch.setattr(integrations, "_execute_proxy_operation", lambda *a, **_k: sent.append(a) or {"ok": True})
+    with pytest.raises(HTTPException) as caught:
+        await proxy_operation(
+            request=ProxyRequest(cluster_id=CLUSTER_ID, operation="create_instance", project="tenant-a", params=params),
+            api_key=NARROW, lxd_service=FakeService(FakeClient()), _=None,
+        )
+    assert caught.value.status_code == 403 and reason in caught.value.detail
+    assert sent == [], "the refused body reached the cluster"
+
+
+async def test_proxy_create_still_works_inside_the_grant_and_for_a_star_key(monkeypatch) -> None:
+    sent: List[Any] = []
+    monkeypatch.setattr(integrations, "_execute_proxy_operation", lambda *a, **_k: sent.append(a[2]) or {"ok": True})
+    plain = {"name": "vm", "source": {"type": "none"}}
+    answer = await proxy_operation(
+        request=ProxyRequest(cluster_id=CLUSTER_ID, operation="create_instance", project="tenant-a", params=plain),
+        api_key=NARROW, lxd_service=FakeService(FakeClient()), _=None,
+    )
+    assert answer.success is True
+    privileged = dict(plain, config={"security.privileged": "true"})
+    answer = await proxy_operation(
+        request=ProxyRequest(cluster_id=CLUSTER_ID, operation="create_instance", project="tenant-a", params=privileged),
+        api_key=_key(["*"]), lxd_service=FakeService(FakeClient()), _=None,
+    )
+    assert answer.success is True and sent == ["create_instance", "create_instance"]
