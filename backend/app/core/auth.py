@@ -167,7 +167,9 @@ class JWKSClient:
         """Look up the key for this token's kid in the cache. Never touches the network."""
         try:
             unverified_header = jwt.get_unverified_header(token)
-        except jwt.exceptions.DecodeError as e:
+        except jwt.PyJWTError as e:
+            # note: PyJWT refuses a non-string kid with InvalidTokenError, the parent of
+            # DecodeError, and PyJWT's header messages carry no caller-supplied text.
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"Invalid token header: {e}",

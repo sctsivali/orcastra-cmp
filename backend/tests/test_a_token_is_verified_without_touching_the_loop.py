@@ -5,7 +5,9 @@ production. The JWKS cache is seeded directly and nothing reaches the network.
 """
 
 import asyncio
+import base64
 import inspect
+import json
 import time
 import uuid
 from pathlib import Path
@@ -16,10 +18,13 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.testclient import TestClient
 
 from app.core import auth
+from app.core.config import get_settings
+from app.core.error_handlers import register_error_handlers
 
 ISSUER = "https://idp.example.test/application/o/orcastra/"
 AUDIENCE = "orcastra-client"
@@ -334,6 +339,37 @@ def test_an_unknown_kid_is_refused_without_touching_the_network(
         auth.validate_jwt(_token(signing_key, kid=kid), _settings())
     assert exc.value.status_code == 401
     assert kid not in str(exc.value.detail), "the 401 echoed the caller's kid back"
+
+
+def _unsigned(header: Dict[str, Any]) -> str:
+    def segment(value: Dict[str, Any]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+
+    return f"{segment(header)}.{segment({'sub': 'user-1'})}.c2lnbmF0dXJl"
+
+
+@pytest.mark.parametrize("kid", [123, ["a"], {"a": 1}])
+async def test_a_kid_that_is_not_a_string_is_refused_not_a_crash(
+    jwks: auth.JWKSClient, kid: Any
+) -> None:
+    token = _unsigned({"alg": "RS256", "typ": "JWT", "kid": kid})
+    with pytest.raises(HTTPException) as exc:
+        await auth.verify_token(token, _settings())
+    assert exc.value.status_code == 401
+    assert exc.value.detail.startswith("Invalid token header")
+    socket = SimpleNamespace(query_params={"token": token})
+    assert await auth.get_ws_user(socket, _settings()) is None, "the socket must close 1008"
+
+    app = FastAPI()
+    register_error_handlers(app)
+    app.dependency_overrides[get_settings] = lambda: _settings()
+
+    @app.get("/probe")
+    async def _probe(user: Any = Depends(auth.get_current_user)) -> Dict[str, str]:
+        return {"user": user.user_id}
+
+    response = TestClient(app).get("/probe", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401, response.text
 
 
 def test_no_synchronous_network_path_remains() -> None:
