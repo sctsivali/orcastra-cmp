@@ -24,7 +24,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, require_partner, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
@@ -43,7 +43,7 @@ activity_logger = get_activity_logger()
 router = APIRouter(
     prefix="/my-keys",
     tags=["My Keys"],
-    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
 # Vault path for storing keys (without secret/data prefix - will be added by vault methods)

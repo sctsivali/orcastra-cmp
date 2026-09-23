@@ -29,7 +29,7 @@ from app.services.lxd.gpu import build_gpu_inventory
 from app.services.lxd.project_scope import list_instance_records
 from app.services.lxd.node_resources import PoolReading, _read_pool_space
 from app.services.lxd.storage_model import summarise_cluster_storage
-from app.core.dependencies import require_tenant
+from app.core.dependencies import require_partner
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/cluster-members",
     tags=["Cluster Members"],
-    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
 

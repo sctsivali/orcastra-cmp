@@ -15,7 +15,7 @@ from app.services.lxd_service import (
     get_lxd_service,
     require_client,
 )
-from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
 from pydantic import BaseModel, Field
 from app.core.lxd_names import safe_segment
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/operations",
     tags=["Operations"],
-    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
 # Thread pool for parallel operations
