@@ -41,7 +41,14 @@ from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permi
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
+from app.core.org_scope import (
+    get_current_allowed_clusters,
+    get_org_ids_for_email,
+    get_scope_cache_key,
+    org_scope_dependency,
+    project_is_visible,
+    reconcile_personal_clusters,
+)
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client, safe_vault_url
 from app.core.config import get_settings
@@ -1420,6 +1427,7 @@ async def create_api_key(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
+    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, request.cluster_permissions)
 
     try:
         # Generate key pair
@@ -1494,6 +1502,115 @@ def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
             # non-existent one.
             raise HTTPException(status_code=404, detail="API key not found")
     return metadata
+
+
+def _read_key_creators_blocking(key_ids: set[str]) -> Dict[str, str]:
+    """created_by of each key id. Runs on auth_executor. An unreadable key maps to ''."""
+    vault_client = get_vault_integrations_client()
+    creators: Dict[str, str] = {}
+    for key_id in sorted(key_ids):
+        try:
+            metadata = vault_client.vault_read(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+            )
+        except Exception:
+            metadata = {}
+        creators[key_id] = str((metadata or {}).get("created_by") or "")
+    return creators
+
+
+async def _clusters_held_by_another_party(
+    db: AsyncSession, email: str, cluster_ids: set[str]
+) -> set[str]:
+    """Clusters on which some holder is neither the caller's organization nor theirs by key.
+
+    note: provisioning binds every buyer organization to the partner's cluster, and a synced
+    buyer is stamped created_by="system" with api_key_id set. Counting those as foreign would
+    make every partner cluster with a sale look shared, so a keyed organization is attributed
+    to whoever minted its key. An unbound row registered by someone else counts as another
+    holder, which is how _clusters_with_several_orgs counts it too.
+    """
+    from app.models.db_models import OrganizationCluster
+
+    if not cluster_ids:
+        return set()
+    rows = (await db.execute(
+        select(
+            OrganizationCluster.cluster_id,
+            OrganizationCluster.organization_id,
+            OrganizationCluster.registered_by,
+            Organization.api_key_id,
+        )
+        .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
+        .where(OrganizationCluster.cluster_id.in_(sorted(cluster_ids)))
+    )).all()
+    own_orgs = await get_org_ids_for_email(email, db)
+    held_elsewhere: set[str] = set()
+    by_key: Dict[str, set[str]] = {}
+    for cluster_id, org_id, registered_by, org_key in rows:
+        if org_id is None:
+            if registered_by != email:
+                held_elsewhere.add(cluster_id)
+        elif org_id in own_orgs:
+            continue
+        elif org_key:
+            by_key.setdefault(org_key, set()).add(cluster_id)
+        else:
+            held_elsewhere.add(cluster_id)
+    if by_key:
+        try:
+            creators = await run_blocking(
+                _read_key_creators_blocking, set(by_key),
+                timeout=VALIDATE_KEY_TIMEOUT, label="api_key_creators", executor=auth_executor,
+            )
+        except (BlockingTimeout, BlockingPoolFull):
+            raise HTTPException(
+                status_code=503, detail="Could not confirm who holds these clusters. Try again."
+            ) from None
+        for key_id, clusters in by_key.items():
+            if creators.get(key_id) != email:
+                held_elsewhere |= clusters
+    return held_elsewhere
+
+
+async def _refuse_a_grant_past_the_project_bound(
+    db: AsyncSession,
+    caller_email: str,
+    grants: List[ClusterPermission],
+    already_granted: Optional[Dict[str, set[str]]] = None,
+) -> None:
+    """A Partner may not give a key more of a cluster than they can see there.
+
+    important: creation and update checked cluster ids only. On a cluster another party also
+    holds, a Partner could name that party's project, or '*', and the key then acted on it
+    through /raw-proxy, /proxy and /provision-tenant-access. A cluster held only by the caller's
+    side is unchanged, so the '*' grant an OrcaHub connection carries still mints there. What a
+    key already holds on a cluster is carried over on update, so an edit cannot widen a key but
+    never breaks a running one. Admin is not bound.
+    """
+    if get_current_allowed_clusters() is None:
+        return
+    held_elsewhere = await _clusters_held_by_another_party(
+        db, caller_email, {grant.cluster_id for grant in grants}
+    )
+    kept = already_granted or {}
+    refused = sorted({
+        f"{grant.cluster_id}/{project}"
+        for grant in grants
+        if grant.cluster_id in held_elsewhere
+        for project in grant.projects
+        if project not in kept.get(grant.cluster_id, set())
+        and (project == "*" or not project_is_visible(grant.cluster_id, project))
+    })
+    if refused:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Not permitted to grant these projects: {refused}. Another organization also "
+                "holds that cluster, so a key may name only the projects you can see there. "
+                "An administrator can issue a wider key."
+            ),
+        )
 
 
 @router.get(
@@ -1600,9 +1717,10 @@ async def update_api_key_permissions(
     permissions: List[ClusterPermission],
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update API key cluster permissions."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    current = _authorize_api_key(get_vault_integrations_client(), key_id)
 
     # important: creation validates the requested clusters against the caller's own set
     # (see create_api_key), and this path did not, so a partner could create a key scoped to
@@ -1616,6 +1734,12 @@ async def update_api_key_permissions(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
+    already_granted = {
+        p.get("cluster_id", ""): set(p.get("projects") or ["default"])
+        for p in (current.get("cluster_permissions") or [])
+        if isinstance(p, dict)
+    }
+    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, permissions, already_granted)
 
     vault_client = get_vault_integrations_client()
     

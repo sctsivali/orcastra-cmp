@@ -518,6 +518,15 @@ async def _query_user_org_ids(user_email: str, db: AsyncSession) -> set[int]:
     return set((await db.execute(stmt)).scalars().all())
 
 
+async def get_org_ids_for_email(user_email: str, db: AsyncSession) -> set[int]:
+    """Organization ids an email belongs to or created.
+
+    The same set get_visible_projects widens a Partner's bound from, exposed so a grant check
+    elsewhere asks the identical question.
+    """
+    return await _query_user_org_ids(user_email, db)
+
+
 async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
     """Clusters bound to more than one organization.
 
