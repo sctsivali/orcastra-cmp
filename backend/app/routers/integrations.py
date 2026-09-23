@@ -67,10 +67,12 @@ from app.core.proxy_paths import (
 from app.core.type_utils import normalize_cluster_type
 from app.core.safe_http import guarded_request
 from app.core.url_safety import UnsafeURLError
+from app.services.activity_logger import get_activity_logger
 from app.services.integration_roles import apply_upsert_role, revoke_if_orphaned
 from app.services.orcahub_sync import callback_networks, callback_requires_https, check_callback_url
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
 # Internal router: JWT-authenticated endpoints for API key management (admin UI)
 router = APIRouter(
@@ -1452,6 +1454,12 @@ async def create_api_key(
 ):
     """Create a new API key for external integration."""
     vault_client = get_vault_integrations_client()
+    requested_meta = {
+        "name": request.name,
+        "app_name": request.app_name,
+        "app_type": request.app_type,
+        "cluster_permissions": [p.model_dump() for p in request.cluster_permissions],
+    }
 
     # Multi-tenancy guard: a partner may only grant access to clusters they can see
     # (their org's or personally registered). Admin (allowed is None) is unrestricted.
@@ -1463,11 +1471,23 @@ async def create_api_key(
         requested = {p.cluster_id for p in request.cluster_permissions}
         invalid = requested - allowed
         if invalid:
+            _audit_api_key(
+                API_KEY_CREATE, "-", _rbac, requested_meta,
+                result="denied", error_code="cluster_out_of_scope",
+            )
             raise HTTPException(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
-    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, request.cluster_permissions)
+    try:
+        await _refuse_a_grant_past_the_project_bound(db, _rbac.email, request.cluster_permissions)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            _audit_api_key(
+                API_KEY_CREATE, "-", _rbac, requested_meta,
+                result="denied", error_code="project_out_of_bound",
+            )
+        raise
 
     try:
         # Generate key pair
@@ -1500,6 +1520,7 @@ async def create_api_key(
         # Clear all scoped cache variants
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+        _audit_api_key(API_KEY_CREATE, key_id, _rbac, metadata)
 
         # If this partner already has an org, bind any clusters they registered while
         # org-less to it now. Best-effort: a failure here must not fail key creation.
@@ -1531,6 +1552,64 @@ def _assert_key_in_scope(metadata: Dict[str, Any], allowed: Optional[set[str]]) 
     key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
     if not (key_clusters & allowed):
         raise HTTPException(status_code=404, detail="API key not found")
+
+
+API_KEY_CREATE = "integration.api_key.create"
+API_KEY_PERMISSIONS_UPDATE = "integration.api_key.permissions.update"
+API_KEY_REVOKE = "integration.api_key.revoke"
+API_KEY_DELETE = "integration.api_key.delete"
+
+
+def _audit_grants(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The cluster grants of a key, reduced to the three fields an auditor needs."""
+    return [
+        {
+            "cluster_id": p.get("cluster_id"),
+            "projects": p.get("projects"),
+            "permissions": p.get("permissions"),
+        }
+        for p in (metadata.get("cluster_permissions") or [])
+        if isinstance(p, dict)
+    ]
+
+
+def _audit_api_key(
+    action: str,
+    key_id: str,
+    actor: AuthenticatedUser,
+    metadata: Dict[str, Any],
+    *,
+    result: str = "success",
+    error_code: Optional[str] = None,
+    before: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """Record an API key lifecycle event.
+
+    important: built from an allowlist. The secret, its hash and app_url never reach the log. The
+    key id travels as target_id on purpose, because the audit sanitiser blanks any detail whose
+    name contains api_key.
+    """
+    grants = _audit_grants(metadata)
+    try:
+        activity_logger.log_activity(
+            action=action,
+            target_type="integration_api_key",
+            target_id=key_id,
+            result=result,
+            error_code=error_code,
+            details={
+                "actor_email": getattr(actor, "email", None),
+                "name": metadata.get("name"),
+                "app_name": metadata.get("app_name"),
+                "app_type": metadata.get("app_type"),
+                "expires_at": metadata.get("expires_at"),
+                "clusters": sorted({str(g.get("cluster_id") or "") for g in grants}),
+            },
+            before_state={"cluster_permissions": before} if before is not None else None,
+            after_state={"cluster_permissions": grants} if before is not None else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - an audit write must never fail the action it records
+        logger.warning("Could not audit %s for %s: %s", action, key_id, exc)
 
 
 def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
@@ -1771,11 +1850,17 @@ async def update_api_key_permissions(
     # important: creation validates the requested clusters against the caller's own set
     # (see create_api_key), and this path did not, so a partner could create a key scoped to
     # their cluster and then widen it to the whole fleet in a second call. Same rule, both doors.
+    before = _audit_grants(current)
+    requested_meta = {**current, "cluster_permissions": [p.model_dump() for p in permissions]}
     allowed = get_current_allowed_clusters()
     if allowed is not None:
         requested = {p.cluster_id for p in permissions}
         invalid = requested - allowed
         if invalid:
+            _audit_api_key(
+                API_KEY_PERMISSIONS_UPDATE, key_id, _rbac, requested_meta,
+                result="denied", error_code="cluster_out_of_scope", before=before,
+            )
             raise HTTPException(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
@@ -1785,7 +1870,15 @@ async def update_api_key_permissions(
         for p in (current.get("cluster_permissions") or [])
         if isinstance(p, dict)
     }
-    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, permissions, already_granted)
+    try:
+        await _refuse_a_grant_past_the_project_bound(db, _rbac.email, permissions, already_granted)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            _audit_api_key(
+                API_KEY_PERMISSIONS_UPDATE, key_id, _rbac, requested_meta,
+                result="denied", error_code="project_out_of_bound", before=before,
+            )
+        raise
 
     vault_client = get_vault_integrations_client()
     
@@ -1807,6 +1900,7 @@ async def update_api_key_permissions(
         # important: also drop the process-local validation cache, otherwise the old
         # cluster_permissions keep authorising proxy calls until its TTL expires.
         evict_api_key_cache(key_id)
+        _audit_api_key(API_KEY_PERMISSIONS_UPDATE, key_id, _rbac, metadata, before=before)
 
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
@@ -1853,6 +1947,7 @@ async def revoke_api_key(
         # important: revocation must be immediate. Without this the key keeps working from
         # the process-local validation cache until its TTL expires.
         evict_api_key_cache(key_id)
+        _audit_api_key(API_KEY_REVOKE, key_id, _rbac, metadata)
 
         logger.info(f"API key {key_id} revoked")
         
@@ -1882,7 +1977,7 @@ async def delete_api_key(
     
     try:
         # Verify it exists
-        get_api_key_from_vault(vault_client, key_id)
+        metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
         
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)
@@ -1891,6 +1986,7 @@ async def delete_api_key(
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         evict_api_key_cache(key_id)
+        _audit_api_key(API_KEY_DELETE, key_id, _rbac, metadata)
 
         return {"success": True, "message": f"API key {key_id} deleted"}
         

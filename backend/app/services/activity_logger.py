@@ -47,6 +47,10 @@ ACTION_CATEGORIES = {
     "auth.token.refresh": EventCategory.IDENTITY,
     "user.ssh_key.create": EventCategory.IDENTITY,
     "user.ssh_key.delete": EventCategory.IDENTITY,
+    "integration.api_key.create": EventCategory.IDENTITY,
+    "integration.api_key.permissions.update": EventCategory.IDENTITY,
+    "integration.api_key.revoke": EventCategory.IDENTITY,
+    "integration.api_key.delete": EventCategory.IDENTITY,
     
     # LXD Infrastructure
     "cluster.register": EventCategory.LXD_INFRA,
@@ -139,6 +143,10 @@ HIGH_SEVERITY_ACTIONS = {
     "break_glass.grant.revoke",
     "user.ssh_key.create",
     "user.ssh_key.delete",
+    "integration.api_key.create",
+    "integration.api_key.permissions.update",
+    "integration.api_key.revoke",
+    "integration.api_key.delete",
     "vault.cert.generate",
     "vault.secret.write",
     "vault.secret.delete",
