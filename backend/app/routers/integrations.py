@@ -13,6 +13,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
 from pydantic import BaseModel, Field, field_validator
@@ -50,7 +51,12 @@ from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.core.lxd_names import safe_segment
-from app.core.proxy_paths import assert_proxy_path_allowed
+from app.core.proxy_paths import (
+    assert_project_scope_allows_path,
+    assert_proxy_path_allowed,
+    project_allowed_by_grant,
+    query_key_name,
+)
 from app.core.type_utils import normalize_cluster_type
 
 logger = logging.getLogger(__name__)
@@ -622,7 +628,12 @@ _PROXY_WAIT_OPERATIONS = frozenset({
 
 
 def _execute_proxy_operation(
-    lxd_service, cluster_id: str, operation: str, params: Dict[str, Any], project: str
+    lxd_service,
+    cluster_id: str,
+    operation: str,
+    params: Dict[str, Any],
+    project: str,
+    allowed_projects: Optional[List[str]],
 ) -> Any:
     """Blocking half of proxy_operation. Only ever runs on proxy_executor.
 
@@ -689,7 +700,12 @@ def _execute_proxy_operation(
         _named_instance().restart(force=params.get("force", False), wait=True)
         return {"status": "Running"}
     if operation == "list_projects":
-        return [{"name": p.name, "description": p.description} for p in client.projects.all()]
+        # note: a project-limited key sees only the projects it was granted.
+        return [
+            {"name": p.name, "description": p.description}
+            for p in client.projects.all()
+            if project_allowed_by_grant(p.name, allowed_projects)
+        ]
     if operation == "list_images":
         return [
             {"fingerprint": img.fingerprint[:12],
@@ -751,19 +767,42 @@ def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
     }]
 
 
-def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
-    """Blocking half of the sync projects fan-out. Only ever runs on proxy_executor."""
+def _key_project_grants(api_key: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Each cluster's project grant on a key, read the way raw_proxy reads it."""
+    return {
+        p["cluster_id"]: p.get("projects", ["default"])
+        for p in api_key.get("cluster_permissions", [])
+    }
+
+
+def _fetch_cluster_projects(
+    lxd_service, cluster_id: str, grants: Dict[str, List[str]]
+) -> List[Dict[str, Any]]:
+    """Blocking half of the sync projects fan-out. Only ever runs on proxy_executor.
+
+    note: a project-limited key sees only the projects it was granted.
+    """
     client = lxd_service.connection_manager.get_client(cluster_id)
     if not client:
         return []
+    allowed = grants.get(cluster_id)
     return [
         {"name": p.name, "cluster_id": cluster_id, "description": p.description}
         for p in client.projects.all()
+        if project_allowed_by_grant(p.name, allowed)
     ]
 
 
-def _fetch_cluster_instances(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
-    """Blocking half of the sync instances fan-out. Only ever runs on proxy_executor."""
+def _fetch_cluster_instances(
+    lxd_service, cluster_id: str, grants: Dict[str, List[str]]
+) -> List[Dict[str, Any]]:
+    """Blocking half of the sync instances fan-out. Only ever runs on proxy_executor.
+
+    note: the pooled client reads the default project only, so a key whose grant does not
+    cover `default` gets nothing here rather than another project's instance names.
+    """
+    if not project_allowed_by_grant("default", grants.get(cluster_id)):
+        return []
     client = lxd_service.connection_manager.get_client(cluster_id)
     if not client:
         return []
@@ -1928,14 +1967,17 @@ async def sync_data(
                     _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info"
                 )
         
+        project_grants = _key_project_grants(api_key)
         if request.include_projects:
             result.projects = await _gather_per_cluster(
-                _fetch_cluster_projects, lxd_service, cluster_ids, "projects"
+                partial(_fetch_cluster_projects, grants=project_grants),
+                lxd_service, cluster_ids, "projects",
             )
 
         if request.include_instances:
             result.instances = await _gather_per_cluster(
-                _fetch_cluster_instances, lxd_service, cluster_ids, "instances"
+                partial(_fetch_cluster_instances, grants=project_grants),
+                lxd_service, cluster_ids, "instances",
             )
 
         return result
@@ -2126,6 +2168,7 @@ async def raw_proxy(
         # important: out here in the outer try for the same reason, so a refusal stays a real
         # 400 or 403 and the session is never called.
         assert_proxy_path_allowed(request.path)
+        assert_project_scope_allows_path(request.path, method, allowed_projects)
 
         required_permission = "read"
 
@@ -2214,7 +2257,11 @@ async def raw_proxy(
         # check, and skipping the override below because it IS default) while sending
         # ?project=<other> in the path, which LXD honours because these certs are registered
         # unrestricted. Every other query key is legitimate passthrough and is left alone.
-        query_params.pop("project", None)
+        # important: matched on the fully decoded name. The key above is decoded once and
+        # re-emitted, and requests then unescapes unreserved characters, so `%2570roject`
+        # survived a one-decode pop and reached LXD as `project`.
+        for key in [name for name in query_params if query_key_name(name) == "project"]:
+            query_params.pop(key)
 
         # Add project parameter if not default
         if project and project != "default":
@@ -2430,6 +2477,7 @@ async def proxy_operation(
                 operation,
                 request.params or {},
                 request.project,
+                allowed_projects,
                 timeout=PROXY_OP_TIMEOUT,
                 label=f"proxy_operation[{operation} {request.cluster_id}]",
                 executor=proxy_executor,
