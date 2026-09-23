@@ -915,6 +915,58 @@ async def _gather_per_cluster(
     return [item for batch in batches for item in batch]
 
 
+CLUSTER_INFO_UNREADABLE = (
+    "Cluster details could not be read for every cluster this key covers, so this sync "
+    "cannot say which clusters exist. Nothing was removed. Retry shortly."
+)
+
+
+async def _gather_cluster_info(cert_manager, cluster_ids) -> List[Dict[str, Any]]:
+    """Every covered cluster's info, or a 503. A cluster is left out only once it is gone.
+
+    important: an integrator deletes every cluster a sync omits (OrcaHub deletes its cluster row
+    and the service exposures hanging off it), so omitting one that still exists is destructive.
+    Cluster info comes from Vault, not the cluster, so the LXD breaker is not consulted. When a
+    read fails, the registry decides: a cluster the readable registry no longer lists is gone and
+    is omitted as before, anything else answers 503 so the integrator keeps what it has.
+    """
+    async def one(cluster_id: str) -> tuple:
+        try:
+            rows = await run_blocking(
+                _fetch_cluster_info,
+                cert_manager,
+                cluster_id,
+                timeout=SYNC_CLUSTER_TIMEOUT,
+                label=f"sync_cluster_info[{cluster_id}]",
+                executor=proxy_executor,
+                max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+            return cluster_id, rows
+        except Exception as exc:  # noqa: BLE001 - any failure is decided by the registry below
+            logger.warning("Could not read cluster_info for %s: %s", cluster_id, sanitize_error(str(exc)))
+            return cluster_id, None
+
+    results = await asyncio.gather(*[one(c) for c in sorted(cluster_ids)])
+    unreadable = [cluster_id for cluster_id, rows in results if rows is None]
+    if unreadable:
+        try:
+            registry = await run_blocking(
+                partial(cert_manager.read_registry, use_cache=False),
+                timeout=SYNC_CLUSTER_TIMEOUT,
+                label="sync_cluster_registry",
+                executor=proxy_executor,
+                max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+        except Exception as exc:  # noqa: BLE001 - an unknown registry cannot vouch for a removal
+            logger.warning("Could not read the cluster registry for a sync: %s", sanitize_error(str(exc)))
+            raise HTTPException(status_code=503, detail=CLUSTER_INFO_UNREADABLE) from None
+        registered = set(registry.cluster_ids or [])
+        if not registry.readable or any(c in registered for c in unreadable):
+            raise HTTPException(status_code=503, detail=CLUSTER_INFO_UNREADABLE)
+        logger.info("sync: omitting deregistered cluster(s) %s", sorted(unreadable))
+    return [row for _cluster_id, rows in results if rows for row in rows]
+
+
 def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     """Every Vault round trip needed to validate a key. Only ever runs on auth_executor.
 
@@ -2260,9 +2312,7 @@ async def sync_data(
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                result.clusters = await _gather_per_cluster(
-                    _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info"
-                )
+                result.clusters = await _gather_cluster_info(cert_manager, cluster_ids)
         
         project_grants = _key_project_grants(api_key)
         if request.include_projects:
