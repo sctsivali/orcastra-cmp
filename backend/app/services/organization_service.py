@@ -230,7 +230,7 @@ class OrganizationService:
         return list(result.scalars().all())
 
     async def bind_cluster(
-        self, org_id: int, cluster_id: str, registered_by: str
+        self, org_id: int, cluster_id: str, registered_by: Optional[str]
     ) -> OrganizationCluster:
         """Bind a Vault cluster to an organization."""
         existing = await self.db.execute(

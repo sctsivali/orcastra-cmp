@@ -17,6 +17,7 @@ from app.core.dependencies import (
     require_partner,
     require_tenant,
 )
+from app.core.org_scope import get_owned_clusters_ignoring_admin
 from app.core.rbac import resolve_roles, get_highest_role
 from app.services.organization_service import OrganizationService
 from app.services.organization_preferences import (
@@ -384,8 +385,20 @@ async def bind_cluster(
     if not await svc.user_has_access(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
+    # important: user_has_access checks the organization, not the cluster, and org scope is
+    # derived from exactly the row written below. registered_by is itself an ownership claim
+    # (org_scope._query_owned_clusters), so an admin binding a cluster they do not own gets no
+    # stamp and break-glass still applies to them there.
+    owned = await get_owned_clusters_ignoring_admin(user, db)
+    if role != "admin" and body.cluster_id not in owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Not permitted to bind cluster {body.cluster_id}",
+        )
+    registrant = user.email if body.cluster_id in owned else None
+
     try:
-        binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=user.email)
+        binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=registrant)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 

@@ -24,8 +24,11 @@ EXEMPT = {
     ("integrations.py", "*"): "API-key auth: cluster_permissions allow-list",
     # Registration creates the binding that scope is later derived from.
     ("cluster_registration.py", "register_cluster"): "creates the binding scope derives from",
+    # Binding creates the row scope derives from, so it needs the org AND the cluster.
+    ("organizations.py", "bind_cluster"): (
+        "org access plus cluster ownership via get_owned_clusters_ignoring_admin"
+    ),
     # Org-level membership check (user_has_access) is the correct boundary here.
-    ("organizations.py", "bind_cluster"): "org membership checked via user_has_access",
     ("organizations.py", "unbind_cluster"): "org membership checked via user_has_access",
     # Break-glass is the mechanism for reaching a cluster you do not own; it has its own gate.
     ("break_glass.py", "*"): "enforce_sensitive_access / require_admin is the gate",
@@ -76,3 +79,14 @@ def test_the_exempt_list_stays_honest() -> None:
     """An exemption for a file that no longer exists hides a real handler behind a stale name."""
     for (filename, _func) in EXEMPT:
         assert (ROUTERS / filename).exists(), f"EXEMPT names {filename}, which does not exist"
+
+
+def test_bind_cluster_checks_cluster_ownership_as_its_exemption_says() -> None:
+    """The exemption above is only honest while the handler asks who owns the cluster."""
+    tree = ast.parse((ROUTERS / "organizations.py").read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "bind_cluster"
+    )
+    assert "get_owned_clusters_ignoring_admin(" in ast.unparse(handler)
