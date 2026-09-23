@@ -575,7 +575,12 @@ async def get_visible_projects(
     if get_highest_role(resolve_roles(user)) != Role.PARTNER:
         return None
 
-    shared = await _clusters_with_several_orgs(db)
+    # important: by party, not by binding count. Provisioning binds every buyer organization to the
+    # partner's cluster, so counting bindings bounded a partner on its own cluster after its first
+    # sale and refused its own and its buyers' projects on every gate built on this bound.
+    from app.services.cluster_parties import clusters_held_by_another_party
+
+    shared = await clusters_held_by_another_party(db, user.email, await _clusters_with_several_orgs(db))
     if not shared:
         return None
 
@@ -739,7 +744,7 @@ async def get_tenant_acl_rules(
     # important: a '*' project on a cluster bound to several organizations named the other
     # organizations' projects too. Each wildcard is expanded with its own organization's
     # projects here, before the merge below loses which organization it came from.
-    grants = await confine_wildcards(db, grants, _clusters_with_several_orgs)
+    grants = await confine_wildcards(db, grants)
 
     # build ACL map: merge permissions across policies
     acl: dict[str, dict[tuple[str, str], set[str]]] = {}

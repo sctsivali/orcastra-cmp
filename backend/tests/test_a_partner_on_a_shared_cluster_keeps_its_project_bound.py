@@ -70,6 +70,18 @@ class FakeSession:
         raise AssertionError(f"unexpected query: {sql[:120]}")
 
 
+@pytest.fixture(autouse=True)
+def every_shared_cluster_is_held_elsewhere(monkeypatch):
+    """These pin the bound's arithmetic on a cluster another party holds. Which clusters another
+    party holds runs on real rows in test_a_cluster_is_foreign_only_to_another_party."""
+    from app.services import cluster_parties
+
+    async def held(_db, _email, cluster_ids):
+        return set(cluster_ids)
+
+    monkeypatch.setattr(cluster_parties, "clusters_held_by_another_party", held)
+
+
 class FakeUser:
     def __init__(self, email="p@example.test", groups=("role_partner",)):
         self.email = email

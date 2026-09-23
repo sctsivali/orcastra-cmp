@@ -99,3 +99,35 @@ async def clusters_held_by_another_party(
         else:
             held_elsewhere.add(cluster_id)
     return held_elsewhere
+
+
+async def clusters_outside_org_party(
+    db: AsyncSession, org_ids: Iterable[int], cluster_ids: Iterable[str]
+) -> Dict[int, Set[str]]:
+    """For each organization, the clusters among cluster_ids that carry a binding outside its party.
+
+    An organization's party is itself and every organization carrying its integration key, which
+    is how a partner's home organization and the buyers its key provisioned belong together. An
+    unbound row counts as outside, as it does in org_scope._clusters_with_several_orgs.
+    """
+    from app.models.db_models import Organization, OrganizationCluster
+
+    orgs, clusters = sorted(set(org_ids)), sorted(set(cluster_ids))
+    if not orgs or not clusters:
+        return {org: set() for org in orgs}
+    keys = dict((await db.execute(
+        select(Organization.id, Organization.api_key_id).where(Organization.id.in_(orgs))
+    )).all())
+    rows = (await db.execute(
+        select(OrganizationCluster.cluster_id, OrganizationCluster.organization_id, Organization.api_key_id)
+        .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
+        .where(OrganizationCluster.cluster_id.in_(clusters))
+    )).all()
+    outside: Dict[int, Set[str]] = {org: set() for org in orgs}
+    for org in orgs:
+        key = keys.get(org)
+        for cluster_id, holder, holder_key in rows:
+            if holder == org or (holder is not None and key and holder_key == key):
+                continue
+            outside[org].add(cluster_id)
+    return outside

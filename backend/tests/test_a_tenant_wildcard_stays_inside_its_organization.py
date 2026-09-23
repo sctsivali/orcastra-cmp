@@ -49,37 +49,40 @@ def _grant(org: int, cluster: str, project: str, perms: tuple[str, ...] = ("view
 
 
 def test_a_wildcard_on_a_shared_cluster_becomes_default_plus_its_organizations_projects() -> None:
-    confined = confine([_grant(1, SHARED, "*")], {SHARED}, {(1, SHARED): {"own-web"}})
+    confined = confine([_grant(1, SHARED, "*")], {1: {SHARED}}, {(1, SHARED): {"own-web"}})
     assert {g.project_name for g in confined} == {"default", "own-web"}
     assert all(g.organization_id == 1 and g.permissions == ("view",) for g in confined)
 
 
 def test_a_wildcard_on_an_unshared_cluster_keeps_its_meaning() -> None:
     grant = _grant(1, OWN, "*")
-    assert confine([grant], {SHARED}, {}) == [grant]
+    assert confine([grant], {1: {SHARED}}, {}) == [grant]
 
 
 def test_a_concrete_project_is_never_rewritten() -> None:
     grant = _grant(1, SHARED, "own-web")
-    assert confine([grant], {SHARED}, {(1, SHARED): {"own-db"}}) == [grant]
+    assert confine([grant], {1: {SHARED}}, {(1, SHARED): {"own-db"}}) == [grant]
 
 
 def test_two_organizations_each_expand_with_their_own_projects() -> None:
     confined = confine(
         [_grant(1, SHARED, "*", ("view",)), _grant(2, SHARED, "*", ("view", "operate"))],
-        {SHARED},
+        {1: {SHARED}, 2: {SHARED}},
         {(1, SHARED): {"own-web"}, (2, SHARED): {"other-db"}},
     )
     by_org = {(g.organization_id, g.project_name) for g in confined}
     assert by_org == {(1, "default"), (1, "own-web"), (2, "default"), (2, "other-db")}
 
 
-def test_no_query_runs_without_a_wildcard() -> None:
-    async def load_shared(_db: Any) -> set:
-        raise AssertionError("the shared-cluster query ran for a grant list with no wildcard")
+def test_no_query_runs_without_a_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import cluster_parties
 
+    async def outside(*_a: Any) -> dict:
+        raise AssertionError("the party query ran for a grant list with no wildcard")
+
+    monkeypatch.setattr(cluster_parties, "clusters_outside_org_party", outside)
     grants = [_grant(1, SHARED, "own-web")]
-    assert asyncio.run(confine_wildcards(object(), grants, load_shared)) == grants
+    assert asyncio.run(confine_wildcards(object(), grants)) == grants
 
 
 # -- the tenant bound -----------------------------------------------------------------------
@@ -98,11 +101,9 @@ def test_the_tenant_bound_is_none_where_nothing_is_shared() -> None:
     assert tenant_project_bound({}, {SHARED}) is None
 
 
-def test_a_leftover_wildcard_never_widens_the_tenant_bound() -> None:
-    """A cluster that became shared between two reads still bounds to named projects only."""
-    assert tenant_project_bound({SHARED: {("*", "*"): {"view"}}}, {SHARED}) == {
-        SHARED: {"default"}
-    }
+def test_a_wildcard_confinement_kept_leaves_its_cluster_unbound() -> None:
+    """A wildcard still standing after confinement is inside its organization's party, where it means every project."""
+    assert tenant_project_bound({SHARED: {("*", "*"): {"view"}}}, {SHARED}) is None
 
 
 # -- get_tenant_acl_rules end to end over a table-keyed fake session --------------------------
@@ -167,6 +168,19 @@ def _tenant() -> AuthenticatedUser:
     return AuthenticatedUser(
         user_id="tenant-wildcard-probe", email="tenant@example.test", groups=["role_tenant"]
     )
+
+
+@pytest.fixture(autouse=True)
+def every_shared_cluster_is_another_partys(request, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fakes model two parties on SHARED, the shape confinement exists for. Party membership
+    itself runs on real rows in test_a_wildcard_follows_its_organizations_party."""
+    from app.services import cluster_parties
+
+    async def outside(_db: Any, orgs: Any, clusters: Any) -> dict:
+        return {org: {SHARED} & set(clusters) for org in orgs}
+
+    if request.node.name != "test_a_wildcard_follows_its_organizations_party":
+        monkeypatch.setattr(cluster_parties, "clusters_outside_org_party", outside)
 
 
 def _acl_for(session: FakeSession) -> dict:
@@ -301,3 +315,37 @@ def test_a_tenant_on_a_shared_cluster_is_bound_on_both_paths(
         )
 
     assert asyncio.run(drive()) == (True, False)
+
+
+
+# -- the party decides, on real rows ------------------------------------------------------------
+
+
+async def test_a_wildcard_follows_its_organizations_party() -> None:
+    """A home org and the buyers its key provisioned are one party, another partner's org is not."""
+    from app.models.db_models import Organization, OrganizationCluster
+    from app.services.cluster_parties import clusters_outside_org_party
+    from tests._sqlite_session import sqlite_session
+
+    db = sqlite_session(Organization, OrganizationCluster)
+    db.add_all([
+        Organization(id=1, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_a"),
+        Organization(id=2, name="buyer", slug="buyer", created_by="system", is_active=True, api_key_id="oak_a"),
+        Organization(id=3, name="other", slug="other", created_by="system", is_active=True, api_key_id="oak_b"),
+        Organization(id=4, name="local", slug="local", created_by="x@example.test", is_active=True),
+    ])
+    await db.commit()
+    db.add_all([
+        OrganizationCluster(organization_id=1, cluster_id="own"), OrganizationCluster(organization_id=2, cluster_id="own"),
+        OrganizationCluster(organization_id=1, cluster_id="mixed"), OrganizationCluster(organization_id=3, cluster_id="mixed"),
+        OrganizationCluster(organization_id=4, cluster_id="local"), OrganizationCluster(organization_id=2, cluster_id="local"),
+    ])
+    await db.commit()
+    outside = await clusters_outside_org_party(db, {1, 2, 4}, {"own", "mixed", "local"})
+    assert outside[1] == {"mixed", "local"}, "own is the home org's party, mixed carries another partner"
+    assert outside[2] == {"mixed", "local"}
+    assert outside[4] == {"own", "mixed", "local"}, "an unkeyed org is its own party only"
+    grants = [_grant(1, "own", "*"), _grant(1, "mixed", "*")]
+    confined = confine(grants, outside, {(1, "mixed"): {"home-web"}})
+    assert [g for g in confined if g.cluster_id == "own"] == [grants[0]]
+    assert {g.project_name for g in confined if g.cluster_id == "mixed"} == {"default", "home-web"}

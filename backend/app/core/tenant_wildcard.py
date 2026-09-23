@@ -14,7 +14,7 @@ which organization a wildcard came from.
 """
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Awaitable, Callable, Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,16 +41,17 @@ class RuleGrant:
 
 def confine(
     grants: Iterable[RuleGrant],
-    shared: set[str],
+    outside: dict[int, set[str]],
     owned: dict[OrgCluster, set[str]],
 ) -> list[RuleGrant]:
-    """Rewrite each wildcard project on a shared cluster into its organization's projects.
+    """Rewrite each wildcard project into its organization's projects where another party holds the cluster.
 
-    A grant on an unshared cluster, or one naming a concrete project, is returned unchanged.
+    outside maps an organization to the clusters that carry a binding outside its party. A grant on
+    any other cluster, or one naming a concrete project, is returned unchanged.
     """
     confined: list[RuleGrant] = []
     for grant in grants:
-        if grant.project_name != WILDCARD or grant.cluster_id not in shared:
+        if grant.project_name != WILDCARD or grant.cluster_id not in outside.get(grant.organization_id, set()):
             confined.append(grant)
             continue
         projects = {DEFAULT_PROJECT} | owned.get((grant.organization_id, grant.cluster_id), set())
@@ -107,23 +108,29 @@ async def organization_projects(
     return owned
 
 
-async def confine_wildcards(
-    db: AsyncSession,
-    grants: list[RuleGrant],
-    load_shared: Callable[[AsyncSession], Awaitable[set[str]]],
-) -> list[RuleGrant]:
-    """Confine every wildcard grant on a shared cluster. No query runs without a wildcard."""
-    if not any(grant.project_name == WILDCARD for grant in grants):
+async def confine_wildcards(db: AsyncSession, grants: list[RuleGrant]) -> list[RuleGrant]:
+    """Confine every wildcard grant on a cluster another party holds. No query runs without a wildcard.
+
+    important: by the policy organization's party, not by binding count. A partner's home
+    organization and its buyers carry one integration key, so a '*' rule of the home organization
+    on the partner's own cluster keeps meaning every project there, as it did before.
+    """
+    from app.services.cluster_parties import clusters_outside_org_party
+
+    wildcards = [grant for grant in grants if grant.project_name == WILDCARD]
+    if not wildcards:
         return grants
-    shared = await load_shared(db)
+    outside = await clusters_outside_org_party(
+        db, {grant.organization_id for grant in wildcards}, {grant.cluster_id for grant in wildcards}
+    )
     pairs = {
         (grant.organization_id, grant.cluster_id)
-        for grant in grants
-        if grant.project_name == WILDCARD and grant.cluster_id in shared
+        for grant in wildcards
+        if grant.cluster_id in outside.get(grant.organization_id, set())
     }
     if not pairs:
         return grants
-    return confine(grants, shared, await organization_projects(db, pairs))
+    return confine(grants, outside, await organization_projects(db, pairs))
 
 
 def tenant_project_bound(
@@ -132,15 +139,16 @@ def tenant_project_bound(
 ) -> Optional[dict[str, set[str]]]:
     """The project bound for a tenant: default plus the projects its ACL names, per shared cluster.
 
-    The ACL has already been confined, so a shared cluster carries no wildcard here. Setting the
-    bound makes project_is_visible, and every gate built on it, hold the tenant to these
-    projects even where the enforcement flag leaves the ACL check off.
+    Setting the bound makes project_is_visible, and every gate built on it, hold the tenant to these
+    projects even where the enforcement flag leaves the ACL check off. The ACL has already been
+    confined, so a wildcard still standing is one inside its organization's party, where it means
+    every project, and that cluster gets no bound.
     """
     bound = {
         cluster_id: {DEFAULT_PROJECT}
         | {project for (project, _instance) in rules if project != WILDCARD}
         for cluster_id, rules in acl.items()
-        if cluster_id in shared
+        if cluster_id in shared and not any(project == WILDCARD for (project, _instance) in rules)
     }
     return bound or None
 
