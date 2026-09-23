@@ -160,17 +160,26 @@ async def clusters_held_by_another_party(
     return held_elsewhere
 
 
-async def held_or_every_bounded(db: AsyncSession, email: str, bounded: Iterable[str]) -> Set[str]:
+async def held_with_confirmation(
+    db: AsyncSession, email: str, bounded: Iterable[str]
+) -> "tuple[Set[str], bool]":
     """clusters_held_by_another_party for a read path, which narrows rather than failing.
 
-    note: when who holds a cluster cannot be confirmed (Vault slow), a list treats every bounded
-    cluster as held, the count-based bound production has always applied, instead of answering 503.
+    Returns (held, confirmed). When who holds a cluster cannot be confirmed (Vault slow), every
+    bounded cluster counts as held, the count-based bound production has always applied, and
+    confirmed is False so a listing can say so instead of answering 503.
     """
     wanted = set(bounded)
     try:
-        return await clusters_held_by_another_party(db, email, wanted)
+        return await clusters_held_by_another_party(db, email, wanted), True
     except HTTPException as exc:
         if exc.status_code != 503:
             raise
         logger.warning("Could not confirm who holds %d cluster(s), keeping them bounded", len(wanted))
-        return wanted
+        return wanted, False
+
+
+async def held_or_every_bounded(db: AsyncSession, email: str, bounded: Iterable[str]) -> Set[str]:
+    """held_with_confirmation without the flag, for a path that only needs the set."""
+    held, _confirmed = await held_with_confirmation(db, email, bounded)
+    return held

@@ -10,7 +10,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.fanout import KIND_PARTIAL, NodeRead, collect
 from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
@@ -48,7 +48,13 @@ groups_router = APIRouter(
 _executor = ThreadPoolExecutor(max_workers=5)
 
 
-async def _held_elsewhere(nodes: List[str], db: AsyncSession, email: str) -> set:
+UNCONFIRMED_HOLDER = (
+    f"{KIND_PARTIAL}: could not confirm who holds this cluster, so its groups and identities "
+    "are not shown. Try again."
+)
+
+
+async def _held_elsewhere(nodes: List[str], db: AsyncSession, email: str) -> "tuple[set, bool]":
     """The clusters among `nodes` whose LXD auth objects this request may not read.
 
     important: groups and identities belong to no project, so on a cluster another party holds
@@ -58,8 +64,8 @@ async def _held_elsewhere(nodes: List[str], db: AsyncSession, email: str) -> set
     """
     bounded = sorted({node for node in nodes if visible_projects_for(node) is not None})
     if not bounded:
-        return set()
-    return await cluster_parties.held_or_every_bounded(db, email, bounded)
+        return set(), True
+    return await cluster_parties.held_with_confirmation(db, email, bounded)
 
 
 class IdentityInfo(BaseModel):
@@ -168,7 +174,7 @@ async def list_identities(
         verify_cluster_access(host)
         await verify_whole_cluster_access(host, db, user.email)
     try:
-        held = set() if host else await _held_elsewhere(
+        held, confirmed = (set(), True) if host else await _held_elsewhere(
             [*lxd_service.connection_manager.get_node_names(), *lxd_service.get_node_names()], db, user.email
         )
         nodes_to_query = [host] if host else [
@@ -197,6 +203,10 @@ async def list_identities(
         fan = collect(nodes_to_query, results, noun="identities")
         unreachable_nodes.extend(fan.unreachable_nodes)
         all_identities = fan.rows
+        if not confirmed:
+            for node in sorted(held):
+                fan.partial_nodes.append(node)
+                fan.node_errors[node] = UNCONFIRMED_HOLDER
         
         return IdentityListResponse(
             total=len(all_identities),
@@ -323,7 +333,7 @@ async def list_groups(
         verify_cluster_access(host)
         await verify_whole_cluster_access(host, db, user.email)
     try:
-        held = set() if host else await _held_elsewhere(
+        held, confirmed = (set(), True) if host else await _held_elsewhere(
             [*lxd_service.connection_manager.get_node_names(), *lxd_service.get_node_names()], db, user.email
         )
         nodes_to_query = [host] if host else [
@@ -352,6 +362,10 @@ async def list_groups(
         fan = collect(nodes_to_query, results, noun="groups")
         unreachable_nodes.extend(fan.unreachable_nodes)
         all_groups = fan.rows
+        if not confirmed:
+            for node in sorted(held):
+                fan.partial_nodes.append(node)
+                fan.node_errors[node] = UNCONFIRMED_HOLDER
         
         return GroupListResponse(
             total=len(all_groups),
