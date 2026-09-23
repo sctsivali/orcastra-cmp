@@ -7,10 +7,13 @@ via the external API endpoints authenticated with API key credentials.
 
 import ipaddress
 import logging
+import re
+import time
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +83,100 @@ _ROLE_TO_ORCAHUB = {
     "partner": "partner",
     "tenant": "tenant",
 }
+
+# OrcaHub's own address check (zod's email pattern), so what is sent is what it accepts. Pydantic's
+# EmailStr is stricter and would drop addresses on special-use domains that OrcaHub takes.
+_ORCAHUB_EMAIL = re.compile(
+    r"^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$"
+)
+HOME_ORG_RESPONSE_MAX_BYTES = 1024 * 1024
+HOME_ORG_TTL_SECONDS = 600.0
+# note: per worker and on the event loop only. A miss costs one extra lookup, never a wrong push.
+_home_org_cache: Dict[str, Tuple[float, str]] = {}
+
+
+class OrcaHubMemberEntry(BaseModel):
+    """One entry of OrcaHub's POST /api/external/members/sync body.
+
+    important: OrcaHub rejects the whole batch with 400 on action "upsert" or a null name, which
+    is what every push sent before, so none of them ever landed. `name` is present only as a
+    string and `role` only on a sync, via model_dump(exclude_none=True).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(..., max_length=255)
+    name: Optional[str] = Field(None, max_length=255)
+    role: Optional[Literal["partner", "tenant"]] = None
+    action: Literal["sync", "remove"]
+
+    @field_validator("email")
+    @classmethod
+    def _an_address_orcahub_accepts(cls, value: str) -> str:
+        if not _ORCAHUB_EMAIL.match(value):
+            raise ValueError("not an email address OrcaHub accepts")
+        return value
+
+
+def orcahub_member_entries(members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Dashboard member changes in OrcaHub's contract. An entry it would refuse is dropped."""
+    entries: List[Dict[str, Any]] = []
+    for member in members:
+        remove = member.get("action") == "remove"
+        name = member.get("name")
+        try:
+            entry = OrcaHubMemberEntry(
+                email=str(member.get("email") or ""),
+                name=name if isinstance(name, str) and name else None,
+                role=None if remove else _ROLE_TO_ORCAHUB.get(member.get("role") or "tenant", "tenant"),
+                action="remove" if remove else "sync",
+            )
+        except ValidationError:
+            logger.warning("Skipping a member OrcaHub would refuse in its members/sync contract")
+            continue
+        entries.append(entry.model_dump(exclude_none=True))
+    return entries
+
+
+async def _connection_home_org_id(creds: Dict[str, Any]) -> Optional[str]:
+    """The OrcaHub organization this connection belongs to, or None when it cannot be told.
+
+    important: OrcaHub applies every members/sync entry to the connection's own organization,
+    not to the Orcastra org it came from. Pushing for a buyer org the same key owns would add or
+    remove the user in the seller org, and a removal there would undo a purchase membership.
+    """
+    key_id = creds["api_key_id"]
+    now = time.monotonic()
+    cached = _home_org_cache.get(key_id)
+    if cached and now - cached[0] < HOME_ORG_TTL_SECONDS:
+        return cached[1]
+    url = f"{creds['app_url'].rstrip('/')}/api/external/organizations"
+    try:
+        resp = await guarded_request(
+            "GET",
+            url,
+            headers={"X-API-Key-ID": key_id, "X-API-Key-Secret": creds["api_key_secret"]},
+            max_bytes=HOME_ORG_RESPONSE_MAX_BYTES,
+            max_redirects=0,
+            require_https=callback_requires_https(creds["app_url"]),
+            allowed_networks=callback_networks(),
+            content_type_prefix="application/json",
+            raise_for_status=True,
+            timeout=10.0,
+        )
+        home = resp.json()["data"]["organizations"][0]["id"]
+    except UnsafeURLError as exc:
+        logger.warning("OrcaHub home organization lookup refused for api key %s: %s", key_id, exc)
+        return None
+    except Exception as exc:
+        logger.warning(
+            "OrcaHub home organization lookup failed for api key %s: %s", key_id, sanitize_error(str(exc))
+        )
+        return None
+    if not isinstance(home, (str, int)) or isinstance(home, bool) or str(home) == "":
+        return None
+    _home_org_cache[key_id] = (now, str(home))
+    return str(home)
 
 
 def _read_orcahub_credentials_blocking(api_key_id: str) -> Optional[Dict[str, Any]]:
@@ -155,8 +252,15 @@ async def push_members_to_orcahub(
     members: List[Dict[str, Any]],
 ) -> bool:
     """
-    Push member changes to OrcaHub.
+    Push member changes in an OrcaHub connection's own organization to OrcaHub.
+
+    Only the connection's home organization is pushed (see _connection_home_org_id), and only
+    while ORCAHUB_MEMBER_PUSH_ENABLED is on.
     """
+    if not get_settings().orcahub_member_push_enabled:
+        logger.debug("OrcaHub member push is disabled, skipping org %s", org_id)
+        return False
+
     # load org to get credentials
     result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
@@ -169,16 +273,17 @@ async def push_members_to_orcahub(
         logger.debug(f"Org {org_id} is not OrcaHub-synced or has no callback URL, skipping push")
         return False
 
-    # map roles for OrcaHub
-    payload_members = []
-    for m in members:
-        orcahub_role = _ROLE_TO_ORCAHUB.get(m.get("role", "tenant"), "tenant")
-        payload_members.append({
-            "email": m["email"],
-            "name": m.get("name"),
-            "role": orcahub_role,
-            "action": m.get("action", "upsert"),
-        })
+    home = await _connection_home_org_id(creds)
+    if home is None or home != str(org.external_id):
+        logger.info(
+            "OrcaHub member push skipped for organization %s: not the connection's own organization",
+            org.slug,
+        )
+        return False
+
+    payload_members = orcahub_member_entries(members)
+    if not payload_members:
+        return False
 
     callback_url = f"{creds['app_url'].rstrip('/')}/api/external/members/sync"
     # important: app_url was chosen by whoever holds the key and this request carries the raw

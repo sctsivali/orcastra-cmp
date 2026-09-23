@@ -42,9 +42,18 @@ class Recorder:
 
     async def __call__(self, method: str, url: str, **kwargs: Any) -> GuardedResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
+        if method == "GET" and url.endswith("/api/external/organizations"):
+            # note: the member push first asks OrcaHub which org the connection belongs to.
+            return GuardedResponse(
+                200, "application/json", b'{"data":{"organizations":[{"id":"ext-home"}]}}'
+            )
         if self.raises is not None:
             raise self.raises
         return GuardedResponse(self.status, "application/json", b"{}")
+
+    @property
+    def posts(self) -> List[Dict[str, Any]]:
+        return [c for c in self.calls if c["method"] == "POST"]
 
 
 @pytest.fixture
@@ -77,6 +86,7 @@ def _org() -> SimpleNamespace:
 @pytest.fixture
 def push(monkeypatch, no_raw_httpx):
     recorder = Recorder()
+    monkeypatch.setattr(orcahub_sync, "_home_org_cache", {})
 
     async def _creds(_org: Any) -> Dict[str, str]:
         return dict(CREDS)
@@ -91,9 +101,9 @@ async def test_the_member_push_goes_through_the_guarded_client(push):
         _OrgSession(_org()), 7, [{"email": "tenant@example.test", "role": "tenant", "action": "sync"}]
     )
     assert ok is True
-    assert len(push.calls) == 1
-    call = push.calls[0]
-    assert call["method"] == "POST"
+    assert len(push.posts) == 1
+    assert all(c["max_redirects"] == 0 and c["require_https"] is True for c in push.calls)
+    call = push.posts[0]
     assert call["url"] == "https://example.test/api/external/members/sync"
     assert call["max_redirects"] == 0
     assert call["require_https"] is True
@@ -108,7 +118,7 @@ async def test_a_refused_member_push_url_returns_false(push, caplog):
         _OrgSession(_org()), 7, [{"email": "tenant@example.test", "role": "tenant", "action": "sync"}]
     )
     assert ok is False
-    assert len(push.calls) == 1
+    assert len(push.posts) == 1
     refused = [r for r in caplog.records if "refused" in r.getMessage()]
     assert refused and all(r.levelno == logging.WARNING for r in refused)
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR], (

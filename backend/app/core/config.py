@@ -158,6 +158,17 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Dashboard member changes in an OrcaHub connection's own organization are pushed to OrcaHub's
+    # members/sync endpoint. Buyer organizations are never pushed. Set false to stop the push.
+    orcahub_member_push_enabled: bool = Field(
+        default=True,
+        alias="ORCAHUB_MEMBER_PUSH_ENABLED",
+        description=(
+            "Push dashboard member assignments and removals in an OrcaHub connection's home "
+            "organization back to OrcaHub. Default on."
+        ),
+    )
+
     # Authentication / Authentik OIDC Configuration
     auth_enabled: bool = Field(
         default=True,
