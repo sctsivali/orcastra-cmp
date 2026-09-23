@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 # LXD API paths no integration may reach through the proxy, whatever its cluster grant.
 #
 # important: a refusal list, not an allowlist, and a deliberate trade. An allowlist would break
-# the integrator the first time it used a path nobody had enumerated. `/certificates` is the
-# sharp one: it is not project-scoped, it lists every client certificate the cluster trusts, and
-# a `write` grant can add one.
-_REFUSED_PROXY_PREFIXES = ("/certificates",)
+# the integrator the first time it used a path nobody had enumerated. Both entries are the trust
+# store: `/certificates` lists and adds trusted client certificates, and on LXD 5.21 and later
+# `/auth` adds a TLS identity (`/auth/identities/tls`) and gives it server-wide entitlements
+# (`/auth/groups`). Either one lets a `write` grant mint a credential that outlives the key.
+_REFUSED_PROXY_PREFIXES = ("/certificates", "/auth")
 
 # Resources a project grant cannot bound.
 #

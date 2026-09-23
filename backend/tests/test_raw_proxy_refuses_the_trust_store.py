@@ -91,6 +91,7 @@ ALLOWED = [
     "/1.0/operations/5b1e0a4c-0000-4000-8000-000000000001/wait",
     "/1.0/operations/5b1e0a4c-0000-4000-8000-000000000001/wait?timeout=30",
     "/1.0/certificates-archive",
+    "/1.0/authors",
 ]
 
 
@@ -100,6 +101,33 @@ def test_every_spelling_of_the_trust_store_is_refused(path: str) -> None:
         assert_proxy_path_allowed(path)
     assert caught.value.status_code == 403
     assert caught.value.detail == "The proxy does not expose /certificates"
+
+
+# LXD 5.21 and later: a TLS identity is a trusted client, and a group gives it entitlements up to
+# server-wide admin. The dashboard itself creates both with the same unrestricted cluster client.
+REFUSED_AUTH = [
+    "/1.0/auth",
+    "/1.0/auth/identities",
+    "/1.0/auth/identities/tls",
+    "/1.0/auth/identities/tls/oak_test",
+    "/1.0/auth/groups",
+    "/1.0/auth/groups/g",
+    "/1.0/auth/identity-provider-groups",
+    "/1.0/AUTH/groups",
+    "/1.0/%61uth/identities/tls",
+    "/1.0/%2561uth/groups",
+    "/auth/identities/tls",
+    "/1.0/auth/groups?project=default",
+    "/1.0/auth/groups#x",
+]
+
+
+@pytest.mark.parametrize("path", REFUSED_AUTH)
+def test_every_spelling_of_the_auth_api_is_refused(path: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        assert_proxy_path_allowed(path)
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "The proxy does not expose /auth"
 
 
 @pytest.mark.parametrize("path", TRAVERSAL)
@@ -186,6 +214,24 @@ async def test_the_endpoint_never_calls_the_session_for_the_trust_store(
     with pytest.raises(HTTPException) as caught:
         await _call(FakeService(_Client(session)), path, method=method)
     assert caught.value.status_code == status
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/1.0/auth/identities/tls"),
+        ("POST", "/1.0/auth/groups"),
+        ("PUT", "/1.0/auth/groups/g"),
+        ("PATCH", "/1.0/auth/identities/tls/oak_test"),
+        ("GET", "/1.0/auth/identities"),
+    ],
+)
+async def test_the_endpoint_never_calls_the_session_for_the_auth_api(method: str, path: str) -> None:
+    session = RecordingSession()
+    with pytest.raises(HTTPException) as caught:
+        await _call(FakeService(_Client(session)), path, method=method)
+    assert caught.value.status_code == 403
     assert session.calls == []
 
 
