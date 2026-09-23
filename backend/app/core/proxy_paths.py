@@ -16,7 +16,7 @@ raw_proxy sent it to `/1.0/certificates`.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote, unquote_plus
 
 from fastapi import HTTPException
@@ -223,6 +223,23 @@ def _host_reach(body: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# important: LXD decodes a body with Go's encoding/json, which matches a struct field whatever its case
+# (and with Unicode case folding), so "Profiles" or "Project" is read as profiles or project. Every
+# body rule here reads the plain lowercase spelling, so a limited key's body must use it for the fields
+# of the body and of its source and target. Map keys (config, devices, properties) match exactly.
+_FIELD_NAME = re.compile(r"^[a-z0-9_-]+$")
+_NESTED_STRUCTS = ("source", "target")
+
+
+def _odd_field_name(body: Dict[str, Any]) -> Optional[str]:
+    scopes = [body] + [body[key] for key in _NESTED_STRUCTS if isinstance(body.get(key), dict)]
+    for scope in scopes:
+        for key in scope:
+            if not isinstance(key, str) or not _FIELD_NAME.fullmatch(key):
+                return str(key)
+    return None
+
+
 def assert_body_within_grant(
     path: str, method: str, body: Optional[Dict[str, Any]], allowed_projects: Optional[List[str]]
 ) -> None:
@@ -232,6 +249,13 @@ def assert_body_within_grant(
     if not isinstance(body, dict):
         return
     granted = sorted(allowed_projects or [])
+    odd = _odd_field_name(body)
+    if odd is not None:
+        logger.warning("Refusing a body field spelled %r for a key limited to %s", odd, granted)
+        raise HTTPException(
+            status_code=400,
+            detail=f"The request body field {odd!r} must be spelled in lowercase ASCII for a key limited to {granted}.",
+        )
     for project in _projects_named_in(body):
         if not project_allowed_by_grant(project, allowed_projects):
             logger.warning("Refusing a body naming project %s for a key limited to %s", project, granted)
@@ -309,3 +333,83 @@ def assert_project_scope_allows_path(
 def host_reach(body: Dict[str, Any]) -> Optional[str]:
     """Public name for the host-reach rule, so the dashboard routes and the proxy share one list."""
     return _host_reach(body)
+
+
+def limited_write_plan(path: str, method: str, body: Any, project: str) -> List[Tuple[Any, ...]]:
+    """What a project-limited key's write applies without saying so, as reads for raw_proxy to judge.
+
+    Each step is one of:
+      ("names", names, in_project): profiles the body names, resolved in in_project
+      ("carried", instance, snapshot, read_project, judge_project, with_config, with_profiles, set_here):
+          an instance or a snapshot whose config and devices (with_config, less the config keys and
+          device names in set_here, which the body sets itself) and whose profile names
+          (with_profiles, judged in judge_project) the write carries
+      ("image", source, in_project, kind): the image a create of type kind applies the profiles of
+
+    important: LXD applies profiles a body does not name. A create names none and gets default, a
+    copy takes its source's profile names and an image create its image's, all resolved in the
+    target project. A move to another project takes the target's profiles of the names the
+    instance carries, and a restore re-applies a snapshot's profiles, config and devices. The
+    instance name is decoded once, as LXD decodes it.
+    """
+    verb = method.upper()
+    if not isinstance(body, dict) or verb not in ("POST", "PUT", "PATCH"):
+        return []
+    relative, _ = split_proxy_path(path)
+    parts = [unquote(part) for part in _path_part(relative).split("/") if part]
+    if parts[:1] == ["1.0"]:
+        parts = parts[1:]
+    kind = [part.lower() for part in parts[:1]]
+    named = [str(name) for name in body["profiles"]] if isinstance(body.get("profiles"), list) else None
+    here = project or "default"
+    if kind == ["images"]:
+        return [("names", named, here)] if named is not None else []
+    if kind != ["instances"]:
+        return []
+    if verb == "POST" and len(parts) == 1:
+        steps: List[Tuple[Any, ...]] = [("names", named, here)] if named is not None else []
+        source = body.get("source") if isinstance(body.get("source"), dict) else {}
+        kind_of_source = str(source.get("type") or "").lower()
+        if kind_of_source == "copy":
+            # note: a copy carries its source's config and devices except the keys and devices the
+            # body sets (LXD's createFromCopy skips those), and its profile names only when the body
+            # names none
+            instance, _, snapshot = str(source.get("source") or "").partition("/")
+            config = body.get("config") if isinstance(body.get("config"), dict) else {}
+            devices = body.get("devices") if isinstance(body.get("devices"), dict) else {}
+            return steps + [("carried", instance, snapshot or None, str(source.get("project") or here), here,
+                             True, named is None, (tuple(sorted(config)), tuple(sorted(devices))))]
+        if named is not None:
+            return steps
+        if kind_of_source == "image":
+            return [("image", source, here, str(body.get("type") or "container"))]
+        return [("names", ["default"], here)]
+    if len(parts) != 2:
+        return []
+    instance = parts[1]
+    if verb == "POST":
+        target = body.get("project")
+        if target not in (None, "") and str(target) != here:
+            if named is not None:
+                return [("names", named, str(target))]
+            return [("carried", instance, None, here, str(target), False, True, ((), ()))]
+        return [("names", named, here)] if named is not None else []
+    steps = [("names", named, here)] if named is not None else []
+    if body.get("restore"):
+        steps.append(("carried", instance, str(body["restore"]), here, here, True, True, ((), ())))
+    return steps
+
+
+def profile_reach(read: Callable[[str], Optional[Dict[str, Any]]], names: Iterable[str]) -> Optional[str]:
+    """The first of `names` whose config or devices reach the host, with what it sets, or None.
+
+    important: a profile's config and devices land on the instance as its own do, so the host-reach
+    rule holds for the profiles a write applies as well as for its body. `read` answers None for a
+    profile that does not exist, which LXD refuses on its own.
+    """
+    for name in names:
+        profile = read(name)
+        reach = _host_reach(profile) if isinstance(profile, dict) else None
+        if reach:
+            return f"profile {name} with {reach}"
+    return None

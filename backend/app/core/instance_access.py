@@ -116,6 +116,59 @@ def refuse_host_reach_where_bounded(cluster_id: str, body: dict, current: Option
         )
 
 
+async def refuse_host_reaching_profiles_where_bounded(
+    cluster_id: str, lxd_service: Any, project: Optional[str], names: Optional[list]
+) -> None:
+    """Raise 403 when a caller held to a project bound applies a profile that reaches the host.
+
+    important: `default` is in every bounded partner's reach, so a host-reaching profile an
+    administrator left there would carry the partner past the bound as surely as the body itself.
+    Read from the project that holds the profile: one without features.profiles uses default's.
+    """
+    from pylxd.exceptions import NotFound
+
+    from app.core.proxy_paths import profile_reach
+    from app.services.lxd.profile_writes import read_profile_sync
+    from app.services.lxd.project_scope import resolve_owner
+
+    if visible_projects_for(cluster_id) is None:
+        return
+    # note: the service applies default when the list is empty, so an empty list is judged as that
+    names = list(names or []) or ["default"]
+
+    def check() -> Optional[str]:
+        client = lxd_service.get_client_with_reconnect(cluster_id)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to {cluster_id}")
+        owner = resolve_owner(client, "profiles", normalize_project(project))
+
+        def read(name: str) -> Optional[dict]:
+            try:
+                return read_profile_sync(client, name, owner)[0]
+            except NotFound:
+                return None
+
+        return profile_reach(read, [str(name) for name in names])
+
+    try:
+        reach = await asyncio.to_thread(check)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Could not read the profiles a create applies on %s: %s", cluster_id, exc)
+        raise HTTPException(
+            status_code=503, detail=f"Could not check the profiles on {cluster_id}, retry shortly"
+        ) from exc
+    if reach:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"The request applies {reach}, which reaches the host that another organization's "
+                "instances on this cluster also run on. An administrator can make this change."
+            ),
+        )
+
+
 def can_view_instance(cluster_id: str, project: Optional[str], instance_name: str) -> bool:
     """Whether this request may see `instance_name` in `project`: the bound and the ACL."""
     name = normalize_project(project)

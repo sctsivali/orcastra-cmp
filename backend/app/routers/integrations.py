@@ -68,7 +68,11 @@ from app.core.proxy_paths import (
     assert_project_scope_allows_path,
     assert_proxy_path_allowed,
     assert_server_state_unchanged,
+    host_reach,
+    limited_write_plan,
+    profile_reach,
     project_allowed_by_grant,
+    project_grant_is_unrestricted,
     query_key_name,
     split_proxy_path,
 )
@@ -704,6 +708,103 @@ _PROXY_WAIT_OPERATIONS = frozenset({
     "create_instance", "delete_instance", "start_instance",
     "stop_instance", "restart_instance",
 })
+
+
+def _limited_write_reach(
+    session: Any, endpoint: str, plan: List[Tuple[Any, ...]], socket_timeout: Any
+) -> Optional[str]:
+    """Blocking: carry out a limited_write_plan and name the first thing that reaches the host.
+
+    important: fails closed. A step whose instance, snapshot or image cannot be read answers as
+    reaching, since the profiles or settings it would apply cannot be judged.
+    """
+
+    def get(path: str, in_project: str, **query: str) -> Any:
+        params = dict(query, **({"project": in_project} if in_project and in_project != "default" else {}))
+        response = session.get(f"{endpoint}{path}", params=params or None, timeout=socket_timeout,
+                               allow_redirects=False)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return (response.json() or {}).get("metadata") or {}
+
+    def profiles_in(in_project: str) -> Any:
+        return lambda name: get(f"/profiles/{safe_segment(name)}", in_project)
+
+    for step in plan:
+        if step[0] == "names":
+            _kind, names, in_project = step
+            reach = profile_reach(profiles_in(in_project), names)
+        elif step[0] == "carried":
+            _kind, instance, snapshot, read_project, judge_project, with_config, with_profiles, set_here = step
+            path = f"/instances/{safe_segment(instance)}"
+            path += f"/snapshots/{safe_segment(snapshot)}" if snapshot else ""
+            held = get(path, read_project)
+            if held is None:
+                return f"{'snapshot ' + snapshot + ' of ' if snapshot else ''}instance {instance}, which could not be read"
+            # note: LXD skips the source's config keys and devices the body sets itself (judged as the body)
+            config = {k: v for k, v in (held.get("config") or {}).items() if k not in set_here[0]}
+            devices = {k: v for k, v in (held.get("devices") or {}).items() if k not in set_here[1]}
+            reach = host_reach({"config": config, "devices": devices}) if with_config else None
+            if reach:
+                reach = f"instance {instance} with {reach}"
+            elif with_profiles:
+                reach = profile_reach(profiles_in(judge_project), [str(name) for name in held.get("profiles") or []])
+        else:
+            _kind, source, in_project, kind = step
+            if source.get("server"):
+                # note: LXD looks the cached copy of that server and alias up in every project, of the
+                # create's type, then applies this project's own record of the fingerprint it found, and
+                # a fresh download gets the default profile
+                # important: fail closed across candidates. LXD's own choice among cached copies also
+                # turns on the protocol, architecture and age, so every copy it could pick is judged
+                refs = {str(source.get(field)) for field in ("alias", "fingerprint") if source.get(field)}
+                cached = get("/images", "default", **{"all-projects": "true", "recursion": "1"})
+                # note: a daemon that ignores all-projects lists one project with no project field
+                if not isinstance(cached, list) or any(isinstance(image, dict) and "project" not in image
+                                                       for image in cached):
+                    return (f"an image cached from {source['server']} that this proxy could not list, "
+                            "so name the profiles in the request")
+                any_type = kind not in ("container", "virtual-machine")
+                found = [str(source["fingerprint"])] if source.get("fingerprint") else []
+                found += [str(image["fingerprint"]) for image in cached
+                          if isinstance(image, dict) and image.get("fingerprint")
+                          and (image.get("update_source") or {}).get("server") == source["server"]
+                          and (image.get("update_source") or {}).get("alias") in refs
+                          and (any_type or (image.get("type") or "container") == kind)]
+                held = [get(f"/images/{safe_segment(fingerprint)}", in_project) for fingerprint in dict.fromkeys(found)]
+                names = ["default"] + [str(name) for image in held if image for name in image.get("profiles") or []]
+                reach = profile_reach(profiles_in(in_project), list(dict.fromkeys(names)))
+            else:
+                fingerprint = source.get("fingerprint")
+                if not fingerprint and source.get("alias"):
+                    fingerprint = (get(f"/images/aliases/{safe_segment(source['alias'])}", in_project) or {}).get("target")
+                image = get(f"/images/{safe_segment(fingerprint)}", in_project) if fingerprint else None
+                if image is None:
+                    return "an image this proxy could not resolve, so name the profiles in the request"
+                reach = profile_reach(profiles_in(in_project), [str(name) for name in image.get("profiles") or []])
+        if reach:
+            return reach
+    return None
+
+
+def _proxy_create_reach(lxd_service, cluster_id: str, params: Dict[str, Any], project: Optional[str]) -> Optional[str]:
+    """Blocking: _limited_write_reach for a /proxy create_instance, before and apart from the create."""
+    from app.services.lxd.availability import require_client
+
+    client = require_client(lxd_service.connection_manager.get_client(cluster_id), cluster_id)
+    return _limited_write_reach(
+        client.api.session, client.api._api_endpoint,
+        limited_write_plan("/1.0/instances", "POST", params, project or "default"),
+        socket_timeout_for(client),
+    )
+
+
+def _limited_key_profile_refusal(reach: str, allowed_projects: Optional[List[str]]) -> str:
+    return (
+        f"The request applies {reach}, which reaches the host, so it needs a key granted all "
+        f"projects on this cluster. This key is limited to {sorted(allowed_projects or [])}."
+    )
 
 
 def _execute_proxy_operation(
@@ -2940,7 +3041,42 @@ async def raw_proxy(
         # therefore the timeout _APINode would have injected. The socket timeout is passed
         # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
         # and then goes silent must degrade this one cluster, never the whole process.
+        # important: a profile carries config and devices too, and LXD applies profiles a write
+        # does not name (see limited_write_plan). A project-limited key may not apply one that
+        # reaches the host, which an administrator may have left in a project it can use.
+        plan = (
+            [] if project_grant_is_unrestricted(allowed_projects)
+            else limited_write_plan(request.path, method, request.body, project)
+        )
         try:
+            if plan:
+                try:
+                    reach = await _run_in_slot(
+                        slot,
+                        _limited_write_reach,
+                        client.api.session,
+                        endpoint,
+                        plan,
+                        socket_timeout_for(client),
+                        timeout=RAW_PROXY_TIMEOUT,
+                        label=f"raw_proxy[profiles {request.cluster_id}]",
+                        executor=proxy_executor,
+                        max_in_flight=PROXY_MAX_IN_FLIGHT,
+                    )
+                except NeverSent:
+                    raise
+                except BlockingTimeout as timeout_error:
+                    # note: only reads ran, so the write was never sent and the cluster is not marked
+                    # unreachable for it, as for any slow read
+                    return RawProxyResponse(
+                        status_code=504,
+                        data=None,
+                        error=f"The write was not sent: the checks before it timed out ({_envelope_error(timeout_error)})",
+                    )
+                if reach:
+                    raise HTTPException(
+                        status_code=403, detail=_limited_key_profile_refusal(reach, allowed_projects)
+                    )
             response = await _run_in_slot(
                 slot,
                 raw_request,
@@ -3137,6 +3273,30 @@ async def proxy_operation(
         # key is held to the same body rule as the raw proxy: no other project, nothing host-reaching
         if operation == "create_instance":
             assert_body_within_grant("/1.0/instances", "POST", request.params or {}, allowed_projects)
+            # important: a project-limited key is held to the profiles its create applies (see
+            # raw_proxy), checked as a job of its own so the create never starts after a timeout
+            if not project_grant_is_unrestricted(allowed_projects):
+                try:
+                    reach = await _run_unless_abandoned(
+                        _proxy_create_reach, lxd_service, request.cluster_id, request.params or {}, request.project,
+                        timeout=PROXY_OP_TIMEOUT,
+                        label=f"proxy_operation[checks {request.cluster_id}]",
+                        executor=proxy_executor,
+                        max_in_flight=PROXY_MAX_IN_FLIGHT,
+                    )
+                except NeverSent:
+                    return ProxyResponse(
+                        success=False, error="The proxy is busy and the operation was not sent, retry shortly"
+                    )
+                except BlockingTimeout as timeout_error:
+                    return ProxyResponse(
+                        success=False,
+                        error=f"The operation was not sent: the checks before it timed out ({_envelope_error(timeout_error)})",
+                    )
+                except BlockingPoolFull as pool_error:
+                    return ProxyResponse(success=False, error=_envelope_error(pool_error))
+                if reach:
+                    raise HTTPException(status_code=403, detail=_limited_key_profile_refusal(reach, allowed_projects))
 
         operation_id = None
 

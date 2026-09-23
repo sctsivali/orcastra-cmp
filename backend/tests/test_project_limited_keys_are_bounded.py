@@ -49,8 +49,11 @@ WILDCARD = _key(["*"])
 
 
 class RecordingSession:
+    """Records every URL, and answers the reads a limited write plan makes with plain resources."""
+
     def __init__(self) -> None:
         self.calls: List[str] = []
+        self.writes: List[str] = []
 
     def _record(self, url: str, **kwargs: Any) -> requests.Response:
         self.calls.append(url)
@@ -59,7 +62,19 @@ class RecordingSession:
         response._content = b'{"type": "sync", "metadata": []}'
         return response
 
-    get = post = put = patch = delete = _record
+    def get(self, url: str, **kwargs: Any) -> requests.Response:
+        response = self._record(url, **kwargs)
+        if "/images/aliases/" in url:
+            response._content = b'{"metadata": {"target": "fp1"}}'
+        elif "/images/" in url or "/instances/" in url:
+            response._content = b'{"metadata": {"profiles": ["default"], "config": {}, "devices": {}}}'
+        return response
+
+    def _write(self, url: str, **kwargs: Any) -> requests.Response:
+        self.writes.append(url)
+        return self._record(url, **kwargs)
+
+    post = put = patch = delete = _write
 
 
 class FakeClient:
@@ -225,13 +240,16 @@ async def test_a_wildcard_key_still_reads_all_projects(path: str) -> None:
 async def test_a_narrow_key_may_change_what_its_project_bounds(method: str, path: str) -> None:
     outcome, session = await _raw(NARROW, method, path, project="tenant-a")
     assert outcome.status_code == 200
-    assert session.calls == [f"https://cluster-a.example.test:8443{path}?project=tenant-a"]
+    # note: a create first reads the profile it applies, see the applied-profile tests
+    writes = [url for url in session.calls if "/profiles/" not in url]
+    assert writes == [f"https://cluster-a.example.test:8443{path}?project=tenant-a"]
 
 
 async def test_a_narrow_key_still_works_inside_its_project() -> None:
     outcome, session = await _raw(NARROW, "POST", "/1.0/instances", project="tenant-a")
     assert outcome.status_code == 200
-    assert session.calls == ["https://cluster-a.example.test:8443/1.0/instances?project=tenant-a"]
+    assert session.calls == ["https://cluster-a.example.test:8443/1.0/profiles/default",
+                             "https://cluster-a.example.test:8443/1.0/instances?project=tenant-a"]
 
 
 async def test_a_narrow_key_may_still_read_topology() -> None:
@@ -401,7 +419,8 @@ async def test_a_narrow_key_body_cannot_leave_its_project(method: str, path: str
 async def test_a_narrow_key_body_inside_its_project_goes_through(method: str, path: str, body: Dict[str, Any]) -> None:
     outcome, session = await _raw(NARROW, method, path, project="tenant-a", body=body)
     assert outcome.status_code == 200
-    assert len(session.calls) == 1
+    # note: a write first reads what it applies (profiles, a copy's source, an image), see the applied-profile tests
+    assert len(session.writes) == 1
 
 
 @pytest.mark.parametrize("method,path,body", FOREIGN_BODIES + HOST_BODIES)

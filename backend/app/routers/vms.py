@@ -40,7 +40,11 @@ from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
 from app.core.org_scope import project_is_visible
-from app.core.instance_access import refuse_host_reach_where_bounded, resolve_instance_project
+from app.core.instance_access import (
+    refuse_host_reach_where_bounded,
+    refuse_host_reaching_profiles_where_bounded,
+    resolve_instance_project,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -261,6 +265,8 @@ async def create_vm(
     """Create a new VM on the specified host."""
     verify_cluster_access(request.host)
     refuse_host_reach_where_bounded(request.host, {"config": request.config or {}, "devices": request.devices or {}})
+    # note: this route creates in the default project whatever the body names
+    await refuse_host_reaching_profiles_where_bounded(request.host, lxd_service, "default", request.profiles)
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()
