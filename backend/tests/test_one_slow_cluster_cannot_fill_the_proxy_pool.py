@@ -232,3 +232,47 @@ async def test_a_proxy_operation_that_started_still_runs_to_its_answer(monkeypat
         api_key=KEY, lxd_service=_Service({"cluster-slow": _Session(None), "cluster-fast": _Session(None)}), _=None,
     )
     assert answer.success is True and ran == ["start_instance"]
+
+
+async def test_a_client_lookup_that_gave_up_while_queued_is_not_a_cluster_failure(monkeypatch) -> None:
+    """The get_client stage shares the pool. Dropped there, it is 'not sent', never 'not reachable'."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    tiny = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(integrations, "proxy_executor", tiny)
+    monkeypatch.setattr(integrations, "PROXY_CONNECT_TIMEOUT", 0.2)
+    looked_up: List[str] = []
+    service = type("Svc", (), {"connection_manager": type("CM", (), {
+        "get_client": staticmethod(lambda c: looked_up.append(c) or _Client(_Session(None), c))})()})()
+    blocker = threading.Event()
+    tiny.submit(blocker.wait, 5)
+    try:
+        with pytest.raises(HTTPException) as caught:
+            await _call(service, "cluster-slow")
+        assert caught.value.status_code == 503 and "not sent" in caught.value.detail
+    finally:
+        blocker.set()
+    tiny.shutdown(wait=True)
+    assert looked_up == [], "a lookup whose caller already gave up still ran"
+    assert not health.is_tripped("cluster-slow")
+
+
+async def test_a_caller_that_disconnects_while_queued_never_reaches_the_cluster(monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    tiny = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(integrations, "proxy_executor", tiny)
+    ran: List[str] = []
+    blocker = threading.Event()
+    tiny.submit(blocker.wait, 5)
+    task = asyncio.create_task(integrations._run_for_cluster(
+        "cluster-slow", lambda: ran.append("sent"), timeout=5, label="probe", executor=tiny, max_in_flight=8))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    blocker.set()
+    tiny.shutdown(wait=True)
+    assert ran == [], "the client left, and its queued request still went out"
+    await asyncio.sleep(0.05)
+    assert not integrations._cluster_slots[(id(asyncio.get_running_loop()), "cluster-slow")].locked()

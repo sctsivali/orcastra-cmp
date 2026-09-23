@@ -284,3 +284,56 @@ def test_a_live_key_gets_its_credentials(monkeypatch):
     assert orcahub_sync._read_orcahub_credentials_blocking("oak_test") == {
         "app_url": "https://example.test", "api_key_id": "oak_test", "api_key_secret": "secret",
     }
+
+
+class _Authentik:
+    def __init__(self) -> None:
+        self.cleared: List[str] = []
+
+    async def get_user_role_groups(self, _email: str) -> set:
+        return set()
+
+    async def sync_user_role(self, *_a: Any) -> bool:
+        return True
+
+    async def remove_user_from_all_roles(self, email: str) -> bool:
+        self.cleared.append(email)
+        return True
+
+
+@pytest.mark.parametrize("row_role,allowed", [("admin", True), ("partner", True), ("tenant", False), ("member", False)])
+async def test_assign_needs_a_row_that_runs_the_org(monkeypatch, row_role: str, allowed: bool) -> None:
+    from fastapi import HTTPException
+
+    authentik = _Authentik()
+    monkeypatch.setattr(user_groups, "get_authentik_sync", lambda: authentik)
+
+    async def no_push(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(orcahub_sync, "push_members_to_orcahub", no_push)
+    db = sqlite_session(*org_tables())
+    db.add(Organization(id=40, name="Run", slug="run", source="local", created_by="founder@example.test"))
+    await db.commit()
+    db.add(OrganizationMember(organization_id=40, user_email="partner@example.test", role=row_role))
+    await db.commit()
+    partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
+    body = user_groups.AssignRoleRequest(user_email="new@example.com", role="tenant", organization_id=40)
+    if allowed:
+        await user_groups.assign_user_role(body, user=partner, db=db)
+        rows = (await db.execute(select(OrganizationMember.role).where(OrganizationMember.user_email == "new@example.com"))).scalars().all()
+        assert rows == ["tenant"]
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await user_groups.assign_user_role(body, user=partner, db=db)
+        assert caught.value.status_code == 403
+
+
+async def test_an_admin_removing_a_user_with_no_rows_still_clears_the_role_groups(monkeypatch, removal_spy) -> None:
+    authentik = _Authentik()
+    monkeypatch.setattr(user_groups, "get_authentik_sync", lambda: authentik)
+    db = await _seeded()
+    admin = AuthenticatedUser(user_id="a", email="admin@example.test", groups=["role_admin"])
+    answer = await user_groups.remove_user_from_all("orphan@example.test", user=admin, db=db)
+    assert "removed" in answer["detail"]
+    assert authentik.cleared == ["orphan@example.test"], "an admin removal must reach Authentik even with no org rows"
