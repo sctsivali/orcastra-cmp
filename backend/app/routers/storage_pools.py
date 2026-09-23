@@ -20,6 +20,9 @@ from app.models.schemas import FanoutReachability
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
+from app.core.database import get_db
+from app.core.instance_access import verify_whole_cluster_access
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
@@ -361,9 +364,13 @@ async def create_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new storage pool."""
     verify_cluster_access(host)
+    # important: a storage pool belongs to no project and serves every project on the cluster,
+    # so a caller held to a bound changes one only where no other party holds the cluster.
+    await verify_whole_cluster_access(host, db, _rbac.email)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -474,9 +481,13 @@ async def update_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a storage pool."""
     verify_cluster_access(host)
+    # important: a storage pool belongs to no project and serves every project on the cluster,
+    # so a caller held to a bound changes one only where no other party holds the cluster.
+    await verify_whole_cluster_access(host, db, _rbac.email)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -519,9 +530,13 @@ async def delete_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a storage pool."""
     verify_cluster_access(host)
+    # important: a storage pool belongs to no project and serves every project on the cluster,
+    # so a caller held to a bound changes one only where no other party holds the cluster.
+    await verify_whole_cluster_access(host, db, _rbac.email)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
