@@ -1,8 +1,8 @@
 """Outbound HTTP this server makes on a caller's behalf.
 
 url_safety decides whether a URL may be called. That is not enough for a fetch on its own:
-  * a name validated once and fetched later can answer differently the second time;
-  * a redirect moves the request to a URL nobody validated;
+  * a name validated once and fetched later can answer differently the second time.
+  * a redirect moves the request to a URL nobody validated.
   * a body read into memory before a size check lets the responder decide how much memory a worker
     uses.
 

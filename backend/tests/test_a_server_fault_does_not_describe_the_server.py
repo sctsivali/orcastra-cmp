@@ -65,7 +65,7 @@ def _build(with_handlers: bool) -> FastAPI:
 
     @app.get("/lxd-down")
     async def lxd_down() -> None:
-        raise LXDConnectionError("Could not connect to https://100.66.12.102:8443 (cert /tmp/orcastra/a.crt)")
+        raise LXDConnectionError("Could not connect to https://192.0.2.10:8443 (cert /tmp/orcastra/a.crt)")
 
     @app.get("/disk-full")
     async def disk_full() -> None:
@@ -129,7 +129,7 @@ def test_the_lxd_handlers_keep_their_shape_and_drop_the_details(client: TestClie
     down = client.get("/lxd-down")
     assert down.status_code == 503
     assert down.json()["code"] == "LXD_CONNECTION_ERROR"
-    assert "100.66.12.102" not in down.text and "/tmp/orcastra" not in down.text
+    assert "192.0.2.10" not in down.text and "/tmp/orcastra" not in down.text
     full = client.get("/disk-full")
     assert full.status_code == 503
     assert full.json()["code"] == "BACKEND_TEMP_STORAGE_FULL"

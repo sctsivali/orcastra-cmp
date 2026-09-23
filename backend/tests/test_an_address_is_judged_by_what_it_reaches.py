@@ -60,8 +60,8 @@ def test_a_public_address_passes(address: str) -> None:
 
 
 def test_an_operator_allowed_network_passes_but_never_a_metadata_endpoint() -> None:
-    tailnet = [ipaddress.ip_network("100.73.127.75/32")]
-    assert address_risk("100.73.127.75", allowed_networks=tailnet) is None
+    tailnet = [ipaddress.ip_network("100.64.7.7/32")]
+    assert address_risk("100.64.7.7", allowed_networks=tailnet) is None
     assert address_risk("100.73.127.76", allowed_networks=tailnet) == url_safety.INTERNAL
     link_local = [ipaddress.ip_network("169.254.0.0/16")]
     assert address_risk("169.254.169.254", allowed_networks=link_local) == url_safety.INTERNAL
