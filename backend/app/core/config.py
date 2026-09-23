@@ -233,8 +233,10 @@ class Settings(BaseSettings):
         alias="OPENSEARCH_ADMIN_PASSWORD",
         description="OpenSearch admin password"
     )
+    # important: verified unless the operator opts out. An unset variable used to mean an
+    # unverified connection that carries the OpenSearch admin credential.
     opensearch_ssl_verify: bool = Field(
-        default=False,
+        default=True,
         alias="OPENSEARCH_SSL_VERIFY",
         description="Verify SSL certs when connecting to OpenSearch"
     )
