@@ -252,10 +252,12 @@ class UserMappingRequest(BaseModel):
     )
 
 
-# note: each element costs its own commit, members also cost Authentik calls.
-# One real OrcaHub push is its org plus buyer orgs and their members, far below these.
-MAX_SYNC_ORGANIZATIONS = 1000
-MAX_SYNC_MEMBERS = 5000
+# note: each element costs its own commit, members also cost Authentik calls. One real OrcaHub push
+# is its org plus every buyer org with an order and all their members, with no limit of its own, and
+# a push over a cap fails the whole sync. The caps sit well above a large partner, and the upgrade
+# preflight reports each integration's size against them.
+MAX_SYNC_ORGANIZATIONS = 5000
+MAX_SYNC_MEMBERS = 25000
 MAX_SYNC_POLICIES = 1000
 MAX_SYNC_POLICY_RULES = 1000
 

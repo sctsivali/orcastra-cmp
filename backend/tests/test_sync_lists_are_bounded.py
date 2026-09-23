@@ -30,12 +30,12 @@ ASSIGNMENT = {"user_email": "tenant@example.test"}
 
 def test_the_caps_are_what_the_design_names():
     assert (MAX_SYNC_ORGANIZATIONS, MAX_SYNC_MEMBERS, MAX_SYNC_POLICIES, MAX_SYNC_POLICY_RULES) == (
-        1000, 5000, 1000, 1000,
+        5000, 25000, 1000, 1000,
     )
 
 
 def test_organizations_at_the_cap_pass_and_one_over_is_refused():
-    assert len(SyncDataRequest(organizations=[ORG] * MAX_SYNC_ORGANIZATIONS).organizations) == 1000
+    assert len(SyncDataRequest(organizations=[ORG] * MAX_SYNC_ORGANIZATIONS).organizations) == MAX_SYNC_ORGANIZATIONS
     with pytest.raises(ValidationError):
         SyncDataRequest(organizations=[ORG] * (MAX_SYNC_ORGANIZATIONS + 1))
 
