@@ -196,6 +196,11 @@ def partner_scope():
 OTHER = AuthenticatedUser(user_id="q", email="teammate@example.test", groups=["role_partner"])
 
 
+def _denied(world: Dict[str, Any]) -> List[tuple]:
+    return [(e.get("result"), e.get("error_code")) for e in world["events"]
+            if e["action"] == integrations.API_KEY_ROTATE]
+
+
 async def test_a_partner_cannot_take_the_secret_of_a_key_reaching_past_their_scope(world, partner_scope) -> None:
     """An admin-minted key granting the partner's cluster and one they cannot reach."""
     grants = [{"cluster_id": "c1", "permissions": ["read"], "projects": ["*"]},
@@ -206,6 +211,7 @@ async def test_a_partner_cannot_take_the_secret_of_a_key_reaching_past_their_sco
         await integrations.rotate_api_key_secret(KEY, None, OTHER, None)
     assert caught.value.status_code == 403 and "c9" in caught.value.detail
     assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "cluster_out_of_scope")], "a refused rotation left no audit record"
 
 
 async def test_a_non_creator_rotation_is_held_to_the_grant_bound(world, partner_scope, monkeypatch) -> None:
@@ -222,6 +228,7 @@ async def test_a_non_creator_rotation_is_held_to_the_grant_bound(world, partner_
         await integrations.rotate_api_key_secret(KEY, None, OTHER, None)
     assert caught.value.status_code == 403 and seen == [OTHER.email]
     assert world["vault"].writes == []
+    assert _denied(world) == [("denied", "project_out_of_bound")], "a refused rotation left no audit record"
 
 
 async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, partner_scope, monkeypatch) -> None:

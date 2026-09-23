@@ -258,8 +258,8 @@ class UserMappingRequest(BaseModel):
 
 # note: each element costs its own commit, members also cost Authentik calls. One real OrcaHub push
 # is its org plus every buyer org with an order and all their members, with no limit of its own, and
-# a push over a cap fails the whole sync. The caps sit well above a large partner, and the upgrade
-# preflight reports each integration's size against them.
+# a push over a cap fails the whole sync. The caps sit well above a large partner, so size a
+# deployment against them before an upgrade (organizations and members per api_key_id).
 MAX_SYNC_ORGANIZATIONS = 5000
 MAX_SYNC_MEMBERS = 25000
 MAX_SYNC_POLICIES = 1000
@@ -2298,11 +2298,19 @@ async def rotate_api_key_secret(
     if allowed is not None and str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
         outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
         if outside:
+            _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="cluster_out_of_scope")
             raise HTTPException(
                 status_code=403,
                 detail=f"This key also grants {outside}, which you cannot reach. An administrator can rotate it.",
             )
-        await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
+        try:
+            await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                _audit_api_key(
+                    API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="project_out_of_bound"
+                )
+            raise
     key_secret, secret_hash = generate_api_key_secret()
     try:
         await asyncio.to_thread(
