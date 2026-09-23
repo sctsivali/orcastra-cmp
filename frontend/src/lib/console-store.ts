@@ -289,7 +289,10 @@ export const useConsoleStore = create<ConsoleState>()(
         
         // Kill all sessions for this instance if requested
         if (cancelOperation && consoleToClose?.instanceName && consoleToClose?.host) {
-          fetch(`/api/v1/console/${encodeURIComponent(consoleToClose.instanceName)}/kill-all-sessions?host=${encodeURIComponent(consoleToClose.host)}`, {
+          const killQuery =
+            `?host=${encodeURIComponent(consoleToClose.host)}` +
+            `&project=${encodeURIComponent(consoleToClose.project || "default")}`;
+          fetch(`/api/v1/console/${encodeURIComponent(consoleToClose.instanceName)}/kill-all-sessions${killQuery}`, {
             method: 'POST',
             headers: {
               ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),

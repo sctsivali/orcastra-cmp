@@ -315,7 +315,7 @@ function ConsoleContent() {
     try {
       const response = await fetch(
         `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions/${operationId}` +
-          `?host=${encodeURIComponent(host)}`,
+          `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
         {
           method: "DELETE",
           headers: {
@@ -1340,7 +1340,11 @@ function ConsoleContent() {
     // Kill sessions when tab is closed
     const handleBeforeUnload = () => {
       // Use sendBeacon with Blob for POST request during unload
-      const killUrl = `${API_URL}/console/${encodeURIComponent(instanceName)}/kill-all-sessions?host=${encodeURIComponent(host)}`;
+      // note: the kill routes act only on this instance in the named project, so a missing
+      // project would leave a console outside `default` running after the tab closed
+      const killUrl =
+        `${API_URL}/console/${encodeURIComponent(instanceName)}/kill-all-sessions` +
+        `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
       // sendBeacon needs a body (Blob) to trigger POST method
       const blob = new Blob([''], { type: 'application/json' });
       navigator.sendBeacon(killUrl, blob);

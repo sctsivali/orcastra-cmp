@@ -138,6 +138,7 @@ function OperationsContent() {
     description: string;
     isKillSession?: boolean;
     instanceName?: string;
+    project?: string;
   }>({ open: false, operationId: "", host: "", description: "" });
 
 
@@ -221,11 +222,17 @@ function OperationsContent() {
     }
   };
 
-  const handleKillSession = async (operationId: string, instanceName: string, host: string) => {
+  const handleKillSession = async (
+    operationId: string,
+    instanceName: string,
+    host: string,
+    project: string,
+  ) => {
     setKillingId(operationId);
     try {
       const response = await fetch(
-        `${API_URL}/console/${instanceName}/active-sessions/${operationId}?host=${encodeURIComponent(host)}`,
+        `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions/${operationId}` +
+          `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
         {
           method: "DELETE",
           headers: {
@@ -262,7 +269,8 @@ function OperationsContent() {
       host,
       description: operation.description || `Operation ${operation.id}`,
       isKillSession,
-      instanceName });
+      instanceName,
+      project: operation.project || "default" });
   };
 
   if (isLoading) {
@@ -317,7 +325,12 @@ function OperationsContent() {
             <AlertDialogAction
               onClick={() => {
                 if (confirmDialog.isKillSession && confirmDialog.instanceName) {
-                  handleKillSession(confirmDialog.operationId, confirmDialog.instanceName, confirmDialog.host);
+                  handleKillSession(
+                    confirmDialog.operationId,
+                    confirmDialog.instanceName,
+                    confirmDialog.host,
+                    confirmDialog.project || "default",
+                  );
                 } else {
                   handleCancelOperation(confirmDialog.operationId, confirmDialog.host);
                 }
