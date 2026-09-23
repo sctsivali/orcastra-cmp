@@ -19,7 +19,7 @@ from app.core.dependencies import (
     require_tenant,
 )
 from app.core.rbac import resolve_roles, get_highest_role
-from app.services.organization_service import OrganizationService
+from app.services.organization_service import OrganizationService, synced_partner_refusal
 from app.services.organization_preferences import (
     get_org_preferences_payload,
     get_user_org_preferences_payload,
@@ -270,14 +270,11 @@ async def list_members(
     return [MemberResponse.model_validate(m) for m in members]
 
 
-def _refuse_a_synced_partner(user_email: str, slugs: list[str]) -> None:
-    if slugs:
+def _refuse_a_synced_partner(user_email: str, synced: dict[int, str]) -> None:
+    if synced:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"{user_email} is a partner of {', '.join(slugs)}, which OrcaHub manages. An Orcastra "
-                "admin can remove them here, or a platform admin in OrcaHub."
-            ),
+            detail=synced_partner_refusal(user_email, list(synced.values())),
         )
 
 

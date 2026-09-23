@@ -159,9 +159,13 @@ export function UserGroupsSettings() {
   // delete mutation
   const deleteMutation = useMutation({
     mutationFn: (userEmail: string) => api.userGroups.remove(userEmail),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["user-groups"] });
       setDeleteEmail(null);
+      // note: a partner row in an organization OrcaHub manages is kept, so the user stays listed
+      if (result.kept?.length) {
+        toast({ title: "Partly removed", description: result.detail });
+      }
     },
   });
 

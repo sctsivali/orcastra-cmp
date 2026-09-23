@@ -2071,7 +2071,7 @@ export const api = {
         body: JSON.stringify(data),
       }),
     remove: (email: string) =>
-      fetchAPI<{ message: string }>(
+      fetchAPI<{ detail: string; kept?: string[] }>(
         `/user-groups/${encodeURIComponent(email)}`,
         { method: "DELETE" }
       ),

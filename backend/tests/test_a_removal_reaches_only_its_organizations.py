@@ -143,6 +143,27 @@ async def test_a_partner_cannot_remove_a_co_partner_from_an_org_orcahub_manages(
     assert left == [7], "nothing was removed"
 
 
+async def test_a_mixed_target_loses_the_rows_it_may_and_keeps_the_synced_partner_row(removal_spy):
+    """A co-partner in an org OrcaHub manages, and a tenant in the caller's local org."""
+    db = await _seeded()
+    db.add(Organization(id=9, name="Local", slug="local", source="local", created_by="partner@example.test"))
+    await db.commit()
+    db.add_all([
+        OrganizationMember(organization_id=7, user_email="copartner@example.test", role="partner"),
+        OrganizationMember(organization_id=9, user_email="copartner@example.test", role="tenant"),
+    ])
+    await db.commit()
+    partner = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
+    answer = await user_groups.remove_user_from_all("copartner@example.test", user=partner, db=db)
+    assert answer["kept"] == ["mine"]
+    assert "OrcaHub" in answer["detail"] and "mine" in answer["detail"]
+    left = (await db.execute(
+        select(OrganizationMember.organization_id).where(OrganizationMember.user_email == "copartner@example.test")
+    )).scalars().all()
+    assert left == [7]
+    assert removal_spy == [{9}], "only the tenant row that was removed is sent"
+
+
 async def test_a_partner_still_removes_a_co_partner_from_a_local_org(removal_spy):
     db = await _seeded()
     db.add(Organization(id=9, name="Local", slug="local", source="local", created_by="partner@example.test"))

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services.organization_service import OrganizationService
+from app.services.organization_service import OrganizationService, synced_partner_refusal
 from app.core.dependencies import AuthenticatedUser, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
@@ -281,6 +281,7 @@ async def remove_user_from_all(
 
     from sqlalchemy import delete
 
+    kept: dict[int, str] = {}
     if highest == Role.ADMIN:
         # admin: remove from all orgs
         removed = await db.execute(
@@ -308,26 +309,21 @@ async def remove_user_from_all(
         )
         # important: OrcaHub owns the roster of an organization it synced and lets only a platform
         # admin remove a partner there. A dashboard removal is not sent there for a partner (see
-        # below), so the next sync would quietly bring them back. Refused, with the reason.
-        caller_orgs = (await db.execute(partner_org_ids)).scalars().all()
-        synced_partner = await OrganizationService(db).synced_partner_orgs(user_email, list(caller_orgs))
-        if synced_partner:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{user_email} is a partner of {', '.join(synced_partner)}, which OrcaHub manages. "
-                    "An Orcastra admin can remove them here, or a platform admin in OrcaHub."
-                ),
-            )
+        # below), so the next sync would quietly bring them back. Those rows are kept and named,
+        # and the rest of the caller's organizations are still cleared.
+        caller_orgs = set((await db.execute(partner_org_ids)).scalars().all())
+        kept = await OrganizationService(db).synced_partner_orgs(user_email, list(caller_orgs))
         removed = await db.execute(
             delete(OrganizationMember)
             .where(
                 OrganizationMember.user_email == user_email,
-                OrganizationMember.organization_id.in_(partner_org_ids),
+                OrganizationMember.organization_id.in_(sorted(caller_orgs - set(kept))),
             )
             .returning(OrganizationMember.organization_id, OrganizationMember.role)
         )
     removed_rows = removed.all()
+    if kept and not removed_rows:
+        raise HTTPException(status_code=409, detail=synced_partner_refusal(user_email, list(kept.values())))
     removed_org_ids = {org_id for org_id, _role in removed_rows}
     await db.commit()
 
@@ -351,7 +347,12 @@ async def remove_user_from_all(
     except Exception as e:
         logger.warning(f"OrcaHub removal push failed (non-blocking): {e}")
 
-    return {"detail": f"User {user_email} removed from organizations"}
+    if kept:
+        return {
+            "detail": f"Removed from the other organizations. {synced_partner_refusal(user_email, list(kept.values()))}",
+            "kept": list(kept.values()),
+        }
+    return {"detail": f"User {user_email} removed from organizations", "kept": []}
 
 
 @router.get("/sync-status", response_model=AuthentikSyncStatus)

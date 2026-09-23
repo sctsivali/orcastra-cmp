@@ -123,3 +123,4 @@ def test_the_remove_dialog_shows_the_refusal() -> None:
     assert "{deleteMutation.error && (" in dialog, "a refused removal must say why"
     assert "(deleteMutation.error as Error).message" in dialog
     assert "deleteMutation.reset()" in source, "one row's refusal must not show on another row"
+    assert "result.kept?.length" in source, "a partial removal must say which organizations kept the user"

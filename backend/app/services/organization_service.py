@@ -26,6 +26,14 @@ def _slugify(name: str) -> str:
     return re.sub(r"-+", "-", slug).strip("-")
 
 
+def synced_partner_refusal(member_email: str, slugs: "list[str]") -> str:
+    """Why a non-admin may not change a partner row in an organization OrcaHub manages."""
+    return (
+        f"{member_email} is a partner of {', '.join(slugs)}, which OrcaHub manages. An Orcastra "
+        "admin can remove them here, or a platform admin in OrcaHub."
+    )
+
+
 class OrganizationService:
     """Service layer for organization management."""
 
@@ -311,16 +319,16 @@ class OrganizationService:
         )
         return result.first() is not None
 
-    async def synced_partner_orgs(self, member_email: str, org_ids: list[int]) -> list[str]:
-        """Slugs of OrcaHub-synced organizations, among org_ids, where member_email is a partner or admin.
+    async def synced_partner_orgs(self, member_email: str, org_ids: list[int]) -> dict[int, str]:
+        """OrcaHub-synced organizations, among org_ids, where member_email is a partner or admin (id to slug).
 
         note: OrcaHub owns those rosters and lets only a platform admin remove a partner. A dashboard
         change to such a row is not sent there, so the next sync would quietly undo it.
         """
         if not org_ids:
-            return []
+            return {}
         result = await self.db.execute(
-            select(Organization.slug)
+            select(Organization.id, Organization.slug)
             .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
             .where(
                 OrganizationMember.user_email == member_email,
@@ -329,8 +337,9 @@ class OrganizationService:
                 Organization.source == "orcahub",
                 Organization.api_key_id.isnot(None),
             )
+            .order_by(Organization.slug)
         )
-        return sorted(result.scalars().all())
+        return {org_id: slug for org_id, slug in result.all()}
 
     async def get_user_cluster_ids(self, user_email: str, user_role: str) -> list[str]:
         """
