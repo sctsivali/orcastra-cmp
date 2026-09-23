@@ -661,7 +661,7 @@ def evict_api_key_cache(key_id: str) -> None:
         _last_used_written.pop(key_id, None)
     try:
         get_cache_manager().set(
-            _REVOKED_NS, key_id, True, ttl=int(API_KEY_CACHE_TTL) + 5
+            _REVOKED_NS, key_id, True, ttl=int(API_KEY_CACHE_TTL + VALIDATE_KEY_TIMEOUT) + 5
         )
     except Exception as exc:
         logger.warning("Could not publish API key revocation for %s: %s", key_id, exc)
@@ -1094,7 +1094,9 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
         secret_data = vault_client.vault_read(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
         )
-        if not secret_data.get("raw"):
+        # note: only for the hash just verified. A rotation between the two reads has already
+        # stored its own raw copy, and writing this one back would revive the old secret.
+        if not secret_data.get("raw") and secret_data.get("hash") == secret_hash:
             secret_data["raw"] = key_secret
             vault_client.vault_kv_put(
                 f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
@@ -2174,6 +2176,16 @@ async def rotate_api_key_secret(
             status_code=409,
             detail="A revoked, inactive or expired key cannot be rotated. Create a new key instead.",
         )
+    # important: everything that could fail runs before the write. Once the new secret is stored
+    # the old one is dead, and a failure after it would leave a secret nobody was ever shown.
+    user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
+    try:
+        key_info = APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+    except ValidationError:
+        raise HTTPException(
+            status_code=409,
+            detail="This key's stored grants no longer validate. Update its permissions, then rotate it.",
+        )
     key_secret, secret_hash = generate_api_key_secret()
     try:
         await asyncio.to_thread(
@@ -2182,8 +2194,14 @@ async def rotate_api_key_secret(
             {"hash": secret_hash, "raw": key_secret},
         )
     except Exception as e:
+        # note: the write may have landed before its reply was lost, so every worker still drops
+        # its cached copy and checks Vault again
+        evict_api_key_cache(key_id)
         logger.error(f"Failed to rotate the secret of API key {key_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to rotate the API key secret")
+        raise HTTPException(
+            status_code=500,
+            detail="The secret rotation did not confirm. Rotate again before using this key.",
+        )
     # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
     # drop its copy, so the old secret fails on the next request wherever it lands
     evict_api_key_cache(key_id)
@@ -2192,12 +2210,7 @@ async def rotate_api_key_secret(
     cache.delete("api_responses", f"integrations:api_key:{key_id}")
     _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata)
     logger.info(f"API key {key_id} secret rotated")
-    user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
-    return APIKeyCreateResponse(
-        api_key=APIKeyInfo(**metadata, user_mappings_count=len(user_mappings)),
-        api_key_id=key_id,
-        api_key_secret=key_secret,
-    )
+    return APIKeyCreateResponse(api_key=key_info, api_key_id=key_id, api_key_secret=key_secret)
 
 
 @router.delete(

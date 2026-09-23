@@ -19,6 +19,16 @@ import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import type { APIKeyCreateResponse } from "@/types/api";
 
+// note: the server refuses a revoked, inactive or expired key, so the control is not offered for
+// one. A stored expiry without an offset is UTC, as the backend writes it.
+export function isRotatable(key: { is_revoked?: boolean; is_active?: boolean; expires_at?: string | null }): boolean {
+  if (key.is_revoked || key.is_active === false) return false;
+  if (!key.expires_at) return true;
+  const iso = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(key.expires_at) ? key.expires_at : `${key.expires_at}Z`;
+  const expires = Date.parse(iso);
+  return Number.isNaN(expires) ? false : expires > Date.now();
+}
+
 // note: a rotation keeps the key id, which every synced organization records as its owner, and
 // replaces only the secret. Two rotations in one tick would each show a secret while only the
 // last one works, so the in-flight flag is claimed synchronously, not through isPending.

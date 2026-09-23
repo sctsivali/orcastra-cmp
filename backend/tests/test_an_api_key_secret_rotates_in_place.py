@@ -134,3 +134,51 @@ def test_the_settings_page_offers_the_rotation() -> None:
     assert "/rotate-secret`" in call[:300] and 'method: "POST"' in call[:300]
     page = (frontend / "components" / "integrations-settings.tsx").read_text()
     assert "<RotateSecretButton" in page and 'title="Secret Rotated"' in page
+    assert "isRotatable(apiKey) && (" in page, "a revoked, inactive or expired key must not offer a rotation that fails"
+    assert "[...queue, response]" in page and "queue.slice(1)" in page, "overlapping rotations must each show their secret"
+    assert "if (!key.expires_at) return true;" in button and "`${key.expires_at}Z`" in button, "a naive expiry is UTC"
+
+
+async def test_a_key_whose_grants_no_longer_validate_is_not_rotated(world) -> None:
+    """The response is built before the write, so a stored grant that fails today's model loses nothing."""
+    bad = [{"cluster_id": "c1", "permissions": [], "projects": ["*"]}]
+    world["metadata"]["cluster_permissions"] = bad
+    world["vault"].docs[f"{BASE}/metadata"]["cluster_permissions"] = bad
+    with pytest.raises(HTTPException) as caught:
+        await integrations.rotate_api_key_secret(KEY, None, OWNER, None)
+    assert caught.value.status_code == 409
+    assert world["vault"].writes == [], "the old secret must survive a rotation that cannot answer"
+    assert await _valid(world["old"])
+
+
+async def test_a_write_whose_reply_is_lost_still_drops_every_cached_copy(world, monkeypatch) -> None:
+    assert await _valid(world["old"])
+
+    def lost(path: str, data: Dict[str, Any]) -> None:
+        world["vault"].docs[path] = dict(data)  # the write lands, then its reply is lost
+        raise RuntimeError("read timed out")
+
+    monkeypatch.setattr(world["vault"], "vault_kv_put", lost)
+    with pytest.raises(HTTPException) as caught:
+        await integrations.rotate_api_key_secret(KEY, None, OWNER, None)
+    assert caught.value.status_code == 500 and "Rotate again" in caught.value.detail
+    assert not await _valid(world["old"]), "a cached copy of the old secret outlived a rotation that landed"
+
+
+def test_the_tombstone_outlives_a_validation_still_in_flight(world) -> None:
+    ttls: List[int] = []
+    cache = integrations.get_cache_manager()
+    original = cache.set
+    cache.set = lambda ns, key, value, ttl=0: ttls.append(ttl) or original(ns, key, value, ttl)
+    integrations.evict_api_key_cache(KEY)
+    assert ttls and ttls[0] >= integrations.API_KEY_CACHE_TTL + integrations.VALIDATE_KEY_TIMEOUT
+
+
+def test_the_raw_backfill_never_writes_over_a_rotation(world, monkeypatch) -> None:
+    """A legacy key without a raw copy, validated with the old secret while a rotation lands."""
+    old_hash = world["vault"].docs[f"{BASE}/secret"]["hash"]
+    _, new_hash = integrations.generate_api_key_secret()
+    world["vault"].docs[f"{BASE}/secret"] = {"hash": new_hash}  # rotated, as a legacy doc would look mid-race
+    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k: (dict(world["metadata"]), old_hash))
+    integrations._validate_api_key_blocking(KEY, world["old"])
+    assert world["vault"].writes == [], "the backfill wrote the old secret over the rotated hash"

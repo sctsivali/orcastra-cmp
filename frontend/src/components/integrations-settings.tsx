@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
-import { RotateSecretButton } from "@/components/integrations/rotate-secret-button";
+import { RotateSecretButton, isRotatable } from "@/components/integrations/rotate-secret-button";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -333,7 +333,8 @@ export function IntegrationsSettings() {
   const queryClient = useQueryClient();
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKeyCreateResponse | null>(null);
-  const [rotatedKey, setRotatedKey] = useState<APIKeyCreateResponse | null>(null);
+  // note: a queue, so two rotations that overlap each show their own secret once
+  const [rotatedKeys, setRotatedKeys] = useState<APIKeyCreateResponse[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -632,11 +633,11 @@ export function IntegrationsSettings() {
                   />
                   
                   <div className="flex items-center justify-end gap-2 border-t pt-3">
-                    {!apiKey.is_revoked && (
+                    {isRotatable(apiKey) && (
                       <RotateSecretButton
                         keyId={apiKey.id}
                         keyName={String(apiKey.name || "this key")}
-                        onRotated={setRotatedKey}
+                        onRotated={(response) => setRotatedKeys((queue) => [...queue, response])}
                       />
                     )}
                     {!apiKey.is_revoked && (
@@ -706,9 +707,10 @@ export function IntegrationsSettings() {
         response={createdKey}
       />
       <APIKeySecretDialog
-        open={rotatedKey !== null}
-        onClose={() => setRotatedKey(null)}
-        response={rotatedKey}
+        key={rotatedKeys[0]?.api_key_id ?? "none"}
+        open={rotatedKeys.length > 0}
+        onClose={() => setRotatedKeys((queue) => queue.slice(1))}
+        response={rotatedKeys[0] ?? null}
         title="Secret Rotated"
         description="The previous secret no longer works. Update the OrcaHub connection with this secret now. It will not be shown again."
       />
