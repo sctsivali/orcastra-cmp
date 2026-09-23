@@ -3,29 +3,46 @@
 A cluster carries one binding per organization. Counting bindings calls every partner cluster
 with a sale "shared", because provisioning binds each buyer organization to the partner's
 cluster. The questions "may this partner grant, manage or reach the whole of this cluster" need
-the other answer: is any binding held by someone who is not on the caller's side. A buyer
-organization belongs to the side of whoever minted the integration key that created it, and a
-key's minter belongs to the side of everyone in their organizations.
+the other answer: is any binding held by someone outside the caller's team.
+
+The team is the caller and everyone who runs one of the caller's organizations (a member above
+tenant). An organization's creator never joins it: synced organizations carry "system" and an
+admin may have created organizations for several partners, so a creator would join unrelated
+partners into one team. A buyer organization belongs to the team of whoever minted the key that
+created it. A key that no longer exists holds nothing.
 """
 
 import logging
 from typing import Dict, Iterable, Set
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
-from app.core.org_scope import get_org_ids_for_email
 from app.services.lxd.proxy import VALIDATE_KEY_TIMEOUT, auth_executor
 
 logger = logging.getLogger(__name__)
 
 API_KEYS_VAULT_PATH = "secret/data/integrations/api_keys"
+# A key Vault answered 404 for. Its organizations hold nothing, while an unreadable key still does.
+DELETED_KEY = "\0deleted"
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    seen = exc
+    while seen is not None:
+        if getattr(getattr(seen, "response", None), "status_code", None) == 404:
+            return True
+        seen = seen.__cause__ or seen.__context__
+    return False
 
 
 def read_key_creators_blocking(key_ids: Set[str]) -> Dict[str, str]:
-    """created_by of each key id. Runs on auth_executor. An unreadable key maps to ''."""
+    """created_by of each key id. Runs on auth_executor.
+
+    A key Vault no longer has maps to DELETED_KEY, and one it could not read maps to ''.
+    """
     from app.core.config import get_settings
     from app.core.vault_client import get_vault_client
 
@@ -37,37 +54,64 @@ def read_key_creators_blocking(key_ids: Set[str]) -> Dict[str, str]:
     for key_id in sorted(key_ids):
         try:
             metadata = vault_client.vault_read(f"{API_KEYS_VAULT_PATH}/{key_id}/metadata")
-        except Exception:
-            metadata = {}
+        except Exception as exc:
+            creators[key_id] = DELETED_KEY if _is_not_found(exc) else ""
+            continue
         creators[key_id] = str((metadata or {}).get("created_by") or "")
     return creators
 
 
-async def side_of(db: AsyncSession, email: str) -> Set[str]:
-    """Lowercased emails on the caller's side: themselves, and everyone in or creating their orgs."""
+async def _run_orgs(db: AsyncSession, email: str) -> Set[int]:
+    """Organizations this user runs: created, or joined in a role above tenant.
+
+    important: not get_org_ids_for_email, which counts any membership. A partner who also buys from
+    another partner is a tenant of that seller's buyer organization, and counting it would put the
+    seller, and the seller's keys and clusters, on the buyer's side.
+    """
     from app.models.db_models import Organization, OrganizationMember
 
+    if not email:
+        return set()
+    rows = (await db.execute(
+        select(Organization.id)
+        .outerjoin(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+        .where(
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
+            or_(
+                Organization.created_by == email,
+                (OrganizationMember.user_email == email) & (OrganizationMember.role != "tenant"),
+            ),
+        )
+    )).scalars().all()
+    return set(rows)
+
+
+async def side_of(db: AsyncSession, email: str) -> Set[str]:
+    """Lowercased emails on the caller's team: themselves and the non-tenant members of their orgs."""
+    from app.models.db_models import OrganizationMember
+
     side = {email.lower()} if email else set()
-    own = await get_org_ids_for_email(email, db)
+    own = await _run_orgs(db, email)
     if not own:
         return side
+    # note: tenants of an organization the caller runs are its customers, not its team, and an
+    # organization's creator is never counted (see the module docstring).
     members = (await db.execute(
-        select(OrganizationMember.user_email).where(OrganizationMember.organization_id.in_(own))
+        select(OrganizationMember.user_email).where(
+            OrganizationMember.organization_id.in_(own), OrganizationMember.role != "tenant"
+        )
     )).scalars().all()
-    creators = (await db.execute(
-        select(Organization.created_by).where(Organization.id.in_(own))
-    )).scalars().all()
-    return side | {str(e).lower() for e in [*members, *creators] if e}
+    return side | {str(e).lower() for e in members if e}
 
 
 async def clusters_held_by_another_party(
     db: AsyncSession, email: str, cluster_ids: Iterable[str]
 ) -> Set[str]:
-    """Clusters on which some holder is neither on the caller's side nor theirs by key.
+    """Clusters on which some holder is outside the caller's team.
 
     An unbound row registered by someone else counts as another holder, as it does in
     org_scope._clusters_with_several_orgs. A key whose creator cannot be read counts as another
-    holder too, so a Vault hiccup narrows, never widens.
+    holder too, so a Vault hiccup narrows, never widens. A key Vault no longer has holds nothing.
     """
     from app.models.db_models import Organization, OrganizationCluster
 
@@ -84,7 +128,7 @@ async def clusters_held_by_another_party(
         .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
         .where(OrganizationCluster.cluster_id.in_(wanted))
     )).all()
-    own_orgs = await get_org_ids_for_email(email, db)
+    own_orgs = await _run_orgs(db, email)
     held_elsewhere: Set[str] = set()
     by_key: Dict[str, Set[str]] = {}
     for cluster_id, org_id, registered_by, org_key in rows:
@@ -109,8 +153,10 @@ async def clusters_held_by_another_party(
             ) from None
         side = await side_of(db, email)
         for key_id, clusters in by_key.items():
-            if (creators.get(key_id) or "").lower() not in side:
-                held_elsewhere |= clusters
+            creator = creators.get(key_id) or ""
+            if creator == DELETED_KEY or creator.lower() in side:
+                continue
+            held_elsewhere |= clusters
     return held_elsewhere
 
 
@@ -128,4 +174,3 @@ async def held_or_every_bounded(db: AsyncSession, email: str, bounded: Iterable[
             raise
         logger.warning("Could not confirm who holds %d cluster(s), keeping them bounded", len(wanted))
         return wanted
-

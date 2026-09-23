@@ -181,7 +181,7 @@ async def test_org_mates_are_members_and_creators_of_the_callers_organizations(m
     ])
     await db.commit()
     mates = await integrations._org_mate_emails(db, ME)
-    assert mates == {ME, TEAMMATE, "founder-a@example.test"}
+    assert mates == {ME, TEAMMATE}, "an org's creator is not its team"
     assert await integrations._org_mate_emails(db, "nobody@example.test") == {"nobody@example.test"}
 
 
