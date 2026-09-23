@@ -63,6 +63,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.core.lxd_names import safe_segment
 from app.core.proxy_paths import (
+    assert_body_within_grant,
     assert_project_scope_allows_path,
     assert_proxy_path_allowed,
     assert_server_state_unchanged,
@@ -2667,6 +2668,7 @@ async def raw_proxy(
         assert_proxy_path_allowed(request.path)
         assert_server_state_unchanged(request.path, method)
         assert_project_scope_allows_path(request.path, method, allowed_projects)
+        assert_body_within_grant(request.path, method, request.body, allowed_projects)
 
         required_permission = "read"
 

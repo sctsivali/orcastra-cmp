@@ -16,7 +16,7 @@ raw_proxy sent it to `/1.0/certificates`.
 
 import logging
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, unquote_plus
 
 from fastapi import HTTPException
@@ -161,6 +161,83 @@ def assert_server_state_unchanged(path: str, method: str) -> None:
     resource = "/" + segments[0] if segments else "the server configuration"
     logger.warning("Refusing a %s to %s through the proxy", method.upper(), resource)
     raise HTTPException(status_code=403, detail=f"The proxy does not change {resource}")
+
+
+# A project grant is enforced by binding the request to that project, which the body can undo.
+# LXD reads a project from the body of a copy, a move and an image-from-instance, and an
+# instance's own config and devices can reach the host, which belongs to every project at once.
+# note: refused only for a key that is not `*`. The integrator's keys are `*` and unaffected.
+_HOST_CONFIG_PREFIXES = (
+    "raw.",
+    "security.privileged",
+    "security.idmap.",
+    "linux.kernel_modules",
+    "security.syscalls.intercept.",
+)
+_HOST_DEVICE_TYPES = frozenset(
+    {"unix-char", "unix-block", "unix-hotplug", "usb", "gpu", "pci", "infiniband", "proxy"}
+)
+
+
+def _projects_named_in(body: Dict[str, Any]) -> List[str]:
+    named = [body.get("project")]
+    for key in ("source", "target"):
+        nested = body.get(key)
+        if isinstance(nested, dict):
+            named.append(nested.get("project"))
+    return [str(value) for value in named if value not in (None, "")]
+
+
+def _host_reach(body: Dict[str, Any]) -> Optional[str]:
+    """What in an instance body reaches the host, or None."""
+    config = body.get("config")
+    if isinstance(config, dict):
+        for key in config:
+            if str(key).lower().startswith(_HOST_CONFIG_PREFIXES):
+                return f"config {key}"
+    devices = body.get("devices")
+    if isinstance(devices, dict):
+        for name, device in devices.items():
+            if not isinstance(device, dict):
+                continue
+            kind = str(device.get("type") or "").lower()
+            if kind in _HOST_DEVICE_TYPES:
+                return f"device {name} of type {kind}"
+            if kind == "disk" and str(device.get("source") or "").startswith("/"):
+                return f"device {name}, a disk from a host path"
+            if kind == "nic" and str(device.get("nictype") or "").lower() == "physical":
+                return f"device {name}, a physical host interface"
+    return None
+
+
+def assert_body_within_grant(
+    path: str, method: str, body: Optional[Dict[str, Any]], allowed_projects: Optional[List[str]]
+) -> None:
+    """Refuse a write body that leaves a project-limited grant. A `*` grant is never touched."""
+    if project_grant_is_unrestricted(allowed_projects) or method.upper() not in _MUTATING_METHODS:
+        return
+    if not isinstance(body, dict):
+        return
+    granted = sorted(allowed_projects or [])
+    for project in _projects_named_in(body):
+        if not project_allowed_by_grant(project, allowed_projects):
+            logger.warning("Refusing a body naming project %s for a key limited to %s", project, granted)
+            raise HTTPException(
+                status_code=403,
+                detail=f"The request body names project {project}. This key is limited to {granted}.",
+            )
+    segments = resource_segments(path)
+    if segments[:1] == ["instances"]:
+        reach = _host_reach(body)
+        if reach:
+            logger.warning("Refusing an instance body with %s for a key limited to %s", reach, granted)
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"The request sets {reach}, which reaches the host, so it needs a key granted "
+                    f"all projects on this cluster. This key is limited to {granted}."
+                ),
+            )
 
 
 def query_key_name(key: str) -> str:

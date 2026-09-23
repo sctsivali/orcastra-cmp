@@ -103,7 +103,8 @@ def _reset_breaker() -> Iterator[None]:
 
 
 async def _raw(
-    api_key: Dict[str, Any], method: str, path: str, project: Optional[str] = None
+    api_key: Dict[str, Any], method: str, path: str, project: Optional[str] = None,
+    body: Optional[Dict[str, Any]] = None,
 ) -> tuple:
     session = RecordingSession()
     try:
@@ -113,7 +114,7 @@ async def _raw(
                 method=method,
                 path=path,
                 project=project,
-                body={} if method in ("POST", "PUT", "PATCH") else None,
+                body=body if body is not None else ({} if method in ("POST", "PUT", "PATCH") else None),
             ),
             api_key=api_key,
             lxd_service=FakeService(FakeClient(session)),
@@ -349,3 +350,58 @@ async def test_sync_instances_follow_a_grant_that_covers_default() -> None:
     result = await _sync(_key(["default", "tenant-a"]))
     assert [p["name"] for p in result.projects] == ["default", "tenant-a"]
     assert [i["name"] for i in result.instances] == ["web-1"]
+
+
+# -- the body cannot take a project-limited key out of its project -----------------------------
+
+ROOT_DISK = {"root": {"type": "disk", "path": "/", "pool": "default"}}
+FOREIGN_BODIES = [
+    ("POST", "/1.0/instances", {"name": "c1", "source": {"type": "copy", "source": "db", "project": "tenant-b"}}),
+    ("POST", "/1.0/instances/web", {"name": "web", "project": "tenant-b"}),
+    ("POST", "/1.0/images", {"source": {"type": "instance", "name": "db", "project": "tenant-b"}}),
+    ("POST", "/1.0/instances", {"name": "c1", "target": {"project": "tenant-b"}}),
+]
+HOST_BODIES = [
+    ("POST", "/1.0/instances", {"name": "c1", "config": {"security.privileged": "true"}}),
+    ("PUT", "/1.0/instances/web", {"config": {"raw.lxc": "lxc.apparmor.profile=unconfined"}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"Security.IDMap.Isolated": "false"}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"linux.kernel_modules": "overlay"}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"host": {"type": "disk", "source": "/", "path": "/mnt"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"sock": {"type": "proxy", "listen": "tcp:0.0.0.0:1",
+                                                            "connect": "unix:/var/lib/lxd/unix.socket"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"g": {"type": "gpu"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"eth1": {"type": "nic", "nictype": "physical", "parent": "eno1"}}}),
+    ("POST", "/1.0/instances", {"name": "c1", "devices": {"d": {"type": "unix-block", "source": "/dev/sda"}}}),
+]
+PLAIN_BODIES = [
+    ("POST", "/1.0/instances", {"name": "c1", "source": {"type": "image", "alias": "ubuntu"},
+                                "devices": dict(ROOT_DISK), "config": {"limits.cpu": "2"}}),
+    ("POST", "/1.0/instances", {"name": "c1", "source": {"type": "copy", "source": "web", "project": "tenant-a"}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"data": {"type": "disk", "pool": "default", "source": "vol1",
+                                                            "path": "/data"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"eth0": {"type": "nic", "network": "lxdbr0"}}}),
+    ("PUT", "/1.0/instances/web/state", {"action": "stop", "force": True}),
+]
+
+
+@pytest.mark.parametrize("method,path,body", FOREIGN_BODIES + HOST_BODIES)
+async def test_a_narrow_key_body_cannot_leave_its_project(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await _raw(NARROW, method, path, project="tenant-a", body=body)
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("method,path,body", PLAIN_BODIES)
+async def test_a_narrow_key_body_inside_its_project_goes_through(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await _raw(NARROW, method, path, project="tenant-a", body=body)
+    assert outcome.status_code == 200
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("method,path,body", FOREIGN_BODIES + HOST_BODIES)
+async def test_a_wildcard_key_body_is_untouched(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await _raw(WILDCARD, method, path, body=body)
+    assert outcome.status_code == 200
+    assert len(session.calls) == 1
+
