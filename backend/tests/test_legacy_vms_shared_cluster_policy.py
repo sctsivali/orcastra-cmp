@@ -27,6 +27,10 @@ from app.services.instance_security_policy import ClusterOwnership, ClusterWrite
 from app.services.lxd.create_preflight import CreatePreflightEvaluation
 from app.services.lxd.instance import CreateSubmissionUnknown
 from app.services.lxd.nic_preflight import merge_effective_devices
+from app.services.migration_fence import (
+    MIGRATION_PROJECT_FENCE_DETAIL,
+    MigrationFenceConflict,
+)
 
 HOST = "shared-cluster"
 PROJECT = "partner-owned"
@@ -234,6 +238,40 @@ async def test_shared_partner_safe_project_and_typed_payload_are_allowed(monkeyp
     assert response.success is True
     assert len(service.creates) == 1
     assert service.events[-2:] == ["project-read", "create"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_create_project_fence_precedes_preflight_and_job_admission(
+    monkeypatch,
+) -> None:
+    service = _Service(SAFE_PROJECT_CONFIG)
+    policy = ClusterWritePolicy(HOST, Role.PARTNER, ClusterOwnership.EXCLUSIVE)
+    _wire_route(monkeypatch, policy, service)
+    fence_calls: list[tuple[str, str]] = []
+
+    async def project_fenced(*, cluster_id, project, db):
+        fence_calls.append((cluster_id, project))
+        raise MigrationFenceConflict(MIGRATION_PROJECT_FENCE_DETAIL)
+
+    async def exact_fence(**_kwargs):
+        pytest.fail("exact fence ran after the project hierarchy fence refused the create")
+
+    monkeypatch.setattr(vms, "assert_project_not_migration_fenced", project_fenced)
+    monkeypatch.setattr(vms, "assert_instance_not_migration_fenced", exact_fence)
+    monkeypatch.setattr(
+        vms,
+        "create_operation_job",
+        lambda **_kwargs: pytest.fail("job was admitted after project fence refusal"),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _create(service, _actor(Role.PARTNER), config={"limits.cpu": "2"})
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == MIGRATION_PROJECT_FENCE_DETAIL
+    assert fence_calls == [(HOST, PROJECT)]
+    assert service.events == ["authorize", "hosts"]
+    assert service.creates == []
 
 
 @pytest.mark.asyncio

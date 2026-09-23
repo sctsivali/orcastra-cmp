@@ -33,7 +33,12 @@ from typing import List, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.extension_models import ExtensionInstallation, WebhookSubscription
+from app.core.error_sanitizer import sanitize_error
+from app.models.extension_models import (
+    ExtensionInstallation,
+    WebhookDelivery,
+    WebhookSubscription,
+)
 
 from .dispatcher import enqueue_event
 from .envelope import ResourceEvent
@@ -113,6 +118,9 @@ async def emit_resource_event(
     project: Optional[str] = None,
     state: Optional[str] = None,
     operation_id: Optional[str] = None,
+    event_id: Optional[str] = None,
+    occurred_at: Optional[str] = None,
+    raise_on_error: bool = False,
 ) -> int:
     """Enqueue one lifecycle event for every entitled subscription. Returns rows created.
 
@@ -128,10 +136,31 @@ async def emit_resource_event(
             subscriptions = await _subscriptions_for_cluster(db, cluster_id, event_type)
             if not subscriptions:
                 return 0
+            stable_event_id = event_id or f"evt_{uuid.uuid4()}"
+            if event_id:
+                # A migration outbox can be reclaimed after this transaction committed but
+                # before its own row was acknowledged. Reusing the outbox id and excluding
+                # existing subscription deliveries makes that retry idempotent.
+                existing_subscription_ids = set(
+                    (
+                        await db.execute(
+                            select(WebhookDelivery.subscription_id).where(
+                                WebhookDelivery.event_id == stable_event_id
+                            )
+                        )
+                    ).scalars().all()
+                )
+                subscriptions = [
+                    subscription
+                    for subscription in subscriptions
+                    if subscription.id not in existing_subscription_ids
+                ]
+                if not subscriptions:
+                    return 0
             event = ResourceEvent(
-                event_id=f"evt_{uuid.uuid4()}",
+                event_id=stable_event_id,
                 event_type=event_type,
-                occurred_at=_now(),
+                occurred_at=occurred_at or _now(),
                 cluster_id=cluster_id,
                 resource_type=resource_type,
                 resource_name=resource_name,
@@ -142,10 +171,15 @@ async def emit_resource_event(
             created = await enqueue_event(db, event, subscriptions=subscriptions)
             await db.commit()
             return len(created)
-    except Exception:  # noqa: BLE001 - a lost notification must not fail a completed operation
+    except Exception as exc:  # noqa: BLE001 - optionally retried by a durable caller
+        if raise_on_error:
+            raise
         logger.warning(
-            "Could not enqueue %s for %s on %s", event_type, resource_name, cluster_id,
-            exc_info=True,
+            "Could not enqueue %s for %s on %s: %s",
+            event_type,
+            resource_name,
+            cluster_id,
+            sanitize_error(exc),
         )
         return 0
 

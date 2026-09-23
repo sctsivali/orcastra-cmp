@@ -68,6 +68,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import LXD_NAME_RE, MAX_NAME_LENGTH
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -579,6 +583,15 @@ async def create_profile(
                 requested_project=project,
                 policy=policy,
             )
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
             validate_profile_payload(
                 policy,
                 config=request.config,
@@ -692,6 +705,15 @@ async def update_profile(
                 requested_project=project,
                 policy=policy,
             )
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
             if policy.requires_safe_allowlist:
                 current, current_etag = await _run_profile_blocking(
                     read_profile_sync,
@@ -804,6 +826,7 @@ async def delete_profile(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a profile."""
     verify_cluster_access(host)
@@ -813,19 +836,49 @@ async def delete_profile(
     # regardless, and the API would disagree with the row menu's reason.
     if profile_name == "default":
         raise HTTPException(status_code=403, detail=DEFAULT_PROFILE_DETAIL)
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this profile")
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Could not connect to cluster '{host}'",
+        async with serialize_cluster_configuration(db, host):
+            client = lxd_service.get_client_with_reconnect(host)
+            if client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Could not connect to cluster '{host}'",
+                )
+            owner = resolve_owner(client, "profiles", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this profile")
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            current, _etag = await _run_profile_blocking(
+                read_profile_sync,
+                client,
+                profile_name,
+                owner,
+                host=host,
+                label="read-before-delete",
+                timeout=_PROFILE_CONTEXT_WALL_SECONDS,
             )
-        owner = resolve_owner(client, "profiles", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this profile")
-        current, _etag = await asyncio.to_thread(read_profile_sync, client, profile_name, owner)
-        visible_used_by = filter_visible_lxd_references(host, current.get("used_by") or [])
-        await asyncio.to_thread(delete_profile_sync, client, profile_name, owner, visible_used_by)
+            visible_used_by = filter_visible_lxd_references(host, current.get("used_by") or [])
+            await _run_profile_blocking(
+                delete_profile_sync,
+                client,
+                profile_name,
+                owner,
+                visible_used_by,
+                host=host,
+                label="delete",
+                timeout=_PROFILE_WRITE_WALL_SECONDS,
+            )
         
         # Log activity: profile deletion success
         activity_logger.log_activity(

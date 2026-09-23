@@ -12,6 +12,7 @@ synchronously and the wait is a no-op.
 
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -24,6 +25,11 @@ from app.routers import network_acls as acls_module
 from app.routers import networks as networks_module
 from app.services.lxd import utils as lxd_utils
 from app.services.lxd_service import get_lxd_service
+
+
+@asynccontextmanager
+async def _no_configuration_lock(_db, _host):
+    yield
 
 
 class _Response:
@@ -132,6 +138,11 @@ def _networks_app(monkeypatch, async_writes: bool):
     monkeypatch.setattr(networks_module, "project_is_visible", lambda host, project: True)
     monkeypatch.setattr(networks_module, "_uplink_candidates", lambda c, host: {})
     monkeypatch.setattr(networks_module, "verify_cluster_access", lambda host: None)
+    monkeypatch.setattr(
+        networks_module,
+        "serialize_cluster_configuration",
+        _no_configuration_lock,
+    )
     monkeypatch.setattr(networks_module.activity_logger, "log_activity", lambda **kw: None)
     monkeypatch.setattr(
         networks_module, "get_cache_manager",
@@ -225,6 +236,11 @@ def _acl_app(monkeypatch, post_answer=None):
     monkeypatch.setattr(acls_module, "resolve_owner", lambda c, kind, project: "default")
     monkeypatch.setattr(acls_module, "project_is_visible", lambda host, project: True)
     monkeypatch.setattr(acls_module, "verify_cluster_access", lambda host: None, raising=False)
+    monkeypatch.setattr(
+        acls_module,
+        "serialize_cluster_configuration",
+        _no_configuration_lock,
+    )
     monkeypatch.setattr(acls_module.activity_logger, "log_activity", lambda **kw: None)
     monkeypatch.setattr(
         acls_module, "get_cache_manager",

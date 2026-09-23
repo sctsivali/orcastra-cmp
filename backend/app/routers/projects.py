@@ -63,6 +63,10 @@ from app.services import project_grants
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.services.activity_logger import get_activity_logger
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -576,6 +580,15 @@ async def create_project(
             project_config = prepare_project_create_config(policy, request.config or {})
             validate_target_project_isolation(policy, project_config)
 
+            try:
+                await assert_project_not_migration_fenced(
+                    cluster_id=request.host,
+                    project=request.name,
+                    db=db,
+                )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+
             if get_highest_role(resolve_roles(user)) == Role.PARTNER:
                 grant_org = await org_to_hold_project_grant(user.email, request.host, db)
                 if grant_org is None and visible_projects_for(request.host) is not None:
@@ -813,6 +826,15 @@ async def update_project(
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+            try:
+                await assert_project_not_migration_fenced(
+                    cluster_id=host,
+                    project=project_name,
+                    db=db,
+                )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+
             project_data, request_cancelled = await _finish_critical_write(
                 lxd_service.update_project(
                     host=host,
@@ -888,8 +910,29 @@ async def delete_project(
     verify_cluster_access(host)
     _refuse_a_project_outside_the_bound(host, project_name)
     try:
-        await lxd_service.delete_project(host, project_name)
-        revoke_note = await project_grants.forget_deleted_project(db, cluster_id=host, project_name=project_name)
+        async with serialize_cluster_configuration(db, host):
+            try:
+                await assert_project_not_migration_fenced(
+                    cluster_id=host,
+                    project=project_name,
+                    db=db,
+                )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+            async def delete_and_revoke_grants() -> str:
+                await lxd_service.delete_project(host, project_name)
+                return await project_grants.forget_deleted_project(
+                    db,
+                    cluster_id=host,
+                    project_name=project_name,
+                )
+
+            revoke_note, request_cancelled = await _finish_critical_write(
+                delete_and_revoke_grants()
+            )
+            if request_cancelled:
+                raise asyncio.CancelledError
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
         # until now, so the catalogue was a promise with no sender behind it.
@@ -924,7 +967,9 @@ async def delete_project(
                 + revoke_note
             )
         }
-        
+
+    except HTTPException:
+        raise
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")
         activity_logger.log_activity(

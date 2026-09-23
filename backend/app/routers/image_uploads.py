@@ -47,6 +47,11 @@ from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.models.db_models import ImageUploadSession
 from app.routers.integrations import require_capability
 from app.services.lxd_service import get_lxd_service
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+    guard_project_mutation,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -275,8 +280,19 @@ async def create_upload(
         staging_path=path,
         expires_at=_now() + timedelta(hours=SESSION_TTL_HOURS),
     )
-    db.add(row)
-    await db.commit()
+    try:
+        # Admission and row visibility share migration execution's cluster lock. Once this
+        # commit releases the PostgreSQL transaction lock, fresh migration preflight must see
+        # the active upload row; if migration won first, the project fence rejects this row.
+        async with guard_project_mutation(
+            db,
+            cluster_id=body.cluster_id,
+            project=body.project,
+        ):
+            db.add(row)
+            await db.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     return {"session_id": session_id, "offset": 0, "expires_at": row.expires_at.isoformat()}
 
@@ -387,8 +403,22 @@ async def finalize_upload(
     if row.upload_offset != row.total_bytes:
         raise HTTPException(status_code=409, detail="Upload is not complete")
 
-    row.status = "importing"
-    await db.commit()
+    try:
+        await assert_project_not_migration_fenced(
+            cluster_id=row.cluster_id,
+            project=row.project,
+            db=db,
+        )
+        async with guard_project_mutation(
+            db,
+            cluster_id=row.cluster_id,
+            project=row.project,
+        ):
+            row.status = "importing"
+            row.error = None
+            await db.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     # Import is long-running (multi-GB stream to LXD); run detached so the request returns fast. The
     # recovery sweep below re-drives this if the worker dies before it finishes.
     asyncio.create_task(_run_import(session_id))
@@ -613,31 +643,66 @@ async def _run_import(session_id: str, recovery: bool = False) -> None:
     loop = asyncio.get_event_loop()
     hb = asyncio.create_task(_heartbeat(session_id))  # start before the long sha256/stream so the claim->beat gap is zero
     path = None
+    preserve_staging = False
     async with async_session_maker() as db:
         row = await _get_session(db, session_id)
         path = row.staging_path
         try:
-            # The digest doubles as the optional integrity check AND the existence-probe key (a unified
-            # image's LXD fingerprint == its file sha256). Compute it only when needed: a normal first
-            # import with no expected checksum skips it so the happy path adds no full-file read; a
-            # recovery re-drive computes it so it can short-circuit if the image is already in the store.
-            digest = None
-            if (recovery or row.expected_sha256) and path and os.path.isfile(path):
-                digest = await loop.run_in_executor(_executor, _sha256_file, path)
-            if row.expected_sha256 and digest and digest.lower() != row.expected_sha256.lower():
-                row.status = "failed"
-                row.error = "checksum mismatch - uploaded file is corrupt"
+            try:
+                # Keep the advisory lock until the daemon operation has settled and the
+                # terminal row is committed. A fresh migration preflight either runs before
+                # this section and fences it, or runs afterwards and observes the result.
+                async with guard_project_mutation(
+                    db,
+                    cluster_id=row.cluster_id,
+                    project=row.project,
+                ):
+                    await assert_project_not_migration_fenced(
+                        cluster_id=row.cluster_id,
+                        project=row.project,
+                        db=db,
+                    )
+                    # The digest doubles as the optional integrity check AND the existence-probe
+                    # key (a unified image's LXD fingerprint == its file sha256). Compute it only
+                    # when needed: a normal first import with no expected checksum skips it; a
+                    # recovery re-drive computes it so it can adopt an image already in the store.
+                    digest = None
+                    if (recovery or row.expected_sha256) and path and os.path.isfile(path):
+                        digest = await loop.run_in_executor(_executor, _sha256_file, path)
+                    if (
+                        row.expected_sha256
+                        and digest
+                        and digest.lower() != row.expected_sha256.lower()
+                    ):
+                        row.status = "failed"
+                        row.error = "checksum mismatch - uploaded file is corrupt"
+                        await db.commit()
+                        return
+                    result = await loop.run_in_executor(
+                        _executor,
+                        _lxd_import_sync,
+                        row.cluster_id,
+                        path,
+                        row.alias,
+                        row.project,
+                        f"OrcaHub custom image {row.alias}",
+                        digest,
+                    )
+                    # important: ready is externally visible through both upload status surfaces.
+                    # Sweep the list/capacity caches first, then publish the terminal row, so a
+                    # caller cannot observe ready while inventory still serves pre-import data.
+                    await _publish_ready(db, row, result)
+            except MigrationFenceConflict as exc:
+                # The upload is complete and safe to retry after the migration. Keep both its
+                # durable state and staged bytes instead of turning a temporary fence into a
+                # multi-gigabyte re-upload.
+                preserve_staging = True
+                await db.rollback()
+                row = await _get_session(db, session_id)
+                row.status = "uploaded"
+                row.error = exc.detail
                 await db.commit()
                 return
-            result = await loop.run_in_executor(
-                _executor, _lxd_import_sync, row.cluster_id, path, row.alias, row.project,
-                f"OrcaHub custom image {row.alias}", digest,
-            )
-            # important: ready is externally visible through both upload status surfaces. Sweep
-            # the list/capacity caches first, then publish the terminal row in PostgreSQL, so a
-            # caller can never observe ready while ordinary inventory reads still serve pre-import
-            # data. A crash here leaves importing + staging for the recovery sweep.
-            await _publish_ready(db, row, result)
             logger.info("Image upload imported: session=%s alias=%s fp=%s", session_id, row.alias, row.fingerprint)
         except _ReadyCacheInvalidationError as e:
             # The image is already on LXD. Keep the durable row non-terminal so the orphan
@@ -656,7 +721,8 @@ async def _run_import(session_id: str, recovery: bool = False) -> None:
             logger.error("Image upload import failed: session=%s error=%s", session_id, e)
         finally:
             hb.cancel()
-            _cleanup_file(path)
+            if not preserve_staging:
+                _cleanup_file(path)
 
 
 async def _finalize_from_existing(

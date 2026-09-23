@@ -22,6 +22,10 @@ from app.services.lxd import instance as instance_module
 from app.services.lxd.create_preflight import CreatePreflightEvaluation
 from app.services.lxd.instance import CreateSubmissionUnknown, InstanceManager
 from app.services.instance_security_policy import InstanceSecurityPolicyViolation
+from app.services.migration_fence import (
+    MIGRATION_PROJECT_FENCE_DETAIL,
+    MigrationFenceConflict,
+)
 
 
 def _request(**changes):
@@ -264,6 +268,71 @@ async def test_create_rejects_malformed_tags_before_idempotency_or_daemon_reads(
 
     assert exc.value.status_code == 400
     assert exc.value.detail["code"] == "INVALID_INSTANCE_TAG"
+
+
+@pytest.mark.asyncio
+async def test_create_project_fence_runs_after_authorization_and_before_preflight(
+    monkeypatch,
+):
+    request = _request(project=" tenant-a ")
+    order: list[tuple[str, str]] = []
+
+    def authorize(host, project):
+        order.append(("authorize", project))
+        assert host == "cluster-a"
+        return project.strip()
+
+    async def no_replay(_requester, _key):
+        return None
+
+    @asynccontextmanager
+    async def configuration_lock(_db, host):
+        order.append(("lock", host))
+        yield
+
+    async def project_fenced(*, cluster_id, project, db):
+        order.append(("project-fence", project))
+        assert cluster_id == "cluster-a"
+        raise MigrationFenceConflict(MIGRATION_PROJECT_FENCE_DETAIL)
+
+    async def exact_fence(**_kwargs):
+        pytest.fail("exact fence ran after the project hierarchy fence refused the create")
+
+    monkeypatch.setattr(instances_router, "verify_project_access", authorize)
+    monkeypatch.setattr(instances_router, "get_operation_job_by_request", no_replay)
+    monkeypatch.setattr(instances_router, "serialize_cluster_configuration", configuration_lock)
+    monkeypatch.setattr(
+        instances_router,
+        "assert_project_not_migration_fenced",
+        project_fenced,
+    )
+    monkeypatch.setattr(
+        instances_router,
+        "assert_instance_not_migration_fenced",
+        exact_fence,
+    )
+    monkeypatch.setattr(
+        instances_router,
+        "_run_create_preflight",
+        lambda *_args: pytest.fail("preflight ran after project fence refusal"),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await instances_router.create_instance(
+            request=request,
+            idempotency_key="project-fenced-request",
+            lxd_service=SimpleNamespace(),
+            db=SimpleNamespace(),
+            _rbac=SimpleNamespace(user_id="user-123", email=None),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == MIGRATION_PROJECT_FENCE_DETAIL
+    assert order == [
+        ("authorize", " tenant-a "),
+        ("lock", "cluster-a"),
+        ("project-fence", "tenant-a"),
+    ]
 
 
 @pytest.mark.asyncio

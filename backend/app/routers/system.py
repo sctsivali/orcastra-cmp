@@ -51,6 +51,13 @@ class SystemSettings(BaseModel):
     snapshot_schedules_enabled: bool
     # The task panel is mounted only when the journal is on; the console hides the dock otherwise.
     task_journal_enabled: bool
+    # Migration rollout is deliberately staged. The center flag exposes read-only planning;
+    # each mutation class has a separate, default-off production gate.
+    migration_center_enabled: bool
+    migration_durable_copy_enabled: bool
+    migration_instance_move_enabled: bool
+    migration_project_member_relocation_enabled: bool
+    migration_project_cross_cluster_enabled: bool
 
 
 class VersionInfo(BaseModel):
@@ -100,6 +107,21 @@ async def get_system_settings():
         debug=settings.debug,
         snapshot_schedules_enabled=settings.snapshot_schedules_enabled,
         task_journal_enabled=settings.task_journal_enabled,
+        migration_center_enabled=getattr(settings, "migration_center_enabled", False),
+        migration_durable_copy_enabled=getattr(
+            settings, "migration_durable_copy_enabled", False
+        ),
+        migration_instance_move_enabled=getattr(
+            settings, "migration_instance_move_enabled", False
+        ),
+        migration_project_member_relocation_enabled=(
+            getattr(settings, "project_relocation_enabled", False)
+            and getattr(settings, "migration_project_member_relocation_enabled", False)
+        ),
+        migration_project_cross_cluster_enabled=(
+            getattr(settings, "project_relocation_enabled", False)
+            and getattr(settings, "migration_project_cross_cluster_enabled", False)
+        ),
     )
 
 

@@ -43,6 +43,22 @@ def test_the_field_is_part_of_the_response_contract() -> None:
     assert "snapshot_schedules_enabled" in SystemSettings.model_fields
 
 
+def test_migration_rollout_capabilities_are_explicit_and_default_off() -> None:
+    fields = SystemSettings.model_fields
+    assert "migration_center_enabled" in fields
+    assert "migration_durable_copy_enabled" in fields
+    assert "migration_instance_move_enabled" in fields
+    assert "migration_project_member_relocation_enabled" in fields
+    assert "migration_project_cross_cluster_enabled" in fields
+
+    settings = Settings()
+    assert settings.migration_center_enabled is False
+    assert settings.migration_durable_copy_enabled is False
+    assert settings.migration_instance_move_enabled is False
+    assert settings.migration_project_member_relocation_enabled is False
+    assert settings.migration_project_cross_cluster_enabled is False
+
+
 def test_a_deployment_with_the_feature_off_says_so(monkeypatch) -> None:
     assert _read(monkeypatch, enabled=False).snapshot_schedules_enabled is False
 

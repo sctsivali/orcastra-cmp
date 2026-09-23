@@ -8,6 +8,7 @@ and then created cluster-wide with the rest. A standalone host keeps the single 
 
 from types import SimpleNamespace
 from typing import Any, Dict, List
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -19,6 +20,11 @@ from app.core.rbac import get_current_user
 from app.services.lxd_service import get_lxd_service
 
 MEMBERS = ["mc1", "mc2", "mc3"]
+
+
+@asynccontextmanager
+async def _no_configuration_lock(_db, _host):
+    yield
 
 
 class _RawPools:
@@ -55,6 +61,11 @@ def _app(monkeypatch, clustered: bool):
     monkeypatch.setattr(pools_module, "is_clustered", lambda c: clustered)
     monkeypatch.setattr(pools_module, "cluster_member_names", lambda c: list(MEMBERS))
     monkeypatch.setattr(pools_module, "verify_cluster_access", lambda host: None)
+    monkeypatch.setattr(
+        pools_module,
+        "serialize_cluster_configuration",
+        _no_configuration_lock,
+    )
     monkeypatch.setattr(pools_module.activity_logger, "log_activity", lambda **kw: None)
     monkeypatch.setattr(
         pools_module, "get_cache_manager",

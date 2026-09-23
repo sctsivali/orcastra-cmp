@@ -16,6 +16,8 @@ Permissions model:
 """
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional, List
 
@@ -44,6 +46,13 @@ from app.models.db_models import (
     TenantAccessPolicy,
     TenantPolicyRule,
     TenantPolicyAssignment,
+)
+from app.services.migration_fence import (
+    MIGRATION_CLUSTER_FENCE_UNAVAILABLE_DETAIL,
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+    assert_project_not_migration_fenced,
+    guard_migration_mutations,
 )
 
 logger = logging.getLogger(__name__)
@@ -383,6 +392,104 @@ def _refuse_a_project_the_caller_cannot_see(rule) -> None:
         )
 
 
+@asynccontextmanager
+async def _guard_rules_mutation(
+    rules: List[object],
+    db: AsyncSession,
+    *,
+    policy_id: Optional[int] = None,
+) -> AsyncIterator[None]:
+    """Lock a policy, then keep its current and proposed grants stable through commit."""
+    current_rules: List[object] = []
+    if policy_id is not None:
+        try:
+            locked_policy_id = (
+                await db.execute(
+                    select(TenantAccessPolicy.id)
+                    .where(TenantAccessPolicy.id == policy_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if locked_policy_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The access policy changed concurrently; reload and retry",
+                )
+            current_rules = list(await _policy_rules(db, policy_id))
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - authorization admission fails closed
+            logger.error(
+                "Could not lock tenant access policy %s for migration admission: %s",
+                policy_id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=MIGRATION_CLUSTER_FENCE_UNAVAILABLE_DETAIL,
+            ) from exc
+
+    clusters: set[str] = set()
+    projects: set[tuple[str, str]] = set()
+    for rule in [*current_rules, *rules]:
+        cluster_id = str(getattr(rule, "cluster_id", "") or "")
+        project = str(getattr(rule, "project_name", "") or "*")
+        if not cluster_id:
+            continue
+        if project == "*":
+            clusters.add(cluster_id)
+        else:
+            projects.add((cluster_id, project))
+    if not clusters and not projects:
+        yield
+        return
+    try:
+        async with guard_migration_mutations(
+            db,
+            clusters=clusters,
+            projects=projects,
+        ):
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+async def _assert_rules_not_migration_fenced(
+    rules: List[object],
+    db: AsyncSession,
+) -> None:
+    """Compatibility probe; mutating callers use the serialized context above."""
+    seen: set[tuple[str, str]] = set()
+    try:
+        for rule in rules:
+            cluster_id = str(getattr(rule, "cluster_id", "") or "")
+            project = str(getattr(rule, "project_name", "") or "*")
+            target = (cluster_id, project)
+            if not cluster_id or target in seen:
+                continue
+            seen.add(target)
+            if project == "*":
+                await assert_cluster_not_migration_fenced(
+                    cluster_id=cluster_id,
+                    db=db,
+                )
+            else:
+                await assert_project_not_migration_fenced(
+                    cluster_id=cluster_id,
+                    project=project,
+                    db=db,
+                )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+async def _policy_rules(db: AsyncSession, policy_id: int) -> List[TenantPolicyRule]:
+    result = await db.execute(
+        select(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy_id)
+    )
+    return list(result.scalars().all())
+
+
 @router.post(
     "/policies",
     response_model=PolicyResponse,
@@ -419,42 +526,41 @@ async def create_policy(
             )
         _refuse_a_project_the_caller_cannot_see(rule)
 
-    # check name uniqueness
-    existing = await db.execute(
-        select(TenantAccessPolicy).where(
-            and_(
-                TenantAccessPolicy.organization_id == org.id,
-                TenantAccessPolicy.name == body.name,
+    async with _guard_rules_mutation(list(body.rules), db):
+        # check name uniqueness after admission so two policy writes cannot validate against
+        # different migration revisions and then commit in the opposite order.
+        existing = await db.execute(
+            select(TenantAccessPolicy).where(
+                and_(
+                    TenantAccessPolicy.organization_id == org.id,
+                    TenantAccessPolicy.name == body.name,
+                )
             )
         )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"Policy '{body.name}' already exists in this organization")
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail=f"Policy '{body.name}' already exists in this organization")
 
-    # create policy
-    policy = TenantAccessPolicy(
-        organization_id=org.id,
-        name=body.name,
-        description=body.description,
-        is_default=body.is_default,
-        created_by=user.email,
-    )
-    db.add(policy)
-    await db.flush()  # get policy.id
-
-    # create rules
-    for rule_data in body.rules:
-        rule = TenantPolicyRule(
-            policy_id=policy.id,
-            cluster_id=rule_data.cluster_id,
-            project_name=rule_data.project_name,
-            instance_name=rule_data.instance_name,
-            permissions=rule_data.permissions,
+        policy = TenantAccessPolicy(
+            organization_id=org.id,
+            name=body.name,
+            description=body.description,
+            is_default=body.is_default,
+            created_by=user.email,
         )
-        db.add(rule)
+        db.add(policy)
+        await db.flush()  # get policy.id
 
-    await db.commit()
-    await db.refresh(policy)
+        for rule_data in body.rules:
+            db.add(TenantPolicyRule(
+                policy_id=policy.id,
+                cluster_id=rule_data.cluster_id,
+                project_name=rule_data.project_name,
+                instance_name=rule_data.instance_name,
+                permissions=rule_data.permissions,
+            ))
+
+        await db.commit()
+        await db.refresh(policy)
     _invalidate_acl_caches()
 
     logger.info(f"Policy '{body.name}' created by {user.email} in org {org.slug}")
@@ -516,66 +622,66 @@ async def update_policy(
 
     await _verify_org_access(user, policy.organization_id, db, require_write=True)
 
-    # update basic fields
-    if body.name is not None:
-        # check uniqueness
-        dup = await db.execute(
-            select(TenantAccessPolicy).where(
-                and_(
-                    TenantAccessPolicy.organization_id == policy.organization_id,
-                    TenantAccessPolicy.name == body.name,
-                    TenantAccessPolicy.id != policy_id,
+    async with _guard_rules_mutation(
+        list(body.rules or []),
+        db,
+        policy_id=policy_id,
+    ):
+        if body.name is not None:
+            dup = await db.execute(
+                select(TenantAccessPolicy).where(
+                    and_(
+                        TenantAccessPolicy.organization_id == policy.organization_id,
+                        TenantAccessPolicy.name == body.name,
+                        TenantAccessPolicy.id != policy_id,
+                    )
                 )
             )
-        )
-        if dup.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail=f"Policy '{body.name}' already exists")
-        policy.name = body.name
+            if dup.scalar_one_or_none():
+                raise HTTPException(status_code=409, detail=f"Policy '{body.name}' already exists")
+            policy.name = body.name
 
-    if body.description is not None:
-        policy.description = body.description
-    if body.is_default is not None:
-        policy.is_default = body.is_default
+        if body.description is not None:
+            policy.description = body.description
+        if body.is_default is not None:
+            policy.is_default = body.is_default
 
-    # replace rules if provided
-    if body.rules is not None:
-        # validate clusters
-        allowed_clusters = get_current_allowed_clusters()
-        org_cluster_stmt = select(OrganizationCluster.cluster_id).where(
-            OrganizationCluster.organization_id == policy.organization_id
-        )
-        result = await db.execute(org_cluster_stmt)
-        org_cluster_ids = set(result.scalars().all())
+        if body.rules is not None:
+            allowed_clusters = get_current_allowed_clusters()
+            org_cluster_stmt = select(OrganizationCluster.cluster_id).where(
+                OrganizationCluster.organization_id == policy.organization_id
+            )
+            result = await db.execute(org_cluster_stmt)
+            org_cluster_ids = set(result.scalars().all())
 
-        for rule in body.rules:
-            if rule.cluster_id not in org_cluster_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Cluster '{rule.cluster_id}' is not in this organization",
-                )
-            if allowed_clusters is not None and rule.cluster_id not in allowed_clusters:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"No access to cluster '{rule.cluster_id}'",
-                )
-            _refuse_a_project_the_caller_cannot_see(rule)
+            for rule in body.rules:
+                if rule.cluster_id not in org_cluster_ids:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cluster '{rule.cluster_id}' is not in this organization",
+                    )
+                if allowed_clusters is not None and rule.cluster_id not in allowed_clusters:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"No access to cluster '{rule.cluster_id}'",
+                    )
+                _refuse_a_project_the_caller_cannot_see(rule)
 
-        # delete old rules and create new ones
-        await db.execute(
-            delete(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy_id)
-        )
-        for rule_data in body.rules:
-            db.add(TenantPolicyRule(
-                policy_id=policy_id,
-                cluster_id=rule_data.cluster_id,
-                project_name=rule_data.project_name,
-                instance_name=rule_data.instance_name,
-                permissions=rule_data.permissions,
-            ))
+            await db.execute(
+                delete(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy_id)
+            )
+            for rule_data in body.rules:
+                db.add(TenantPolicyRule(
+                    policy_id=policy_id,
+                    cluster_id=rule_data.cluster_id,
+                    project_name=rule_data.project_name,
+                    instance_name=rule_data.instance_name,
+                    permissions=rule_data.permissions,
+                ))
 
-    policy.updated_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(policy)
+        policy.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(policy)
     _invalidate_acl_caches()
 
     logger.info(f"Policy '{policy.name}' (id={policy_id}) updated by {user.email}")
@@ -600,8 +706,9 @@ async def delete_policy(
 
     await _verify_org_access(user, policy.organization_id, db, require_write=True)
 
-    await db.delete(policy)
-    await db.commit()
+    async with _guard_rules_mutation([], db, policy_id=policy_id):
+        await db.delete(policy)
+        await db.commit()
     _invalidate_acl_caches()
     logger.info(f"Policy '{policy.name}' (id={policy_id}) deleted by {user.email}")
 
@@ -711,43 +818,42 @@ async def create_assignment(
 
     org = await _verify_org_access(user, body.organization_id, db, require_write=True)
 
-    # find org member
-    member_stmt = select(OrganizationMember).where(
-        and_(
-            OrganizationMember.organization_id == body.organization_id,
-            OrganizationMember.user_email == body.user_email,
-        )
-    )
-    result = await db.execute(member_stmt)
-    member = result.scalar_one_or_none()
-
-    if not member:
-        raise HTTPException(
-            status_code=404,
-            detail=f"User '{body.user_email}' is not a member of organization '{org.name}'",
-        )
-
-    # check duplicate
-    existing = await db.execute(
-        select(TenantPolicyAssignment).where(
+    async with _guard_rules_mutation([], db, policy_id=policy.id):
+        member_stmt = select(OrganizationMember).where(
             and_(
-                TenantPolicyAssignment.policy_id == body.policy_id,
-                TenantPolicyAssignment.org_member_id == member.id,
+                OrganizationMember.organization_id == body.organization_id,
+                OrganizationMember.user_email == body.user_email,
             )
         )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="This policy is already assigned to this user")
+        result = await db.execute(member_stmt)
+        member = result.scalar_one_or_none()
 
-    assignment = TenantPolicyAssignment(
-        policy_id=body.policy_id,
-        org_member_id=member.id,
-        assigned_by=user.email,
-        expires_at=body.expires_at,
-    )
-    db.add(assignment)
-    await db.commit()
-    await db.refresh(assignment)
+        if not member:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User '{body.user_email}' is not a member of organization '{org.name}'",
+            )
+
+        existing = await db.execute(
+            select(TenantPolicyAssignment).where(
+                and_(
+                    TenantPolicyAssignment.policy_id == body.policy_id,
+                    TenantPolicyAssignment.org_member_id == member.id,
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="This policy is already assigned to this user")
+
+        assignment = TenantPolicyAssignment(
+            policy_id=body.policy_id,
+            org_member_id=member.id,
+            assigned_by=user.email,
+            expires_at=body.expires_at,
+        )
+        db.add(assignment)
+        await db.commit()
+        await db.refresh(assignment)
     _invalidate_acl_caches()
 
     logger.info(f"Policy '{policy.name}' assigned to {body.user_email} by {user.email}")
@@ -788,8 +894,9 @@ async def delete_assignment(
 
     await _verify_org_access(user, policy.organization_id, db, require_write=True)
 
-    await db.delete(assignment)
-    await db.commit()
+    async with _guard_rules_mutation([], db, policy_id=policy.id):
+        await db.delete(assignment)
+        await db.commit()
     _invalidate_acl_caches()
     logger.info(f"Assignment {assignment_id} revoked by {user.email}")
 

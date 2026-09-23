@@ -212,6 +212,90 @@ class Settings(BaseSettings):
         description="How many due schedules one worker claims per tick."
     )
 
+    # Durable instance and project migration. This gates only new plan/job admission. Recovery,
+    # audit delivery, retention, and authorized actions stay available for already durable jobs.
+    migration_center_enabled: bool = Field(
+        default=False,
+        alias="MIGRATION_CENTER_ENABLED",
+        description="Enable new Migration Center plan creation and job execution.",
+    )
+    project_relocation_enabled: bool = Field(
+        default=False,
+        alias="PROJECT_RELOCATION_ENABLED",
+        description="Master gate for every project-scope relocation stage.",
+    )
+    migration_durable_copy_enabled: bool = Field(
+        default=False,
+        alias="MIGRATION_DURABLE_COPY_ENABLED",
+        description="Enable durable copy execution after read-only preflight is validated.",
+    )
+    migration_instance_move_enabled: bool = Field(
+        default=False,
+        alias="MIGRATION_INSTANCE_MOVE_ENABLED",
+        description="Enable staged instance move execution after durable copy is validated.",
+    )
+    migration_project_member_relocation_enabled: bool = Field(
+        default=False,
+        alias="MIGRATION_PROJECT_MEMBER_RELOCATION_ENABLED",
+        description="Enable whole-project workload relocation between members of one cluster.",
+    )
+    migration_project_cross_cluster_enabled: bool = Field(
+        default=False,
+        alias="MIGRATION_PROJECT_CROSS_CLUSTER_ENABLED",
+        description="Enable whole-project staged relocation between clusters.",
+    )
+    migration_plan_ttl_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=3600,
+        alias="MIGRATION_PLAN_TTL_SECONDS",
+        description="Seconds before a migration draft requires a fresh preflight.",
+    )
+    migration_default_retention_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        alias="MIGRATION_DEFAULT_RETENTION_HOURS",
+        description="Default rollback window while a fenced source is retained.",
+    )
+    migration_max_retention_hours: int = Field(
+        default=168,
+        ge=1,
+        le=168,
+        alias="MIGRATION_MAX_RETENTION_HOURS",
+        description="Maximum source-retention window accepted by the migration API.",
+    )
+    migration_recovery_tick_seconds: int = Field(
+        default=15,
+        ge=1,
+        le=300,
+        alias="MIGRATION_RECOVERY_TICK_SECONDS",
+        description="How often a worker searches for recoverable migration jobs.",
+    )
+    migration_global_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=16,
+        alias="MIGRATION_GLOBAL_CONCURRENCY",
+        description="Maximum migrations this deployment may drive concurrently.",
+    )
+    migration_approved_builds: str = Field(
+        default="",
+        alias="MIGRATION_APPROVED_BUILDS",
+        description=(
+            "Comma-separated exact engine:server_version values approved for migration after "
+            "vendor or distribution security review."
+        ),
+    )
+    migration_lxd_native_cross_project_move_approved_builds: str = Field(
+        default="",
+        alias="MIGRATION_LXD_NATIVE_CROSS_PROJECT_MOVE_APPROVED_BUILDS",
+        description=(
+            "Comma-separated exact lxd:server_version values independently approved for the "
+            "native cross-project move path after GHSA-5g5r-wh97-qcq2 review."
+        ),
+    )
+
     # ── Task journal (the bottom panel's Tasks, Queue and Cluster Log) ─────────────────────────
     # On by default: it only reads the clusters and writes the dashboard's own database. One flag
     # gates the follower, the activity sink, the prune loop and the routes together, so a

@@ -22,6 +22,11 @@ from app.core.org_scope import (
     verify_project_access,
     verify_tenant_permission,
 )
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    guard_instance_mutation,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -98,43 +103,53 @@ class TerminalProxy:
             except (asyncio.TimeoutError, Exception):
                 width, height = 120, 40
             
-            # Create exec session
-            session_info, error = await terminal_service.create_exec_session(
-                instance_name=self.instance_name,
-                host=self.host,
-                project=self.project,
-                width=width,
-                height=height,
-            )
-            
-            if error:
-                await self._send_error(error)
+            try:
+                # The short critical section ends after the exec operation is submitted and
+                # registered. It never spans the interactive WebSocket session.
+                async with guard_instance_mutation(
+                    cluster_id=self.host,
+                    project=self.project,
+                    instance_name=self.instance_name,
+                ):
+                    session_info, error = await terminal_service.create_exec_session(
+                        instance_name=self.instance_name,
+                        host=self.host,
+                        project=self.project,
+                        width=width,
+                        height=height,
+                    )
+
+                    if error:
+                        await self._send_error(error)
+                        return
+
+                    session_id = new_session_id(
+                        session_info.get("operation_id"),
+                        "terminal",
+                    )
+                    if session_id != session_info.get("operation_id"):
+                        logger.warning(
+                            f"LXD returned no operation id for {self.instance_name}@{self.host}; "
+                            f"tracking under {session_id}"
+                        )
+                    self._session = tracker.register(
+                        session_id=session_id,
+                        instance_name=self.instance_name,
+                        host=self.host,
+                        project=self.project,
+                        protocol=SessionProtocol.TERMINAL,
+                        user_id=self.user_id,
+                        user_email=self.user_email,
+                        user_role=self.user_role,
+                        target_organization_id=self.target_organization_id,
+                        target_org_slug=self.target_org_slug,
+                        break_glass_grant_id=self.break_glass_grant_id,
+                    )
+                    # Publish cross-worker tracking before admission is released.
+                    tracker.mark_connected(session_id)
+            except MigrationFenceConflict as exc:
+                await self._send_error(exc.detail)
                 return
-            
-            # Register session for tracking. See new_session_id for why the empty case
-            # matters now that the id is a key shared across workers.
-            session_id = new_session_id(session_info.get("operation_id"), "terminal")
-            if session_id != session_info.get("operation_id"):
-                logger.warning(
-                    f"LXD returned no operation id for {self.instance_name}@{self.host}; "
-                    f"tracking under {session_id}"
-                )
-            self._session = tracker.register(
-                session_id=session_id,
-                instance_name=self.instance_name,
-                host=self.host,
-                project=self.project,
-                protocol=SessionProtocol.TERMINAL,
-                user_id=self.user_id,
-                user_email=self.user_email,
-                user_role=self.user_role,
-                target_organization_id=self.target_organization_id,
-                target_org_slug=self.target_org_slug,
-                break_glass_grant_id=self.break_glass_grant_id,
-            )
-            # via the tracker, not the SessionInfo: this is the edge that has to reach
-            # the other workers immediately rather than at the next heartbeat.
-            tracker.mark_connected(session_id)
             
             # Send session info (include session_id for frontend tracking)
             await self.browser_ws.send_json({
@@ -492,6 +507,16 @@ async def terminal_websocket(
                 return
             _bg_grant_id = _grant.id if _grant else None
             _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
+
+    try:
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict:
+        await websocket.close(code=1008, reason="Instance fenced by Migration Center")
+        return
 
     await websocket.accept()
     user_id = user.user_id if user else "anonymous"

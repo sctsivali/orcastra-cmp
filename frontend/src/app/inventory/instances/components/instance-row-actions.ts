@@ -1,4 +1,4 @@
-import { Copy, Monitor, Play, RefreshCw, RotateCw, SlidersHorizontal, Square, Terminal, Trash2 } from "lucide-react";
+import { ArrowLeftRight, Copy, Monitor, Play, RefreshCw, RotateCw, SlidersHorizontal, Square, Terminal, Trash2 } from "lucide-react";
 import type { RowAction } from "@/components/ui/row-actions";
 import type { VMInfo } from "@/types/api";
 import { actionKey, type InstanceAction } from "./use-instance-actions";
@@ -22,6 +22,10 @@ export interface InstanceRowActionsInput {
   writeDisabledReason?: string;
   /** Partner and above. The backend refuses copy, rebuild and delete below that. */
   canManage: boolean;
+  /** Fail-closed reason while Migration Center planning availability is not established. */
+  migrationPlanningUnavailableReason?: string;
+  /** Copy is mutating and is available only through the reviewed durable-copy rollout stage. */
+  migrationCopyUnavailableReason?: string;
   /** Keys of the lifecycle actions in flight (actionKey), from useInstanceActions. */
   pendingActions: ReadonlySet<string>;
   deletePending: boolean;
@@ -34,6 +38,7 @@ export interface InstanceRowActionsInput {
   onConsole: () => void;
   onEditSpecification: () => void;
   onCopy: () => void;
+  onMove: () => void;
   onRebuild: () => void;
   onDelete: () => void;
 }
@@ -47,7 +52,17 @@ export interface InstanceRowActionsInput {
  * a greyed button: pending beats read-only, which beats the permission answer.
  */
 export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] {
-  const { instance, isReadOnly, writeDisabledReason, canManage, pendingActions, deletePending, permissionReason } = input;
+  const {
+    instance,
+    isReadOnly,
+    writeDisabledReason,
+    canManage,
+    migrationPlanningUnavailableReason,
+    migrationCopyUnavailableReason,
+    pendingActions,
+    deletePending,
+    permissionReason,
+  } = input;
   const project = instance.project || "default";
   const running = instance.status === "Running";
   const readOnly = writeDisabledReason ?? (isReadOnly ? READ_ONLY_REASON : undefined);
@@ -86,7 +101,20 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
         separatorBefore: true,
         unavailableReason: manage,
       },
-      { id: "copy", label: "Copy Instance", icon: Copy, onSelect: input.onCopy, unavailableReason: manage },
+      {
+        id: "copy",
+        label: "Copy Instance",
+        icon: Copy,
+        onSelect: input.onCopy,
+        unavailableReason: manage ?? migrationCopyUnavailableReason,
+      },
+      {
+        id: "move",
+        label: "Move Instance",
+        icon: ArrowLeftRight,
+        onSelect: input.onMove,
+        unavailableReason: migrationPlanningUnavailableReason,
+      },
       { id: "rebuild", label: "Rebuild Instance", icon: RefreshCw, onSelect: input.onRebuild, unavailableReason: manage },
       {
         id: "delete",

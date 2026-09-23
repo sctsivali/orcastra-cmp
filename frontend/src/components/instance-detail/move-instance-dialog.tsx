@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import { AlertTriangle, ArrowRight, Info } from "lucide-react";
+import { useRouter } from "next/navigation";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,7 +23,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useCopyInstance, useMovePreflight } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useToast } from "@/hooks/use-toast";
-import { formatBytes } from "@/lib/utils";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { formatBytes, safeRandomUUID } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 
 interface MoveInstanceDialogProps {
@@ -42,6 +45,7 @@ interface MoveInstanceDialogProps {
  * two are minutes apart and that difference should not be a surprise.
  */
 export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanceDialogProps) {
+  const router = useRouter();
   const { toast } = useToast();
   const project = instance.project || "default";
   const preflight = useMovePreflight(instance.name, instance.host, project, open);
@@ -54,7 +58,7 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
   const [reason, setReason] = React.useState("");
   const [acknowledged, setAcknowledged] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const { isReadOnly } = useReadOnlyMode();
+  const { writeAvailability } = useReadOnlyMode();
 
   // The source's own schedule, straight off the row. A copy duplicates an instance whose storage
   // another product meters, so it carries the same acknowledgement as a snapshot rather than an
@@ -62,6 +66,7 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
   const externalSchedule = instance.config?.["snapshots.schedule"] || null;
   const billingLinked = !!externalSchedule;
   const submitInFlightRef = React.useRef(false);
+  const idempotencyKeyRef = React.useRef("");
 
   React.useEffect(() => {
     if (open) {
@@ -69,7 +74,10 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
       setTargetProject("");
       setTargetPool("");
       setTargetName(`${instance.name}-copy`);
+      setReason("");
+      setAcknowledged(false);
       setError(null);
+      idempotencyKeyRef.current = safeRandomUUID();
     }
   }, [open, instance.name]);
 
@@ -91,14 +99,17 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
       value: d.host,
       label: d.host,
       disabled: Boolean(unusableReason),
-      description: unusableReason,
+      status: unusableReason
+        ? { label: "Unavailable", dotClassName: "bg-status-offline", tone: "negative" as const }
+        : { label: "Available", dotClassName: "bg-status-online", tone: "positive" as const },
+      statusReason: unusableReason,
     };
   });
   const projectOptions = (chosen?.projects ?? []).map((p) => ({ value: p, label: p }));
   const poolOptions = (chosen?.pools ?? []).map((p) => ({
     value: p.name,
     label: p.name,
-    description: p.headroom ? `${formatBytes(p.headroom.free)} free` : undefined,
+    sublabel: p.headroom ? `${formatBytes(p.headroom.free)} free` : undefined,
   }));
 
   const sameCluster = chosen?.same_cluster ?? true;
@@ -109,19 +120,36 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
   const nameValid = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$/.test(targetName);
   const sameTarget =
     targetHost === instance.host && targetProject === project && targetName === instance.name;
-  const overrideReady = !billingLinked || (acknowledged && reason.trim().length > 0);
+  const reasonReady = reason.trim().length >= 8;
+  const overrideReady = !billingLinked || acknowledged;
+  const blockers = preflight.data?.blockers ?? [];
+  const writeDisabledReason =
+    writeAvailability === "checking"
+      ? "Checking system write availability."
+      : writeAvailability === "unavailable"
+        ? "System write availability could not be verified."
+        : writeAvailability === "read_only"
+          ? "The dashboard is in read-only mode."
+          : null;
   const canSubmit =
+    preflight.isSuccess &&
+    !preflight.isFetching &&
+    blockers.length === 0 &&
     !!targetHost &&
     !!targetProject &&
     nameValid &&
     !sameTarget &&
-    !isReadOnly &&
+    !writeDisabledReason &&
+    reasonReady &&
     overrideReady &&
     !copyInstance.isPending;
 
   const handleSubmit = async () => {
-    if (submitInFlightRef.current) return;
+    if (!canSubmit || submitInFlightRef.current) return;
     submitInFlightRef.current = true;
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = safeRandomUUID();
+    }
     setError(null);
     try {
       const result = await copyInstance.mutateAsync({
@@ -136,9 +164,13 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
           reason: reason.trim() || undefined,
           acknowledge_billing_impact: billingLinked ? acknowledged : undefined,
         },
+        idempotencyKey: idempotencyKeyRef.current,
       });
       toast({ title: "Copy started", description: result.message });
       onOpenChange(false);
+      if (result.migration_job_id) {
+        router.push(inventoryLinks.migrations({ job: result.migration_job_id }));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start the copy.");
     } finally {
@@ -147,7 +179,12 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!copyInstance.isPending) onOpenChange(next);
+      }}
+    >
       <DialogContent className="max-h-[85vh] flex flex-col overflow-hidden sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Copy This Instance</DialogTitle>
@@ -158,20 +195,43 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
 
         <DialogBody className="space-y-4">
           {preflight.isLoading ? (
-            <p className="text-sm text-muted-foreground">Checking where this can go...</p>
-          ) : preflight.isError ? (
-            <p className="text-sm text-destructive">
-              {preflight.error instanceof Error
-                ? preflight.error.message
-                : "Could not read the destinations."}
+            <p role="status" className="text-sm text-muted-foreground">
+              Checking where this can go...
             </p>
+          ) : preflight.isError ? (
+            <Alert variant="destructive" aria-live="assertive">
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              <AlertTitle>Destination preflight failed</AlertTitle>
+              <AlertDescription className="space-y-3">
+                <p>
+                  {preflight.error instanceof Error
+                    ? preflight.error.message
+                    : "Could not read the destinations."}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void preflight.refetch()}
+                  disabled={preflight.isFetching}
+                >
+                  {preflight.isFetching ? "Retrying" : "Retry preflight"}
+                </Button>
+              </AlertDescription>
+            </Alert>
           ) : (
             <>
-              {(preflight.data?.blockers ?? []).map((blocker) => (
-                <p key={blocker} className="text-sm text-destructive">
-                  {blocker}
-                </p>
-              ))}
+              {blockers.length > 0 && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" aria-hidden />
+                  <AlertTitle>Copy is blocked by preflight</AlertTitle>
+                  <AlertDescription>
+                    <ul className="list-disc space-y-1 pl-5">
+                      {blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              )}
 
               <div className="flex items-center gap-3 rounded-md border bg-muted/40 p-3 text-sm">
                 <span className="font-mono">{instance.host}</span>
@@ -264,6 +324,22 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
                 </div>
               )}
 
+              <div className="space-y-2">
+                <Label htmlFor="move-reason">Operation reason</Label>
+                <Textarea
+                  id="move-reason"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Why this instance needs to be copied"
+                  maxLength={280}
+                  rows={3}
+                  aria-invalid={reason.trim().length > 0 && !reasonReady}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Required for the durable audit trail. Use at least 8 characters.
+                </p>
+              </div>
+
               {billingLinked && (
                 <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
                   <div className="flex gap-3">
@@ -274,18 +350,6 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
                       <span className="font-mono">{externalSchedule}</span>. Copying it duplicates
                       a workload someone else is accounting for.
                     </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="move-reason">Reason</Label>
-                    <Textarea
-                      id="move-reason"
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="Why this instance needs to be copied right now"
-                      maxLength={280}
-                      rows={3}
-                    />
                   </div>
 
                   <div className="flex items-start gap-3">
@@ -301,10 +365,14 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
                 </div>
               )}
 
-              {isReadOnly && (
-                <p className="text-sm text-muted-foreground">
-                  The dashboard is in read-only mode, so no copy can be started.
-                </p>
+              {writeDisabledReason && (
+                <Alert>
+                  <Info className="h-4 w-4" aria-hidden />
+                  <AlertTitle>Copy is unavailable</AlertTitle>
+                  <AlertDescription>
+                    {writeDisabledReason} No copy can start until writes are confirmed available.
+                  </AlertDescription>
+                </Alert>
               )}
 
               {/* role="alert" so a submit failure is announced. Focus stays on the submit
@@ -316,19 +384,25 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
                   {error}
                 </p>
               )}
+              {copyInstance.isPending && (
+                <p role="status" className="sr-only" aria-live="polite">
+                  Starting the durable instance copy.
+                </p>
+              )}
             </>
           )}
         </DialogBody>
 
         <DialogFooter>
           <Button
+            className="min-h-11 sm:min-h-10"
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={copyInstance.isPending}
           >
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
+          <Button className="min-h-11 sm:min-h-10" onClick={handleSubmit} disabled={!canSubmit}>
             {copyInstance.isPending ? "Starting copy" : "Copy instance"}
           </Button>
         </DialogFooter>

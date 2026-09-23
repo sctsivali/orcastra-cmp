@@ -141,10 +141,16 @@ def projects_client(service, monkeypatch, session, user=None) -> TestClient:
     from app.core.rbac import get_current_user
     from app.routers import projects as projects_module
     from app.services.lxd_service import get_lxd_service
+    from app.services.webhooks import emitter
 
     monkeypatch.setattr(projects_module, "verify_cluster_access", lambda host: None)
     monkeypatch.setattr(projects_module, "get_cache_manager", lambda: NoCache())
     monkeypatch.setattr(projects_module.activity_logger, "log_activity", lambda **k: None, raising=False)
+
+    async def _no_event(**_kwargs):
+        return None
+
+    monkeypatch.setattr(emitter, "emit_resource_event", _no_event)
 
     async def _write_policy(actor, host, db):
         role = get_highest_role(resolve_roles(actor))

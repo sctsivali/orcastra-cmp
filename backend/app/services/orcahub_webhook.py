@@ -63,6 +63,54 @@ async def _post_signed(creds: dict, payload: dict) -> None:
         resp.raise_for_status()
 
 
+async def emit_orcahub_event_durable(
+    *,
+    event_id: str,
+    event_type: str,
+    cluster_id: str,
+    project: Optional[str],
+    name: str,
+    occurred_at: Optional[str] = None,
+    state: Optional[str] = None,
+    resource_type: str = "INSTANCE",
+) -> int:
+    """Deliver one retry-safe OrcaHub event from a durable caller.
+
+    The caller retains its outbox row until this returns. A per-organization UUID derived from
+    the stable outbox id gives OrcaHub the same idempotency key after a partial delivery or worker
+    crash. Endpoint and signing credentials still come only from the stored integration.
+    """
+    async with async_session_maker() as db:
+        orgs = await _orcahub_orgs_for_cluster(db, cluster_id)
+    if not orgs:
+        return 0
+
+    occurred = occurred_at or datetime.now(timezone.utc).isoformat()
+    delivered = 0
+    for org in orgs:
+        creds = await _get_orcahub_credentials(org)
+        if not creds:
+            continue
+        stable_event_id = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"orcastra-migration:{event_id}:{org.id}")
+        )
+        payload = {
+            "eventId": stable_event_id,
+            "eventType": event_type,
+            "occurredAt": occurred,
+            "orcastraClusterId": cluster_id,
+            "orcastraProjectName": project or "default",
+            "resourceType": resource_type,
+            "name": name,
+            "externalUpdatedAt": occurred,
+        }
+        if state:
+            payload["state"] = state
+        await _post_signed(creds, payload)
+        delivered += 1
+    return delivered
+
+
 async def _emit(event_type: str, cluster_id: str, project: Optional[str], name: str, state: Optional[str], resource_type: str) -> None:
     try:
         async with async_session_maker() as db:

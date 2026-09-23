@@ -7,7 +7,7 @@ Supports integration with Orcahub and other external applications (soon with Orc
 import asyncio
 import secrets
 import hashlib
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 import hmac
 import logging
 import threading
@@ -106,6 +106,12 @@ from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
     assert_cluster_safe_to_share,
     serialize_cluster_share,
+)
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+    assert_instance_not_migration_fenced,
+    assert_project_not_migration_fenced,
 )
 
 logger = logging.getLogger(__name__)
@@ -562,6 +568,138 @@ class RawProxyResponse(BaseModel):
     data: Optional[Dict[str, Any]] = Field(None, description="Response data from LXD")
     headers: Dict[str, str] = Field(default_factory=dict, description="Response headers")
     error: Optional[str] = Field(None, description="Error message if request failed")
+
+
+def _raw_proxy_fenced_write_target(request: RawProxyRequest) -> Optional[str]:
+    """Return the exact instance mutated by a raw request, except a risk-reducing stop."""
+    method = request.method.upper()
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+
+    parsed = urlsplit(request.path)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        return None
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if segments and segments[0] == "1.0":
+        segments = segments[1:]
+    if not segments or segments[0] not in {
+        "instances",
+        "containers",
+        "virtual-machines",
+    }:
+        return None
+
+    if len(segments) == 1:
+        if method != "POST" or not isinstance(request.body, dict):
+            return None
+        name = request.body.get("name")
+    else:
+        name = segments[1]
+    if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name:
+        return None
+
+    if len(segments) == 3 and segments[2] == "state" and isinstance(request.body, dict):
+        action = request.body.get("action")
+        # Stop remains available for incident containment. Freeze is still a target state
+        # mutation and can interrupt the authoritative workload after cutover.
+        if isinstance(action, str) and action.lower() == "stop":
+            return None
+    return name
+
+
+def _raw_proxy_fenced_project(request: RawProxyRequest, ambient_project: str) -> Optional[str]:
+    """Return the project hierarchy whose migration dependencies a raw write can drift."""
+    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+
+    parsed = urlsplit(request.path)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        return None
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if segments and segments[0] == "1.0":
+        segments = segments[1:]
+    if not segments:
+        return None
+
+    if segments[0] == "projects":
+        if len(segments) >= 2:
+            target = segments[1]
+        elif request.method.upper() == "POST" and isinstance(request.body, dict):
+            target = request.body.get("name")
+        else:
+            return None
+        if isinstance(target, str) and target and target not in {".", ".."} and "/" not in target:
+            return target
+        return None
+
+    project_dependency_families = {
+        "profiles",
+        "networks",
+        "network-acls",
+        "network-address-sets",
+        "network-zones",
+        "images",
+    }
+    if segments[0] in project_dependency_families:
+        return ambient_project
+    if segments[0] == "storage-pools" and any(
+        segment in {"volumes", "buckets"} for segment in segments[2:]
+    ):
+        return ambient_project
+    return None
+
+
+def _raw_proxy_has_cluster_wide_write(request: RawProxyRequest) -> bool:
+    """Identify infrastructure writes that can invalidate every project on a cluster."""
+    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    parsed = urlsplit(request.path)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        return False
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if segments and segments[0] == "1.0":
+        segments = segments[1:]
+    if not segments:
+        return False
+    if segments[0] in {"cluster", "cluster-members"}:
+        return True
+    if segments[0] == "networks":
+        return True
+    if segments[0] != "storage-pools":
+        return False
+    return not any(segment in {"volumes", "buckets"} for segment in segments[2:])
+
+
+async def _assert_proxy_write_is_not_fenced(
+    *, cluster_id: str, project: str, instance_name: str
+) -> None:
+    try:
+        await assert_instance_not_migration_fenced(
+            cluster_id=cluster_id,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+async def _assert_proxy_project_write_is_not_fenced(
+    *, cluster_id: str, project: str
+) -> None:
+    try:
+        await assert_project_not_migration_fenced(
+            cluster_id=cluster_id,
+            project=project,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+async def _assert_proxy_cluster_write_is_not_fenced(*, cluster_id: str) -> None:
+    try:
+        await assert_cluster_not_migration_fenced(cluster_id=cluster_id)
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
 
 class ProxyResponse(BaseModel):
@@ -3543,7 +3681,25 @@ async def raw_proxy(
         # note: shared with the image and ISO upload routers. An empty grant raised ValueError
         # here and surfaced as a 500; it is a 403 now. See app/core/api_key_permissions.py.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
-        
+
+        write_target = _raw_proxy_fenced_write_target(request)
+        if write_target is not None:
+            await _assert_proxy_write_is_not_fenced(
+                cluster_id=request.cluster_id,
+                project=project,
+                instance_name=write_target,
+            )
+        fenced_project = _raw_proxy_fenced_project(request, project)
+        if fenced_project is not None:
+            await _assert_proxy_project_write_is_not_fenced(
+                cluster_id=request.cluster_id,
+                project=fenced_project,
+            )
+        if _raw_proxy_has_cluster_wide_write(request):
+            await _assert_proxy_cluster_write_is_not_fenced(
+                cluster_id=request.cluster_id,
+            )
+
         # important: the breaker check sits AFTER the permission checks on purpose, so
         # response timing cannot be used to probe which clusters exist without permission.
         if health.is_tripped(request.cluster_id):
@@ -3920,6 +4076,50 @@ async def proxy_operation(
                     f"granted all projects on {request.cluster_id}. This key is limited to "
                     f"{sorted(perm.get('projects', ['default']))}."
                 ),
+            )
+
+        if operation in {
+            "create_instance",
+            "update_instance",
+            "start_instance",
+            "restart_instance",
+            "delete_instance",
+            "exec_instance",
+            "put_file",
+            "desktop_input",
+            "desktop_clipboard",
+            "create_snapshot",
+            "restore_snapshot",
+            "delete_snapshot",
+        }:
+            instance_name = (request.params or {}).get("name")
+            if isinstance(instance_name, str) and instance_name:
+                await _assert_proxy_write_is_not_fenced(
+                    cluster_id=request.cluster_id,
+                    project=request.project,
+                    instance_name=instance_name,
+                )
+
+        fenced_project: Optional[str] = None
+        if operation in {"create_network", "delete_network"}:
+            fenced_project = request.project
+        elif operation in {"create_project", "delete_project"}:
+            target_project = (request.params or {}).get("name")
+            if isinstance(target_project, str) and target_project:
+                fenced_project = target_project
+        if fenced_project is not None:
+            await _assert_proxy_project_write_is_not_fenced(
+                cluster_id=request.cluster_id,
+                project=fenced_project,
+            )
+        if operation in {
+            "create_network",
+            "delete_network",
+            "create_storage_pool",
+            "delete_storage_pool",
+        }:
+            await _assert_proxy_cluster_write_is_not_fenced(
+                cluster_id=request.cluster_id,
             )
 
         # important: the breaker check sits AFTER the permission checks so response timing

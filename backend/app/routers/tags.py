@@ -14,9 +14,12 @@ API Prefix: /api/v1/tags
 """
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -45,7 +48,15 @@ from app.models.schemas import (
     # User visibility
     UserTagVisibilitySettings, UserTagVisibilityResponse,
 )
+from app.models.db_models import TagAssignment
 from app.services.lxd_service import get_lxd_service
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+    assert_instance_not_migration_fenced,
+    assert_project_not_migration_fenced,
+    guard_migration_mutations,
+)
 from app.services.tag_service import TagService
 
 logger = logging.getLogger(__name__)
@@ -106,6 +117,143 @@ def _authorize_resource_target(
 
     scoped_project = verify_instance_view_access(cluster_id, project, resource_id)
     return cluster_id, scoped_project, resource_id
+
+
+def _tag_migration_targets(
+    resource_type: str,
+    resource_id: str,
+    *,
+    host: Optional[str],
+    project: Optional[str],
+) -> tuple[set[str], set[tuple[str, str]], set[tuple[str, str, str]]]:
+    clusters: set[str] = set()
+    projects: set[tuple[str, str]] = set()
+    instances: set[tuple[str, str, str]] = set()
+    if resource_type == "instance" and host and project:
+        instances.add((host, project, resource_id))
+    elif resource_type == "project" and host:
+        projects.add((host, resource_id))
+    elif resource_type == "node":
+        clusters.add(resource_id)
+    else:
+        raise MigrationFenceConflict()
+    return clusters, projects, instances
+
+
+async def _assert_tag_target_not_migration_fenced(
+    resource_type: str,
+    resource_id: str,
+    *,
+    host: Optional[str],
+    project: Optional[str],
+) -> None:
+    """Compatibility check for callers that only need a side-effect-free admission probe."""
+    try:
+        if resource_type == "instance":
+            await assert_instance_not_migration_fenced(
+                cluster_id=str(host),
+                project=str(project),
+                instance_name=resource_id,
+            )
+        elif resource_type == "project":
+            await assert_project_not_migration_fenced(
+                cluster_id=str(host),
+                project=resource_id,
+            )
+        else:
+            await assert_cluster_not_migration_fenced(cluster_id=resource_id)
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+@asynccontextmanager
+async def _guard_tag_target_mutation(
+    resource_type: str,
+    resource_id: str,
+    *,
+    host: Optional[str],
+    project: Optional[str],
+) -> AsyncIterator[None]:
+    """Keep Orcastra assignments and legacy LXD tags stable under one cluster lock."""
+    try:
+        clusters, projects, instances = _tag_migration_targets(
+            resource_type,
+            resource_id,
+            host=host,
+            project=project,
+        )
+        async with guard_migration_mutations(
+            clusters=clusters,
+            projects=projects,
+            instances=instances,
+        ):
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+@asynccontextmanager
+async def _guard_tag_definition_mutation(
+    tag_id: int,
+    tag_service: TagService,
+) -> AsyncIterator[None]:
+    """Protect every resource whose durable assignment references one tag definition."""
+    rows = (
+        await tag_service.db.execute(
+            select(TagAssignment).where(TagAssignment.tag_id == tag_id)
+        )
+    ).scalars().all()
+    targets = {
+        (
+            assignment.resource_type,
+            assignment.resource_id,
+            assignment.resource_host,
+            assignment.resource_project,
+        )
+        for assignment in rows
+    }
+    if not targets:
+        yield
+        return
+
+    clusters: set[str] = set()
+    projects: set[tuple[str, str]] = set()
+    instances: set[tuple[str, str, str]] = set()
+    try:
+        for resource_type, resource_id, host, project in targets:
+            target_clusters, target_projects, target_instances = _tag_migration_targets(
+                resource_type,
+                resource_id,
+                host=host,
+                project=project,
+            )
+            clusters.update(target_clusters)
+            projects.update(target_projects)
+            instances.update(target_instances)
+        async with guard_migration_mutations(
+            clusters=clusters,
+            projects=projects,
+            instances=instances,
+        ):
+            current_rows = (
+                await tag_service.db.execute(
+                    select(TagAssignment).where(TagAssignment.tag_id == tag_id)
+                )
+            ).scalars().all()
+            current_targets = {
+                (
+                    assignment.resource_type,
+                    assignment.resource_id,
+                    assignment.resource_host,
+                    assignment.resource_project,
+                )
+                for assignment in current_rows
+            }
+            if current_targets != targets:
+                raise MigrationFenceConflict()
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
 
 router = APIRouter(
@@ -253,7 +401,8 @@ async def update_tag(
 ):
     """Update a tag."""
     try:
-        return await tag_service.update_tag(tag_id, data)
+        async with _guard_tag_definition_mutation(tag_id, tag_service):
+            return await tag_service.update_tag(tag_id, data)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -272,7 +421,8 @@ async def delete_tag(
 ):
     """Delete a tag."""
     try:
-        await tag_service.delete_tag(tag_id)
+        async with _guard_tag_definition_mutation(tag_id, tag_service):
+            await tag_service.delete_tag(tag_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -365,15 +515,20 @@ async def set_resource_tags(
         host=effective_host,
         project=effective_project,
     )
-    
-    return await tag_service.set_resource_tags(
-        resource_type=resource_type,
-        resource_id=resource_id,
-        tags=request.tags,
-        resource_host=effective_host,
-        resource_project=effective_project,
-        user_id=user_id,
-    )
+    async with _guard_tag_target_mutation(
+        resource_type,
+        resource_id,
+        host=effective_host,
+        project=effective_project,
+    ):
+        return await tag_service.set_resource_tags(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            tags=request.tags,
+            resource_host=effective_host,
+            resource_project=effective_project,
+            user_id=user_id,
+        )
 
 
 @router.post(
@@ -406,17 +561,22 @@ async def add_resource_tags(
         host=effective_host,
         project=effective_project,
     )
-    
-    return await tag_service.assign_tags_to_resource(
-        BulkTagAssignRequest(
-            tags=request.tags,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            resource_host=effective_host,
-            resource_project=effective_project,
-        ),
-        user_id=user_id,
-    )
+    async with _guard_tag_target_mutation(
+        resource_type,
+        resource_id,
+        host=effective_host,
+        project=effective_project,
+    ):
+        return await tag_service.assign_tags_to_resource(
+            BulkTagAssignRequest(
+                tags=request.tags,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                resource_host=effective_host,
+                resource_project=effective_project,
+            ),
+            user_id=user_id,
+        )
 
 
 @router.delete(
@@ -443,14 +603,19 @@ async def remove_resource_tag(
         host=host,
         project=project,
     )
-    
-    await tag_service.remove_tag_from_resource(
-        tag_name=tag_name,
-        resource_type=resource_type,
-        resource_id=resource_id,
-        resource_host=host,
-        resource_project=project,
-    )
+    async with _guard_tag_target_mutation(
+        resource_type,
+        resource_id,
+        host=host,
+        project=project,
+    ):
+        await tag_service.remove_tag_from_resource(
+            tag_name=tag_name,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_host=host,
+            resource_project=project,
+        )
 
 
 # ============================================
@@ -475,14 +640,20 @@ async def update_instance_tags_legacy(
 ):
     """Update tags for an instance (legacy endpoint)."""
     project = verify_instance_view_access(host, project, instance_name)
-    return await tag_service.set_resource_tags(
-        resource_type="instance",
-        resource_id=instance_name,
-        tags=request.tags,
-        resource_host=host,
-        resource_project=project,
-        user_id=user_id,
-    )
+    async with _guard_tag_target_mutation(
+        "instance",
+        instance_name,
+        host=host,
+        project=project,
+    ):
+        return await tag_service.set_resource_tags(
+            resource_type="instance",
+            resource_id=instance_name,
+            tags=request.tags,
+            resource_host=host,
+            resource_project=project,
+            user_id=user_id,
+        )
 
 
 @router.put(
@@ -501,13 +672,19 @@ async def update_project_tags_legacy(
 ):
     """Update tags for a project (legacy endpoint)."""
     project_name = verify_project_access(host, project_name)
-    return await tag_service.set_resource_tags(
-        resource_type="project",
-        resource_id=project_name,
-        tags=request.tags,
-        resource_host=host,
-        user_id=user_id,
-    )
+    async with _guard_tag_target_mutation(
+        "project",
+        project_name,
+        host=host,
+        project=None,
+    ):
+        return await tag_service.set_resource_tags(
+            resource_type="project",
+            resource_id=project_name,
+            tags=request.tags,
+            resource_host=host,
+            user_id=user_id,
+        )
 
 
 @router.put(
@@ -525,12 +702,18 @@ async def update_node_tags_legacy(
 ):
     """Update tags for a node (legacy endpoint)."""
     verify_cluster_access(node_name)
-    return await tag_service.set_resource_tags(
-        resource_type="node",
-        resource_id=node_name,
-        tags=request.tags,
-        user_id=user_id,
-    )
+    async with _guard_tag_target_mutation(
+        "node",
+        node_name,
+        host=None,
+        project=None,
+    ):
+        return await tag_service.set_resource_tags(
+            resource_type="node",
+            resource_id=node_name,
+            tags=request.tags,
+            user_id=user_id,
+        )
 
 
 @router.get(
@@ -627,14 +810,19 @@ async def import_from_lxd(
         host=host,
         project=project,
     )
-    
-    return await tag_service.import_tags_from_lxd(
-        resource_type=resource_type,
-        resource_id=resource_id,
-        resource_host=host,
-        resource_project=project,
-        user_id=user_id,
-    )
+    async with _guard_tag_target_mutation(
+        resource_type,
+        resource_id,
+        host=host,
+        project=project,
+    ):
+        return await tag_service.import_tags_from_lxd(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            resource_host=host,
+            resource_project=project,
+            user_id=user_id,
+        )
 
 
 # ============================================

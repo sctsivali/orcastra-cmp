@@ -48,6 +48,11 @@ from app.routers.iso_uploads import (
     UPLOAD_DIR,
 )
 from app.services.activity_logger import get_activity_logger
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+    guard_project_mutation,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -213,8 +218,16 @@ async def create_upload(
         staging_path=path,
         expires_at=_now() + timedelta(hours=SESSION_TTL_HOURS),
     )
-    db.add(row)
-    await db.commit()
+    try:
+        async with guard_project_mutation(
+            db,
+            cluster_id=row.cluster_id,
+            project=row.project,
+        ):
+            db.add(row)
+            await db.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     return {"session_id": session_id, "offset": 0, "expires_at": row.expires_at.isoformat()}
 
@@ -294,8 +307,22 @@ async def finalize_upload(
     if row.upload_offset != row.total_bytes:
         raise HTTPException(status_code=409, detail="Upload is not complete")
 
-    row.status = "importing"
-    await db.commit()
+    try:
+        await assert_project_not_migration_fenced(
+            cluster_id=row.cluster_id,
+            project=row.project,
+            db=db,
+        )
+        async with guard_project_mutation(
+            db,
+            cluster_id=row.cluster_id,
+            project=row.project,
+        ):
+            row.status = "importing"
+            row.error = None
+            await db.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     activity_logger.log_activity(
         action="storage.iso.upload.import",
         target_type="storage_volume",

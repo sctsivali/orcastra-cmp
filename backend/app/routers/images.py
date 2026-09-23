@@ -42,6 +42,10 @@ from app.core.org_scope import (
 from app.core.tenant_visibility import tenant_acl_active, tenant_may_see_project
 from app.services.activity_logger import get_activity_logger
 from app.services.remote_image_catalog import _fetch_remote_catalog, _REMOTE_FETCH_TIMEOUT
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+)
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -627,6 +631,13 @@ async def delete_image(
                 ),
             )
         _store_must_be_visible(host, image.project)
+        try:
+            await assert_project_not_migration_fenced(
+                cluster_id=host,
+                project=image.project,
+            )
+        except MigrationFenceConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
 
         # important: the refusal is here, not only in the UI. The dashboard's own dependent
         # count is tenant-filtered, and an API key reaching this route has no UI at all.

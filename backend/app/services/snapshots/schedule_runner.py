@@ -23,6 +23,10 @@ from app.core.request_context import RequestContext, set_request_context
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd import snapshots as snapshots_service
 from app.services.lxd.lazy_client import client_for
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    guard_instance_mutation,
+)
 from app.services.snapshots import schedule_authority as authority
 from app.services.snapshots.naming import build_scheduled_snapshot_name, scheduled_snapshot_prefix
 
@@ -175,6 +179,41 @@ def _select_own(rows: List[Dict[str, Any]], prefix: str) -> List[Dict[str, Any]]
 
 
 async def run_one(
+    db: Any,
+    schedule: Any,
+    *,
+    now: datetime,
+    lxd_service: Any,
+    fingerprint_reader=None,
+) -> RunOutcome:
+    """Serialize the complete scheduled snapshot run with migration admission."""
+    adopt_schedule_context(schedule)
+    # Validate stored path segments before constructing the migration guard identity. An empty
+    # or malformed stored name is a terminal schedule refusal, not a transient fence outage.
+    refusal = _stored_names_are_addressable(schedule)
+    if refusal is not None:
+        return RunOutcome(result="refused", refusal=refusal, terminal=refusal.terminal)
+    try:
+        async with guard_instance_mutation(
+            db,
+            cluster_id=schedule.cluster_id,
+            project=schedule.project,
+            instance_name=schedule.instance_name,
+        ):
+            return await _run_one_guarded(
+                db,
+                schedule,
+                now=now,
+                lxd_service=lxd_service,
+                fingerprint_reader=fingerprint_reader,
+            )
+    except MigrationFenceConflict as exc:
+        # A migration fence is expected to clear after rollback or cleanup. Keep the schedule
+        # due without counting the migration window as a schedule failure.
+        return RunOutcome(result="deferred", error=exc.detail)
+
+
+async def _run_one_guarded(
     db: Any,
     schedule: Any,
     *,

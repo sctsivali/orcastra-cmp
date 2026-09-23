@@ -52,6 +52,7 @@ const QUERY_FAMILY_KEYS = {
   tenantAccess: [["tenant-access-policies"], ["tenant-access-assignments"]],
   userGroups: [["user-groups"]],
   tasks: [["tasks"], ["task"], ["cluster-log"]],
+  migrations: [["migrations"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type QueryFamily = keyof typeof QUERY_FAMILY_KEYS;
@@ -72,6 +73,16 @@ function defineMutationImpacts<const T extends Record<string, MutationImpact>>(i
  * has a specialised optimistic patch: the terminal reconciliation still uses these families.
  */
 export const MUTATION_IMPACTS = defineMutationImpacts({
+  "migration.plan": {
+    completion: "response",
+    queryFamilies: ["migrations"],
+    apiCalls: ["migrationsAPI.createPlan", "migrationsAPI.updatePlan"],
+  },
+  "migration.job": {
+    completion: "response",
+    queryFamilies: ["migrations", "tasks", "instances", "instanceDetails", "monitoring", "ipam", "projectUsage", "projects", "profiles", "networks", "networkAcls", "storagePools", "storageVolumes", "images", "snapshots", "snapshotSchedules", "nodes", "nodeResources", "regions"],
+    apiCalls: ["migrationsAPI.executePlan", "migrationsAPI.action"],
+  },
   "instance.create": {
     completion: "terminal-operation",
     queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "profiles", "networks", "storagePools", "storageVolumes"],

@@ -24,7 +24,15 @@ from app.services.lxd.resources import public_config, public_environment
 from app.core.type_utils import detect_cluster_type_from_metadata, resolve_cluster_type
 from app.core.node_metadata import get_node_metadata_store
 from app.services.lxd.lazy_client import client_for
+from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
+from app.core.database import get_db
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+)
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,7 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+SERVER_CONFIG_WRITE_WAIT_SECONDS = 60
 
 
 class ServerInfo(BaseModel):
@@ -267,17 +276,34 @@ async def update_server_config(
     config: Dict[str, Any] = Body(..., description="Configuration to update"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update server configuration."""
     verify_cluster_access(node_name)
     try:
-        client = require_client(await client_for(lxd_service, node_name), node_name)
-        # Update config using PUT method
-        # important: client.api is already rooted at <endpoint>/1.0, which is the server
-        # config endpoint itself. Indexing '1.0' again addressed /1.0/1.0, so this PUT
-        # never reached the config it was meant to write. pylxd's own code calls
-        # `self.api.get()` for the same resource.
-        response = client.api.put(json={'config': config})
+        async with serialize_cluster_configuration(db, node_name):
+            try:
+                await assert_cluster_not_migration_fenced(
+                    cluster_id=node_name,
+                    db=db,
+                )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            client = require_client(await client_for(lxd_service, node_name), node_name)
+            # Update config using PUT method
+            # important: client.api is already rooted at <endpoint>/1.0, which is the server
+            # config endpoint itself. Indexing '1.0' again addressed /1.0/1.0, so this PUT
+            # never reached the config it was meant to write. pylxd's own code calls
+            # `self.api.get()` for the same resource.
+            response = client.api.put(
+                json={'config': config},
+                timeout=write_timeout(SERVER_CONFIG_WRITE_WAIT_SECONDS),
+            )
+            wait_for_lxd_operation(
+                client,
+                response,
+                timeout=SERVER_CONFIG_WRITE_WAIT_SECONDS,
+            )
         if response.status_code in [200, 202]:
             return response.json().get('metadata', {})
         else:

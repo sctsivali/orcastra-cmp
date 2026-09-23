@@ -1,0 +1,152 @@
+import type { BadgeTone } from "@/components/ui/badge";
+import { formatLabel } from "@/lib/utils";
+import type {
+  MigrationEndpointRef,
+  MigrationIssue,
+  MigrationJob,
+  MigrationJobPhase,
+  MigrationJobResource,
+  MigrationJobStatus,
+  MigrationJsonValue,
+  MigrationPlannedResource,
+} from "@/types/migrations";
+
+const PHASE_META: Record<MigrationJobPhase, { label: string; tone: BadgeTone }> = {
+  queued: { label: "Queued", tone: "caution" },
+  preparing_target: { label: "Preparing Target", tone: "caution" },
+  preparing_recovery: { label: "Preparing Recovery", tone: "caution" },
+  checkpointing: { label: "Creating Checkpoint", tone: "caution" },
+  initial_sync: { label: "Initial Sync", tone: "caution" },
+  cutover_pending: { label: "Cutover Pending", tone: "caution" },
+  quiescing: { label: "Quiescing", tone: "caution" },
+  final_sync: { label: "Final Sync", tone: "caution" },
+  target_validating: { label: "Validating Target", tone: "caution" },
+  external_cutover_pending: { label: "External Cutover Pending", tone: "caution" },
+  cutting_over: { label: "Cutting Over", tone: "caution" },
+  verifying: { label: "Verifying", tone: "caution" },
+  source_retained: { label: "Source Retained", tone: "positive" },
+  cleanup_due: { label: "Cleanup Due", tone: "caution" },
+  cleaning_up: { label: "Cleaning Up", tone: "caution" },
+  unknown: { label: "Outcome Unknown", tone: "negative" },
+  reconciling: { label: "Reconciling", tone: "caution" },
+  rollback_available: { label: "Rollback Available", tone: "caution" },
+  rolling_back: { label: "Rolling Back", tone: "caution" },
+  rolled_back: { label: "Rolled Back", tone: "neutral" },
+  cleanup_blocked: { label: "Cleanup Blocked", tone: "negative" },
+  completed: { label: "Completed", tone: "positive" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+  manual_recovery: { label: "Manual Recovery", tone: "negative" },
+  failed: { label: "Failed", tone: "negative" },
+};
+
+const STATUS_META: Record<MigrationJobStatus, { label: string; tone: BadgeTone }> = {
+  pending: { label: "Pending", tone: "caution" },
+  running: { label: "Running", tone: "caution" },
+  waiting: { label: "Waiting", tone: "caution" },
+  success: { label: "Succeeded", tone: "positive" },
+  failure: { label: "Failed", tone: "negative" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+  unknown: { label: "Outcome Unknown", tone: "negative" },
+  manual_recovery: { label: "Manual Recovery", tone: "negative" },
+};
+
+export type MigrationView = "active" | "attention" | "history";
+
+const ATTENTION_PHASES = new Set<MigrationJobPhase>([
+  "cutover_pending",
+  "external_cutover_pending",
+  "unknown",
+  "reconciling",
+  "rollback_available",
+  "cleanup_due",
+  "cleanup_blocked",
+  "manual_recovery",
+  "failed",
+]);
+
+const HISTORY_PHASES = new Set<MigrationJobPhase>([
+  "completed",
+  "rolled_back",
+  "cancelled",
+  "failed",
+]);
+
+export function migrationStatusMeta(job: Pick<MigrationJob, "phase" | "status">) {
+  return PHASE_META[job.phase] ?? STATUS_META[job.status] ?? { label: formatLabel(job.phase), tone: "neutral" as const };
+}
+
+export function migrationInView(job: Pick<MigrationJob, "phase" | "status">, view: MigrationView): boolean {
+  if (view === "attention") {
+    return ATTENTION_PHASES.has(job.phase) || ["failure", "unknown", "manual_recovery"].includes(job.status);
+  }
+  if (view === "history") {
+    return HISTORY_PHASES.has(job.phase) || ["success", "failure", "cancelled"].includes(job.status);
+  }
+  return !HISTORY_PHASES.has(job.phase) && !["success", "failure", "cancelled"].includes(job.status);
+}
+
+export function findingMessage(finding: MigrationIssue): string {
+  return finding.message;
+}
+
+export function findingTitle(finding: MigrationIssue): string | null {
+  return finding.code ? formatLabel(finding.code) : null;
+}
+
+export function findingRemediation(finding: MigrationIssue): string | null {
+  return finding.remediation ?? null;
+}
+
+export function endpointLabel(endpoint: MigrationEndpointRef): string {
+  const resource = endpoint.resource_name ? `/${endpoint.resource_name}` : "";
+  return `${endpoint.cluster_id}/${endpoint.project}${resource}`;
+}
+
+export function endpointPrimary(endpoint: MigrationEndpointRef): string {
+  return endpoint.resource_name || endpoint.project;
+}
+
+export function jsonScalar(value: MigrationJsonValue | undefined): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return null;
+}
+
+export function resourceName(resource: MigrationPlannedResource): string {
+  return (
+    jsonScalar(resource.source.name) ||
+    jsonScalar(resource.target.name) ||
+    resource.resource_key
+  );
+}
+
+export function resourceLocation(value: Record<string, MigrationJsonValue>): string | null {
+  const cluster = jsonScalar(value.cluster_id);
+  const project = jsonScalar(value.project);
+  const name = jsonScalar(value.name);
+  const parts = [cluster, project, name].filter((part): part is string => !!part);
+  return parts.length ? parts.join("/") : null;
+}
+
+export function resourceProgress(resource: MigrationJobResource): {
+  percent: number | null;
+  transferred: number | null;
+  total: number | null;
+} {
+  const percent = resource.progress.percent;
+  const transferred = resource.progress.bytes_transferred;
+  const total = resource.progress.bytes_total;
+  return {
+    percent: typeof percent === "number" ? percent : null,
+    transferred: typeof transferred === "number" ? transferred : null,
+    total: typeof total === "number" ? total : null,
+  };
+}
+
+export function jobProgress(job: Pick<MigrationJob, "resources">): number | null {
+  const values = job.resources
+    .map((resource) => resourceProgress(resource).percent)
+    .filter((value): value is number => value !== null);
+  if (!values.length) return null;
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}

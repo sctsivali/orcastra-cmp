@@ -21,13 +21,14 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Mirrors backend/app/services/lxd/connection.py at the time of writing.
+# Mirrors the idempotent-method retry policy in backend/app/services/lxd/connection.py.
+# Mutating methods are deliberately absent: a timeout after submission is an unknown outcome.
 PRODUCTION_RETRY = dict(
     total=3,
     connect=0,
     backoff_factor=0.5,
     status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
+    allowed_methods=["HEAD", "GET", "OPTIONS"],
     raise_on_status=False,
 )
 

@@ -18,13 +18,16 @@ through the control plane is drafted in the service layer and deliberately not r
 here; see documentation/instances/operator-snapshots-and-mobility.md for why.
 """
 import logging
+import re
 from typing import Annotated, Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.blocking import run_blocking
-from app.core.cache import get_cache_manager
+from app.core.config import get_settings
+from app.core.database import get_db
 from app.core.dependencies import (
     AuthenticatedUser,
     check_read_only_mode,
@@ -40,14 +43,30 @@ from app.core.org_scope import (
     verify_project_access,
 )
 from app.services.activity_logger import get_activity_logger
-from app.core.snapshot_billing_gate import audit_billing_override
 from app.services.lxd import mobility
 from app.services.lxd import snapshots as snapshots_service
 from app.services.lxd.availability import require_client
 from app.services.lxd.lazy_client import client_for
 from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT, proxy_executor
 from app.services.lxd_service import LXDService, get_lxd_service
-from app.services.orcahub_webhook import schedule_orcahub_event
+from app.models.migration_schemas import (
+    MigrationEndpointRef,
+    MigrationIntent,
+    MigrationMappings,
+    MigrationPlanCreateRequest,
+    MigrationScope,
+)
+from app.services.migrations import MigrationService
+from app.services.migrations.authority import (
+    AuthorityDeniedError,
+    AuthorityIdentityError,
+    CurrentAuthorityError,
+)
+from app.services.migrations.orchestrator import (
+    MigrationAuthorityError,
+    MigrationConflict,
+)
+from app.services.migrations.security import MigrationSecurityError, sanitize_error
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -59,6 +78,7 @@ router = APIRouter(
 )
 
 _LXD_CALL_TIMEOUT = 60
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def _blocking(fn, *args, label: str, timeout: int = _LXD_CALL_TIMEOUT, **kwargs):
@@ -91,7 +111,13 @@ class MoveRequest(BaseModel):
     project: str = Field("default", description="LXD project the source instance lives in")
     target_host: str = Field(..., description="Cluster to copy into")
     target_project: str = Field("default", description="LXD project to copy into")
-    target_name: str = Field(..., min_length=1, max_length=63, description="Name for the copy on the destination")
+    target_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=63,
+        pattern=LXD_NAME_PATTERN,
+        description="Name for the copy on the destination",
+    )
     target_member: Optional[str] = Field(None, description="Cluster member to place the copy on, for a clustered host")
     target_pool: Optional[str] = Field(None, description="Storage pool for the copy's root disk")
     acknowledge_billing_impact: bool = Field(
@@ -109,8 +135,14 @@ class MoveResponse(BaseModel):
     target_host: str = Field(..., description="Cluster the copy is landing on")
     target_project: str = Field(..., description="Project the copy is landing in")
     target_name: str = Field(..., description="Name of the copy")
-    transport: str = Field(..., description="Transport actually used: copy, migration or stream")
+    transport: str = Field(
+        ...,
+        description="Transport actually used: durable, copy, migration or stream",
+    )
     operation_id: Optional[str] = Field(None, description="LXD operation to poll on the destination")
+    migration_job_id: Optional[str] = Field(
+        None, description="Durable Migration Center job, when that engine accepted the copy"
+    )
     message: str = Field(..., description="Operator-facing summary")
 
 
@@ -150,32 +182,103 @@ def _gate_copy(policy: Dict[str, Any], instance_name: str, body: "MoveRequest") 
         raise
 
 
-async def _settle_copy(client, operation_url: Optional[str], project: str) -> Dict[str, Any]:
-    """Wait briefly on the copy operation so a 202 is not the last thing anyone hears.
-
-    important: a cross-cluster migration is accepted by the target before any bytes move, so the
-    202 says only that the request was understood. Every way the transfer can fail afterwards
-    (the target cannot open the source, the pool fills, the secrets are refused) lands in the
-    operation and nowhere else. Without this the copy is reported as started and its failure is
-    never surfaced anywhere an operator looks.
-
-    A large instance legitimately outlasts the window, which is reported as unsettled rather than
-    as either outcome, the same contract the snapshot surface uses.
-    """
-    operation_id = (operation_url or "").rsplit("/", 1)[-1]
-    if not operation_id:
-        return {"status": None, "err": None, "settled": True}
-    try:
-        return await _blocking(
-            snapshots_service.wait_for_operation,
-            client,
-            operation_id,
-            project,
-            label="mobility.wait",
+def _validated_idempotency_key(value: Optional[str]) -> str:
+    if value is None:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="Idempotency-Key is required while durable copy is enabled.",
         )
-    except Exception as exc:  # noqa: BLE001 - a failed wait is not a failed operation
-        logger.debug("Could not wait on copy operation %s: %s", operation_id, exc)
-        return {"status": None, "err": None, "settled": False}
+    if not _IDEMPOTENCY_KEY.fullmatch(value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Idempotency-Key contains unsupported characters.",
+        )
+    return value
+
+
+async def _durable_copy(
+    *,
+    db: AsyncSession,
+    lxd_service: LXDService,
+    user: AuthenticatedUser,
+    instance_name: str,
+    body: MoveRequest,
+    idempotency_key: Optional[str],
+    justification: Optional[str],
+) -> MoveResponse:
+    reason = (body.reason or "").strip()
+    if len(reason) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A reason of at least 8 characters is required for a durable copy.",
+        )
+    settings = get_settings()
+    request = MigrationPlanCreateRequest(
+        scope=MigrationScope.INSTANCE,
+        intent=MigrationIntent.COPY,
+        source=MigrationEndpointRef(
+            cluster_id=body.host,
+            project=body.project,
+            resource_name=instance_name,
+        ),
+        target=MigrationEndpointRef(
+            cluster_id=body.target_host,
+            project=body.target_project,
+            resource_name=body.target_name,
+            member=body.target_member,
+        ),
+        retention_hours=settings.migration_default_retention_hours,
+        checkpoint_requested=False,
+        external_cutover_required=False,
+        mappings=MigrationMappings(
+            storage_pools={"root": body.target_pool} if body.target_pool else {}
+        ),
+    )
+    acknowledgements = ["copy-impact-reviewed", "billing-impact-reviewed"]
+    if justification:
+        acknowledgements.append("billing-impact-acknowledged")
+    try:
+        row, _created = await MigrationService(db, lxd_service).execute_compatibility_copy(
+            request,
+            idempotency_key=_validated_idempotency_key(idempotency_key),
+            reason=reason,
+            acknowledgements=acknowledgements,
+            user=user,
+            requester_role="partner",
+        )
+    except (MigrationAuthorityError, AuthorityDeniedError, AuthorityIdentityError) as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except CurrentAuthorityError as exc:
+        logger.warning("Durable copy authority verification failed: %s", exc.code)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Current migration authority could not be verified.",
+        ) from exc
+    except (MigrationConflict, MigrationSecurityError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Durable copy request failed: %s", sanitize_error(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Migration service is temporarily unavailable.",
+        ) from exc
+
+    return MoveResponse(
+        success=True,
+        instance_name=instance_name,
+        target_host=body.target_host,
+        target_project=body.target_project,
+        target_name=body.target_name,
+        transport="durable",
+        operation_id=None,
+        migration_job_id=row.job_id,
+        message=(
+            f"Copy job for {instance_name} was accepted by Migration Center. "
+            "Track validation and transfer progress there."
+        ),
+    )
 
 
 @router.get("/{instance_name}/move-preflight", response_model=MovePreflight)
@@ -301,9 +404,11 @@ async def copy_instance(
     ],
     body: MoveRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_partner()),
-):
+) -> MoveResponse:
     # Both ends are authorized. Checking only the source would let a partner read out of a
     # cluster they own and write into one they do not, which is the whole boundary.
     source_project = verify_project_access(body.host, body.project)
@@ -312,8 +417,24 @@ async def copy_instance(
         update={"project": source_project, "target_project": target_project}
     )
 
+    settings = get_settings()
+    if not (
+        settings.migration_center_enabled
+        and settings.migration_durable_copy_enabled
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "durable_copy_admission_disabled",
+                "message": "Durable Copy Instance admission is not enabled.",
+                "remediation": (
+                    "Use Migration Center preflight and enable the reviewed durable-copy "
+                    "rollout stage before submitting a copy."
+                ),
+            },
+        )
+
     source = await _client(lxd_service, body.host)
-    target = await _client(lxd_service, body.target_host)
 
     # A copy reads the source and duplicates it. That does not move the storage the external
     # schedule is measured on, but the rule an operator carries is "anything on a billing-linked
@@ -321,164 +442,15 @@ async def copy_instance(
     policy = await _read_source_policy(source, instance_name, body.project)
     justification = _gate_copy(policy, instance_name, body)
 
-    transport = mobility.choose_transport(body.host, body.target_host)
-
-    try:
-        if transport == mobility.TRANSPORT_COPY:
-            operation = await _blocking(
-                mobility.copy_within_cluster,
-                source,
-                label="mobility.copy",
-                source_name=instance_name,
-                source_project=body.project,
-                target_name=body.target_name,
-                target_project=body.target_project,
-                target_member=body.target_member,
-                target_pool=body.target_pool,
-            )
-            # A same-cluster copy is one LXD call, so the operation lives on the source server.
-            operation_client = source
-        else:
-            operation = await _cross_cluster(source, target, instance_name, body)
-            # A pull migration is driven by the destination, so its operation is the target's.
-            operation_client = target
-    except HTTPException:
-        raise
-    except snapshots_service.LXDOperationUnreadable as exc:
-        # Accepted with nothing to wait on. Upstream problem, and a copy reported as started when
-        # its completion cannot be confirmed is the defect this path was rewritten to remove.
-        _audit_move(instance_name, body, transport, result="failure", error=str(exc))
-        raise HTTPException(status_code=502, detail=str(exc))
-    except mobility.MobilityError as exc:
-        _audit_move(instance_name, body, transport, result="failure", error=str(exc))
-        raise HTTPException(status_code=409, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        _audit_move(instance_name, body, transport, result="failure", error=str(exc))
-        raise lxd_http_error(exc, "Instance", instance_name)
-
-    operation_id = (operation or "").rsplit("/", 1)[-1] or None
-    outcome = await _settle_copy(operation_client, operation, body.target_project)
-
-    if outcome.get("failed"):
-        detail = outcome.get("err") or "unknown error"
-        if mobility.is_unreachable_error(Exception(detail)):
-            # The one failure an operator cannot diagnose from the raw message, because the link
-            # that broke is the one this control plane never uses.
-            detail = (
-                f"{detail}. A cross-cluster copy is pulled by the destination, so "
-                f"{body.target_host} has to open a connection to {body.host} directly. It could not."
-            )
-        _audit_move(
-            instance_name, body, transport, result="failure", error=detail,
-            operation_id=operation_id,
-        )
-        raise HTTPException(
-            status_code=502, detail=f"The copy failed after it was accepted: {detail}"
-        )
-
-    _audit_move(
-        instance_name, body, transport,
-        result="success" if outcome.get("settled") else "accepted",
-        operation_id=operation_id,
-    )
-    if justification:
-        audit_billing_override(
-            "copy", instance_name, body.host, body.project, policy, justification,
-            user.email or user.user_id,
-        )
-    # The reader's cache is invalidated either way: something is happening on the destination and
-    # a stale list is wrong in both cases.
-    get_cache_manager().invalidate_instance_cache()
-    if outcome.get("settled"):
-        # important: announced only once the operation settled. `instance.created` tells the
-        # upstream product a resource EXISTS, and it meters what it is told about. Emitting on the
-        # unsettled branch announced an instance whose transfer had been accepted and might still
-        # fail, which is the same "reported before it happened" defect the settle check was added
-        # to remove, one step further downstream. An unsettled copy that does complete is picked
-        # up by that product's own inventory sweep, so the cost of waiting is a delay rather than
-        # a miss, while the cost of announcing early is a resource in a ledger that never appeared.
-        schedule_orcahub_event(
-            event_type="instance.created",
-            cluster_id=body.target_host,
-            project=body.target_project,
-            resource_type="INSTANCE",
-            name=body.target_name,
-        )
-    return MoveResponse(
-        success=True,
+    return await _durable_copy(
+        db=db,
+        lxd_service=lxd_service,
+        user=user,
         instance_name=instance_name,
-        target_host=body.target_host,
-        target_project=body.target_project,
-        target_name=body.target_name,
-        transport=transport,
-        operation_id=operation_id,
-        message=(
-            (
-                f"{instance_name} copied to {body.target_host}/{body.target_project} "
-                f"as {body.target_name}."
-            )
-            if outcome.get("settled")
-            else (
-                f"Copying {instance_name} to {body.target_host}/{body.target_project} "
-                f"as {body.target_name} using the {transport} transport."
-            )
-        ),
+        body=body,
+        idempotency_key=idempotency_key,
+        justification=justification,
     )
-
-
-async def _cross_cluster(source, target, instance_name: str, body: MoveRequest):
-    """Run the cross-cluster copy over LXD's native pull migration.
-
-    The source stands up a migration and hands back one-time secrets; the target pulls with them.
-    That means the TARGET opens the connection to the SOURCE, a link this control plane never
-    uses itself and therefore cannot test in advance: LXD exposes no call that answers "can you
-    reach this host". A failure on that link surfaces in the target's operation, which is why the
-    caller polls it rather than trusting the 202.
-
-    A streaming transport that would carry the bytes through this control plane instead exists in
-    the service layer and is deliberately not wired up here. It has never executed, and making it
-    production-grade needs a queued job with its own worker pool and bounded disk rather than an
-    hour-long hold on the pool that also serves console and terminal traffic.
-    """
-    certificate = await _blocking(
-        mobility.server_certificate, source, label="mobility.cert"
-    )
-    definition = await _blocking(
-        mobility.read_instance_definition,
-        source,
-        instance_name,
-        body.project,
-        label="mobility.definition",
-    )
-    operation_url, secrets_map = await _blocking(
-        mobility.begin_source_migration,
-        source,
-        label="mobility.begin",
-        instance_name=instance_name,
-        project=body.project,
-    )
-    try:
-        return await _blocking(
-            mobility.accept_migration_on_target,
-            target,
-            label="mobility.accept",
-            target_name=body.target_name,
-            target_project=body.target_project,
-            source_operation_url=operation_url,
-            source_certificate=certificate,
-            secrets=secrets_map,
-            target_member=body.target_member,
-            target_pool=body.target_pool,
-            definition=definition,
-        )
-    except Exception as exc:  # noqa: BLE001
-        if mobility.is_unreachable_error(exc):
-            raise mobility.MobilityError(
-                f"{body.target_host} could not reach {body.host} to pull {instance_name}. "
-                "A cross-cluster copy is pulled by the destination, so the two clusters need a "
-                "direct network path between them."
-            ) from exc
-        raise
 
 
 def _audit_move(

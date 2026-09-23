@@ -15,6 +15,11 @@ from app.core.lxd_path import safe_segment
 from app.core.org_scope import org_scope_dependency, verify_instance_view_access
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd_service import LXDConnectionError, LXDService, get_lxd_service
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    guard_instance_mutation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +132,16 @@ async def push_file_to_instance(
     - Instance must be running
     """
     project = verify_instance_view_access(host, project, instance_name)
+    try:
+        # Refuse before consuming a potentially large request body. The guarded check below is
+        # still authoritative for the later daemon write and closes the check-then-act race.
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     # Read one byte beyond the limit so a refused upload cannot allocate an arbitrarily large
     # body in memory. Authorization deliberately runs first: a caller must not make the server
@@ -142,19 +157,27 @@ async def push_file_to_instance(
     try:
         import asyncio
 
-        _result = await asyncio.get_event_loop().run_in_executor(
-            _executor,
-            _push_file_to_instance,
-            lxd_service,
-            host,
-            instance_name,
-            project,
-            dest_path,
-            file_data,
-            mode,
-            uid,
-            gid,
-        )
+        # Keep the fence decision and the synchronous Files API write inside the same cluster
+        # serialization boundary used by migration execution. If this request wins, migration's
+        # fresh preflight waits for the write. If migration wins, this context never yields.
+        async with guard_instance_mutation(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        ):
+            _result = await asyncio.get_event_loop().run_in_executor(
+                _executor,
+                _push_file_to_instance,
+                lxd_service,
+                host,
+                instance_name,
+                project,
+                dest_path,
+                file_data,
+                mode,
+                uid,
+                gid,
+            )
 
         # log activity
         activity_logger.log_activity(
@@ -178,6 +201,9 @@ async def push_file_to_instance(
             "dest_path": dest_path,
             "size": len(file_data),
         }
+
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     except LXDConnectionError as e:
         logger.error(f"Connection error uploading file to {instance_name}: {e}")

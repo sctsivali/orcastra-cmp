@@ -28,6 +28,10 @@ from app.services.instance_operation_audit import (
     drain_instance_operation_audits,
     enqueue_instance_operation_audit,
 )
+from app.services.migration_fence import (
+    assert_instance_not_migration_fenced,
+    assert_project_not_migration_fenced,
+)
 from . import health
 from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
@@ -1296,7 +1300,16 @@ class InstanceManager:
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
+            # The project comes from the authoritative daemon lookup above. Checking here,
+            # immediately before the lifecycle decision, prevents a retained migration source
+            # from being reported as safely startable even if it has drifted back to Running.
+            await assert_instance_not_migration_fenced(
+                cluster_id=host,
+                project=project_name,
+                instance_name=name,
+            )
+
             if instance.status == "Running":
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
             elif instance.status == "Frozen":
@@ -1474,6 +1487,12 @@ class InstanceManager:
                     f"Please reactivate the subscription through the billing portal."
                 )
 
+            await assert_instance_not_migration_fenced(
+                cluster_id=host,
+                project=project_name,
+                instance_name=name,
+            )
+
             # The graceful restart blocks on the guest shutdown for up to
             # `timeout`s; run the synchronous pylxd calls in a worker thread so the
             # event loop isn't stalled for the full wait. A forced restart is a
@@ -1532,7 +1551,13 @@ class InstanceManager:
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
+            await assert_instance_not_migration_fenced(
+                cluster_id=host,
+                project=project_name,
+                instance_name=name,
+            )
+
             # important: both waits run OFF the event loop and on a client whose socket window
             # outlives them. The pooled client reads for 8 seconds; tearing down a root disk on a
             # `dir` pool, or on a loaded host, takes longer. The read then died first, the
@@ -1621,6 +1646,12 @@ class InstanceManager:
         instance, project_name = find_instance_in_projects(client, name, project)
         if instance is None:
             raise LXDOperationError(f"Instance {name} not found on {host}")
+
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project_name,
+            instance_name=name,
+        )
 
         # Snapshot guard: LXD rejects a rebuild if any snapshot exists. Surface it
         # as a typed error the router maps to a clear 409 listing the snapshots.
@@ -1716,6 +1747,16 @@ class InstanceManager:
         project: str = "default",
     ) -> VMInfo:
         """Create a VM without running pylxd's blocking workflow on the event loop."""
+        project = (project or "default").strip() or "default"
+        await assert_project_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+        )
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=name,
+        )
         try:
             return await run_blocking(
                 self._create_vm_blocking,
@@ -1869,6 +1910,17 @@ class InstanceManager:
         This backs the dashboard's `POST /instances` flow. create_vm() is kept
         separate and unchanged for Orcahub's `POST /vms`.
         """
+        project = (project or "default").strip() or "default"
+        await assert_project_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+        )
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=name,
+        )
+
         worker_id: Optional[str] = None
         job_row: Optional[InstanceOperationJob] = None
         heartbeat_task: Optional[asyncio.Task[Any]] = None

@@ -1,0 +1,1704 @@
+"""Side-effect-free migration discovery and compatibility checks.
+
+Every discovered project resource is either represented in the plan or becomes a blocker.
+There is intentionally no best-effort project migration mode.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Optional
+from urllib.parse import parse_qs, unquote, urlparse
+
+from app.core.lxd_path import safe_segment
+from app.services.lxd import mobility
+from app.services.lxd.project_usage import parse_lxd_size
+
+from .security import (
+    MigrationSecurityError,
+    api_endpoint,
+    approved_build,
+    approved_lxd_native_cross_project_move,
+    canonical_json_hash,
+    daemon_identity,
+    instance_identity_fingerprint,
+)
+
+
+_PROJECT_DEPENDENCY_FEATURES = (
+    "features.images",
+    "features.networks",
+    "features.networks.zones",
+    "features.profiles",
+    "features.storage.buckets",
+    "features.storage.volumes",
+)
+_OPTIONAL_COLLECTION_EXTENSIONS = {
+    "network_acls": "network_acl",
+    "network_zones": "network_dns",
+    "network_address_sets": "network_address_set",
+    "placement_groups": "placement_groups",
+    "storage_buckets": "storage_buckets",
+    "network_forwards": "network_forward",
+    "network_load_balancers": "network_load_balancer",
+}
+_PROJECT_OPERATION_ROOTS = {
+    "containers": frozenset({"containers", "instances"}),
+    "images": frozenset({"images"}),
+    "instance-backups": frozenset(
+        {"containers", "instances", "virtual-machines"}
+    ),
+    "instance-snapshots": frozenset(
+        {"containers", "instances", "virtual-machines"}
+    ),
+    "instances": frozenset({"containers", "instances", "virtual-machines"}),
+    "network-acls": frozenset({"network-acls"}),
+    "network-address-sets": frozenset({"network-address-sets"}),
+    "network-zones": frozenset({"network-zones"}),
+    "networks": frozenset({"networks"}),
+    "profiles": frozenset({"profiles"}),
+    "projects": frozenset({"projects"}),
+    "virtual-machines": frozenset({"instances", "virtual-machines"}),
+}
+_MAX_OPERATION_RESOURCE_URL_LENGTH = 4096
+_TERMINAL_OPERATION_BUCKETS = frozenset({"cancelled", "failure", "success"})
+
+
+class InventoryReadError(RuntimeError):
+    """The daemon did not provide authoritative inventory evidence."""
+
+    def __init__(self, resource: str) -> None:
+        super().__init__(f"Authoritative {resource} inventory is unavailable.")
+        self.resource = resource
+
+
+@dataclass
+class PreflightResult:
+    strategy: str
+    downtime: str
+    capabilities: dict[str, Any] = field(default_factory=dict)
+    resources: list[dict[str, Any]] = field(default_factory=list)
+    blockers: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def ready(self) -> bool:
+        return not self.blockers
+
+    def block(self, code: str, message: str, remediation: str = "") -> None:
+        self.blockers.append(
+            {"code": code, "message": message, "remediation": remediation}
+        )
+
+    def warn(self, code: str, message: str, remediation: str = "") -> None:
+        self.warnings.append(
+            {"code": code, "message": message, "remediation": remediation}
+        )
+
+
+def _metadata(response: Any, *, resource: str) -> Any:
+    status_code = getattr(response, "status_code", 200)
+    if not isinstance(status_code, int) or status_code != 200:
+        raise InventoryReadError(resource)
+    try:
+        payload = response.json()
+    except Exception as exc:  # noqa: BLE001
+        raise InventoryReadError(resource) from exc
+    if not isinstance(payload, dict) or "metadata" not in payload:
+        raise InventoryReadError(resource)
+    return payload["metadata"]
+
+
+def _is_not_found(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return response is not None and getattr(response, "status_code", None) == 404
+
+
+def _get_collection(node: Any, *, project: str, resource: str) -> list[dict[str, Any]]:
+    try:
+        response = node.get(params={"project": project, "recursion": 1})
+    except Exception as exc:  # noqa: BLE001
+        raise InventoryReadError(resource) from exc
+    metadata = _metadata(response, resource=resource)
+    if not isinstance(metadata, list) or any(
+        not isinstance(item, dict) for item in metadata
+    ):
+        raise InventoryReadError(resource)
+    return metadata
+
+
+def _authoritative_extensions(client: Any) -> set[str]:
+    """Return extensions only when `/1.0` proves an exact string collection."""
+    identity = daemon_identity(client)
+    extensions = identity.get("extensions")
+    if not isinstance(extensions, list) or any(
+        not isinstance(extension, str) or not extension for extension in extensions
+    ):
+        raise InventoryReadError("api_extensions")
+    host_info = getattr(client, "host_info", None)
+    if isinstance(host_info, dict):
+        raw_extensions = host_info.get("api_extensions")
+        if not isinstance(raw_extensions, list) or any(
+            not isinstance(extension, str) or not extension
+            for extension in raw_extensions
+        ):
+            raise InventoryReadError("api_extensions")
+        if set(raw_extensions) != set(extensions):
+            raise InventoryReadError("api_extensions")
+    return set(extensions)
+
+
+def _operation_resource_project(kind: str, raw_url: Any) -> str:
+    if (
+        not isinstance(kind, str)
+        or not isinstance(raw_url, str)
+        or not raw_url
+        or len(raw_url) > _MAX_OPERATION_RESOURCE_URL_LENGTH
+    ):
+        raise InventoryReadError("active operation ownership")
+    parsed = urlparse(raw_url)
+    if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith("/1.0/"):
+        raise InventoryReadError("active operation ownership")
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if (
+        len(segments) < 3
+        or segments[0] != "1.0"
+        or any(segment in {".", ".."} or "/" in segment for segment in segments)
+    ):
+        raise InventoryReadError("active operation ownership")
+    normalized_kind = kind.replace("_", "-")
+    root = segments[1]
+    if normalized_kind in {"storage-volumes", "storage-volume-snapshots"}:
+        if root != "storage-pools" or len(segments) < 6 or segments[3] != "volumes":
+            raise InventoryReadError("active operation ownership")
+    elif normalized_kind == "storage-buckets":
+        if root != "storage-pools" or len(segments) < 5 or segments[3] != "buckets":
+            raise InventoryReadError("active operation ownership")
+    elif root not in _PROJECT_OPERATION_ROOTS.get(normalized_kind, frozenset()):
+        raise InventoryReadError("active operation ownership")
+    try:
+        query = parse_qs(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=False,
+            max_num_fields=32,
+        )
+    except ValueError as exc:
+        raise InventoryReadError("active operation ownership") from exc
+    project_values = query.get("project", [])
+    if len(project_values) > 1 or (project_values and not project_values[0].strip()):
+        raise InventoryReadError("active operation ownership")
+    if normalized_kind == "projects":
+        project = segments[2].strip()
+        if project_values and project_values[0] != project:
+            raise InventoryReadError("active operation ownership")
+    else:
+        project = project_values[0].strip() if project_values else "default"
+    if not project or project in {".", ".."} or "/" in project:
+        raise InventoryReadError("active operation ownership")
+    return project
+
+
+def _active_operation_projects(response: Any) -> set[str]:
+    metadata = _metadata(response, resource="active operation")
+    if not isinstance(metadata, dict):
+        raise InventoryReadError("active operation")
+    active: set[str] = set()
+    for bucket, operations in metadata.items():
+        if not isinstance(bucket, str) or not isinstance(operations, list) or any(
+            not isinstance(operation, dict) for operation in operations
+        ):
+            raise InventoryReadError("active operation")
+        if bucket.strip().lower() in _TERMINAL_OPERATION_BUCKETS:
+            continue
+        for operation in operations:
+            status_code = operation.get("status_code")
+            if not isinstance(status_code, int) or not 100 <= status_code < 200:
+                raise InventoryReadError("active operation status")
+            resources = operation.get("resources")
+            if not isinstance(resources, dict) or not resources:
+                raise InventoryReadError("active operation ownership")
+            owners: set[str] = set()
+            resource_count = 0
+            for kind, urls in resources.items():
+                if not isinstance(kind, str) or not isinstance(urls, list) or not urls:
+                    raise InventoryReadError("active operation ownership")
+                for raw_url in urls:
+                    owners.add(_operation_resource_project(kind, raw_url))
+                    resource_count += 1
+            if resource_count == 0 or len(owners) != 1:
+                raise InventoryReadError("active operation ownership")
+            active.update(owners)
+    return active
+
+
+def _read_active_operation_projects(client: Any, projects: set[str]) -> set[str]:
+    extensions = _authoritative_extensions(client)
+    try:
+        operations_node = client.api.operations
+    except (AttributeError, TypeError) as exc:
+        raise InventoryReadError("active operation") from exc
+    if "operations_get_query_all_projects" in extensions:
+        try:
+            response = operations_node.get(
+                params={"recursion": 1, "all-projects": "true"}
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise InventoryReadError("active operation") from exc
+        return _active_operation_projects(response) & projects
+
+    active: set[str] = set()
+    for project in sorted(projects):
+        try:
+            response = operations_node.get(
+                params={"project": project, "recursion": 1}
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise InventoryReadError("active operation") from exc
+        observed = _active_operation_projects(response)
+        if any(owner != project for owner in observed):
+            raise InventoryReadError("active operation ownership")
+        active.update(observed)
+    return active
+
+
+def _check_active_operations(
+    result: PreflightResult,
+    *,
+    source_client: Any,
+    target_client: Any,
+    source_cluster: str,
+    source_project: str,
+    target_cluster: str,
+    target_project: str,
+) -> None:
+    endpoints = [
+        ("source", source_client, {source_project}),
+    ]
+    if source_cluster == target_cluster:
+        endpoints[0][2].add(target_project)
+    else:
+        endpoints.append(("target", target_client, {target_project}))
+    for side, client, projects in endpoints:
+        try:
+            active = _read_active_operation_projects(client, projects)
+        except InventoryReadError as exc:
+            result.capabilities["daemon_operation_inventory_verified"] = False
+            result.capabilities["daemon_operations_quiescent"] = False
+            _block_inventory_error(result, side=side, error=exc)
+            continue
+        for project in sorted(active):
+            result.capabilities["daemon_operations_quiescent"] = False
+            result.block(
+                f"{side}_active_daemon_operation",
+                f"The {side} daemon has an active operation touching project '{project}'.",
+                "Wait for the daemon operation to settle and run preflight again. Reconcile an "
+                "unknown outcome before migration; active operations are never assumed safe.",
+            )
+
+
+def _get_project(client: Any, project: str) -> Optional[dict[str, Any]]:
+    try:
+        response = client.api.projects[safe_segment(project)].get()
+    except Exception as exc:
+        if _is_not_found(exc):
+            return None
+        raise InventoryReadError(f"project '{project}'") from exc
+    metadata = _metadata(response, resource=f"project '{project}'")
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("config"), dict):
+        raise InventoryReadError(f"project '{project}'")
+    return metadata
+
+
+def _validate_instance_metadata(metadata: Any, resource: str) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        raise InventoryReadError(resource)
+    for key in ("config", "devices", "expanded_config", "expanded_devices"):
+        if key in metadata and not isinstance(metadata[key], dict):
+            raise InventoryReadError(resource)
+    profiles = metadata.get("profiles")
+    if profiles is not None and (
+        not isinstance(profiles, list)
+        or any(not isinstance(profile, str) for profile in profiles)
+    ):
+        raise InventoryReadError(resource)
+    return metadata
+
+
+def _instance(client: Any, project: str, name: str) -> Optional[dict[str, Any]]:
+    try:
+        response = client.api.instances[safe_segment(name)].get(
+            params={"project": project}
+        )
+    except Exception as exc:
+        if _is_not_found(exc):
+            return None
+        raise InventoryReadError(f"instance '{name}'") from exc
+    return _validate_instance_metadata(
+        _metadata(response, resource=f"instance '{name}'"),
+        f"instance '{name}'",
+    )
+
+
+def _profile(client: Any, project: str, name: str) -> Optional[dict[str, Any]]:
+    try:
+        response = client.api.profiles[safe_segment(name)].get(
+            params={"project": project}
+        )
+    except Exception as exc:
+        if _is_not_found(exc):
+            return None
+        raise InventoryReadError(f"profile '{name}'") from exc
+    metadata = _metadata(response, resource=f"profile '{name}'")
+    if not isinstance(metadata, dict) or any(
+        key in metadata and not isinstance(metadata[key], dict)
+        for key in ("config", "devices")
+    ):
+        raise InventoryReadError(f"profile '{name}'")
+    return metadata
+
+
+def _storage_pools(client: Any) -> list[str]:
+    try:
+        response = client.api.storage_pools.get()
+    except Exception as exc:  # noqa: BLE001
+        raise InventoryReadError("storage pool") from exc
+    metadata = _metadata(response, resource="storage pool")
+    if not isinstance(metadata, list):
+        raise InventoryReadError("storage pool")
+    pools: list[str] = []
+    for value in metadata:
+        if not isinstance(value, str):
+            raise InventoryReadError("storage pool")
+        name = value.rstrip("/").rsplit("/", 1)[-1]
+        if not name:
+            raise InventoryReadError("storage pool")
+        pools.append(name)
+    return pools
+
+
+def _reviewed_project_config(config: dict[str, Any]) -> bool:
+    return all(
+        str(key).startswith(("features.", "limits.", "restricted."))
+        or str(key) == "restricted"
+        for key in config
+    )
+
+
+def _shared_dependency_features(
+    project: str, project_record: Optional[dict[str, Any]]
+) -> list[str]:
+    if project == "default" or project_record is None:
+        return []
+    config = project_record.get("config") or {}
+    if not isinstance(config, dict):
+        return list(_PROJECT_DEPENDENCY_FEATURES)
+    return [
+        feature
+        for feature in _PROJECT_DEPENDENCY_FEATURES
+        if str(config.get(feature, "false")).strip().lower() != "true"
+    ]
+
+
+def _block_shared_dependencies(
+    result: PreflightResult,
+    *,
+    side: str,
+    project: str,
+    project_record: Optional[dict[str, Any]],
+) -> None:
+    shared = _shared_dependency_features(project, project_record)
+    if not shared:
+        return
+    result.capabilities["project_dependencies_locked"] = False
+    result.block(
+        f"{side}_shared_project_dependencies_unlocked",
+        f"The {side} project inherits dependency namespaces that are outside this "
+        f"migration's canonical locks: {', '.join(shared)}.",
+        "Use a project with explicitly isolated profiles, networks, network zones, images, "
+        "custom volumes, and storage buckets, materialize equivalent dependencies there, "
+        "then run preflight again.",
+    )
+
+
+def _block_inventory_error(
+    result: PreflightResult, *, side: str, error: InventoryReadError
+) -> None:
+    result.block(
+        f"{side}_inventory_unverified",
+        f"The {side} daemon did not provide authoritative {error.resource} inventory.",
+        "Restore the endpoint or daemon capability response and run preflight again. "
+        "Unknown inventory is never treated as empty.",
+    )
+
+
+def _project_fingerprint(project: Optional[dict[str, Any]]) -> Optional[str]:
+    if project is None:
+        return None
+    return canonical_json_hash(project.get("config") or {})
+
+
+def _instance_preflight_fingerprint(instance: dict[str, Any]) -> str:
+    """Hash approval-relevant state without retaining raw guest configuration."""
+    config = {
+        key: value
+        for key, value in (
+            instance.get("expanded_config") or instance.get("config") or {}
+        ).items()
+        if not str(key).startswith("volatile.")
+    }
+    return canonical_json_hash(
+        {
+            "type": instance.get("type"),
+            "architecture": instance.get("architecture"),
+            "profiles": instance.get("profiles") or [],
+            "config": config,
+            "devices": instance.get("expanded_devices")
+            or instance.get("devices")
+            or {},
+            "status": instance.get("status"),
+            "location": instance.get("location"),
+        }
+    )
+
+
+def _apply_lxd_native_cross_project_move_gate(
+    result: PreflightResult,
+    *,
+    intent: str,
+    same_cluster: bool,
+    source_project: str,
+    target_project: str,
+    source_identity: dict[str, Any],
+    settings: Any,
+) -> None:
+    """Expose the native-move baseline without selecting the GHSA-affected path."""
+    applicable = bool(
+        intent == "move"
+        and same_cluster
+        and source_project != target_project
+        and source_identity["engine"] == "lxd"
+    )
+    security_approved = bool(
+        applicable
+        and approved_lxd_native_cross_project_move(source_identity, settings)
+    )
+    result.capabilities["lxd_native_cross_project_move_applicable"] = applicable
+    result.capabilities["lxd_native_cross_project_move_security_approved"] = (
+        security_approved
+    )
+    result.capabilities["lxd_native_cross_project_move_selected"] = False
+    if applicable and not security_approved:
+        result.warn(
+            "lxd_native_cross_project_move_security_blocked",
+            "Native LXD cross-project move is disabled because its exact daemon build has not "
+            "passed the GHSA-5g5r-wh97-qcq2 security baseline.",
+            "Keep the staged-copy strategy, or independently approve the exact build token in "
+            "MIGRATION_LXD_NATIVE_CROSS_PROJECT_MOVE_APPROVED_BUILDS after vendor or package review.",
+        )
+
+
+def _check_capacity(
+    result: PreflightResult,
+    *,
+    source_client: Any,
+    target_client: Any,
+    source_project: str,
+    instance_names: list[str],
+    target_pool: Optional[str],
+    target_member: Optional[str] = None,
+) -> None:
+    """Require source allocation and target free space, including snapshot overhead."""
+    if not target_pool:
+        result.block(
+            "target_pool_mapping_required",
+            "A target root storage pool mapping is required before capacity can be validated.",
+            "Map storage_pools.root or storage_pools.* to a managed target pool.",
+        )
+        return
+    footprints = [
+        _instance_transfer_bytes(source_client, source_project, name)
+        for name in instance_names
+    ]
+    if target_member:
+        try:
+            headroom = _member_pool_headroom(
+                target_client, target_pool, target_member
+            )
+        except InventoryReadError as exc:
+            _block_inventory_error(result, side="target", error=exc)
+            return
+    else:
+        try:
+            target_pools = _storage_pools(target_client)
+        except InventoryReadError as exc:
+            _block_inventory_error(result, side="target", error=exc)
+            return
+        if target_pool not in target_pools:
+            result.block(
+                "target_pool_missing", f"Target storage pool '{target_pool}' does not exist."
+            )
+            return
+        headroom = mobility.pool_headroom(target_client, target_pool)
+    if any(value is None for value in footprints):
+        result.block(
+            "source_footprint_unverified",
+            "One or more source disk allocations or snapshot sizes could not be measured.",
+            "Restore authoritative disk and snapshot size reporting, then run preflight again.",
+        )
+    if headroom is None:
+        result.block(
+            "target_capacity_unverified",
+            f"Free space for target pool '{target_pool}' could not be measured.",
+            "Restore authoritative target pool capacity reporting, then run preflight again.",
+        )
+        return
+    if all(value is not None for value in footprints):
+        required = sum(int(value or 0) for value in footprints)
+        if required > int(headroom["free"]):
+            result.block(
+                "target_pool_insufficient_capacity",
+                f"Target pool '{target_pool}' has insufficient measured free space.",
+                "Free capacity or choose another mapped pool.",
+            )
+
+
+def _instance_transfer_bytes(
+    client: Any, project: str, name: str
+) -> Optional[int]:
+    """Conservatively include live usage, provisioned root size, and every snapshot."""
+    usage = mobility.instance_footprint(client, name, project)
+    if usage is None:
+        return None
+    try:
+        instance = _instance(client, project, name)
+        if instance is None:
+            return None
+        devices = instance.get("expanded_devices") or instance.get("devices") or {}
+        root = next(
+            (
+                device
+                for device in devices.values()
+                if isinstance(device, dict)
+                and device.get("type") == "disk"
+                and device.get("path") == "/"
+            ),
+            None,
+        )
+        if not isinstance(root, dict):
+            return None
+        provisioned = parse_lxd_size(root.get("size"))
+        current = max(usage, provisioned or 0)
+        snapshots = _get_collection(
+            client.api.instances[safe_segment(name)].snapshots,
+            project=project,
+            resource=f"snapshot size for '{name}'",
+        )
+        snapshot_bytes = 0
+        for snapshot in snapshots:
+            raw_size = snapshot.get("size")
+            if raw_size is None:
+                raw_size = snapshot.get("size_bytes")
+            size = parse_lxd_size(raw_size)
+            if size is None:
+                return None
+            snapshot_bytes += size
+        return current + snapshot_bytes
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _member_pool_headroom(
+    client: Any, pool: str, member: str
+) -> dict[str, int]:
+    try:
+        detail = _metadata(
+            client.api.storage_pools[safe_segment(pool)].get(
+                params={"target": member}
+            ),
+            resource=f"storage pool '{pool}' on member '{member}'",
+        )
+        resources = _metadata(
+            client.api.storage_pools[safe_segment(pool)].resources.get(
+                params={"target": member}
+            ),
+            resource=f"storage capacity for '{pool}' on member '{member}'",
+        )
+    except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, InventoryReadError):
+            raise
+        raise InventoryReadError(
+            f"storage pool '{pool}' on member '{member}'"
+        ) from exc
+    if not isinstance(detail, dict) or str(detail.get("status") or "").lower() not in {
+        "created",
+        "available",
+    }:
+        raise InventoryReadError(f"storage pool '{pool}' on member '{member}'")
+    space = resources.get("space") if isinstance(resources, dict) else None
+    if not isinstance(space, dict):
+        raise InventoryReadError(f"storage capacity for '{pool}' on member '{member}'")
+    total = space.get("total")
+    used = space.get("used")
+    if not isinstance(total, int) or not isinstance(used, int) or total <= 0 or used < 0:
+        raise InventoryReadError(f"storage capacity for '{pool}' on member '{member}'")
+    return {"total": total, "used": used, "free": max(0, total - used)}
+
+
+def _member_relocation_checks(
+    result: PreflightResult,
+    *,
+    client: Any,
+    project: str,
+    target_member: str,
+    target_pool: Optional[str],
+    instances: list[dict[str, Any]],
+) -> None:
+    """Prove one exact online member can satisfy local storage and NIC dependencies."""
+    root_pools: set[str] = set()
+    for instance in instances:
+        devices = instance.get("expanded_devices") or instance.get("devices") or {}
+        roots = [
+            device
+            for device in devices.values()
+            if isinstance(device, dict)
+            and device.get("type") == "disk"
+            and device.get("path") == "/"
+        ] if isinstance(devices, dict) else []
+        if len(roots) != 1 or not isinstance(roots[0].get("pool"), str) or not roots[0].get("pool"):
+            result.block(
+                "source_root_pool_unverified",
+                f"The effective root pool for instance '{instance.get('name')}' is unreadable.",
+                "Restore expanded root-disk inventory and run preflight again.",
+            )
+            continue
+        root_pools.add(str(roots[0]["pool"]))
+    if len(root_pools) != 1:
+        result.block(
+            "member_relocation_root_pool_ambiguous",
+            "Member relocation requires one exact effective root pool.",
+            "Relocate instances individually after each root pool is verified.",
+        )
+        return
+    effective_root_pool = next(iter(root_pools))
+    if target_pool is not None and target_pool != effective_root_pool:
+        result.block(
+            "member_relocation_pool_mapping_unsupported",
+            f"Native member relocation preserves root pool '{effective_root_pool}' and cannot "
+            f"apply requested pool '{target_pool}'.",
+            "Remove the pool mapping or map it exactly to the effective root pool.",
+        )
+    result.capabilities["member_relocation_root_pool"] = effective_root_pool
+    try:
+        response = client.api.cluster.members.get(params={"recursion": 1})
+        metadata = _metadata(response, resource="cluster member")
+    except Exception as exc:  # noqa: BLE001
+        error = exc if isinstance(exc, InventoryReadError) else InventoryReadError(
+            "cluster member"
+        )
+        _block_inventory_error(result, side="target", error=error)
+        return
+    if not isinstance(metadata, list) or any(not isinstance(row, dict) for row in metadata):
+        _block_inventory_error(
+            result,
+            side="target",
+            error=InventoryReadError("cluster member"),
+        )
+        return
+    matches = [
+        row
+        for row in metadata
+        if row.get("server_name") == target_member or row.get("name") == target_member
+    ]
+    if len(matches) != 1:
+        result.block(
+            "target_member_unverified",
+            f"Target member '{target_member}' was not found uniquely in cluster inventory.",
+            "Select an exact online cluster member and run preflight again.",
+        )
+        return
+    member = matches[0]
+    if str(member.get("status") or "").lower() != "online":
+        result.block(
+            "target_member_offline",
+            f"Target member '{target_member}' is not online.",
+            "Restore the member to Online state or choose another member.",
+        )
+    member_architecture = member.get("architecture")
+    if not isinstance(member_architecture, str) or not member_architecture:
+        result.block(
+            "target_member_architecture_unverified",
+            f"Target member '{target_member}' did not report an architecture.",
+            "Restore authoritative member inventory before relocation.",
+        )
+    else:
+        mismatches = sorted(
+            {
+                str(instance.get("architecture"))
+                for instance in instances
+                if instance.get("architecture")
+                and instance.get("architecture") != member_architecture
+            }
+        )
+        if mismatches:
+            result.block(
+                "target_member_architecture_mismatch",
+                f"Target member '{target_member}' cannot run: {', '.join(mismatches)}.",
+                "Choose a member with the same workload architecture.",
+            )
+
+    for instance in instances:
+        name = str(instance.get("name") or "")
+        devices = instance.get("expanded_devices") or instance.get("devices") or {}
+        if not isinstance(devices, dict):
+            result.block(
+                "target_member_devices_unverified",
+                f"Effective devices for instance '{name}' are unreadable.",
+                "Restore expanded device inventory and run preflight again.",
+            )
+            continue
+        for device_name, device in devices.items():
+            if not isinstance(device, dict) or device.get("type") != "nic":
+                continue
+            network = device.get("network")
+            nictype = str(device.get("nictype") or "").strip().lower()
+            parent = device.get("parent")
+            if not network:
+                if parent or nictype:
+                    result.block(
+                        "target_member_host_network_unverified",
+                        f"NIC '{device_name}' on '{name}' depends on host-local parent or "
+                        "uplink configuration that Orcastra cannot prove on the target member.",
+                        "Use a managed network proven on the target member, or review the "
+                        "relocation outside this release.",
+                    )
+                continue
+            try:
+                network_record = _metadata(
+                    client.api.networks[safe_segment(str(network))].get(
+                        params={"project": project, "target": target_member}
+                    ),
+                    resource=f"network '{network}' on member '{target_member}'",
+                )
+            except Exception as exc:  # noqa: BLE001
+                error = (
+                    exc
+                    if isinstance(exc, InventoryReadError)
+                    else InventoryReadError(
+                        f"network '{network}' on member '{target_member}'"
+                    )
+                )
+                _block_inventory_error(result, side="target", error=error)
+                continue
+            locations = (
+                network_record.get("locations")
+                if isinstance(network_record, dict)
+                else None
+            )
+            status = (
+                str(network_record.get("status") or "").lower()
+                if isinstance(network_record, dict)
+                else ""
+            )
+            if (
+                not isinstance(network_record, dict)
+                or not isinstance(locations, list)
+                or target_member not in locations
+                or status not in {"created", "available"}
+            ):
+                result.block(
+                    "target_member_network_unavailable",
+                    f"Managed network '{network}' is not proven available on member "
+                    f"'{target_member}'.",
+                    "Create or repair the network on that member, then run preflight again.",
+                )
+
+    _check_capacity(
+        result,
+        source_client=client,
+        target_client=client,
+        source_project=project,
+        instance_names=[str(instance.get("name")) for instance in instances],
+        target_pool=effective_root_pool,
+        target_member=target_member,
+    )
+
+
+def _project_custom_volumes(client: Any, project: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for pool in _storage_pools(client):
+        try:
+            node = client.api.storage_pools[safe_segment(pool)].volumes.custom
+        except (AttributeError, TypeError) as exc:
+            raise InventoryReadError(f"custom volume in pool '{pool}'") from exc
+        for metadata in _get_collection(
+            node, project=project, resource=f"custom volume in pool '{pool}'"
+        ):
+            rows.append({"pool": pool, **metadata})
+    return rows
+
+
+def _project_buckets(
+    client: Any, project: str, *, extensions: set[str]
+) -> list[dict[str, Any]]:
+    if _OPTIONAL_COLLECTION_EXTENSIONS["storage_buckets"] not in extensions:
+        return []
+    rows: list[dict[str, Any]] = []
+    for pool in _storage_pools(client):
+        try:
+            node = client.api.storage_pools[safe_segment(pool)].buckets
+        except (AttributeError, TypeError) as exc:
+            raise InventoryReadError(f"storage bucket in pool '{pool}'") from exc
+        for metadata in _get_collection(
+            node, project=project, resource=f"storage bucket in pool '{pool}'"
+        ):
+            rows.append({"pool": pool, **metadata})
+    return rows
+
+
+def _known_project_resources(client: Any, project: str) -> dict[str, list[Any]]:
+    extensions = _authoritative_extensions(client)
+    try:
+        networks_node = client.api.networks
+        instances_node = client.api.instances
+        profiles_node = client.api.profiles
+        images_node = client.api.images
+    except (AttributeError, TypeError) as exc:
+        raise InventoryReadError("core project resource") from exc
+    networks = _get_collection(networks_node, project=project, resource="network")
+    instances = _get_collection(instances_node, project=project, resource="instance")
+    for instance in instances:
+        _validate_instance_metadata(instance, "instance")
+        if not isinstance(instance.get("name"), str) or not instance["name"]:
+            raise InventoryReadError("instance")
+    resources: dict[str, list[Any]] = {
+        "instances": instances,
+        "profiles": _get_collection(profiles_node, project=project, resource="profile"),
+        "networks": networks,
+        "images": _get_collection(images_node, project=project, resource="image"),
+        "custom_volumes": _project_custom_volumes(client, project),
+        "storage_buckets": _project_buckets(
+            client, project, extensions=extensions
+        ),
+    }
+    for label in (
+        "network_acls",
+        "network_zones",
+        "network_address_sets",
+        "placement_groups",
+    ):
+        required_extension = _OPTIONAL_COLLECTION_EXTENSIONS[label]
+        if required_extension not in extensions:
+            resources[label] = []
+            continue
+        try:
+            node = getattr(client.api, label)
+        except (AttributeError, TypeError) as exc:
+            raise InventoryReadError(label.replace("_", " ")) from exc
+        resources[label] = _get_collection(
+            node, project=project, resource=label.replace("_", " ")
+        )
+    resources["network_forwards"] = []
+    resources["network_load_balancers"] = []
+    for network in networks:
+        if not isinstance(network, dict) or not network.get("name"):
+            continue
+        try:
+            node = networks_node[safe_segment(str(network["name"]))]
+        except (AttributeError, KeyError, TypeError) as exc:
+            raise InventoryReadError(
+                f"network '{network['name']}' dependency"
+            ) from exc
+        for label, attribute in (
+            ("network_forwards", "forwards"),
+            ("network_load_balancers", "load_balancers"),
+        ):
+            required_extension = _OPTIONAL_COLLECTION_EXTENSIONS[label]
+            if required_extension not in extensions:
+                continue
+            try:
+                collection = getattr(node, attribute)
+            except (AttributeError, TypeError) as exc:
+                raise InventoryReadError(label.replace("_", " ")) from exc
+            resources[label].extend(
+                _get_collection(
+                    collection, project=project, resource=label.replace("_", " ")
+                )
+            )
+    return resources
+
+
+def project_inventory(client: Any, project: str) -> dict[str, Any]:
+    """Safe inventory projection used by cleanup drift checks."""
+    resources = _known_project_resources(client, project)
+    return {
+        "instances": sorted(
+            str(row.get("name"))
+            for row in resources.get("instances", [])
+            if isinstance(row, dict) and row.get("name")
+        ),
+        "counts": {kind: len(rows) for kind, rows in resources.items()},
+    }
+
+
+def _occupied_resources(resources: dict[str, list[Any]]) -> dict[str, int]:
+    occupied: dict[str, int] = {}
+    for kind, rows in resources.items():
+        if not rows:
+            continue
+        if kind == "profiles":
+            nonempty = [
+                profile
+                for profile in rows
+                if not isinstance(profile, dict)
+                or profile.get("name") != "default"
+                or bool(profile.get("config") or {})
+                or bool(profile.get("devices") or {})
+            ]
+            if nonempty:
+                occupied[kind] = len(nonempty)
+        else:
+            occupied[kind] = len(rows)
+    return occupied
+
+
+def _device_blockers(result: PreflightResult, instance: dict[str, Any], name: str) -> None:
+    # Expanded values include inherited profile configuration. Checking only local config lets a
+    # privileged/raw profile cross the boundary without ever appearing in `config` or `devices`.
+    config = instance.get("expanded_config") or instance.get("config") or {}
+    if str(config.get("security.privileged", "")).lower() == "true":
+        result.block(
+            "privileged_instance",
+            f"Instance '{name}' is privileged.",
+            "Use a separately reviewed privileged-workload procedure.",
+        )
+    if any(str(key).startswith("raw.") for key in config):
+        result.block(
+            "raw_instance_config",
+            f"Instance '{name}' has raw daemon configuration.",
+            "Remove or separately review raw configuration before migration.",
+        )
+    if str(config.get("boot.autostart", "")).lower() == "true":
+        result.block(
+            "source_autostart_not_fenced",
+            f"Instance '{name}' can start automatically when its daemon restarts.",
+            "Disable boot.autostart and run preflight again before staged migration.",
+        )
+    devices = instance.get("expanded_devices") or instance.get("devices") or {}
+    allowed_types = {"disk", "nic", "none", "tpm"}
+    for device_name, device in devices.items():
+        if not isinstance(device, dict):
+            result.block(
+                "invalid_device", f"Instance '{name}' has invalid device '{device_name}'."
+            )
+            continue
+        device_type = str(device.get("type") or "")
+        if device_type not in allowed_types:
+            result.block(
+                "unknown_or_unsupported_device",
+                f"Instance '{name}' uses unapproved device type '{device_type or 'unknown'}'.",
+                "Remove it or add a reviewed migration handler for that device type.",
+            )
+        if device_type in {"gpu", "pci", "usb", "proxy", "unix-block", "unix-char"}:
+            result.block(
+                "unsupported_device",
+                f"Instance '{name}' uses unsupported {device_type} device '{device_name}'.",
+                "Remove the device or use a hardware-aware migration procedure.",
+            )
+        if device_type == "disk" and device.get("path") != "/" and device.get("source"):
+            result.block(
+                "attached_volume_or_host_path",
+                f"Instance '{name}' has non-root disk '{device_name}'.",
+                "Migrate and map the custom volume or host path first.",
+            )
+
+
+def _source_state_blocker(
+    result: PreflightResult, instance: dict[str, Any], name: str
+) -> None:
+    if str(instance.get("status") or "").strip().lower() == "stopped":
+        return
+    result.block(
+        "source_instance_not_stopped",
+        f"Instance '{name}' must be authoritatively Stopped before migration.",
+        "Stop the workload, drain console and terminal sessions, then run preflight again. "
+        "This release does not orchestrate live guest writes or interactive session drain.",
+    )
+
+
+def _network_dependency_blockers(
+    result: PreflightResult, instance: dict[str, Any], name: str
+) -> None:
+    devices = instance.get("expanded_devices") or instance.get("devices") or {}
+    for device_name, device in devices.items():
+        if not isinstance(device, dict) or device.get("type") != "nic":
+            continue
+        result.block(
+            "network_dependency_unmapped",
+            f"Instance '{name}' has NIC dependency '{device_name}' that cannot be proven equivalent.",
+            "Network/parent mapping is not executable in this release; use the same project or detach the NIC.",
+        )
+
+
+def _profile_compatibility(
+    result: PreflightResult,
+    source_client: Any,
+    target_client: Any,
+    source_project: str,
+    target_project: str,
+    instance: dict[str, Any],
+) -> None:
+    for profile_name in instance.get("profiles") or ["default"]:
+        name = str(profile_name)
+        try:
+            source = _profile(source_client, source_project, name)
+        except InventoryReadError as exc:
+            _block_inventory_error(result, side="source", error=exc)
+            continue
+        try:
+            target = _profile(target_client, target_project, name)
+        except InventoryReadError as exc:
+            _block_inventory_error(result, side="target", error=exc)
+            continue
+        if source is None:
+            result.block("source_profile_missing", f"Source profile '{name}' is unreadable.")
+        elif target is None:
+            result.block(
+                "target_profile_missing",
+                f"Target profile '{name}' does not exist.",
+                "Create and validate an equivalent target profile.",
+            )
+        elif (source.get("config") or {}) != (target.get("config") or {}) or (
+            source.get("devices") or {}
+        ) != (target.get("devices") or {}):
+            result.block(
+                "profile_drift",
+                f"Target profile '{name}' is not equivalent to the source profile.",
+                "Align the profile or provide an explicit mapping.",
+            )
+
+
+def inspect(
+    *,
+    scope: str,
+    intent: str,
+    source_client: Any,
+    target_client: Any,
+    source_cluster: str,
+    source_project: str,
+    source_name: Optional[str],
+    target_cluster: str,
+    target_project: str,
+    target_name: Optional[str],
+    target_member: Optional[str],
+    target_pool: Optional[str],
+    settings: Any,
+    mappings: Optional[dict[str, Any]] = None,
+) -> PreflightResult:
+    """Build one deterministic preflight plan without mutating either daemon."""
+    source_identity = daemon_identity(source_client)
+    target_identity = daemon_identity(target_client)
+    same_cluster = source_cluster == target_cluster
+    same_project = same_cluster and source_project == target_project
+    member_relocation = intent == "move" and same_project and bool(target_member)
+    strategy = (
+        "member_relocation"
+        if member_relocation
+        else "same_cluster_copy"
+        if same_cluster
+        else "cross_cluster_pull"
+    )
+    result = PreflightResult(
+        strategy=strategy,
+        downtime="none" if intent == "copy" else "cold",
+        capabilities={
+            "source": source_identity,
+            "target": target_identity,
+            "same_cluster": same_cluster,
+            "same_project": same_project,
+            "target_member": target_member,
+            "checkpoint": True,
+            # Automated rollback, checkpoint restore, and source cleanup remain hard-disabled
+            # until Orcastra can prove every direct-daemon write across worker restarts.
+            "rollback": False,
+            "live": False,
+            "incremental_refresh": False,
+            "target_project_exists": False,
+            "target_project_create": False,
+            "atomic_shadow_metadata_cutover": not (
+                scope == "instance" and intent == "move" and not member_relocation
+            ),
+            "project_dependencies_locked": True,
+            "daemon_operation_inventory_verified": True,
+            "daemon_operations_quiescent": True,
+            "stopped_source_required": True,
+        },
+    )
+    if scope == "instance" and intent == "move" and not member_relocation:
+        result.block(
+            "instance_shadow_metadata_cutover_unsupported",
+            "Identity-changing instance move is disabled because Orcastra tags, schedules, "
+            "policy grants, tenant rules, billing ownership, and webhook ownership cannot yet "
+            "be cut over atomically.",
+            "Use Copy Instance, or use same-cluster same-project member relocation with the "
+            "original instance name.",
+        )
+    if intent == "copy" and target_member:
+        result.capabilities["targeted_copy"] = False
+        result.block(
+            "targeted_copy_member_validation_unsupported",
+            "Copy to an explicit cluster member is disabled because member-local network, "
+            "storage, architecture, and capacity validation is not yet generalized for copy.",
+            "Remove the target member and let the daemon place the stopped copy, or use a "
+            "separately validated member-relocation workflow.",
+        )
+    if scope == "project" and member_relocation:
+        result.block(
+            "project_member_relocation_recovery_unavailable",
+            "Project member relocation is disabled because a partial multi-instance move "
+            "cannot yet be reversed inside the original locked job.",
+            "Relocate one instance at a time after target-member preflight succeeds.",
+        )
+    _check_active_operations(
+        result,
+        source_client=source_client,
+        target_client=target_client,
+        source_cluster=source_cluster,
+        source_project=source_project,
+        target_cluster=target_cluster,
+        target_project=target_project,
+    )
+    mapping_groups = mappings or {}
+    if scope == "project" and intent == "copy":
+        result.block(
+            "project_copy_unsupported",
+            "Project copy is not implemented by the durable relocation executor.",
+            "Use project move after reviewing cutover and retention, or copy instances individually.",
+        )
+    for group in ("networks", "profiles", "volumes", "members", "external_dependencies"):
+        if mapping_groups.get(group):
+            result.block(
+                f"unsupported_{group}_mapping",
+                f"{group.replace('_', ' ').title()} mappings are not applied by this executor.",
+                "Remove the mapping and resolve the dependency explicitly before migration.",
+            )
+    unsupported_pool_keys = sorted(
+        key
+        for key in (mapping_groups.get("storage_pools") or {})
+        if key not in {"root", "*"}
+    )
+    if unsupported_pool_keys:
+        result.block(
+            "unsupported_storage_mapping",
+            "Only the root storage mapping is applied by this executor.",
+            "Use storage_pools.root or storage_pools.* only.",
+        )
+    if source_identity["engine"] != target_identity["engine"]:
+        result.block(
+            "cross_engine_not_supported",
+            "Source and target use different daemon engines.",
+            "Use LXD-to-LXD or Incus-to-Incus for this release.",
+        )
+    if not same_cluster:
+        try:
+            registered_source = urlparse(api_endpoint(source_client))
+            if registered_source.scheme != "https" or not registered_source.hostname:
+                raise MigrationSecurityError(
+                    "Cross-cluster migration requires a registered HTTPS endpoint."
+                )
+        except MigrationSecurityError:
+            result.block(
+                "registered_migration_endpoint_required",
+                "The source cluster lacks an eligible registered HTTPS migration endpoint.",
+                "Register and certificate-pin the source API endpoint before migration.",
+            )
+        else:
+            result.warn(
+                "target_to_source_reachability_unverified",
+                "Cross-cluster pull uses the registered, certificate-pinned source endpoint, but target-to-source reachability cannot be pre-probed.",
+                "Confirm routing and firewall access from the target cluster to the registered source endpoint.",
+            )
+    if same_cluster and source_project != target_project and (
+        "container_copy_project" not in source_identity["extensions"]
+    ):
+        result.block(
+            "container_copy_project_required",
+            "The cluster lacks the extension required for cross-project copy.",
+        )
+    _apply_lxd_native_cross_project_move_gate(
+        result,
+        intent=intent,
+        same_cluster=same_cluster,
+        source_project=source_project,
+        target_project=target_project,
+        source_identity=source_identity,
+        settings=settings,
+    )
+    if same_cluster and target_member and "cluster_internal_copy" not in source_identity["extensions"]:
+        result.block(
+            "cluster_internal_copy_required",
+            "The cluster lacks the extension required for cross-member relocation.",
+        )
+    for side, identity in (("source", source_identity), ("target", target_identity)):
+        if not approved_build(identity, settings):
+            result.block(
+                f"{side}_build_not_approved",
+                f"The {side} daemon build is not in the migration allowlist.",
+                f"Approve exact token {identity['engine']}:{identity['version']} after review.",
+            )
+    try:
+        source_project_record = _get_project(source_client, source_project)
+    except InventoryReadError as exc:
+        _block_inventory_error(result, side="source", error=exc)
+        return result
+    try:
+        target_project_record = _get_project(target_client, target_project)
+    except InventoryReadError as exc:
+        _block_inventory_error(result, side="target", error=exc)
+        return result
+    result.capabilities["target_project_exists"] = target_project_record is not None
+    result.capabilities["source_project_fingerprint"] = _project_fingerprint(
+        source_project_record
+    )
+    result.capabilities["target_project_fingerprint"] = _project_fingerprint(
+        target_project_record
+    )
+    effective_target_config = (
+        (target_project_record.get("config") or {})
+        if target_project_record is not None
+        else (
+            (source_project_record.get("config") or {})
+            if source_project_record is not None
+            else {}
+        )
+    )
+    if (
+        strategy == "cross_cluster_pull"
+        and target_identity["engine"] == "incus"
+        and str(effective_target_config.get("restricted") or "").lower() == "true"
+    ):
+        result.block(
+            "restricted_incus_pull_target_unsupported",
+            "Cross-cluster pull migration into a restricted Incus project is not supported.",
+            "Use an unrestricted compatible target project until a pinned push transport is "
+            "implemented and approved.",
+        )
+    _block_shared_dependencies(
+        result,
+        side="source",
+        project=source_project,
+        project_record=source_project_record,
+    )
+    if not same_project:
+        _block_shared_dependencies(
+            result,
+            side="target",
+            project=target_project,
+            project_record=target_project_record,
+        )
+    if scope == "instance":
+        if not source_name:
+            result.block("source_name_required", "An instance name is required.")
+            return result
+        try:
+            source_instance = _instance(source_client, source_project, source_name)
+        except InventoryReadError as exc:
+            _block_inventory_error(result, side="source", error=exc)
+            return result
+        if source_instance is None:
+            result.block("source_not_found", "The source instance does not exist.")
+            return result
+        _source_state_blocker(result, source_instance, source_name)
+        source_identity_fingerprint = instance_identity_fingerprint(source_instance)
+        if source_identity_fingerprint is None:
+            result.block(
+                "source_identity_unavailable",
+                f"Instance '{source_name}' has no authoritative immutable identity evidence.",
+                "Refresh the daemon inventory and ensure the instance exposes a creation time or UUID.",
+            )
+        destination_name = target_name or source_name
+        if same_project and not target_member:
+            if destination_name == source_name:
+                result.block(
+                    "source_target_identical",
+                    "Source and target resolve to the same instance identity.",
+                    "Choose a distinct copy name, another project, or another cluster member.",
+                )
+            elif intent == "move":
+                result.block(
+                    "rename_in_place_unsupported",
+                    "A same-project move cannot be used as an in-place rename.",
+                    "Use a dedicated rename workflow or choose another project/member.",
+                )
+        if member_relocation:
+            source_location = str(source_instance.get("location") or "").strip()
+            if not source_location:
+                result.block(
+                    "source_member_unverified",
+                    "The source instance member could not be read authoritatively.",
+                    "Refresh cluster inventory before selecting a relocation member.",
+                )
+            elif source_location == target_member:
+                result.block(
+                    "target_member_is_source",
+                    f"Instance '{source_name}' is already on member '{target_member}'.",
+                    "Choose a different target member.",
+                )
+        if member_relocation and target_name and target_name != source_name:
+            result.block(
+                "member_relocation_rename_unsupported",
+                "Native member relocation preserves the instance name.",
+                "Use the source name as the destination name or choose staged copy.",
+            )
+        if member_relocation and target_member:
+            _member_relocation_checks(
+                result,
+                client=source_client,
+                project=source_project,
+                target_member=target_member,
+                target_pool=target_pool,
+                instances=[source_instance],
+            )
+        if target_project_record is None:
+            can_create_target = source_project_record is not None
+            if source_project_record is None:
+                result.block(
+                    "source_project_missing", "The source project does not exist."
+                )
+            elif not _reviewed_project_config(
+                dict(source_project_record.get("config") or {})
+            ):
+                can_create_target = False
+                result.block(
+                    "unsupported_project_config",
+                    "The source project has configuration without a reviewed clone policy.",
+                    "Create and validate the target project manually before migration.",
+                )
+            used_profiles: list[Optional[dict[str, Any]]] = []
+            for name in source_instance.get("profiles") or ["default"]:
+                try:
+                    used_profiles.append(
+                        _profile(source_client, source_project, str(name))
+                    )
+                except InventoryReadError as exc:
+                    _block_inventory_error(result, side="source", error=exc)
+                    used_profiles.append(None)
+            if any(
+                profile is None
+                or bool(profile.get("config") or {})
+                or bool(profile.get("devices") or {})
+                for profile in used_profiles
+            ):
+                can_create_target = False
+                result.block(
+                    "target_project_requires_profile_clone",
+                    "A new target project would require cloning a non-empty profile.",
+                    "Create the target project and equivalent profiles before migration.",
+                )
+            if can_create_target:
+                result.capabilities["target_project_create"] = True
+                result.capabilities["target_project_fingerprint"] = _project_fingerprint(
+                    source_project_record
+                )
+        if not same_project:
+            result.resources.append(
+                {
+                    "resource_type": "project",
+                    "source_name": source_project,
+                    "target_name": target_project,
+                    "required": True,
+                    "state": "planned",
+                }
+            )
+        result.capabilities["incremental_refresh"] = bool(
+            member_relocation
+            and source_identity["engine"] == "incus"
+            and source_instance.get("type") == "container"
+            and "instance_refresh_migration" in source_identity["extensions"]
+        )
+        if member_relocation:
+            target_instance = source_instance
+        elif target_project_record is None:
+            target_instance = None
+        else:
+            try:
+                target_instance = _instance(
+                    target_client, target_project, destination_name
+                )
+            except InventoryReadError as exc:
+                _block_inventory_error(result, side="target", error=exc)
+                target_instance = None
+        if not member_relocation and target_project_record is not None:
+            if target_instance is not None:
+                result.block(
+                    "target_instance_exists",
+                    f"Target instance '{destination_name}' already exists.",
+                    "Choose another target name or remove the conflicting instance.",
+                )
+        source_arch = source_instance.get("architecture")
+        if source_arch and target_identity["architectures"] and source_arch not in target_identity[
+            "architectures"
+        ]:
+            result.block(
+                "architecture_mismatch",
+                f"Target cannot run architecture '{source_arch}'.",
+            )
+        _device_blockers(result, source_instance, source_name)
+        if not same_project:
+            _network_dependency_blockers(result, source_instance, source_name)
+        if not same_project and target_project_record is not None:
+            if source_project_record is None or dict(
+                source_project_record.get("config") or {}
+            ) != dict(target_project_record.get("config") or {}):
+                result.block(
+                    "target_project_policy_mismatch",
+                    "Target project restrictions, features, limits, or quotas differ from source.",
+                    "Align the empty target project policy exactly before migration.",
+                )
+            try:
+                target_resources = _known_project_resources(
+                    target_client, target_project
+                )
+            except InventoryReadError as exc:
+                _block_inventory_error(result, side="target", error=exc)
+                target_resources = None
+            occupied = (
+                _occupied_resources(target_resources)
+                if target_resources is not None
+                else {}
+            )
+            if occupied:
+                result.block(
+                    "target_project_not_empty",
+                    "The target project contains resources.",
+                    "Choose a new or empty target project. Project merge is not supported.",
+                )
+            _profile_compatibility(
+                result,
+                source_client,
+                target_client,
+                source_project,
+                target_project,
+                source_instance,
+            )
+        if not member_relocation:
+            _check_capacity(
+                result,
+                source_client=source_client,
+                target_client=target_client,
+                source_project=source_project,
+                instance_names=[source_name],
+                target_pool=target_pool,
+            )
+        result.resources.append(
+            {
+                "resource_type": "instance",
+                "source_name": source_name,
+                "target_name": destination_name,
+                "source_fingerprint": _instance_preflight_fingerprint(source_instance),
+                "source_identity_fingerprint": source_identity_fingerprint,
+                "target_fingerprint": (
+                    _instance_preflight_fingerprint(target_instance)
+                    if target_instance is not None
+                    else None
+                ),
+                "target_identity_fingerprint": (
+                    instance_identity_fingerprint(target_instance)
+                    if target_instance is not None
+                    else None
+                ),
+                "required": True,
+                "state": "planned",
+            }
+        )
+        return result
+
+    if source_project_record is None:
+        result.block("source_project_missing", "The source project does not exist.")
+        return result
+    if not same_project:
+        result.block(
+            "project_shadow_metadata_cutover_unsupported",
+            "Cross-project relocation cannot yet cut over Orcastra policy, billing, tags, schedules, and webhook ownership atomically.",
+            "Use same-project member relocation or wait for the shadow-metadata cutover stage.",
+        )
+    elif not target_member:
+        result.block(
+            "source_target_identical",
+            "Source and target resolve to the same project namespace with no target member.",
+            "Choose a distinct cluster member or another compatible target project.",
+        )
+    try:
+        resources = _known_project_resources(source_client, source_project)
+    except InventoryReadError as exc:
+        _block_inventory_error(result, side="source", error=exc)
+        return result
+    if member_relocation:
+        instances = [
+            instance
+            for instance in resources["instances"]
+            if isinstance(instance, dict) and instance.get("name")
+        ]
+        if not instances:
+            result.block(
+                "empty_project_relocation_noop",
+                "The project has no workloads to relocate to another member.",
+                "Choose a project with workloads or cancel this no-op operation.",
+            )
+        for instance in instances:
+            name = str(instance["name"])
+            source_location = str(instance.get("location") or "").strip()
+            if not source_location:
+                result.block(
+                    "source_member_unverified",
+                    f"The current member for instance '{name}' could not be read.",
+                    "Refresh cluster inventory before selecting a relocation member.",
+                )
+            elif source_location == target_member:
+                result.block(
+                    "target_member_contains_source_workload",
+                    f"Instance '{name}' is already on target member '{target_member}'.",
+                    "Relocate remaining workloads individually or choose another member.",
+                )
+    if target_project_record is None:
+        source_project_config = dict(source_project_record.get("config") or {})
+        if not _reviewed_project_config(source_project_config):
+            result.block(
+                "unsupported_project_config",
+                "The source project has configuration without a reviewed clone policy.",
+                "Create and validate the target project manually before migration.",
+            )
+        nontrivial_profiles = [
+            profile
+            for profile in resources["profiles"]
+            if isinstance(profile, dict)
+            and ((profile.get("config") or {}) or (profile.get("devices") or {}))
+        ]
+        if nontrivial_profiles:
+            result.block(
+                "target_project_requires_profile_clone",
+                "A new target project would require cloning non-empty profiles.",
+                "Create the target project and equivalent profiles, then run preflight again.",
+            )
+        if _reviewed_project_config(source_project_config) and not nontrivial_profiles:
+            result.capabilities["target_project_create"] = True
+            result.capabilities["target_project_fingerprint"] = _project_fingerprint(
+                source_project_record
+            )
+    if target_project_record is not None and not same_project:
+        if dict(source_project_record.get("config") or {}) != dict(
+            target_project_record.get("config") or {}
+        ):
+            result.block(
+                "target_project_policy_mismatch",
+                "Target project restrictions, features, limits, or quotas differ from source.",
+                "Align the empty target project policy exactly, then run preflight again.",
+            )
+        try:
+            target_resources = _known_project_resources(target_client, target_project)
+        except InventoryReadError as exc:
+            _block_inventory_error(result, side="target", error=exc)
+            target_resources = None
+        occupied = (
+            _occupied_resources(target_resources)
+            if target_resources is not None
+            else {}
+        )
+        if occupied:
+            result.block(
+                "target_project_not_empty",
+                "The target project contains resources.",
+                "Choose a new or empty target project. Project merge is not supported.",
+            )
+    unsupported_labels = {
+        "networks": "managed networks",
+        "network_acls": "network ACLs",
+        "network_zones": "network zones",
+        "network_address_sets": "network address sets",
+        "images": "project images",
+        "custom_volumes": "custom storage volumes",
+        "storage_buckets": "storage buckets",
+        "network_forwards": "network forwards",
+        "network_load_balancers": "network load balancers",
+        "placement_groups": "placement groups",
+    }
+    for kind, label in unsupported_labels.items():
+        if not same_project and resources.get(kind):
+            result.block(
+                f"unsupported_{kind}",
+                f"The source project contains {label} that cannot yet be migrated safely.",
+                "Migrate or remove that dependency before relocating the project.",
+            )
+    for instance in resources["instances"]:
+        if not isinstance(instance, dict) or not instance.get("name"):
+            result.block(
+                "invalid_instance_inventory",
+                "The daemon returned an invalid instance inventory entry.",
+            )
+            continue
+        name = str(instance["name"])
+        _source_state_blocker(result, instance, name)
+        source_identity_fingerprint = instance_identity_fingerprint(instance)
+        if source_identity_fingerprint is None:
+            result.block(
+                "source_identity_unavailable",
+                f"Instance '{name}' has no authoritative immutable identity evidence.",
+                "Refresh the daemon inventory and ensure the instance exposes a creation time or UUID.",
+            )
+        _device_blockers(result, instance, name)
+        if not same_project:
+            _network_dependency_blockers(result, instance, name)
+        if not same_project and target_project_record is not None:
+            _profile_compatibility(
+                result,
+                source_client,
+                target_client,
+                source_project,
+                target_project,
+                instance,
+            )
+        result.resources.append(
+            {
+                "resource_type": "instance",
+                "source_name": name,
+                "target_name": name,
+                "source_fingerprint": _instance_preflight_fingerprint(instance),
+                "source_identity_fingerprint": source_identity_fingerprint,
+                "target_fingerprint": (
+                    _instance_preflight_fingerprint(instance)
+                    if member_relocation
+                    else None
+                ),
+                "target_identity_fingerprint": (
+                    source_identity_fingerprint if member_relocation else None
+                ),
+                "required": True,
+                "state": "planned",
+            }
+        )
+    if not member_relocation:
+        _check_capacity(
+            result,
+            source_client=source_client,
+            target_client=target_client,
+            source_project=source_project,
+            instance_names=[
+                str(instance.get("name"))
+                for instance in resources["instances"]
+                if isinstance(instance, dict) and instance.get("name")
+            ],
+            target_pool=target_pool,
+        )
+    result.resources.insert(
+        0,
+        {
+            "resource_type": "project",
+            "source_name": source_project,
+            "target_name": target_project,
+            "required": True,
+            "state": "planned",
+        },
+    )
+    if not resources["instances"]:
+        result.warn("empty_source_project", "The source project has no instances to relocate.")
+    return result

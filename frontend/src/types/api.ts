@@ -1423,6 +1423,13 @@ export interface SystemSettings {
   snapshot_schedules_enabled?: boolean;
   /** Whether this deployment mounted the task journal routes. Same three-state rule. */
   task_journal_enabled?: boolean;
+  /** Read-only Migration Center planning and history capability. */
+  migration_center_enabled?: boolean;
+  /** Independently staged mutation capabilities. All default to disabled server-side. */
+  migration_durable_copy_enabled?: boolean;
+  migration_instance_move_enabled?: boolean;
+  migration_project_member_relocation_enabled?: boolean;
+  migration_project_cross_cluster_enabled?: boolean;
 }
 
 // My Keys
@@ -3208,8 +3215,9 @@ export interface MoveResponse {
   target_host: string;
   target_project: string;
   target_name: string;
-  /** copy within a cluster, migration between clusters, stream when they cannot reach each other. */
-  transport: "copy" | "migration" | "stream";
+  /** Durable engine, copy within a cluster, migration between clusters, or bounded stream. */
+  transport: "durable" | "copy" | "migration" | "stream";
   operation_id?: string | null;
+  migration_job_id?: string | null;
   message: string;
 }

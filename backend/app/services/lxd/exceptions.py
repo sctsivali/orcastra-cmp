@@ -8,6 +8,17 @@ class LXDConnectionError(Exception):
     pass
 
 
+class LXDTransportPinError(LXDConnectionError):
+    """The HTTPS session is not bound to the caller's expected server certificate.
+
+    Migration jobs persist the certificate fingerprint they were approved against. This
+    distinct error lets that higher-level workflow stop on an identity boundary without
+    changing the best-effort connection semantics used by legacy request paths.
+    """
+
+    pass
+
+
 class LXDLocalUnavailableError(LXDConnectionError):
     """The control-plane worker could not start or finish a bounded LXD read.
 

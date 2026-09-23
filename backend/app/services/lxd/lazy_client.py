@@ -45,7 +45,11 @@ CONNECT_TIMEOUT: float = 30.0
 _MAX_IN_FLIGHT = 4
 
 
-def connect_or_get_client(lxd_service: Any, cluster_id: str) -> Optional[Any]:
+def connect_or_get_client(
+    lxd_service: Any,
+    cluster_id: str,
+    expected_server_fingerprint: Optional[str] = None,
+) -> Optional[Any]:
     """The pooled client, or one connected from Vault. None means "did not answer".
 
     Safe to call from a worker thread and from a fan-out helper that already runs in one.
@@ -56,14 +60,36 @@ def connect_or_get_client(lxd_service: Any, cluster_id: str) -> Optional[Any]:
     worst, and only until the breaker trips. Threading the client out of ensure_connection to
     save it would put a second meaning on a function eight other callers rely on.
     """
-    client = lxd_service.connection_manager.get_client(cluster_id)
+    client = (
+        lxd_service.connection_manager.get_client(cluster_id)
+        if expected_server_fingerprint is None
+        else lxd_service.connection_manager.get_client(
+            cluster_id,
+            expected_server_fingerprint=expected_server_fingerprint,
+        )
+    )
     if client is not None:
         return client
 
-    if not lxd_service.ensure_connection(cluster_id):
+    connected = (
+        lxd_service.ensure_connection(cluster_id)
+        if expected_server_fingerprint is None
+        else lxd_service.ensure_connection(
+            cluster_id,
+            expected_server_fingerprint=expected_server_fingerprint,
+        )
+    )
+    if not connected:
         return None
 
-    return lxd_service.connection_manager.get_client(cluster_id)
+    return (
+        lxd_service.connection_manager.get_client(cluster_id)
+        if expected_server_fingerprint is None
+        else lxd_service.connection_manager.get_client(
+            cluster_id,
+            expected_server_fingerprint=expected_server_fingerprint,
+        )
+    )
 
 
 async def client_for(
@@ -71,6 +97,7 @@ async def client_for(
     cluster_id: str,
     *,
     label: str = "lazy_connect",
+    expected_server_fingerprint: Optional[str] = None,
 ) -> Optional[Any]:
     """`connect_or_get_client` off the event loop. None on timeout or a saturated pool.
 
@@ -79,10 +106,14 @@ async def client_for(
     the same way to an operator and there is no second error path to get wrong.
     """
     try:
+        connect_args = (
+            (lxd_service, cluster_id)
+            if expected_server_fingerprint is None
+            else (lxd_service, cluster_id, expected_server_fingerprint)
+        )
         return await run_blocking(
             connect_or_get_client,
-            lxd_service,
-            cluster_id,
+            *connect_args,
             timeout=CONNECT_TIMEOUT,
             label=f"{label}[{cluster_id}]",
             executor=_CONNECT_EXECUTOR,

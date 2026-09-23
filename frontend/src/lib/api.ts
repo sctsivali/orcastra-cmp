@@ -2632,13 +2632,21 @@ const mobilityAPI = {
       90000,
     );
   },
-  copy: async (instanceName: string, body: MoveRequest): Promise<MoveResponse> => {
+  copy: async (
+    instanceName: string,
+    body: MoveRequest,
+    idempotencyKey: string,
+  ): Promise<MoveResponse> => {
     // A cross-cluster copy holds the request while the upstream operation is set up, which is
     // slower than an ordinary write but still bounded: the transfer itself runs as an operation
     // the caller polls, not inside this request.
     return fetchAPI<MoveResponse>(
       `/instances/${encodeURIComponent(instanceName)}/copy`,
-      { method: "POST", body: JSON.stringify(body) },
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "Idempotency-Key": idempotencyKey },
+      },
       120000,
       false,
       { retryAfterAuthRefresh: false },

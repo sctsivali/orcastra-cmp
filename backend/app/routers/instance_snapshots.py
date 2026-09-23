@@ -18,6 +18,8 @@ Three rules follow from that split and are load-bearing:
   product can see it.
 """
 import logging
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
@@ -57,6 +59,11 @@ from app.models.schemas import (
     SnapshotRestoreRequest,
 )
 from app.services.orcahub_webhook import schedule_orcahub_event
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    guard_instance_mutation,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -76,6 +83,35 @@ _SNAPSHOT_OUTCOME_UNKNOWN = {
         "Check this instance's snapshots before trying again."
     ),
 }
+
+
+async def _assert_snapshot_source_is_writable(
+    host: str, project: str, instance_name: str
+) -> None:
+    try:
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+@asynccontextmanager
+async def _guard_snapshot_source(
+    host: str, project: str, instance_name: str
+) -> AsyncIterator[None]:
+    """Keep snapshot admission and the daemon operation atomic with migration execute."""
+    try:
+        async with guard_instance_mutation(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        ):
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
 
 def _invalidate_snapshot_views() -> None:
@@ -395,6 +431,7 @@ async def create_snapshot(
 ):
     project = _enforce_snapshot_access(body.host, body.project, instance_name)
     body = body.model_copy(update={"project": project})
+    await _assert_snapshot_source_is_writable(body.host, project, instance_name)
 
     client = await _client(lxd_service, body.host)
     policy = await _read_policy(client, instance_name, body.project)
@@ -416,7 +453,9 @@ async def create_snapshot(
     lock = rebuild_lock(lock_key)
     create_started = False
     try:
-        async with lock:
+        async with _guard_snapshot_source(
+            body.host, body.project, instance_name
+        ), lock:
             try:
                 await _blocking(
                     snapshots_service.assert_capacity,
@@ -577,6 +616,7 @@ async def delete_snapshot(
     user: AuthenticatedUser = Depends(require_tenant()),
 ):
     project = _enforce_snapshot_access(host, project, instance_name)
+    await _assert_snapshot_source_is_writable(host, project, instance_name)
 
     # important: name safety, then ownership, both before a client is opened. Everything
     # decidable from the request alone is decided before anything touches the cluster, which is
@@ -602,15 +642,16 @@ async def delete_snapshot(
     )
 
     try:
-        operation_id = await _blocking(
-            snapshots_service.delete_instance_snapshot,
-            client,
-            instance_name,
-            project,
-            snapshot_name,
-            label="snapshots.delete",
-        )
-        outcome = await _settle(client, operation_id, project)
+        async with _guard_snapshot_source(host, project, instance_name):
+            operation_id = await _blocking(
+                snapshots_service.delete_instance_snapshot,
+                client,
+                instance_name,
+                project,
+                snapshot_name,
+                label="snapshots.delete",
+            )
+            outcome = await _settle(client, operation_id, project)
     except HTTPException:
         raise
     except snapshots_service.LXDOperationUnreadable as exc:
@@ -698,6 +739,7 @@ async def restore_snapshot(
         body.host, body.project, instance_name, need_operate=True
     )
     body = body.model_copy(update={"project": project})
+    await _assert_snapshot_source_is_writable(body.host, project, instance_name)
 
     if body.confirm_name != instance_name:
         raise HTTPException(
@@ -727,51 +769,54 @@ async def restore_snapshot(
 
     safety_name: Optional[str] = None
     try:
-        # important: the target has to exist before anything is written. Restoring a name that is
-        # not on the instance fails at the daemon, and because the safety copy was taken first it
-        # left a snapshot behind on a billed source for a restore that never ran.
-        existing = await _blocking(
-            snapshots_service.list_instance_snapshots,
-            client,
-            instance_name,
-            body.project,
-            label="snapshots.list",
-        )
-        if not any(row.get("name") == snapshot_name for row in existing):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}.",
+        async with _guard_snapshot_source(body.host, body.project, instance_name):
+            # important: the target has to exist before anything is written. Restoring a name
+            # that is not on the instance fails at the daemon, and because the safety copy was
+            # taken first it left a snapshot behind on a billed source for a restore that never
+            # ran.
+            existing = await _blocking(
+                snapshots_service.list_instance_snapshots,
+                client,
+                instance_name,
+                body.project,
+                label="snapshots.list",
             )
+            if not any(row.get("name") == snapshot_name for row in existing):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}.",
+                )
 
-        # Its own module beside the ownership and billing gates, because it is a third refusal
-        # with the same shape: it decides whether the action may proceed and says why not.
-        safety_name = await take_safety_snapshot(
-            client,
-            instance_name=instance_name,
-            host=body.host,
-            project=body.project,
-            wanted=body.safety_snapshot,
-            existing=existing,
-            blocking=_blocking,
-            settle=_settle,
-            audit=lambda **kw: _audit(
-                "instance.snapshot.restore", instance_name, body.host, body.project,
-                details={"snapshot": snapshot_name, **kw.pop("details", {})}, **kw
-            ),
-        )
-        if safety_name:
-            # The safety point exists even when the restore later fails.
-            _invalidate_snapshot_views()
+            # Its own module beside the ownership and billing gates, because it is a third
+            # refusal with the same shape: it decides whether the action may proceed and says
+            # why not.
+            safety_name = await take_safety_snapshot(
+                client,
+                instance_name=instance_name,
+                host=body.host,
+                project=body.project,
+                wanted=body.safety_snapshot,
+                existing=existing,
+                blocking=_blocking,
+                settle=_settle,
+                audit=lambda **kw: _audit(
+                    "instance.snapshot.restore", instance_name, body.host, body.project,
+                    details={"snapshot": snapshot_name, **kw.pop("details", {})}, **kw
+                ),
+            )
+            if safety_name:
+                # The safety point exists even when the restore later fails.
+                _invalidate_snapshot_views()
 
-        operation_id = await _blocking(
-            snapshots_service.restore_instance_snapshot,
-            client,
-            instance_name,
-            body.project,
-            snapshot_name,
-            label="snapshots.restore",
-        )
-        outcome = await _settle(client, operation_id, body.project)
+            operation_id = await _blocking(
+                snapshots_service.restore_instance_snapshot,
+                client,
+                instance_name,
+                body.project,
+                snapshot_name,
+                label="snapshots.restore",
+            )
+            outcome = await _settle(client, operation_id, body.project)
     except HTTPException:
         raise
     except snapshots_service.LXDOperationUnreadable as exc:

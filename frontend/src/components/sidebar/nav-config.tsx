@@ -23,6 +23,7 @@ import {
   MapPin,
   Blocks,
   History,
+  ArrowLeftRight,
 } from "lucide-react";
 import type { QueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -99,6 +100,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "members", label: "Members", href: "/inventory/clustering/members", icon: Boxes },
       { id: "server", label: "Server", href: "/inventory/server", icon: Cpu },
       { id: "operations", label: "Operations", href: "/inventory/operations", icon: Cog },
+      { id: "migrations", label: "Migrations", href: "/inventory/migrations", icon: ArrowLeftRight },
       { id: "warnings", label: "Warnings", href: "/inventory/warnings", icon: AlertTriangle },
     ],
   },

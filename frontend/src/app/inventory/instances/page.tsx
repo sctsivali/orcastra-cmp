@@ -70,6 +70,8 @@ import { INSTANCES, InstancesTable } from "./components/instances-table";
 import { useInstanceActions } from "./components/use-instance-actions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { InstanceSpecificationDialog } from "@/components/instance-specification/instance-specification-dialog";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
 
 function InstancesContent() {
   const { scopeKey } = useActorQueryScope();
@@ -209,6 +211,18 @@ function InstancesContent() {
   const canCreateInstance = hasRole(Role.PARTNER);
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
   const canDeleteInstance = hasRole(Role.PARTNER);
+  const migrationCapabilities = useMigrationCapabilities();
+  const migrationPlanningUnavailableReason = migrationCapabilities.isLoading
+    ? "Checking Migration Center availability"
+    : migrationCapabilities.isError
+      ? "Migration Center availability is unavailable"
+      : migrationCapabilities.centerEnabled !== true
+        ? "New migration admission is paused"
+        : undefined;
+  const migrationCopyUnavailableReason = migrationPlanningUnavailableReason
+    ?? (migrationCapabilities.durableCopyEnabled === true
+      ? undefined
+      : "Durable Copy Instance is not enabled");
 
   const resetPage = () => setCurrentPage(1);
   const filters = useTableFilters(INSTANCES, instances as any[], { onFilterChange: resetPage });
@@ -354,6 +368,8 @@ function InstancesContent() {
             pendingActions={actions.pendingActions}
             isReadOnly={isReadOnly}
             writeDisabledReason={writeDisabledReason}
+            migrationPlanningUnavailableReason={migrationPlanningUnavailableReason}
+            migrationCopyUnavailableReason={migrationCopyUnavailableReason}
             permissionReason={permissionReason}
             canDeleteInstance={canDeleteInstance}
             deletePending={actions.deletePending}
@@ -363,6 +379,16 @@ function InstancesContent() {
               setSpecificationTarget(instance);
             }}
             onCopy={setCopyTarget}
+            onMove={(instance) =>
+              navigate(
+                inventoryLinks.migrations({
+                  scope: "instance",
+                  sourceCluster: instance.host,
+                  sourceProject: instance.project || "default",
+                  resourceName: instance.name,
+                }),
+              )
+            }
             onRebuild={setRebuildTarget}
             onDelete={setDeleteTarget}
           />

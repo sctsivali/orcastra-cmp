@@ -71,7 +71,12 @@ class LXDService:
         except Exception as e:
             logger.warning(f"Could not sync registered clusters at init: {e}")
     
-    def ensure_connection(self, cluster_id: str) -> bool:
+    def ensure_connection(
+        self,
+        cluster_id: str,
+        *,
+        expected_server_fingerprint: str | None = None,
+    ) -> bool:
         """
         Ensure cluster is connected (lazy loading helper).
         Respects org-scope: returns False if the cluster is outside user's org.
@@ -79,13 +84,23 @@ class LXDService:
         # Org-scope guard: prevent reconnecting to clusters outside the user's org
         from app.core.org_scope import get_current_allowed_clusters
         from app.services.lxd import health
-        from app.services.lxd.exceptions import LXDAuthorizationError
+        from app.services.lxd.exceptions import (
+            LXDAuthorizationError,
+            LXDTransportPinError,
+        )
         allowed = get_current_allowed_clusters()
         if allowed is not None and cluster_id not in allowed:
             return False
 
         # Check if already connected
-        client = self.connection_manager.get_client(cluster_id)
+        client = (
+            self.connection_manager.get_client(cluster_id)
+            if expected_server_fingerprint is None
+            else self.connection_manager.get_client(
+                cluster_id,
+                expected_server_fingerprint=expected_server_fingerprint,
+            )
+        )
         if client:
             return True
 
@@ -108,12 +123,19 @@ class LXDService:
             )
             cert_data = self.cert_manager.get_cluster_certificate(cluster_id)
             
+            connect_kwargs = {
+                "cluster_id": cluster_id,
+                "endpoint": metadata["endpoint"],
+                "cert_content": cert_data["client.crt"],
+                "key_content": cert_data["client.key"],
+                "verify": False,
+            }
+            if expected_server_fingerprint is not None:
+                connect_kwargs["expected_server_fingerprint"] = (
+                    expected_server_fingerprint
+                )
             connected = self.connection_manager.connect_with_vault_cert(
-                cluster_id=cluster_id,
-                endpoint=metadata["endpoint"],
-                cert_content=cert_data["client.crt"],
-                key_content=cert_data["client.key"],
-                verify=False
+                **connect_kwargs
             )
             # note: this returns None when the breaker refuses it. Treating that as success
             # cleared the breaker and reported a cluster as connected that never was.
@@ -122,6 +144,8 @@ class LXDService:
             logger.info(f"Lazy-connected to cluster: {cluster_id}")
             health.clear(cluster_id)
             return True
+        except LXDTransportPinError:
+            raise
         except LXDAuthorizationError as e:
             # important: the host ANSWERED and refused our certificate. Letting this fall into
             # the broad handler below recorded it as a generic failure, so the breaker's kind

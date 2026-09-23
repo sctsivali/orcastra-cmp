@@ -207,6 +207,8 @@ export function resourceHref(
       return inventoryLinks.networkDetail(name, node, project);
     case "network_acl":
       return inventoryLinks.networkAcls({ q: name, node });
+    case "migration":
+      return inventoryLinks.migrations({ job: name });
     default:
       return null;
   }

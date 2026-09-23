@@ -14,6 +14,8 @@ half-built instances and a filled pool.
 
 import inspect
 
+import pytest
+
 from app.routers import instance_mobility
 from app.services.lxd import mobility
 
@@ -99,7 +101,8 @@ def test_an_unknown_architecture_does_not_block_a_move():
     assert mobility.architecture_compatible("x86_64", []) is True
 
 
-def test_a_migration_declares_the_instance_architecture():
+@pytest.mark.parametrize("instance_type", ["container", "virtual-machine"])
+def test_a_migration_declares_the_instance_architecture_and_type(instance_type):
     """The migration body must name the architecture, or the target refuses it outright.
 
     A same-cluster copy infers it from the source; a migration target builds the instance record
@@ -131,6 +134,7 @@ def test_a_migration_declares_the_instance_architecture():
         source_certificate="cert",
         secrets={"control": "c"},
         definition={
+            "type": instance_type,
             "config": {"limits.cpu": "1"},
             "devices": {"root": {"path": "/", "type": "disk"}},
             "profiles": ["default"],
@@ -138,6 +142,7 @@ def test_a_migration_declares_the_instance_architecture():
         },
     )
     assert captured["architecture"] == "x86_64"
+    assert captured["type"] == instance_type
     assert captured["config"]["limits.cpu"] == "1"
     assert captured["source"]["mode"] == "pull"
 
@@ -181,7 +186,7 @@ def test_the_migration_operation_url_is_absolute():
     assert secrets == {"control": "c", "fs": "f"}
 
 
-def test_an_absolute_url_from_the_daemon_is_left_alone():
+def test_an_absolute_url_from_another_origin_is_refused():
     class _Instance:
         def post(self, json=None, params=None):
             class _R:
@@ -203,5 +208,55 @@ def test_an_absolute_url_from_the_daemon_is_left_alone():
             instances = _Instances()
             _api_endpoint = "https://100.66.12.102:8443/1.0"
 
+    try:
+        mobility.begin_source_migration(_Client(), instance_name="ct-x", project="p")
+    except mobility.MobilityError as exc:
+        assert "outside its registered endpoint" in str(exc)
+        return
+    raise AssertionError("a daemon-supplied foreign operation URL must fail closed")
+
+
+def test_an_absolute_url_on_the_registered_origin_is_allowed():
+    class _Instance:
+        def post(self, json=None, params=None):
+            class _R:
+                @staticmethod
+                def json():
+                    return {
+                        "operation": "https://100.66.12.102:8443/1.0/operations/z",
+                        "metadata": {"metadata": {"control": "c"}},
+                    }
+
+            return _R()
+
+    class _Instances:
+        def __getitem__(self, name):
+            return _Instance()
+
+    class _Client:
+        class api:
+            instances = _Instances()
+            _api_endpoint = "https://100.66.12.102:8443/1.0"
+
     url, _ = mobility.begin_source_migration(_Client(), instance_name="ct-x", project="p")
-    assert url == "https://elsewhere:8443/1.0/operations/z"
+    assert url == "https://100.66.12.102:8443/1.0/operations/z"
+
+
+def test_operation_url_rejects_query_fragment_credentials_and_wrong_path():
+    class _Client:
+        class api:
+            _api_endpoint = "https://source.example:8443/1.0"
+
+    invalid = (
+        "https://source.example:8443/1.0/operations/z?next=http://internal",
+        "https://source.example:8443/1.0/operations/z#fragment",
+        "https://user@source.example:8443/1.0/operations/z",
+        "https://source.example:8443/1.0/images/z",
+        "ftp://source.example:8443/1.0/operations/z",
+    )
+    for value in invalid:
+        try:
+            mobility.validated_operation_url(_Client(), value)
+        except mobility.MobilityError:
+            continue
+        raise AssertionError(f"unsafe migration operation URL was accepted: {value}")

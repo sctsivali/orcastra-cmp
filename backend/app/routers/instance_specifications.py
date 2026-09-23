@@ -27,6 +27,10 @@ from app.core.org_scope import (
 )
 from app.services.instance_job_identity import resolve_instance_job_organization
 from app.services.instance_operation_audit import drain_instance_operation_audits
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    guard_instance_mutation,
+)
 from app.services.instance_specifications import (
     SpecificationError,
     create_operation_job,
@@ -327,76 +331,97 @@ async def update_instance_specification(
         return job_payload(replay)
 
     try:
-        current, plan = await preflight_specification(
-            instance_name,
-            body.host,
-            scoped_project,
-            requested,
-        )
-        if not current.etag or not (
-            if_match.strip().removeprefix("W/").strip('"')
-            == current.etag.strip().removeprefix("W/").strip('"')
-        ):
-            raise HTTPException(
-                status_code=412,
-                detail="This instance changed since it was read. Reload it and review the change again.",
-            )
-        if plan["plan_revision"] != body.plan_revision:
-            raise HTTPException(
-                status_code=409,
-                detail={"message": "The specification plan is stale.", "preflight": plan},
-            )
-        if plan["blockers"]:
-            raise HTTPException(
-                status_code=409,
-                detail={"message": "The specification change is blocked.", "preflight": plan},
-            )
-        if plan["execution"] == "restart_required" and body.apply_mode != "graceful_restart":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "This change requires explicit graceful-restart approval.",
-                    "preflight": plan,
-                },
-            )
-        missing = set(plan["required_acknowledgements"]) - set(body.acknowledgements)
-        if missing:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "Required warnings were not acknowledged.",
-                    "missing": sorted(missing),
-                    "preflight": plan,
-                },
-            )
-
-        job_organization = await resolve_instance_job_organization(
+        # Final read/preflight and durable admission are one critical section with migration
+        # execution. The worker reacquires the same guard before any daemon mutation.
+        async with guard_instance_mutation(
             db,
             cluster_id=body.host,
             project=scoped_project,
-        )
-
-        row, created = await create_operation_job(
-            kind="specification",
-            host=body.host,
-            project=scoped_project,
             instance_name=instance_name,
-            requester=requester,
-            target_organization_id=job_organization.organization_id,
-            target_organization_slug=job_organization.organization_slug,
-            target_organization_resolution=job_organization.resolution,
-            idempotency_key=key,
-            payload_hash=digest,
-            requested=requested,
-            plan_revision=body.plan_revision,
-            apply_mode=body.apply_mode,
-            instance_type=current.public["type"],
-            before_spec=current.public,
-            target_spec={
-                "acknowledgements": sorted(set(body.acknowledgements)),
-                "execution": plan["execution"],
-            },
-        )
+        ):
+            current, plan = await preflight_specification(
+                instance_name,
+                body.host,
+                scoped_project,
+                requested,
+            )
+            if not current.etag or not (
+                if_match.strip().removeprefix("W/").strip('"')
+                == current.etag.strip().removeprefix("W/").strip('"')
+            ):
+                raise HTTPException(
+                    status_code=412,
+                    detail=(
+                        "This instance changed since it was read. Reload it and review the "
+                        "change again."
+                    ),
+                )
+            if plan["plan_revision"] != body.plan_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"message": "The specification plan is stale.", "preflight": plan},
+                )
+            if plan["blockers"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "The specification change is blocked.",
+                        "preflight": plan,
+                    },
+                )
+            if (
+                plan["execution"] == "restart_required"
+                and body.apply_mode != "graceful_restart"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "This change requires explicit graceful-restart approval.",
+                        "preflight": plan,
+                    },
+                )
+            missing = set(plan["required_acknowledgements"]) - set(
+                body.acknowledgements
+            )
+            if missing:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Required warnings were not acknowledged.",
+                        "missing": sorted(missing),
+                        "preflight": plan,
+                    },
+                )
+
+            job_organization = await resolve_instance_job_organization(
+                db,
+                cluster_id=body.host,
+                project=scoped_project,
+            )
+
+            row, created = await create_operation_job(
+                kind="specification",
+                host=body.host,
+                project=scoped_project,
+                instance_name=instance_name,
+                requester=requester,
+                target_organization_id=job_organization.organization_id,
+                target_organization_slug=job_organization.organization_slug,
+                target_organization_resolution=job_organization.resolution,
+                idempotency_key=key,
+                payload_hash=digest,
+                requested=requested,
+                plan_revision=body.plan_revision,
+                apply_mode=body.apply_mode,
+                instance_type=current.public["type"],
+                before_spec=current.public,
+                target_spec={
+                    "acknowledgements": sorted(set(body.acknowledgements)),
+                    "execution": plan["execution"],
+                },
+            )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

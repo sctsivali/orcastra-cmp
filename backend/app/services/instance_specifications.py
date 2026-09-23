@@ -41,6 +41,10 @@ from app.services.instance_operation_audit import (
 from app.services.lxd.project_usage import parse_lxd_size, read_project_usage
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd_service import get_lxd_service
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    guard_instance_mutation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2231,7 +2235,28 @@ async def run_specification_job(job_id: str, *, recover_unknown: bool = False) -
     row.locked_by = worker_id
     heartbeat = asyncio.create_task(_lease_heartbeat(job_id, worker_id))
     try:
-        await _run_claimed_specification_job(row, worker_id)
+        # The guard stays held through every possible stop/apply/start submission and its
+        # authoritative readback. Migration final preflight uses the same advisory lock.
+        async with guard_instance_mutation(
+            cluster_id=row.cluster_id,
+            project=row.project,
+            instance_name=row.instance_name,
+        ):
+            await _run_claimed_specification_job(row, worker_id)
+    except MigrationFenceConflict as exc:
+        prior_mutation = bool(
+            row.stopped_by_job
+            or row.operation_id
+            or row.phase not in {"pending", "preflighting"}
+        )
+        await _terminal(
+            row,
+            "partial" if prior_mutation else "failure",
+            phase="partial" if prior_mutation else "failure",
+            operation_id=row.operation_id,
+            result={"migration_fenced": True, "prior_phase": row.phase},
+            error=exc.detail,
+        )
     finally:
         await _stop_lease_heartbeat(heartbeat)
 

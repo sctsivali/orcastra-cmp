@@ -51,6 +51,10 @@ from app.services.shared_cluster_audit import (
     assert_cluster_safe_to_share,
     serialize_cluster_share,
 )
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -1059,6 +1063,10 @@ async def delete_cluster(
     """Delete a cluster registration."""
     verify_cluster_access(cluster_id)
     try:
+        await assert_cluster_not_migration_fenced(cluster_id=cluster_id, db=db)
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    try:
         # Delete all cluster data from Vault
         vault = cert_manager.vault
         base_path = cert_manager.clusters_path
@@ -1264,6 +1272,10 @@ async def regenerate_certificate(
     # verify caller may access this cluster (org-scope), matching get/delete/update
     verify_cluster_access(cluster_id)
     try:
+        await assert_cluster_not_migration_fenced(cluster_id=cluster_id)
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    try:
         settings = get_settings()
 
         # Get cluster info to retrieve endpoint and detect type
@@ -1457,6 +1469,10 @@ async def repin_cluster_certificate(
     certificate they hold rather than to the one it actually serves.
     """
     verify_cluster_access(cluster_id)
+    try:
+        await assert_cluster_not_migration_fenced(cluster_id=cluster_id)
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     settings = get_settings()
     if not (settings.vault_enabled and settings.vault_token):

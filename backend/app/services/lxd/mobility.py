@@ -21,7 +21,10 @@ would be a standing security relationship between two customers' infrastructure.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import SplitResult, urlsplit
+
 from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,53 @@ class MobilityError(RuntimeError):
 
 class MobilityUnreachable(MobilityError):
     """The target cannot reach the source, so pull migration is unavailable."""
+
+
+_OPERATION_PATH_RE = re.compile(r"^/1\.0/operations/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _effective_port(parsed: SplitResult) -> Optional[int]:
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme.lower() == "https":
+        return 443
+    if parsed.scheme.lower() == "http":
+        return 80
+    return None
+
+
+def validated_operation_url(client, operation_url: str) -> str:
+    """Bind a daemon-provided operation URL to the registered source endpoint.
+
+    The destination hypervisor dereferences this URL from its own network. Trusting an absolute
+    URL returned by a compromised or confused daemon would therefore turn migration into a
+    hypervisor-side SSRF primitive. Only the connected source origin and the exact LXD operation
+    path are accepted; query strings, fragments and user info have no valid migration meaning.
+    """
+    endpoint = urlsplit(api_base(client))
+    raw = (operation_url or "").strip()
+    if raw.startswith("/"):
+        raw = f"{endpoint.scheme}://{endpoint.netloc}{raw}"
+    parsed = urlsplit(raw)
+
+    same_origin = (
+        parsed.scheme.lower() in {"http", "https"}
+        and parsed.scheme.lower() == endpoint.scheme.lower()
+        and (parsed.hostname or "").lower() == (endpoint.hostname or "").lower()
+        and _effective_port(parsed) == _effective_port(endpoint)
+        and parsed.username is None
+        and parsed.password is None
+    )
+    if (
+        not same_origin
+        or parsed.query
+        or parsed.fragment
+        or not _OPERATION_PATH_RE.fullmatch(parsed.path)
+    ):
+        raise MobilityError(
+            "The source cluster returned an operation URL outside its registered endpoint."
+        )
+    return raw
 
 
 def _project_params(project: Optional[str], **extra: Any) -> Dict[str, Any]:
@@ -198,17 +248,43 @@ def read_instance_definition(client, instance_name: str, project: str) -> Dict[s
     same network.
     """
     meta = _metadata(client.api.instances[safe_segment(instance_name)].get(params=_project_params(project))) or {}
+    instance_type = meta.get("type")
+    if instance_type not in {"container", "virtual-machine"}:
+        raise MobilityError("The source instance returned an unsupported type.")
     config = {
         key: value
         for key, value in (meta.get("config") or {}).items()
         if not key.startswith("volatile.")
     }
     return {
+        "type": instance_type,
         "config": config,
         "devices": meta.get("devices") or {},
         "profiles": meta.get("profiles") or ["default"],
         "architecture": meta.get("architecture"),
     }
+
+
+def _map_root_pool(devices: Dict[str, Any], target_pool: Optional[str]) -> Dict[str, Any]:
+    """Apply a pool mapping to the effective root disk without guessing its device key."""
+    mapped = dict(devices)
+    if not target_pool:
+        return mapped
+    root_key = next(
+        (
+            str(name)
+            for name, device in mapped.items()
+            if isinstance(device, dict)
+            and device.get("type") == "disk"
+            and device.get("path") == "/"
+        ),
+        None,
+    )
+    root_key = root_key or "root"
+    root = dict(mapped.get(root_key) or {"path": "/", "type": "disk"})
+    root["pool"] = target_pool
+    mapped[root_key] = root
+    return mapped
 
 
 def copy_within_cluster(
@@ -232,14 +308,11 @@ def copy_within_cluster(
     which is what the `container_copy_project` extension added.
     """
     definition = read_instance_definition(client, source_name, source_project)
-    devices = dict(definition["devices"])
-    if target_pool:
-        root = dict(devices.get("root") or {"path": "/", "type": "disk"})
-        root["pool"] = target_pool
-        devices["root"] = root
+    devices = _map_root_pool(definition["devices"], target_pool)
 
     body: Dict[str, Any] = {
         "name": target_name,
+        "type": definition["type"],
         "source": {
             "type": "copy",
             "source": source_name,
@@ -293,9 +366,7 @@ def begin_source_migration(
     # note: this is the address the dashboard reaches the source on. A topology where the target
     # must use a different address than the control plane does would need that second address
     # recorded in the registry, which nothing does today.
-    if not operation_url.startswith("http"):
-        base = api_base(source_client).rsplit("/1.0", 1)[0]
-        operation_url = f"{base}{operation_url}"
+    operation_url = validated_operation_url(source_client, operation_url)
     return operation_url, secrets
 
 
@@ -329,6 +400,10 @@ def accept_migration_on_target(
     # Same reason as the copy path: a destination project carrying limits refuses an instance
     # that does not declare its own, during a check that runs before the transfer begins.
     if definition:
+        instance_type = definition.get("type")
+        if instance_type not in {"container", "virtual-machine"}:
+            raise MobilityError("The source instance definition has an unsupported type.")
+        body["type"] = instance_type
         body["config"] = definition.get("config") or {}
         body["profiles"] = definition.get("profiles") or ["default"]
         # A migration target builds the instance record before any bytes move, and it does not
@@ -336,15 +411,11 @@ def accept_migration_on_target(
         # is refused outright with `Architecture is not supported: ""`.
         if definition.get("architecture"):
             body["architecture"] = definition["architecture"]
-        devices = dict(definition.get("devices") or {})
-        if target_pool:
-            root = dict(devices.get("root") or {"path": "/", "type": "disk"})
-            root["pool"] = target_pool
-            devices["root"] = root
+        devices = _map_root_pool(definition.get("devices") or {}, target_pool)
         if devices:
             body["devices"] = devices
-    elif target_pool:
-        body["devices"] = {"root": {"path": "/", "type": "disk", "pool": target_pool}}
+    else:
+        raise MobilityError("A validated source instance definition is required for migration.")
 
     params = _project_params(target_project, target=target_member)
     response = target_client.api.instances.post(json=body, params=params)
@@ -424,14 +495,28 @@ def non_retrying_session(client):
     pooled session's TLS material and connection pool but strips the retry policy.
     """
     import requests
-    from requests.adapters import HTTPAdapter
+    from .connection import FingerprintHTTPAdapter
 
     pooled = client.api.session
     session = requests.Session()
     session.cert = pooled.cert
     session.verify = pooled.verify
     session.headers.update(pooled.headers)
-    adapter = HTTPAdapter(max_retries=0)
+    # Preserve the pooled client's response guards. In particular, a 307/308 must be rejected
+    # before requests can replay an import body or migration secret to another origin.
+    pooled_hooks = getattr(pooled, "hooks", {})
+    session.hooks["response"] = list(pooled_hooks.get("response", []))
+    pooled_adapter = None
+    if hasattr(pooled, "get_adapter"):
+        pooled_adapter = pooled.get_adapter(api_base(client))
+        if not getattr(pooled_adapter, "server_fingerprint", None):
+            raise MobilityError(
+                "The source connection has no pinned certificate fingerprint."
+            )
+    adapter = FingerprintHTTPAdapter(
+        max_retries=0,
+        server_fingerprint=getattr(pooled_adapter, "server_fingerprint", None),
+    )
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     return session

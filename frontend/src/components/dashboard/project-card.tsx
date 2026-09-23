@@ -11,7 +11,9 @@ import {
   Cpu,
   HardDrive,
   MemoryStick,
-  Settings } from "lucide-react";
+  Settings,
+  ArrowLeftRight,
+  Boxes } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TagManager } from "@/components/tag-manager";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -35,6 +37,9 @@ import { InstanceRow } from "./instance-row";
 import { ProjectDeleteDialog, ProjectEditDialog } from "./project-card-dialogs";
 import { NodeLink } from "@/components/ui/node-link";
 import { formatByteQuota, formatMemoryQuota } from "@/lib/utils";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
 
 interface ProjectCardProps {
   project: ProjectInfo;
@@ -68,6 +73,9 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const { isPartner } = usePermissions();
+  const { navigate } = useNavigationProgress();
+  const migrationCapabilities = useMigrationCapabilities();
+  const canPlanMigration = isPartner && migrationCapabilities.centerEnabled === true;
   // useId rather than an id built from projectKey: the key carries a colon and the project name
   // is operator-supplied, so neither is safe to put in the DOM id the disclosure points at.
   const instancesRegionId = React.useId();
@@ -172,8 +180,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             {/* An identifier, not a status: the node it runs on links into Clusters through the
                 same component every table cell uses, and reads as text for a Tenant. */}
             <NodeLink clusterId={project.host} className="text-xs shrink-0" />
-            {/* Delete/Edit Button - Partner+ only */}
-            {!isReadOnly && isPartner && (
+            {/* Partner planning stays available in read-only rollout; mutations do not. */}
+            {isPartner && (!isReadOnly || canPlanMigration) && (
               <>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
@@ -187,29 +195,71 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                  <DropdownMenuItem 
-                    className="cursor-pointer"
-                    onSelect={() => setEditDialogOpen(true)}
-                  >
-                    <Settings className="mr-2 h-4 w-4" />
-                    Edit Project
-                  </DropdownMenuItem>
-                  <DropdownMenuItem 
-                    className="text-destructive focus:text-destructive cursor-pointer"
-                    onSelect={() => setDeleteDialogOpen(true)}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete Project
-                  </DropdownMenuItem>
+                  {!isReadOnly && (
+                    <DropdownMenuItem
+                      className="cursor-pointer"
+                      onSelect={() => setEditDialogOpen(true)}
+                    >
+                      <Settings className="mr-2 h-4 w-4" />
+                      Edit Project
+                    </DropdownMenuItem>
+                  )}
+                  {canPlanMigration && (
+                    <>
+                      <DropdownMenuItem
+                        className="cursor-pointer"
+                        onSelect={() =>
+                          navigate(
+                            inventoryLinks.migrations({
+                              scope: "project",
+                              sourceCluster: project.host,
+                              sourceProject: project.name,
+                              mode: "member",
+                            }),
+                          )
+                        }
+                      >
+                        <Boxes className="mr-2 h-4 w-4" />
+                        Relocate Workloads
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="cursor-pointer"
+                        onSelect={() =>
+                          navigate(
+                            inventoryLinks.migrations({
+                              scope: "project",
+                              sourceCluster: project.host,
+                              sourceProject: project.name,
+                              mode: "cluster",
+                            }),
+                          )
+                        }
+                      >
+                        <ArrowLeftRight className="mr-2 h-4 w-4" />
+                        Relocate Project
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {!isReadOnly && (
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive cursor-pointer"
+                      onSelect={() => setDeleteDialogOpen(true)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete Project
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <ProjectDeleteDialog
-                project={project}
-                instanceCount={instanceCount}
-                open={deleteDialogOpen}
-                onOpenChange={setDeleteDialogOpen}
-                isReadOnly={isReadOnly}
-              />
+              {!isReadOnly && (
+                <ProjectDeleteDialog
+                  project={project}
+                  instanceCount={instanceCount}
+                  open={deleteDialogOpen}
+                  onOpenChange={setDeleteDialogOpen}
+                  isReadOnly={isReadOnly}
+                />
+              )}
             </>
             )}
           </div>

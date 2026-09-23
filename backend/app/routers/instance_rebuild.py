@@ -47,6 +47,10 @@ from app.services.lxd_service import (
 )
 from app.routers.instances import _validate_image_server
 from app.services.activity_logger import get_activity_logger
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    guard_instance_mutation,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -196,35 +200,41 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
 
     op_id: Optional[str] = None
     try:
-        # 1. Stop (rebuild requires the instance stopped). Force-stop covers a
-        #    running or frozen guest.
-        await _set_status(job_id, "stopping")
-        try:
-            await lxd_service.stop_vm(name, host, force=True, project=project)
-        except LXDOperationError as e:
-            # A not-running instance is fine; anything else is a real failure.
-            if "not found" in str(e).lower():
-                raise
+        # Hold the same cluster advisory lock used by migration acceptance through the final
+        # daemon mutation/readback. A migration that wins first fences this job before stop;
+        # a rebuild that wins first makes migration wait and preflight the rebuilt instance.
+        async with guard_instance_mutation(
+            cluster_id=host,
+            project=project,
+            instance_name=name,
+        ):
+            # 1. Stop (rebuild requires the instance stopped). Force-stop covers a
+            #    running or frozen guest.
+            await _set_status(job_id, "stopping")
+            try:
+                await lxd_service.stop_vm(name, host, force=True, project=project)
+            except LXDOperationError as e:
+                # A not-running instance is fine; anything else is a real failure.
+                if "not found" in str(e).lower():
+                    raise
 
-        # 2. Rebuild the root disk.
-        await _set_status(job_id, "rebuilding")
-        op_id = await lxd_service.rebuild_instance(
-            name, host, source, project=project, cloud_init=cloud_init
-        )
-        await _set_status(job_id, operation_id=op_id or None)
+            # 2. Rebuild the root disk and wait for the accepted operation to settle.
+            await _set_status(job_id, "rebuilding")
+            op_id = await lxd_service.rebuild_instance(
+                name, host, source, project=project, cloud_init=cloud_init
+            )
+            await _set_status(job_id, operation_id=op_id or None)
 
-        if mode == "empty":
-            # Leave it stopped: the user attaches an ISO + starts it from the console.
-            await _set_status(job_id, "ready")
-        else:
-            # 3. Start.
-            await _set_status(job_id, "starting")
-            await lxd_service.start_vm(name, host, project=project)
-            # 4. Optionally wait for provisioning (best-effort, informational).
-            if run_provisioning:
-                await _set_status(job_id, "provisioning")
-                await _wait_for_provisioning(lxd_service, name, host, project)
-            await _set_status(job_id, "ready")
+            if mode != "empty":
+                # 3. Start. Provisioning below is read-only, so it does not extend the
+                #    cluster-wide mutation lock after start readback has completed.
+                await _set_status(job_id, "starting")
+                await lxd_service.start_vm(name, host, project=project)
+
+        if mode != "empty" and run_provisioning:
+            await _set_status(job_id, "provisioning")
+            await _wait_for_provisioning(lxd_service, name, host, project)
+        await _set_status(job_id, "ready")
 
         activity_logger.log_activity(
             action="instance.rebuild", target_type="instance", target_id=name,
@@ -261,47 +271,60 @@ async def rebuild_instance(
         raise HTTPException(status_code=422, detail="cloud-init user-data is required for the cloud-init mode")
     _validate_image_server(body.image_server)
 
-    # Preflight: status + snapshots + config/volume snapshot. Snapshots block the
-    # rebuild (LXD rejects it), so surface a clear 409 before doing anything.
     try:
-        pf = await lxd_service.get_rebuild_preflight(instance_name, body.host, project)
+        # Admission is committed under the same advisory lock as migration execution. The
+        # worker reacquires this guard before mutation, so a migration cannot fit between this
+        # fence read and a later stop/rebuild submission.
+        async with guard_instance_mutation(
+            cluster_id=body.host,
+            project=project,
+            instance_name=instance_name,
+        ):
+            # Preflight: status + snapshots + config/volume snapshot. Snapshots block the
+            # rebuild (LXD rejects it), so surface a clear 409 before doing anything.
+            pf = await lxd_service.get_rebuild_preflight(
+                instance_name, body.host, project
+            )
+            if pf.get("snapshots"):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            "Rebuild is blocked while the instance has snapshots. "
+                            "Delete them first."
+                        ),
+                        "snapshots": pf["snapshots"],
+                    },
+                )
+
+            source = _build_source(body)
+            job_id = secrets.token_hex(16)
+            row = RebuildJob(
+                job_id=job_id,
+                cluster_id=body.host,
+                project=pf.get("project") or project,
+                instance_name=instance_name,
+                mode=body.mode,
+                requested_image=(body.image if body.mode != "empty" else None),
+                old_image=pf.get("base_image"),
+                source=source,
+                previous_config=pf.get("config"),
+                attached_volumes=pf.get("attached_volumes") or {},
+                cloud_init=(body.cloud_init if body.mode == "cloud-init" else None),
+                requester=(user.email or user.user_id),
+                status="pending",
+            )
+            async with async_session_maker() as session:
+                session.add(row)
+                await session.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-
-    if pf.get("snapshots"):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "Rebuild is blocked while the instance has snapshots. Delete them first.",
-                "snapshots": pf["snapshots"],
-            },
-        )
-
-    source = _build_source(body)
-    job_id = secrets.token_hex(16)
-    row = RebuildJob(
-        job_id=job_id,
-        cluster_id=body.host,
-        project=pf.get("project") or project,
-        instance_name=instance_name,
-        mode=body.mode,
-        requested_image=(body.image if body.mode != "empty" else None),
-        old_image=pf.get("base_image"),
-        source=source,
-        previous_config=pf.get("config"),
-        attached_volumes=pf.get("attached_volumes") or {},
-        cloud_init=(body.cloud_init if body.mode == "cloud-init" else None),
-        requester=(user.email or user.user_id),
-        status="pending",
-    )
-    db = async_session_maker()
-    async with db as session:
-        session.add(row)
-        await session.commit()
 
     asyncio.create_task(_run_rebuild(job_id, body.run_provisioning))
     # Readers hold a cached list; without this the change is invisible until the TTL.

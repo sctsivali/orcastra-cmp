@@ -9,6 +9,8 @@ tenant reaches this router at all. Their absence would otherwise read as an over
 """
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -36,7 +38,11 @@ from app.services.lxd.availability import require_client
 from app.services.lxd.lazy_client import client_for
 from app.services.lxd.lxd_service import LXDService, get_lxd_service
 from app.services.snapshots import schedule_authority, schedule_service as svc
-from app.services.snapshots.schedule_runner import RunOutcome, run_one
+from app.services.snapshots.schedule_runner import RunOutcome, _run_one_guarded
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    guard_instance_mutation,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -65,6 +71,25 @@ def _audit(action: str, schedule: Any, result: str = "success", **details: Any) 
         )
     except Exception:  # pragma: no cover
         logger.warning("Could not write the audit record for %s", action, exc_info=True)
+
+
+@asynccontextmanager
+async def _guard_schedule_mutation(
+    *,
+    cluster_id: str,
+    project: str,
+    instance_name: str,
+) -> AsyncIterator[None]:
+    """Keep the cluster admission lock across schedule service commits."""
+    try:
+        async with guard_instance_mutation(
+            cluster_id=cluster_id,
+            project=project,
+            instance_name=instance_name,
+        ):
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
 
 @router.get("", response_model=SnapshotScheduleListResponse)
@@ -116,44 +141,48 @@ async def create_schedule(
         host=body.host,
         project=body.project,
     )
+    async with _guard_schedule_mutation(
+        cluster_id=body.host,
+        project=body.project,
+        instance_name=body.instance_name,
+    ):
+        client = await _client(lxd_service, body.host)
+        from app.services.lxd import snapshots as snapshots_service
+        from app.services.snapshots.schedule_runner import _blocking
 
-    client = await _client(lxd_service, body.host)
-    from app.services.lxd import snapshots as snapshots_service
-    from app.services.snapshots.schedule_runner import _blocking
+        config, policy = await _blocking(
+            snapshots_service.read_instance_config_and_policy,
+            client,
+            body.instance_name,
+            body.project,
+            label=f"read {body.instance_name}",
+        )
+        conflict = svc.upstream_conflict(body.host, body.project, body.instance_name, policy)
+        if conflict is not None:
+            raise conflict
 
-    config, policy = await _blocking(
-        snapshots_service.read_instance_config_and_policy,
-        client,
-        body.instance_name,
-        body.project,
-        label=f"read {body.instance_name}",
-    )
-    conflict = svc.upstream_conflict(body.host, body.project, body.instance_name, policy)
-    if conflict is not None:
-        raise conflict
+        rows = await _blocking(
+            snapshots_service.list_instance_snapshots,
+            client,
+            body.instance_name,
+            body.project,
+            label=f"list {body.instance_name}",
+        )
+        no_room = svc.capacity_conflict(body.instance_name, rows, body.keep_last)
+        if no_room is not None:
+            raise no_room
 
-    rows = await _blocking(
-        snapshots_service.list_instance_snapshots,
-        client,
-        body.instance_name,
-        body.project,
-        label=f"list {body.instance_name}",
-    )
-    no_room = svc.capacity_conflict(body.instance_name, rows, body.keep_last)
-    if no_room is not None:
-        raise no_room
+        from app.services.break_glass_service import cluster_fingerprint
 
-    from app.services.break_glass_service import cluster_fingerprint
-
-    schedule = await svc.insert_schedule(
-        db,
-        body=body,
-        owner_email=user.email,
-        organization_id=organization_id,
-        instance_uuid=config.get("volatile.uuid"),
-        cluster_fingerprint=await cluster_fingerprint(body.host),
-        now=_now(),
-    )
+        schedule = await svc.insert_schedule(
+            db,
+            body=body,
+            owner_email=user.email,
+            organization_id=organization_id,
+            instance_uuid=config.get("volatile.uuid"),
+            cluster_fingerprint=await cluster_fingerprint(body.host),
+            now=_now(),
+        )
     _audit("instance.snapshot.schedule.create", schedule, summary=svc.to_info(schedule).summary)
     return SnapshotScheduleActionResponse(
         success=True,
@@ -177,29 +206,33 @@ async def update_schedule(
 ):
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
+    async with _guard_schedule_mutation(
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+        instance_name=schedule.instance_name,
+    ):
+        # Re-read the policy: an instance can acquire an upstream schedule between the create and
+        # edit, and an edit that ignored that would quietly re-arm a schedule the runner must refuse.
+        client = await _client(lxd_service, schedule.cluster_id)
+        from app.services.lxd import snapshots as snapshots_service
+        from app.services.snapshots.schedule_runner import _blocking
 
-    # Re-read the policy: an instance can acquire an upstream schedule between the create and the
-    # edit, and an edit that ignored that would quietly re-arm a schedule the runner must refuse.
-    client = await _client(lxd_service, schedule.cluster_id)
-    from app.services.lxd import snapshots as snapshots_service
-    from app.services.snapshots.schedule_runner import _blocking
+        _config, policy = await _blocking(
+            snapshots_service.read_instance_config_and_policy,
+            client,
+            schedule.instance_name,
+            schedule.project,
+            label=f"read {schedule.instance_name}",
+        )
+        conflict = svc.upstream_conflict(
+            schedule.cluster_id, schedule.project, schedule.instance_name, policy
+        )
+        if conflict is not None:
+            raise conflict
 
-    _config, policy = await _blocking(
-        snapshots_service.read_instance_config_and_policy,
-        client,
-        schedule.instance_name,
-        schedule.project,
-        label=f"read {schedule.instance_name}",
-    )
-    conflict = svc.upstream_conflict(
-        schedule.cluster_id, schedule.project, schedule.instance_name, policy
-    )
-    if conflict is not None:
-        raise conflict
-
-    svc.apply_update(schedule, body, _now())
-    await db.commit()
-    await db.refresh(schedule)
+        svc.apply_update(schedule, body, _now())
+        await db.commit()
+        await db.refresh(schedule)
     _audit("instance.snapshot.schedule.update", schedule)
     return SnapshotScheduleActionResponse(
         success=True, message="Schedule updated.", schedule=svc.to_info(schedule)
@@ -216,12 +249,17 @@ async def pause_schedule(
     """Idempotent. Pausing a paused schedule is not an error, it is the state being asked for."""
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
-    schedule.state = "paused"
-    schedule.paused_reason = f"Paused by {user.email}."
-    schedule.due_slot = None
-    schedule.updated_at = _now()
-    await db.commit()
-    await db.refresh(schedule)
+    async with _guard_schedule_mutation(
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+        instance_name=schedule.instance_name,
+    ):
+        schedule.state = "paused"
+        schedule.paused_reason = f"Paused by {user.email}."
+        schedule.due_slot = None
+        schedule.updated_at = _now()
+        await db.commit()
+        await db.refresh(schedule)
     _audit("instance.snapshot.schedule.paused", schedule, by="operator")
     return SnapshotScheduleActionResponse(
         success=True, message="Schedule paused.", schedule=svc.to_info(schedule)
@@ -239,54 +277,58 @@ async def resume_schedule(
     """Resuming re-asks the question that paused it, rather than trusting that it went away."""
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
-
-    # The caller's current affiliation authorizes management of the row. The original owner's
-    # persisted affiliation authorizes its unattended writes. Resume needs both: otherwise a
-    # colleague could re-arm a schedule whose durable actor has left, only for the next tick to
-    # pause it again.
-    refusal = await schedule_authority.standing_authority_refusal(
-        db,
-        actor_email=schedule.owner_email,
-        organization_id=schedule.organization_id,
+    async with _guard_schedule_mutation(
         cluster_id=schedule.cluster_id,
         project=schedule.project,
-    )
-    if refusal is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"error": refusal.code, "message": refusal.message},
+        instance_name=schedule.instance_name,
+    ):
+        # The caller's current affiliation authorizes management of the row. The original owner's
+        # persisted affiliation authorizes its unattended writes. Resume needs both: otherwise a
+        # colleague could re-arm a schedule whose durable actor has left, only for the next tick to
+        # pause it again.
+        refusal = await schedule_authority.standing_authority_refusal(
+            db,
+            actor_email=schedule.owner_email,
+            organization_id=schedule.organization_id,
+            cluster_id=schedule.cluster_id,
+            project=schedule.project,
         )
+        if refusal is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": refusal.code, "message": refusal.message},
+            )
 
-    client = await _client(lxd_service, schedule.cluster_id)
-    from app.services.lxd import snapshots as snapshots_service
-    from app.services.snapshots import recurrence
-    from app.services.snapshots.schedule_runner import _blocking
+        client = await _client(lxd_service, schedule.cluster_id)
+        from app.services.lxd import snapshots as snapshots_service
+        from app.services.snapshots import recurrence
+        from app.services.snapshots.schedule_runner import _blocking
 
-    _config, policy = await _blocking(
-        snapshots_service.read_instance_config_and_policy,
-        client,
-        schedule.instance_name,
-        schedule.project,
-        label=f"read {schedule.instance_name}",
-    )
-    conflict = svc.upstream_conflict(
-        schedule.cluster_id, schedule.project, schedule.instance_name, policy
-    )
-    if conflict is not None:
-        raise conflict
+        _config, policy = await _blocking(
+            snapshots_service.read_instance_config_and_policy,
+            client,
+            schedule.instance_name,
+            schedule.project,
+            label=f"read {schedule.instance_name}",
+        )
+        conflict = svc.upstream_conflict(
+            schedule.cluster_id, schedule.project, schedule.instance_name, policy
+        )
+        if conflict is not None:
+            raise conflict
 
-    now = _now()
-    schedule.state = "active"
-    schedule.paused_reason = None
-    schedule.consecutive_failures = 0
-    schedule.last_error = None
-    schedule.due_slot = None
-    schedule.next_run_at = recurrence.next_slot_after(
-        schedule.frequency, schedule.hour_utc, schedule.minute_utc, schedule.weekday, now
-    )
-    schedule.updated_at = now
-    await db.commit()
-    await db.refresh(schedule)
+        now = _now()
+        schedule.state = "active"
+        schedule.paused_reason = None
+        schedule.consecutive_failures = 0
+        schedule.last_error = None
+        schedule.due_slot = None
+        schedule.next_run_at = recurrence.next_slot_after(
+            schedule.frequency, schedule.hour_utc, schedule.minute_utc, schedule.weekday, now
+        )
+        schedule.updated_at = now
+        await db.commit()
+        await db.refresh(schedule)
     _audit("instance.snapshot.schedule.update", schedule, resumed=True)
     return SnapshotScheduleActionResponse(
         success=True, message="Schedule resumed.", schedule=svc.to_info(schedule)
@@ -309,9 +351,14 @@ async def delete_schedule(
     """
     schedule = await svc.get_owned(db, schedule_id, user.email)
     schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
-    _audit("instance.snapshot.schedule.delete", schedule)
-    await db.delete(schedule)
-    await db.commit()
+    async with _guard_schedule_mutation(
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+        instance_name=schedule.instance_name,
+    ):
+        _audit("instance.snapshot.schedule.delete", schedule)
+        await db.delete(schedule)
+        await db.commit()
     return SnapshotScheduleActionResponse(
         success=True,
         message="Schedule removed. The snapshots it took stay where they are.",
@@ -343,16 +390,26 @@ async def run_schedule_now(
             },
         )
 
-    now = _now()
-    schedule.due_slot = now
-    await db.commit()
-    outcome: RunOutcome = await run_one(db, schedule, now=now, lxd_service=lxd_service)
+    async with _guard_schedule_mutation(
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+        instance_name=schedule.instance_name,
+    ):
+        now = _now()
+        schedule.due_slot = now
+        await db.commit()
+        outcome: RunOutcome = await _run_one_guarded(
+            db,
+            schedule,
+            now=now,
+            lxd_service=lxd_service,
+        )
 
-    from app.services.snapshots.schedule_scheduler import settle_row
+        from app.services.snapshots.schedule_scheduler import settle_row
 
-    settle_row(schedule, outcome, now)
-    await db.commit()
-    await db.refresh(schedule)
+        settle_row(schedule, outcome, now)
+        await db.commit()
+        await db.refresh(schedule)
 
     if outcome.result in ("success", "replayed"):
         return SnapshotScheduleActionResponse(

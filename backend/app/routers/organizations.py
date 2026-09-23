@@ -6,6 +6,8 @@ Scoped by RBAC: Admin sees all, Partner sees own, Tenant sees assigned.
 """
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -30,6 +32,11 @@ from app.services.organization_preferences import (
     get_user_org_preferences_payload,
     get_user_org_preferences_version,
     reset_org_preferences_to_defaults,
+)
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    guard_cluster_mutation,
+    guard_organization_mutation,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,6 +182,33 @@ def _org_to_response(org, caller_email: Optional[str] = None) -> OrgResponse:
     )
 
 
+@asynccontextmanager
+async def _guard_organization_write(
+    db: AsyncSession,
+    organization_id: int,
+) -> AsyncIterator[None]:
+    try:
+        async with guard_organization_mutation(
+            db,
+            organization_id=organization_id,
+        ):
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
+@asynccontextmanager
+async def _guard_cluster_write(
+    db: AsyncSession,
+    cluster_id: str,
+) -> AsyncIterator[None]:
+    try:
+        async with guard_cluster_mutation(db, cluster_id=cluster_id):
+            yield
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+
 # ---------------------------------------------------------------------------
 # Organization CRUD
 # ---------------------------------------------------------------------------
@@ -310,8 +344,12 @@ async def delete_organization(
 ):
     """Delete organization. Admin only."""
     svc = OrganizationService(db)
-    if not await svc.delete_organization(org_id):
+    org = await svc.get_organization(org_id)
+    if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    async with _guard_organization_write(db, org_id):
+        if not await svc.delete_organization(org_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
 
 # ---------------------------------------------------------------------------
@@ -346,18 +384,19 @@ async def add_member(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    async with _guard_organization_write(db, org_id):
+        if not await svc.user_has_access(org_id, user.email, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
-    try:
-        member = await svc.add_member(
-            org_id=org_id,
-            user_email=body.user_email,
-            role="member",
-            invited_by=user.email,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        try:
+            member = await svc.add_member(
+                org_id=org_id,
+                user_email=body.user_email,
+                role="member",
+                invited_by=user.email,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     return MemberResponse.model_validate(member)
 
@@ -374,12 +413,13 @@ async def update_member(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    async with _guard_organization_write(db, org_id):
+        if not await svc.user_has_access(org_id, user.email, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
-    member = await svc.update_member_role(org_id, member_email, "member")
-    if not member:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+        member = await svc.update_member_role(org_id, member_email, "member")
+        if not member:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
     return MemberResponse.model_validate(member)
 
 
@@ -394,11 +434,12 @@ async def remove_member(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    async with _guard_organization_write(db, org_id):
+        if not await svc.user_has_access(org_id, user.email, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
-    if not await svc.remove_member(org_id, member_email):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+        if not await svc.remove_member(org_id, member_email):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
 
 
 # ---------------------------------------------------------------------------
@@ -453,12 +494,15 @@ async def bind_cluster(
                 detail=f"Not permitted to bind cluster {body.cluster_id}",
             )
 
-    try:
-        binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=user.email)
-    except SharedClusterGuardError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    async with _guard_cluster_write(db, body.cluster_id):
+        if not await svc.user_has_access(org_id, user.email, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+        try:
+            binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=user.email)
+        except SharedClusterGuardError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     return ClusterBindingResponse.model_validate(binding)
 
@@ -474,11 +518,12 @@ async def unbind_cluster(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    async with _guard_cluster_write(db, cluster_id):
+        if not await svc.user_has_access(org_id, user.email, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
-    if not await svc.unbind_cluster(org_id, cluster_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster binding not found")
+        if not await svc.unbind_cluster(org_id, cluster_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster binding not found")
 
 
 # ---------------------------------------------------------------------------

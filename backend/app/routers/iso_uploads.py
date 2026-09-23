@@ -44,6 +44,11 @@ from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.models.db_models import IsoUploadSession
 from app.routers.integrations import require_capability
 from app.services.lxd_service import get_lxd_service
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+    guard_project_mutation,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -268,8 +273,16 @@ async def create_upload(
         staging_path=path,
         expires_at=_now() + timedelta(hours=SESSION_TTL_HOURS),
     )
-    db.add(row)
-    await db.commit()
+    try:
+        async with guard_project_mutation(
+            db,
+            cluster_id=body.cluster_id,
+            project=body.project,
+        ):
+            db.add(row)
+            await db.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     return {"session_id": session_id, "offset": 0, "expires_at": row.expires_at.isoformat()}
 
@@ -378,8 +391,22 @@ async def finalize_upload(
     if row.upload_offset != row.total_bytes:
         raise HTTPException(status_code=409, detail="Upload is not complete")
 
-    row.status = "importing"
-    await db.commit()
+    try:
+        await assert_project_not_migration_fenced(
+            cluster_id=row.cluster_id,
+            project=row.project,
+            db=db,
+        )
+        async with guard_project_mutation(
+            db,
+            cluster_id=row.cluster_id,
+            project=row.project,
+        ):
+            row.status = "importing"
+            row.error = None
+            await db.commit()
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     asyncio.create_task(_run_import(session_id))
     return _status_payload(row)
 
@@ -576,25 +603,52 @@ async def _run_import(session_id: str, recovery: bool = False) -> None:
     loop = asyncio.get_event_loop()
     hb = asyncio.create_task(_heartbeat(session_id))
     path = None
+    preserve_staging = False
     async with async_session_maker() as db:
         row = await _get_session(db, session_id)
         path = row.staging_path
         try:
-            # Optional integrity check: hash the staged file and compare to the declared checksum.
-            if row.expected_sha256 and path and os.path.isfile(path):
-                digest = await loop.run_in_executor(_executor, _sha256_file, path)
-                if digest.lower() != row.expected_sha256.lower():
-                    row.status = "failed"
-                    row.error = "checksum mismatch - uploaded file is corrupt"
-                    await db.commit()
-                    return
-            result = await loop.run_in_executor(
-                _executor, _lxd_import_iso_sync, row.cluster_id, path, row.pool, row.volume_name, row.project, recovery,
-            )
-            # Publish ready only after inventory/capacity invalidation completes. If this worker
-            # dies before the commit, the importing row is recovered and the already-landed
-            # volume is adopted without exposing a terminal state beside stale inventory.
-            await _publish_ready(db, row, result)
+            try:
+                async with guard_project_mutation(
+                    db,
+                    cluster_id=row.cluster_id,
+                    project=row.project,
+                ):
+                    await assert_project_not_migration_fenced(
+                        cluster_id=row.cluster_id,
+                        project=row.project,
+                        db=db,
+                    )
+                    # Optional integrity check: hash the staged file and compare to the declared
+                    # checksum while the admission lock excludes fresh migration preflight.
+                    if row.expected_sha256 and path and os.path.isfile(path):
+                        digest = await loop.run_in_executor(_executor, _sha256_file, path)
+                        if digest.lower() != row.expected_sha256.lower():
+                            row.status = "failed"
+                            row.error = "checksum mismatch - uploaded file is corrupt"
+                            await db.commit()
+                            return
+                    result = await loop.run_in_executor(
+                        _executor,
+                        _lxd_import_iso_sync,
+                        row.cluster_id,
+                        path,
+                        row.pool,
+                        row.volume_name,
+                        row.project,
+                        recovery,
+                    )
+                    # Publish ready only after inventory/capacity invalidation completes. The
+                    # commit is the terminal lock boundary after authoritative daemon settlement.
+                    await _publish_ready(db, row, result)
+            except MigrationFenceConflict as exc:
+                preserve_staging = True
+                await db.rollback()
+                row = await _get_session(db, session_id)
+                row.status = "uploaded"
+                row.error = exc.detail
+                await db.commit()
+                return
             logger.info("ISO upload imported: session=%s pool=%s volume=%s", session_id, row.pool, row.volume_name)
         except _ReadyCacheInvalidationError as e:
             # The volume is already on LXD. Keep the durable row non-terminal so recovery can
@@ -612,7 +666,8 @@ async def _run_import(session_id: str, recovery: bool = False) -> None:
             logger.error("ISO upload import failed: session=%s error=%s", session_id, e)
         finally:
             hb.cancel()
-            _cleanup_file(path)
+            if not preserve_staging:
+                _cleanup_file(path)
 
 
 async def _finalize_from_existing(

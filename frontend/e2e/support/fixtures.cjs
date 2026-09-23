@@ -6,6 +6,7 @@ const {
   iso,
   monitoringDashboard,
   monitoringHistory,
+  platformAvailability,
   platformNodes,
   tenantSpecifications,
 } = require("./api-fixture-data.cjs");
@@ -321,6 +322,8 @@ async function installApiFixtures(page, role, options = {}) {
       };
     } else if (options.instanceCreatePage === true && path === "/images/remote") {
       body = { images: [], total: 0 };
+    } else if (path === "/nodes/availability") {
+      body = platformAvailability();
     } else if (path === "/nodes") {
       if (state.nodeError) {
         status = 503;

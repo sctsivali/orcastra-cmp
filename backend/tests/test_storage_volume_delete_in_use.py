@@ -12,6 +12,7 @@ Hermetic, same shape as test_image_delete: no Vault, no pylxd, no database, no n
 """
 
 import pytest
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -101,8 +102,24 @@ def _service(volume) -> LXDService:
 def _no_webhook(monkeypatch):
     """The OrcaHub webhook needs a session factory. It is not what this file is about."""
     from app.routers import storage_volumes
+    from app.services.webhooks import emitter
 
     monkeypatch.setattr(storage_volumes, "schedule_orcahub_event", lambda *a, **k: None)
+
+    async def no_event(**_kwargs):
+        return None
+
+    monkeypatch.setattr(emitter, "emit_resource_event", no_event)
+
+    @asynccontextmanager
+    async def no_configuration_lock(_db, _host):
+        yield
+
+    monkeypatch.setattr(
+        storage_volumes,
+        "serialize_cluster_configuration",
+        no_configuration_lock,
+    )
 
 
 def _client(svc) -> TestClient:

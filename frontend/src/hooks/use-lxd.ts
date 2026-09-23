@@ -2675,14 +2675,27 @@ export function useCopyInstance() {
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
   return useMutation({
-    mutationFn: ({ instanceName, body }: { instanceName: string; body: MoveRequest }) =>
-      api.mobility.copy(instanceName, body),
+    mutationFn: ({
+      instanceName,
+      body,
+      idempotencyKey,
+    }: {
+      instanceName: string;
+      body: MoveRequest;
+      idempotencyKey: string;
+    }) => api.mobility.copy(instanceName, body, idempotencyKey),
     retry: false,
     onSuccess: (result) => {
       // Do not hold the accepted mutation open while a large transfer settles. The returned
       // operation id is retained by React Query and followed in the background without replaying
       // the copy request.
       void (async () => {
+        if (result.migration_job_id) {
+          await queryClient.invalidateQueries({
+            queryKey: ["migrations", scopeKey],
+          });
+          return;
+        }
         await reconcileCopyState(queryClient, scopeKey);
         if (result.operation_id) {
           await reconcileCopyOperation(

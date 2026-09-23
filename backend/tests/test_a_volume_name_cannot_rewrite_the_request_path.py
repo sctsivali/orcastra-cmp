@@ -22,6 +22,7 @@ made. The instance snapshot routes have carried that guard all along. These had 
 
 import pytest
 import requests
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -39,6 +40,17 @@ HOSTILE = [
     "a#b",
     "",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _no_configuration_lock(monkeypatch):
+    from app.routers import storage_volumes
+
+    @asynccontextmanager
+    async def unlocked(_db, _host):
+        yield
+
+    monkeypatch.setattr(storage_volumes, "serialize_cluster_configuration", unlocked)
 
 
 def _wire_path(pool: str, volume_type: str, name: str) -> str:

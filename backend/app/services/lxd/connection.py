@@ -9,6 +9,8 @@ import os
 import atexit
 import gc
 from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
+
 import requests
 import pylxd
 from requests.adapters import HTTPAdapter
@@ -20,12 +22,20 @@ from .exceptions import (
     LXDAuthorizationError,
     LXDConnectionError,
     LXDLocalStorageError,
+    LXDTransportPinError,
 )
 
 logger = logging.getLogger(__name__)
 
 # House default for LXD traffic, matching the value pylxd clients are constructed with below.
 DEFAULT_LXD_TIMEOUT: Tuple[int, int] = (3, 8)
+
+
+def normalize_server_fingerprint(value: Optional[str]) -> str:
+    """Normalize the common SHA-256 display forms for an equality check."""
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower().replace(":", "")
 
 
 def _read_retries_enabled() -> bool:
@@ -67,6 +77,122 @@ class TimeoutHTTPAdapter(HTTPAdapter):
         return super().send(request, *args, **kwargs)
 
 
+class FingerprintHTTPAdapter(TimeoutHTTPAdapter):
+    """Apply the registered server-certificate fingerprint on the real HTTP socket.
+
+    The separate enrollment probe prevents an obviously changed certificate from receiving the
+    client credential, but it cannot close the gap between that probe and the following request.
+    urllib3's ``assert_fingerprint`` performs the same comparison on every pooled connection and
+    therefore remains authoritative for the transport that carries the request itself.
+    """
+
+    def __init__(self, *args, server_fingerprint: Optional[str] = None, **kwargs):
+        self.server_fingerprint = server_fingerprint or None
+        self._required_server_fingerprint: Optional[str] = None
+        super().__init__(*args, **kwargs)
+
+    def require_server_fingerprint(self, expected_fingerprint: str) -> None:
+        """Bind this adapter to an already approved migration fingerprint.
+
+        The adapter's regular ``assert_fingerprint`` still validates the peer certificate on
+        every new socket. This additional binding proves that the adapter was configured from
+        the exact plan/job pin before any Migration Center request is allowed to use it.
+        """
+        expected = normalize_server_fingerprint(expected_fingerprint)
+        configured = normalize_server_fingerprint(self.server_fingerprint)
+        expected_is_sha256 = len(expected) == 64 and all(
+            value in "0123456789abcdef" for value in expected
+        )
+        if not expected_is_sha256 or configured != expected:
+            raise LXDTransportPinError(
+                "The cluster HTTPS transport is not bound to the approved certificate."
+            )
+        self._required_server_fingerprint = expected
+
+    def send(self, request, *args, **kwargs):
+        required = self._required_server_fingerprint
+        if required is not None:
+            if normalize_server_fingerprint(self.server_fingerprint) != required:
+                raise LXDTransportPinError(
+                    "The cluster HTTPS transport certificate binding changed."
+                )
+            if urlparse(str(getattr(request, "url", ""))).scheme.lower() != "https":
+                raise LXDTransportPinError(
+                    "Migration Center refuses a non-HTTPS daemon request."
+                )
+        return super().send(request, *args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        if self.server_fingerprint:
+            pool_kwargs["assert_fingerprint"] = self.server_fingerprint
+        return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        if self.server_fingerprint:
+            proxy_kwargs["assert_fingerprint"] = self.server_fingerprint
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+
+def _reject_lxd_redirect(response, *args, **kwargs):
+    """Reject redirects before requests can replay a credentialed mutation elsewhere."""
+    del args, kwargs
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    if 300 <= status_code < 400:
+        response.close()
+        raise LXDConnectionError(
+            "The registered cluster endpoint returned a redirect, which is not allowed."
+        )
+    return response
+
+
+def _install_lxd_response_guards(session: requests.Session) -> None:
+    hooks = session.hooks.setdefault("response", [])
+    if _reject_lxd_redirect not in hooks:
+        hooks.append(_reject_lxd_redirect)
+
+
+def require_https_session_fingerprint(
+    session: requests.Session,
+    endpoint: str,
+    expected_fingerprint: str,
+) -> FingerprintHTTPAdapter:
+    """Fail closed unless the actual HTTPS adapter carries the approved pin."""
+    parsed = urlparse(endpoint)
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise LXDTransportPinError(
+            "Migration Center requires a registered HTTPS cluster endpoint."
+        )
+    try:
+        adapter = session.get_adapter(endpoint)
+    except Exception as exc:
+        raise LXDTransportPinError(
+            "The cluster HTTPS session has no verifiable transport adapter."
+        ) from exc
+    if not isinstance(adapter, FingerprintHTTPAdapter):
+        raise LXDTransportPinError(
+            "The cluster HTTPS session does not use the fingerprint-pinning adapter."
+        )
+    adapter.require_server_fingerprint(expected_fingerprint)
+    return adapter
+
+
+def require_client_server_fingerprint(client: pylxd.Client, expected_fingerprint: str) -> None:
+    """Bind a pylxd client's real session to a persisted migration fingerprint."""
+    api = getattr(client, "api", None)
+    endpoint = getattr(api, "_api_endpoint", None)
+    session = getattr(api, "session", None)
+    if not isinstance(endpoint, str) or not endpoint or session is None:
+        raise LXDTransportPinError(
+            "The cluster client does not expose a verifiable HTTPS session."
+        )
+    require_https_session_fingerprint(session, endpoint, expected_fingerprint)
+
+
 class LXDConnectionManager:
     """
     Manages LXD client connections with pooling and automatic reconnection.
@@ -106,7 +232,13 @@ class LXDConnectionManager:
         atexit.register(self._cleanup_all_temp_files)
         atexit.register(self._secure_cleanup_credentials)
     
-    def _configure_client_session(self, client: pylxd.Client) -> None:
+    def _configure_client_session(
+        self,
+        client: pylxd.Client,
+        server_fingerprint: Optional[str] = None,
+        *,
+        required_server_fingerprint: Optional[str] = None,
+    ) -> None:
         """
         Configure pylxd client's session with larger connection pool.
         This prevents 'Connection pool is full' warnings during parallel operations.
@@ -122,24 +254,47 @@ class LXDConnectionManager:
                     read=None if _read_retries_enabled() else 0,
                     backoff_factor=0.5,
                     status_forcelist=[429, 500, 502, 503, 504],
-                    allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
+                    # important: never retry a mutating method. A 5xx or lost response is an
+                    # unknown outcome, not proof that LXD did not accept the create, state
+                    # change, restore or delete. Durable callers must reconcile the operation
+                    # and resource before deciding whether another submission is safe.
+                    allowed_methods=["HEAD", "GET", "OPTIONS"],
                     raise_on_status=False
                 )
 
-                adapter = TimeoutHTTPAdapter(
+                adapter = FingerprintHTTPAdapter(
                     max_retries=retry_strategy,
                     pool_connections=self.POOL_CONNECTIONS,
                     pool_maxsize=self.POOL_MAXSIZE,
-                    pool_block=False  # Don't block, just create new connection
+                    pool_block=False,  # Don't block, just create new connection
+                    server_fingerprint=server_fingerprint,
                 )
+                if required_server_fingerprint:
+                    adapter.require_server_fingerprint(required_server_fingerprint)
                 
                 session.mount("http://", adapter)
                 session.mount("https://", adapter)
+                _install_lxd_response_guards(session)
                 logger.debug(f"Configured client session with pool_maxsize={self.POOL_MAXSIZE}")
+            if required_server_fingerprint:
+                require_client_server_fingerprint(
+                    client, required_server_fingerprint
+                )
+        except LXDTransportPinError:
+            raise
         except Exception as e:
+            if required_server_fingerprint:
+                raise LXDTransportPinError(
+                    "The cluster HTTPS session could not be bound to the approved certificate."
+                ) from e
             logger.debug(f"Could not configure client session: {e}")
     
-    def _create_http_session(self):
+    def _create_http_session(
+        self,
+        server_fingerprint: Optional[str] = None,
+        *,
+        required_server_fingerprint: Optional[str] = None,
+    ):
         """Create HTTP session with retry configuration."""
         session = requests.Session()
         
@@ -149,16 +304,20 @@ class LXDConnectionManager:
             read=None if _read_retries_enabled() else 0,
             backoff_factor=1,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
+            # Mutation submissions are not replayed. See the pooled-client guard above.
+            allowed_methods=["HEAD", "GET", "OPTIONS"],
             raise_on_status=False
         )
 
-        adapter = TimeoutHTTPAdapter(
+        adapter = FingerprintHTTPAdapter(
             max_retries=retry_strategy,
             pool_connections=self.POOL_CONNECTIONS,
             pool_maxsize=self.POOL_MAXSIZE,
-            pool_block=False
+            pool_block=False,
+            server_fingerprint=server_fingerprint,
         )
+        if required_server_fingerprint:
+            adapter.require_server_fingerprint(required_server_fingerprint)
         
         session.mount("http://", adapter)
         session.mount("https://", adapter)
@@ -166,6 +325,7 @@ class LXDConnectionManager:
             'Connection': 'keep-alive',
             'Keep-Alive': 'timeout=600, max=1000'
         })
+        _install_lxd_response_guards(session)
         
         return session
     
@@ -279,12 +439,14 @@ class LXDConnectionManager:
         gc.collect()
         logger.debug("Cleared all credentials from memory")
     
-    def _enforce_certificate_pin(self, cluster_id: str, endpoint: str) -> None:
+    def _enforce_certificate_pin(
+        self, cluster_id: str, endpoint: str
+    ) -> Optional[str]:
         """Pin on first sight, refuse on change, and never turn a network fault into an alarm."""
         from app.core.config import get_settings
 
         if not get_settings().lxd_pin_server_certificate:
-            return
+            return None
 
         from app.services.lxd_certs.pinning import FINGERPRINT_FIELD, check_or_record_pin
 
@@ -294,10 +456,11 @@ class LXDConnectionManager:
             # Vault unreachable is not a certificate problem, and refusing here would make an
             # outage in one dependency look like an attack on another.
             logger.warning("Could not read the pin for %s (%s); connecting unpinned", cluster_id, exc)
-            return
+            return None
 
+        stored_fingerprint = (metadata or {}).get(FINGERPRINT_FIELD)
         outcome, fingerprint = check_or_record_pin(
-            cluster_id, endpoint, (metadata or {}).get(FINGERPRINT_FIELD)
+            cluster_id, endpoint, stored_fingerprint
         )
         if outcome == "pinned" and fingerprint:
             try:
@@ -305,6 +468,48 @@ class LXDConnectionManager:
             except Exception as exc:
                 # Failing to record it means the next connection pins again, which is harmless.
                 logger.warning("Could not record the pin for %s: %s", cluster_id, exc)
+        return fingerprint or (
+            stored_fingerprint if isinstance(stored_fingerprint, str) else None
+        )
+
+    def _enforce_expected_certificate_pin(
+        self,
+        cluster_id: str,
+        endpoint: str,
+        expected_fingerprint: str,
+    ) -> str:
+        """Verify a persisted migration pin before presenting the client certificate."""
+        from app.services.lxd_certs.pinning import fetch_server_fingerprint
+
+        expected = normalize_server_fingerprint(expected_fingerprint)
+        if len(expected) != 64 or any(value not in "0123456789abcdef" for value in expected):
+            raise LXDTransportPinError(
+                "The approved cluster certificate fingerprint is invalid."
+            )
+        parsed = urlparse(endpoint)
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise LXDTransportPinError(
+                "Migration Center requires a registered HTTPS cluster endpoint."
+            )
+        live = fetch_server_fingerprint(endpoint)
+        if live is None:
+            raise LXDTransportPinError(
+                "The cluster certificate could not be verified against the approved fingerprint."
+            )
+        if normalize_server_fingerprint(live) != expected:
+            logger.error(
+                "Migration transport certificate mismatch for %s; refusing the connection",
+                cluster_id,
+            )
+            raise LXDTransportPinError(
+                "The cluster certificate no longer matches the approved fingerprint."
+            )
+        return expected
 
     def _read_cluster_metadata(self, cluster_id: str) -> dict:
         from app.core.config import get_settings
@@ -339,6 +544,7 @@ class LXDConnectionManager:
         key_content: str,
         verify: bool = False,
         force: bool = False,
+        expected_server_fingerprint: Optional[str] = None,
     ) -> Optional[pylxd.Client]:
         """
         Create LXD client connection using certificate content from Vault.
@@ -369,7 +575,7 @@ class LXDConnectionManager:
                 "endpoint": endpoint,
                 "cert_content": cert_content,
                 "key_content": key_content,
-                "verify": verify
+                "verify": verify,
             }
             
             # note: no unlink before the write. The path is stable per cluster and the write
@@ -382,14 +588,31 @@ class LXDConnectionManager:
             # it is the absence of server authentication; the pin is what replaces it. Trust on
             # first use, refuse on change. See services/lxd_certs/pinning.py for why this rather
             # than requiring an operator to type the fingerprint at registration.
-            self._enforce_certificate_pin(cluster_id, endpoint)
+            server_fingerprint = (
+                self._enforce_expected_certificate_pin(
+                    cluster_id, endpoint, expected_server_fingerprint
+                )
+                if expected_server_fingerprint
+                else self._enforce_certificate_pin(cluster_id, endpoint)
+            )
+            self._connection_info[cluster_id]["server_fingerprint"] = (
+                server_fingerprint or ""
+            )
+
+            session = self._create_http_session(
+                server_fingerprint,
+                required_server_fingerprint=expected_server_fingerprint,
+            )
+            session.cert = (cert_path, key_path)
+            session.verify = verify
 
             # Create LXD client with faster timeout for quick failure detection
             client = pylxd.Client(
                 endpoint=endpoint,
                 cert=(cert_path, key_path),
                 verify=verify,
-                timeout=(3, 8)
+                timeout=(3, 8),
+                session=session,
             )
             
             # Verify connection and authentication
@@ -403,7 +626,11 @@ class LXDConnectionManager:
                     )
             
             # Configure session with larger connection pool for parallel operations
-            self._configure_client_session(client)
+            self._configure_client_session(
+                client,
+                server_fingerprint,
+                required_server_fingerprint=expected_server_fingerprint,
+            )
             
             # Cache the client
             self._clients[cluster_id] = client
@@ -428,6 +655,9 @@ class LXDConnectionManager:
 
             return client
                     
+        except LXDTransportPinError:
+            self._connection_info.pop(cluster_id, None)
+            raise
         except LXDAuthorizationError:
             # Narrow on purpose. A plain LXDConnectionError escaping this block is a transport
             # failure, and recording it as "unauthorized" would make an offline cluster read as
@@ -467,7 +697,12 @@ class LXDConnectionManager:
             logger.warning(f"Failed to connect to cluster {cluster_id}: {e}")
             raise LXDConnectionError(f"Cannot connect to {cluster_id}: {str(e)}")
     
-    def get_client(self, cluster_id: str) -> Optional[pylxd.Client]:
+    def get_client(
+        self,
+        cluster_id: str,
+        *,
+        expected_server_fingerprint: Optional[str] = None,
+    ) -> Optional[pylxd.Client]:
         """
         Get cached LXD client for the specified cluster.
         
@@ -512,6 +747,10 @@ class LXDConnectionManager:
             return None
 
         if cluster_id in self._clients:
+            if expected_server_fingerprint:
+                require_client_server_fingerprint(
+                    self._clients[cluster_id], expected_server_fingerprint
+                )
             # Validate connection is still working
             if self._validate_connection(self._clients[cluster_id], cluster_id):
                 return self._clients[cluster_id]
@@ -519,10 +758,24 @@ class LXDConnectionManager:
                 # Connection failed validation, try reconnect
                 logger.warning(f"Connection to {cluster_id} failed validation, reconnecting...")
                 self.cleanup_connection(cluster_id)
-                return self._auto_reconnect(cluster_id)
+                return (
+                    self._auto_reconnect(cluster_id)
+                    if expected_server_fingerprint is None
+                    else self._auto_reconnect(
+                        cluster_id,
+                        expected_server_fingerprint=expected_server_fingerprint,
+                    )
+                )
         else:
             # Not in cache, try auto-reconnect if we have connection info
-            return self._auto_reconnect(cluster_id)
+            return (
+                self._auto_reconnect(cluster_id)
+                if expected_server_fingerprint is None
+                else self._auto_reconnect(
+                    cluster_id,
+                    expected_server_fingerprint=expected_server_fingerprint,
+                )
+            )
 
     def get_cached_client(self, cluster_id: str) -> Optional[pylxd.Client]:
         """Return an already connected client without probing or reconnecting.
@@ -562,12 +815,17 @@ class LXDConnectionManager:
             return None
         cert_path, key_path = paths
         try:
+            server_fingerprint = info.get("server_fingerprint") or None
+            session = self._create_http_session(server_fingerprint)
+            session.cert = (cert_path, key_path)
+            session.verify = info.get("verify", False)
             return pylxd.Client(
                 endpoint=info["endpoint"],
                 cert=(cert_path, key_path),
                 verify=info.get("verify", False),
                 timeout=timeout,
                 project=project or "default",
+                session=session,
             )
         except Exception as e:
             logger.error(
@@ -575,7 +833,12 @@ class LXDConnectionManager:
             )
             return None
 
-    def _auto_reconnect(self, cluster_id: str) -> Optional[pylxd.Client]:
+    def _auto_reconnect(
+        self,
+        cluster_id: str,
+        *,
+        expected_server_fingerprint: Optional[str] = None,
+    ) -> Optional[pylxd.Client]:
         """
         Attempt to automatically reconnect using stored connection info.
         
@@ -604,11 +867,32 @@ class LXDConnectionManager:
                 info["key_content"]
             )
             
+            server_fingerprint = (
+                self._enforce_expected_certificate_pin(
+                    cluster_id,
+                    info["endpoint"],
+                    expected_server_fingerprint,
+                )
+                if expected_server_fingerprint
+                else (
+                    self._enforce_certificate_pin(cluster_id, info["endpoint"])
+                    or info.get("server_fingerprint")
+                    or None
+                )
+            )
+            info["server_fingerprint"] = server_fingerprint or ""
+            session = self._create_http_session(
+                server_fingerprint,
+                required_server_fingerprint=expected_server_fingerprint,
+            )
+            session.cert = (cert_path, key_path)
+            session.verify = info.get("verify", False)
             client = pylxd.Client(
                 endpoint=info["endpoint"],
                 cert=(cert_path, key_path),
                 verify=info.get("verify", False),
-                timeout=(3, 8)
+                timeout=(3, 8),
+                session=session,
             )
             
             # Verify authentication. pylxd.Client() has just read /1.0 under the (3, 8)
@@ -648,7 +932,11 @@ class LXDConnectionManager:
             # note: the boot path configures the session (pool size, retry policy, default
             # timeout) and this path did not, so a worker that had reconnected once ran a
             # different HTTP stack for the same cluster than its sibling.
-            self._configure_client_session(client)
+            self._configure_client_session(
+                client,
+                server_fingerprint,
+                required_server_fingerprint=expected_server_fingerprint,
+            )
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
             self._slow_validations.pop(cluster_id, None)
@@ -671,6 +959,8 @@ class LXDConnectionManager:
 
             return client
             
+        except LXDTransportPinError:
+            raise
         except LXDLocalStorageError:
             # See connect_with_vault_cert: not the cluster's fault, so it must not be recorded
             # against it. Raised rather than returned as None because None here reads downstream

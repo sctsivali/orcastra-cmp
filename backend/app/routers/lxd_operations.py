@@ -3,23 +3,46 @@ API Router for LXD Operations.
 Provides endpoints for monitoring and managing LXD operations.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List, Dict, Any
-import logging
 import asyncio
+import logging
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import partial
+from typing import Any, Callable, Dict, List, Optional, TypeVar
+from urllib.parse import parse_qs, unquote, urlsplit
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from requests.exceptions import Timeout as RequestsTimeout
+from sqlalchemy import or_, select
+
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.database import async_session_maker
+from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
+from app.core.error_sanitizer import sanitize_error
+from app.core.lxd_path import safe_segment
+from app.core.org_scope import (
+    check_tenant_permission,
+    org_scope_dependency,
+    verify_cluster_access,
+)
+from app.core.rbac import Role, resolve_roles
+from app.models.db_models import Organization, OrganizationMember
+from app.services.instance_job_identity import resolve_instance_job_organization
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.lazy_client import client_for
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    assert_operation_not_migration_owned,
+    assert_project_not_migration_fenced,
+)
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
     require_client,
 )
-from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
-from app.services.lxd.lazy_client import client_for
-from pydantic import BaseModel, Field
-from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +59,326 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+_operation_executor = ThreadPoolExecutor(
+    max_workers=8,
+    thread_name_prefix="lxd_operation",
+)
+_OPERATION_MAX_IN_FLIGHT = 8
+_OPERATION_MAX_IN_FLIGHT_PER_CLUSTER = 4
+_OPERATION_SOCKET_TIMEOUT = (3, 8)
+_OPERATION_LOOKUP_TIMEOUT_SECONDS = 12.0
+_OPERATION_CANCEL_TIMEOUT_SECONDS = 12.0
+_OPERATION_WAIT_GRACE_SECONDS = 10.0
+_OperationResult = TypeVar("_OperationResult")
+
+# LXD operation metadata is not a presentation object. Console and exec operations can carry
+# per-fd websocket secrets there, while migration operations can carry transport credentials.
+# Only scalar progress fields have a browser use and are safe to return.
+_SAFE_OPERATION_METADATA_KEYS = frozenset(
+    {
+        "progress",
+        "download_progress",
+        "upload_progress",
+        "fs_progress",
+        "create_progress",
+        "migration_progress",
+    }
+)
+
+# An operation is project-owned only when every resource URL names one of these API families.
+# Cluster members, certificates, storage pools themselves, and any future/unknown family are
+# deliberately absent. A query parameter on a cluster-wide URL must never turn it into a
+# project-owned resource by assertion alone.
+_PROJECT_RESOURCE_ROOTS = {
+    "instances": frozenset({"instances", "containers", "virtual-machines"}),
+    "containers": frozenset({"instances", "containers"}),
+    "virtual-machines": frozenset({"instances", "virtual-machines"}),
+    "instance-snapshots": frozenset({"instances", "containers", "virtual-machines"}),
+    "instance-backups": frozenset({"instances", "containers", "virtual-machines"}),
+    "images": frozenset({"images"}),
+    "profiles": frozenset({"profiles"}),
+    "networks": frozenset({"networks"}),
+    "network-acls": frozenset({"network-acls"}),
+    "network-address-sets": frozenset({"network-address-sets"}),
+    "network-zones": frozenset({"network-zones"}),
+    "projects": frozenset({"projects"}),
+}
+_INSTANCE_ROOTS = frozenset({"instances", "containers", "virtual-machines"})
+_MAX_RESOURCE_URL_LENGTH = 4096
+
+
+@dataclass(frozen=True)
+class _OperationOwnership:
+    project: str
+    instance_name: str = ""
+
+
+async def _operation_io(
+    call: Callable[[], _OperationResult],
+    *,
+    host: str,
+    label: str,
+    timeout: float,
+) -> _OperationResult:
+    """Run one synchronous pylxd request with global and per-cluster bounds."""
+    return await run_blocking(
+        call,
+        timeout=timeout,
+        label=label,
+        executor=_operation_executor,
+        max_in_flight=_OPERATION_MAX_IN_FLIGHT,
+        concurrency_key=host,
+        max_in_flight_per_key=_OPERATION_MAX_IN_FLIGHT_PER_CLUSTER,
+    )
+
+
+def _response_operation(response: Any) -> Dict[str, Any]:
+    """Extract one operation record without retaining the raw daemon response."""
+    body = response.json()
+    metadata = body.get("metadata") if isinstance(body, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        raise ValueError("LXD returned an invalid operation response")
+    return dict(metadata)
+
+
+async def _lookup_operation(client: Any, operation_id: str, host: str) -> Dict[str, Any]:
+    endpoint = client.api.operations[safe_segment(operation_id)]
+    response = await _operation_io(
+        partial(endpoint.get, timeout=_OPERATION_SOCKET_TIMEOUT),
+        host=host,
+        label=f"operations.lookup[{host}]",
+        timeout=_OPERATION_LOOKUP_TIMEOUT_SECONDS,
+    )
+    return _response_operation(response)
+
+
+async def _wait_for_operation(
+    client: Any,
+    operation_id: str,
+    host: str,
+    timeout: int,
+) -> Dict[str, Any]:
+    endpoint = client.api.operations[safe_segment(operation_id)].wait
+    response = await _operation_io(
+        partial(
+            endpoint.get,
+            params={"timeout": timeout},
+            timeout=(_OPERATION_SOCKET_TIMEOUT[0], timeout + 5),
+        ),
+        host=host,
+        label=f"operations.wait[{host}]",
+        timeout=timeout + _OPERATION_WAIT_GRACE_SECONDS,
+    )
+    return _response_operation(response)
+
+
+def _operation_value(operation: Any, key: str, default: Any = None) -> Any:
+    if isinstance(operation, Mapping):
+        return operation.get(key, default)
+    return getattr(operation, key, default)
+
+
+def _sanitize_operation_metadata(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: sanitize_error(item, limit=500) if isinstance(item, str) else item
+        for key, item in value.items()
+        if key in _SAFE_OPERATION_METADATA_KEYS
+        and (item is None or isinstance(item, (str, int, float, bool)))
+    }
+
+
+def _resource_project(kind: str, raw_url: Any) -> Optional[tuple[str, str]]:
+    """Return a resource's project and optional instance, or None when ownership is unsafe."""
+    if not isinstance(raw_url, str) or not raw_url or len(raw_url) > _MAX_RESOURCE_URL_LENGTH:
+        return None
+
+    parsed = urlsplit(raw_url)
+    if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith("/1.0/"):
+        return None
+
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if len(segments) < 3 or segments[0] != "1.0":
+        return None
+    if any(segment in {".", ".."} or "/" in segment for segment in segments):
+        return None
+
+    normalized_kind = kind.replace("_", "-")
+    root = segments[1]
+    if normalized_kind in {"storage-volumes", "storage-volume-snapshots"}:
+        if root != "storage-pools" or len(segments) < 6 or segments[3] != "volumes":
+            return None
+    elif normalized_kind == "storage-buckets":
+        if root != "storage-pools" or len(segments) < 5 or segments[3] != "buckets":
+            return None
+    elif root not in _PROJECT_RESOURCE_ROOTS.get(normalized_kind, frozenset()):
+        return None
+
+    try:
+        query = parse_qs(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=False,
+            max_num_fields=32,
+        )
+    except ValueError:
+        return None
+    project_values = query.get("project", [])
+    if len(project_values) > 1 or (project_values and not project_values[0].strip()):
+        return None
+
+    if normalized_kind == "projects":
+        project = segments[2].strip()
+        if project_values and project_values[0] != project:
+            return None
+    else:
+        project = project_values[0].strip() if project_values else "default"
+    if not project:
+        return None
+
+    instance_name = segments[2] if root in _INSTANCE_ROOTS else ""
+    return project, instance_name
+
+
+def _operation_ownership(operation: Any) -> Optional[_OperationOwnership]:
+    """Derive one unambiguous project from all resources named by an operation."""
+    resources = _operation_value(operation, "resources")
+    if not isinstance(resources, Mapping) or not resources:
+        return None
+
+    projects: set[str] = set()
+    instances: set[str] = set()
+    resource_count = 0
+    for kind, urls in resources.items():
+        if not isinstance(kind, str) or not isinstance(urls, list):
+            return None
+        for raw_url in urls:
+            ownership = _resource_project(kind, raw_url)
+            if ownership is None:
+                return None
+            project, instance_name = ownership
+            projects.add(project)
+            if instance_name:
+                instances.add(instance_name)
+            resource_count += 1
+
+    if resource_count == 0 or len(projects) != 1:
+        return None
+    return _OperationOwnership(
+        project=next(iter(projects)),
+        instance_name=next(iter(instances)) if len(instances) == 1 else "",
+    )
+
+
+def _operation_not_found() -> HTTPException:
+    # A missing operation, an ambiguous owner, and another organization's operation are
+    # intentionally indistinguishable. An id must not be an ownership oracle.
+    return HTTPException(status_code=404, detail="Operation not found")
+
+
+async def _authoritative_project_access(
+    *, host: str, project: str, actor: AuthenticatedUser
+) -> bool:
+    """Require one exact project owner and the actor's affiliation with that owner."""
+    async with async_session_maker() as db:
+        owner = await resolve_instance_job_organization(
+            db,
+            cluster_id=host,
+            project=project,
+        )
+        if owner.resolution != "exact" or owner.organization_id is None:
+            return False
+        if Role.ADMIN in resolve_roles(actor):
+            return True
+        identity = actor.email or actor.user_id
+        actor_org_ids = set(
+            (
+                await db.execute(
+                    select(Organization.id)
+                    .outerjoin(
+                        OrganizationMember,
+                        OrganizationMember.organization_id == Organization.id,
+                    )
+                    .where(
+                        Organization.is_active == True,  # noqa: E712
+                        or_(
+                            OrganizationMember.user_email == identity,
+                            Organization.created_by == identity,
+                        ),
+                    )
+                )
+            ).scalars()
+        )
+        return owner.organization_id in actor_org_ids
+
+
+async def _authorize_operation(
+    operation: Any, host: str, actor: AuthenticatedUser
+) -> _OperationOwnership:
+    ownership = _operation_ownership(operation)
+    if ownership is None or not check_tenant_permission(
+        host,
+        ownership.project,
+        ownership.instance_name or None,
+        "view",
+    ):
+        raise _operation_not_found()
+    try:
+        permitted = await _authoritative_project_access(
+            host=host,
+            project=ownership.project,
+            actor=actor,
+        )
+    except Exception as exc:  # noqa: BLE001 - ambiguity and DB failure both fail closed
+        logger.error(
+            "Could not resolve operation ownership for %s/%s: %s",
+            host,
+            ownership.project,
+            type(exc).__name__,
+        )
+        raise _operation_not_found() from exc
+    if not permitted:
+        raise _operation_not_found()
+    return ownership
+
+
+def _operation_info(
+    operation: Any,
+    *,
+    host: str,
+    ownership: _OperationOwnership,
+) -> "OperationInfo":
+    return OperationInfo(
+        id=str(_operation_value(operation, "id", "")),
+        class_name=str(_operation_value(operation, "class", "") or ""),
+        created_at=str(_operation_value(operation, "created_at", "") or ""),
+        updated_at=str(_operation_value(operation, "updated_at", "") or ""),
+        status=str(_operation_value(operation, "status", "") or ""),
+        status_code=int(_operation_value(operation, "status_code", 0) or 0),
+        description=sanitize_error(
+            str(_operation_value(operation, "description", "") or ""), limit=500
+        ),
+        err=sanitize_error(str(_operation_value(operation, "err", "") or ""), limit=500),
+        may_cancel=bool(_operation_value(operation, "may_cancel", False)),
+        metadata=_sanitize_operation_metadata(_operation_value(operation, "metadata", {})),
+        node_name=host,
+        project=ownership.project,
+        instance_name=ownership.instance_name,
+    )
+
+
+def _require_safe_cancellation(operation: Any) -> None:
+    """Default-deny cancellation classes that are not ordinary project-owned tasks.
+
+    Migration jobs will own cancellation through their durable job API. Until that ownership
+    model exists here, this legacy endpoint only accepts a daemon task whose resource ownership
+    was independently derived and whose daemon flag explicitly permits cancellation.
+    """
+    if str(_operation_value(operation, "class", "") or "") != "task":
+        raise HTTPException(status_code=409, detail="This operation class cannot be cancelled")
+    if not bool(_operation_value(operation, "may_cancel", False)):
+        raise HTTPException(status_code=409, detail="This operation cannot be cancelled")
 
 
 class OperationInfo(BaseModel):
@@ -88,40 +431,14 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
             
             for op_data in running_ops:
                 try:
-                    # Extract project and instance name from resources
-                    project = "default"
-                    instance_name = ""
-                    resources = op_data.get('resources', {})
-                    if resources:
-                        # Try to extract from instance path
-                        instances = resources.get('instances', [])
-                        if instances and len(instances) > 0:
-                            # Path format: /1.0/instances/name?project=xxx
-                            instance_path = instances[0]
-                            # Extract instance name
-                            import re
-                            match = re.search(r'/instances/([^?/]+)', instance_path)
-                            if match:
-                                instance_name = match.group(1)
-                            # Extract project
-                            if 'project=' in instance_path:
-                                project = instance_path.split('project=')[-1].split('&')[0]
-                    
-                    operations.append(OperationInfo(
-                        id=op_data.get('id', ''),
-                        class_name=op_data.get('class', ''),
-                        created_at=op_data.get('created_at', ''),
-                        updated_at=op_data.get('updated_at', ''),
-                        status=op_data.get('status', ''),
-                        status_code=op_data.get('status_code', 0),
-                        description=op_data.get('description', ''),
-                        err=op_data.get('err', ''),
-                        may_cancel=op_data.get('may_cancel', False),
-                        metadata=op_data.get('metadata', {}),
-                        node_name=node_name,
-                        project=project,
-                        instance_name=instance_name,
-                    ))
+                    ownership = _operation_ownership(op_data)
+                    # Cluster-global, unknown and ambiguous resources are not project-owned and
+                    # therefore have no safe row on this organization-scoped endpoint.
+                    if ownership is None:
+                        continue
+                    operations.append(
+                        _operation_info(op_data, host=node_name, ownership=ownership)
+                    )
                 except LXDConnectionError:
                     # a missing client IS unreachability: let it through
                     raise
@@ -150,6 +467,7 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
 async def list_operations(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    actor: AuthenticatedUser = Depends(require_partner()),
 ):
     """List all operations."""
     try:
@@ -182,15 +500,31 @@ async def list_operations(
                 logger.error(f"Error fetching operations: {result}")
                 unreachable_nodes.append(node_name)
 
-        all_operations = [
-            operation for operation in all_operations
-            if check_tenant_permission(
-                operation.node_name,
-                operation.project or "default",
-                operation.instance_name or None,
-                "view",
-            )
-        ]
+        authorized_operations: List[OperationInfo] = []
+        for operation in all_operations:
+            try:
+                # Re-run ownership against the durable organization bindings. Project visibility
+                # alone is insufficient for a shared cluster's ambiguous default project.
+                permitted = check_tenant_permission(
+                    operation.node_name,
+                    operation.project,
+                    operation.instance_name or None,
+                    "view",
+                ) and await _authoritative_project_access(
+                    host=operation.node_name,
+                    project=operation.project,
+                    actor=actor,
+                )
+            except Exception:
+                logger.error(
+                    "Could not resolve listed operation ownership for %s/%s",
+                    operation.node_name,
+                    operation.project,
+                )
+                continue
+            if permitted:
+                authorized_operations.append(operation)
+        all_operations = authorized_operations
         
         return OperationListResponse(
             total=len(all_operations),
@@ -218,33 +552,24 @@ async def get_operation(
     operation_id: str,
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    actor: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get details for a specific operation."""
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        operation = client.operations.get(safe_segment(operation_id))
-        
-        return OperationInfo(
-            id=operation.id,
-            class_name=getattr(operation, 'class', ''),
-            created_at=getattr(operation, 'created_at', ''),
-            updated_at=getattr(operation, 'updated_at', ''),
-            status=getattr(operation, 'status', ''),
-            status_code=getattr(operation, 'status_code', 0),
-            description=getattr(operation, 'description', ''),
-            err=getattr(operation, 'err', ''),
-            may_cancel=getattr(operation, 'may_cancel', False),
-            metadata=getattr(operation, 'metadata', {})
-        )
+        operation = await _lookup_operation(client, operation_id, host)
     except HTTPException:
         # broad handler below converts it into a 500
         # important: let require_client's 503 through. Without this the
         # so an offline cluster does not read as a server fault.
         raise
-    except Exception as e:
-        logger.error(f"Error getting operation {operation_id}: {e}")
-        raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
+    except Exception as exc:
+        logger.info("Operation lookup on %s failed: %s", host, type(exc).__name__)
+        raise _operation_not_found() from exc
+
+    ownership = await _authorize_operation(operation, host, actor)
+    return _operation_info(operation, host=host, ownership=ownership)
 
 
 @router.delete(
@@ -264,10 +589,49 @@ async def cancel_operation(
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        # pylxd Operation objects don't have a cancel() method;
-        # use the raw API to send DELETE to /1.0/operations/<uuid>
-        client.api.operations[safe_segment(operation_id)].delete()
-        
+        operation = await _lookup_operation(client, operation_id, host)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.info("Operation lookup on %s failed: %s", host, type(exc).__name__)
+        raise _operation_not_found() from exc
+
+    ownership = await _authorize_operation(operation, host, _rbac)
+    _require_safe_cancellation(operation)
+    try:
+        # The operation id can be absent from the journal in the small window after a daemon
+        # accepted a migration submission and before the worker persisted its response. The
+        # authoritative operation resources still identify the project/instance, whose durable
+        # migration locks close that gap and also protect unknown submissions.
+        await assert_project_not_migration_fenced(
+            cluster_id=host,
+            project=ownership.project,
+        )
+        if ownership.instance_name:
+            await assert_instance_not_migration_fenced(
+                cluster_id=host,
+                project=ownership.project,
+                instance_name=ownership.instance_name,
+            )
+        await assert_operation_not_migration_owned(
+            cluster_id=host,
+            operation_id=operation_id,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+    try:
+        # pylxd Operation objects don't have a cancel() method. Use the raw API only after the
+        # independently fetched operation has proven one authorized project owner.
+        await _operation_io(
+            partial(
+                client.api.operations[safe_segment(operation_id)].delete,
+                timeout=_OPERATION_SOCKET_TIMEOUT,
+            ),
+            host=host,
+            label=f"operations.cancel[{host}]",
+            timeout=_OPERATION_CANCEL_TIMEOUT_SECONDS,
+        )
         return {
             "success": True,
             "message": f"Operation {operation_id} cancelled successfully"
@@ -277,9 +641,32 @@ async def cancel_operation(
         # important: let require_client's 503 through. Without this the
         # so an offline cluster does not read as a server fault.
         raise
-    except Exception as e:
-        logger.error(f"Error cancelling operation {operation_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except BlockingPoolFull as exc:
+        logger.warning("Operation cancellation capacity on %s is unavailable", host)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "operation_cancel_temporarily_unavailable",
+                "message": "Operation cancellation is temporarily unavailable; retry shortly.",
+            },
+        ) from exc
+    except (BlockingTimeout, RequestsTimeout) as exc:
+        # DELETE may have reached the daemon. Reporting an ordinary failure invites a blind
+        # retry, while claiming success would be equally unsafe. The caller must refresh first.
+        logger.warning("Operation cancellation outcome on %s is unknown", host)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "operation_cancel_outcome_unknown",
+                "message": (
+                    "The cluster may have accepted the cancellation. Refresh the operation "
+                    "before retrying."
+                ),
+            },
+        ) from exc
+    except Exception as exc:
+        logger.error("Operation cancellation on %s failed: %s", host, type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Operation cancellation failed") from exc
 
 
 @router.post(
@@ -291,27 +678,51 @@ async def cancel_operation(
 async def wait_operation(
     operation_id: str,
     host: str = Query(..., description="Target cluster"),
-    timeout: Optional[int] = Query(30, description="Timeout in seconds"),
+    timeout: Optional[int] = Query(30, ge=1, le=60, description="Timeout in seconds"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    actor: AuthenticatedUser = Depends(require_partner()),
 ):
     """Wait for an operation to complete."""
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        operation = client.operations.get(safe_segment(operation_id))
-        operation.wait(timeout=timeout)
+        operation = await _lookup_operation(client, operation_id, host)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.info("Operation lookup on %s failed: %s", host, type(exc).__name__)
+        raise _operation_not_found() from exc
+
+    await _authorize_operation(operation, host, actor)
+    try:
+        wait_seconds = int(timeout or 30)
+        completed = await _wait_for_operation(
+            client,
+            operation_id,
+            host,
+            wait_seconds,
+        )
         
         return {
             "success": True,
             "message": f"Operation {operation_id} completed",
-            "status": getattr(operation, 'status', ''),
-            "status_code": getattr(operation, 'status_code', 0)
+            "status": _operation_value(
+                completed,
+                "status",
+                _operation_value(operation, "status", ""),
+            ),
+            "status_code": _operation_value(
+                completed,
+                "status_code",
+                _operation_value(operation, "status_code", 0),
+            ),
         }
-    except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
-        raise
-    except Exception as e:
-        logger.error(f"Error waiting for operation {operation_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except (BlockingTimeout, BlockingPoolFull, RequestsTimeout) as exc:
+        logger.warning("Operation wait on %s timed out or was shed", host)
+        raise HTTPException(
+            status_code=503,
+            detail="Operation wait is temporarily unavailable; refresh and retry.",
+        ) from exc
+    except Exception as exc:
+        logger.error("Operation wait on %s failed: %s", host, type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Operation wait failed") from exc

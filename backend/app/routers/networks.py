@@ -28,6 +28,7 @@ from app.core.org_scope import (
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 from app.services.lxd.project_scope import (
     DEFAULT_PROJECT,
+    effective_project,
     list_across_projects,
     list_in_project,
     list_project_configs,
@@ -41,10 +42,23 @@ from app.core.tenant_visibility import (
 )
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, get_resource_list_generation
-from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.blocking import (
+    BlockingPoolFull,
+    BlockingTimeout,
+    in_flight_for_key,
+    run_blocking,
+)
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
+from app.core.database import get_db
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+    assert_project_not_migration_fenced,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
 from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
@@ -71,6 +85,37 @@ NETWORK_CREATE_TIMEOUT = 90.0
 NETWORK_WRITE_WAIT_SECONDS = 60
 # Shed rather than queue: the pool is 5 wide and shared with the list fan-out.
 NETWORK_MAX_IN_FLIGHT = 10
+NETWORK_MAX_IN_FLIGHT_PER_CLUSTER = 1
+
+
+async def _run_network_blocking(
+    function,
+    *args,
+    host: str,
+    label: str,
+):
+    """Keep the cluster lock until an admitted worker has actually stopped."""
+    try:
+        return await run_blocking(
+            function,
+            *args,
+            timeout=NETWORK_CREATE_TIMEOUT,
+            label=label,
+            executor=_executor,
+            max_in_flight=NETWORK_MAX_IN_FLIGHT,
+            concurrency_key=host,
+            max_in_flight_per_key=NETWORK_MAX_IN_FLIGHT_PER_CLUSTER,
+        )
+    except (BlockingTimeout, asyncio.CancelledError):
+        # A timeout or task cancellation cannot stop a worker thread. The daemon calls have
+        # bounded socket timeouts, so drain the one per-cluster worker before the caller may
+        # release migration admission and allow a fence to be created.
+        while in_flight_for_key(_executor, host):
+            try:
+                await asyncio.shield(asyncio.sleep(0.05))
+            except asyncio.CancelledError:
+                continue
+        raise
 
 
 class NetworkInfo(BaseModel):
@@ -555,34 +600,36 @@ async def create_network(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new network."""
     verify_cluster_access(host)
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
 
-    def _create_blocking():
-        """All the pylxd work for one create, in one hop off the loop.
-
-        important: on a cluster this is N+4 sequential HTTP round trips (connect, cluster
-        probe, member list, one define per member, the cluster-wide create, the read-back),
-        so it scales with cluster size. Run inline it parks the event-loop thread for that
-        whole sequence.
-        """
+    def _resolve_target_blocking():
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(
                 status_code=503,
                 detail=f"Could not connect to cluster '{host}'",
             )
+        project_configs = list_project_configs(client) if project else {}
+        owner = effective_project("networks", project, project_configs)
+        return client, project_configs, owner
 
+    def _create_blocking(client, project_configs, owner):
+        """Run validation, daemon submission, operation wait, and readback off the loop.
+
+        important: on a cluster this is N+3 sequential HTTP round trips after target
+        resolution (cluster probe, member list, one define per member, the cluster-wide
+        create, the read-back), so it scales with cluster size.
+        """
         # important: resolved, not taken as given. A project that does not set
         # features.networks holds no networks of its own and LXD stores this in default;
         # writing it as asked and reading it back as resolved would disagree about where it
         # went.
-        project_configs = list_project_configs(client) if project else {}
-        owner = resolve_owner(client, "networks", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this project")
-
         # important: LXD refuses any network type except OVN in a project other than default,
         # with "Network type does not support non-default projects". Verified against LXD 6.9.
         # Saying so here is the difference between an operator learning the rule and an
@@ -662,19 +709,51 @@ async def create_network(
         created.setdefault("project", owner)
         return created
 
+    submission_started = False
     try:
         try:
-            network = await run_blocking(
-                _create_blocking,
-                timeout=NETWORK_CREATE_TIMEOUT,
-                label=f"create_network[{host}/{request.name}]",
-                executor=_executor,
-                max_in_flight=NETWORK_MAX_IN_FLIGHT,
-            )
+            async with serialize_cluster_configuration(db, host):
+                try:
+                    await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+                client, project_configs, owner = await _run_network_blocking(
+                    _resolve_target_blocking,
+                    host=host,
+                    label=f"resolve_network_owner[{host}/{request.name}]",
+                )
+                if not project_is_visible(host, owner):
+                    raise HTTPException(status_code=403, detail="Access denied to this project")
+                for fenced_project in sorted({requested_project, owner}):
+                    try:
+                        await assert_project_not_migration_fenced(
+                            cluster_id=host,
+                            project=fenced_project,
+                            db=db,
+                        )
+                    except MigrationFenceConflict as exc:
+                        raise HTTPException(status_code=409, detail=exc.detail) from exc
+                submission_started = True
+                network = await _run_network_blocking(
+                    _create_blocking,
+                    client,
+                    project_configs,
+                    owner,
+                    host=host,
+                    label=f"create_network[{host}/{request.name}]",
+                )
         except BlockingTimeout:
+            logger.error(f"create_network timed out on {host} for {request.name}")
+            if not submission_started:
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        f"Network target resolution on {host} exceeded "
+                        f"{NETWORK_CREATE_TIMEOUT:.0f}s; no network write was submitted"
+                    ),
+                ) from None
             # The define/create fan-out may have partially applied; say so rather than
             # implying nothing happened.
-            logger.error(f"create_network timed out on {host} for {request.name}")
             raise HTTPException(
                 status_code=504,
                 detail=(
@@ -761,6 +840,7 @@ async def update_network(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a network."""
     verify_cluster_access(host)
@@ -770,48 +850,62 @@ async def update_network(
             validate_network_config(config)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this network")
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Could not connect to cluster '{host}'",
-            )
-        owner = resolve_owner(client, "networks", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this network")
-        scope = project_params(owner)
-        current = client.api.networks[safe_segment(network_name)].get(params=scope).json().get(
-            "metadata"
-        ) or {}
+        async with serialize_cluster_configuration(db, host):
+            client = lxd_service.get_client_with_reconnect(host)
+            if client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Could not connect to cluster '{host}'",
+                )
+            owner = resolve_owner(client, "networks", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this network")
+            try:
+                await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+                for fenced_project in sorted({requested_project, owner}):
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            scope = project_params(owner)
+            current = client.api.networks[safe_segment(network_name)].get(params=scope).json().get(
+                "metadata"
+            ) or {}
 
-        # important: the create path validates the OVN uplink and this one did not, while
-        # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect was still
-        # reachable through update. Reuse the same validator rather
-        # than growing a second copy of the rule: it reads only .type and .config.
-        if config is not None and "network" in config:
-            merged = {**(current.get("config") or {}), **config}
-            probe = SimpleNamespace(type=current.get("type") or "", config=merged)
-            validate_uplink(
-                probe,
-                _uplink_candidates(client, host),
-                list_project_configs(client).get(owner, {}),
+            # important: the create path validates the OVN uplink and this one did not, while
+            # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect was still
+            # reachable through update. Reuse the same validator rather
+            # than growing a second copy of the rule: it reads only .type and .config.
+            if config is not None and "network" in config:
+                merged = {**(current.get("config") or {}), **config}
+                probe = SimpleNamespace(type=current.get("type") or "", config=merged)
+                validate_uplink(
+                    probe,
+                    _uplink_candidates(client, host),
+                    list_project_configs(client).get(owner, {}),
+                )
+            payload = {
+                "config": current.get("config") or {},
+                "description": current.get("description") or "",
+            }
+            if config is not None:
+                payload["config"] = config
+            if description is not None:
+                payload["description"] = description
+            wait_for_lxd_operation(
+                client,
+                client.api.networks[safe_segment(network_name)].put(
+                    json=payload, params=scope, timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
+                ),
+                timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
-        payload = {
-            "config": current.get("config") or {},
-            "description": current.get("description") or "",
-        }
-        if config is not None:
-            payload["config"] = config
-        if description is not None:
-            payload["description"] = description
-        wait_for_lxd_operation(
-            client,
-            client.api.networks[safe_segment(network_name)].put(
-                json=payload, params=scope, timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
-            ),
-            timeout=NETWORK_WRITE_WAIT_SECONDS,
-        )
 
         get_cache_manager().invalidate_resource_cache("networks")
 
@@ -844,26 +938,41 @@ async def delete_network(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a network."""
     verify_cluster_access(host)
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this network")
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Could not connect to cluster '{host}'",
+        async with serialize_cluster_configuration(db, host):
+            client = lxd_service.get_client_with_reconnect(host)
+            if client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Could not connect to cluster '{host}'",
+                )
+            owner = resolve_owner(client, "networks", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this network")
+            try:
+                await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+                for fenced_project in sorted({requested_project, owner}):
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            wait_for_lxd_operation(
+                client,
+                client.api.networks[safe_segment(network_name)].delete(
+                    params=project_params(owner), timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
+                ),
+                timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
-        owner = resolve_owner(client, "networks", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this network")
-        wait_for_lxd_operation(
-            client,
-            client.api.networks[safe_segment(network_name)].delete(
-                params=project_params(owner), timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
-            ),
-            timeout=NETWORK_WRITE_WAIT_SECONDS,
-        )
 
         get_cache_manager().invalidate_resource_cache("networks")
 

@@ -39,3 +39,32 @@ def _reset_session_singletons(monkeypatch):
     yield
     session_registry._registry = None
     session_tracker._tracker = None
+
+
+@pytest.fixture(autouse=True)
+def _default_to_no_active_migration_fence(monkeypatch):
+    """Unit tests opt into migration locks explicitly instead of reaching a real database."""
+    from app.services import migration_fence
+
+    async def _no_locked_job(*_args, **_kwargs):
+        return None
+
+    async def _ordinary_operation(*_args, **_kwargs):
+        return False
+
+    async def _no_organization_clusters(*_args, **_kwargs):
+        return set()
+
+    class _FenceSession:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(migration_fence, "_active_locked_job_id", _no_locked_job)
+    monkeypatch.setattr(migration_fence, "_active_project_lock_job_id", _no_locked_job)
+    monkeypatch.setattr(migration_fence, "_active_cluster_lock_job_id", _no_locked_job)
+    monkeypatch.setattr(migration_fence, "_organization_cluster_ids", _no_organization_clusters)
+    monkeypatch.setattr(migration_fence, "_migration_owns_operation", _ordinary_operation)
+    monkeypatch.setattr(migration_fence, "async_session_maker", _FenceSession)

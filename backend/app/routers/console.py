@@ -49,6 +49,11 @@ from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
 from app.core.lxd_path import safe_segment
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    guard_instance_mutation,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -663,15 +668,24 @@ async def create_console_session(
     _bg_grant_id = _bg_grant.id if _bg_grant else None
 
     console_service = get_console_service()
-
-    session_info, error = await console_service.create_console_session(
-        instance_name=instance_name,
-        host=host,
-        project=project,
-        console_type=console_type,
-        width=width,
-        height=height,
-    )
+    try:
+        # Release the private advisory-lock transaction as soon as LXD returns the operation.
+        # The long-lived client WebSocket must never own a database transaction.
+        async with guard_instance_mutation(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        ):
+            session_info, error = await console_service.create_console_session(
+                instance_name=instance_name,
+                host=host,
+                project=project,
+                console_type=console_type,
+                width=width,
+                height=height,
+            )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
 
     if error:
         # Log activity: console session creation failure (HIGH SEVERITY - security audit)
@@ -767,6 +781,15 @@ async def update_startup_order(
 ):
     """Update startup order for instances."""
     project = verify_project_access(host, project)
+    for update in request.updates:
+        try:
+            await assert_instance_not_migration_fenced(
+                cluster_id=host,
+                project=project,
+                instance_name=update.instance_name,
+            )
+        except MigrationFenceConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
     console_service = get_console_service()
     
     updates = [u.model_dump(exclude_none=True) for u in request.updates]
@@ -865,6 +888,14 @@ async def attach_iso(
 ):
     """Attach an ISO to an instance."""
     project = _verify_instance_access(host, project, instance_name, "operate")
+    try:
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     console_service = get_console_service()
     
     success, message = await console_service.attach_iso(
@@ -900,6 +931,14 @@ async def eject_iso(
 ):
     """Eject an ISO from an instance."""
     project = _verify_instance_access(host, project, instance_name, "operate")
+    try:
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     console_service = get_console_service()
     
     success, message = await console_service.eject_iso(
@@ -1289,43 +1328,56 @@ class ConsoleProxy:
         tracker = get_session_tracker()
         
         try:
-            # Create console session with LXD
-            # Default dimensions - resize happens via SPICE agent
-            session_info, error = await console_service.create_console_session(
-                instance_name=self.instance_name,
-                host=self.host,
-                project=self.project,
-                console_type=self.console_type,
-                width=1024,
-                height=768,
-            )
-            
-            if error:
-                logger.error(f"Console session error: {error}")
-                await self._send_error(error)
+            try:
+                # Hold the migration admission lock only through daemon submission and tracker
+                # registration. The authoritative daemon operation then blocks fresh preflight;
+                # the interactive WebSocket lifetime never holds a database transaction.
+                async with guard_instance_mutation(
+                    cluster_id=self.host,
+                    project=self.project,
+                    instance_name=self.instance_name,
+                ):
+                    session_info, error = await console_service.create_console_session(
+                        instance_name=self.instance_name,
+                        host=self.host,
+                        project=self.project,
+                        console_type=self.console_type,
+                        width=1024,
+                        height=768,
+                    )
+
+                    if error:
+                        logger.error(f"Console session error: {error}")
+                        await self._send_error(error)
+                        return
+
+                    # Register before releasing admission. Migration can only acquire the lock
+                    # after the daemon operation is both authoritative and locally tracked.
+                    session_id = new_session_id(
+                        session_info.get("operation_id"),
+                        "console",
+                    )
+                    if session_id != session_info.get("operation_id"):
+                        logger.warning(
+                            f"LXD returned no operation id for {self.instance_name}@{self.host}; "
+                            f"tracking under {session_id}"
+                        )
+                    self._session = tracker.register(
+                        session_id=session_id,
+                        instance_name=self.instance_name,
+                        host=self.host,
+                        project=self.project,
+                        protocol=SessionProtocol.GRAPHICS,
+                        user_id=self.user_id,
+                        user_email=self.user_email,
+                        user_role=self.user_role,
+                        target_organization_id=self.target_organization_id,
+                        target_org_slug=self.target_org_slug,
+                        break_glass_grant_id=self.break_glass_grant_id,
+                    )
+            except MigrationFenceConflict as exc:
+                await self._send_error(exc.detail)
                 return
-            
-            # Register session for tracking. See new_session_id for why the empty case
-            # matters now that the id is a key shared across workers.
-            session_id = new_session_id(session_info.get("operation_id"), "console")
-            if session_id != session_info.get("operation_id"):
-                logger.warning(
-                    f"LXD returned no operation id for {self.instance_name}@{self.host}; "
-                    f"tracking under {session_id}"
-                )
-            self._session = tracker.register(
-                session_id=session_id,
-                instance_name=self.instance_name,
-                host=self.host,
-                project=self.project,
-                protocol=SessionProtocol.GRAPHICS,
-                user_id=self.user_id,
-                user_email=self.user_email,
-                user_role=self.user_role,
-                target_organization_id=self.target_organization_id,
-                target_org_slug=self.target_org_slug,
-                break_glass_grant_id=self.break_glass_grant_id,
-            )
 
             ssl_context = console_service.get_ssl_context(self.host)
             
@@ -1624,6 +1676,16 @@ async def console_websocket(
                 return
             _bg_grant_id = _grant.id if _grant else None
             _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
+
+    try:
+        await assert_instance_not_migration_fenced(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        )
+    except MigrationFenceConflict:
+        await websocket.close(code=1008, reason="Instance fenced by Migration Center")
+        return
 
     # Accept with 'binary' subprotocol - required by spice-html5
     # spice-html5 uses: new WebSocket(uri, 'binary')

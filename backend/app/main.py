@@ -125,6 +125,31 @@ async def _durable_instance_job_recovery_loop() -> None:
             )
 
 
+async def _recover_migrations_once() -> tuple[int, int]:
+    """Reconcile durable migration jobs and deliver their audit outbox."""
+    from app.services.migrations.orchestrator import (
+        drain_migration_audits,
+        recover_migration_jobs,
+    )
+
+    recovered = await recover_migration_jobs()
+    delivered = await drain_migration_audits()
+    return recovered, delivered
+
+
+async def _migration_recovery_loop(interval_seconds: int) -> None:
+    """Keep leases, retention transitions, reconciliation, and audits moving."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            await _recover_migrations_once()
+        except Exception as exc:  # noqa: BLE001 - a later lease sweep retries safely
+            logger.warning(
+                "Could not run Migration Center recovery: %s",
+                sanitize_error(str(exc)),
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown."""
@@ -132,6 +157,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Orcastra CMP API...")
     settings = get_settings()
     instance_operation_recovery_task = None
+    migration_recovery_task = None
 
     # important: the per-key budget only isolates integrations from each other while it is
     # strictly below the per-IP one. Buckets are evaluated together and the request is refused by
@@ -363,6 +389,23 @@ async def lifespan(app: FastAPI):
         _durable_instance_job_recovery_loop()
     )
 
+    # Recovery is independent from new-work admission. Turning the rollout gate off must not
+    # strand leases, retained sources, audit events, or the resource fences of an existing job.
+    try:
+        recovered, delivered = await _recover_migrations_once()
+        if recovered:
+            logger.info("Scheduled recovery for %d migration job(s)", recovered)
+        if delivered:
+            logger.info("Delivered %d migration audit event(s)", delivered)
+    except Exception as migration_recovery_err:  # noqa: BLE001
+        logger.warning(
+            "Could not start Migration Center recovery: %s",
+            sanitize_error(str(migration_recovery_err)),
+        )
+    migration_recovery_task = asyncio.create_task(
+        _migration_recovery_loop(settings.migration_recovery_tick_seconds)
+    )
+
     # Same recovery guarantee for stranded custom-ISO imports (see iso_uploads.py).
     try:
         from app.routers.iso_uploads import start_import_recovery as start_iso_import_recovery
@@ -537,6 +580,10 @@ async def lifespan(app: FastAPI):
     if instance_operation_recovery_task is not None:
         instance_operation_recovery_task.cancel()
         await asyncio.gather(instance_operation_recovery_task, return_exceptions=True)
+
+    if migration_recovery_task is not None:
+        migration_recovery_task.cancel()
+        await asyncio.gather(migration_recovery_task, return_exceptions=True)
 
     # Stop the task journal writers first: the follower releases its lock so another worker can
     # take over, and the sink drains before the database engine below is disposed.
@@ -825,6 +872,10 @@ Ensure your client certificates are properly configured.
     # Instance mobility (JWT): copy a workload to another project, member or cluster
     from app.routers.instance_mobility import router as instance_mobility_router
     app.include_router(instance_mobility_router, prefix=settings.api_prefix)
+
+    from app.routers.migrations import router as migrations_router
+
+    app.include_router(migrations_router, prefix=settings.api_prefix)
 
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)

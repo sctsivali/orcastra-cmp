@@ -91,6 +91,12 @@ from app.services.instance_specifications import (
     create_operation_job,
     get_operation_job_by_request,
 )
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    assert_project_not_migration_fenced,
+    guard_instance_mutation,
+)
 from app.routers.tags import get_tag_service_dep
 from app.core.lxd_path import safe_segment
 import requests
@@ -798,6 +804,23 @@ async def create_instance(
     # request sharing the same cluster. Authoritative preflight, project-isolation admission,
     # durable job commit, and daemon submission all happen while the same lock is held.
     async with serialize_cluster_configuration(db, request.host):
+        try:
+            # Instance migrations lock the whole project hierarchy because quotas, profiles,
+            # networks, and volume attachments are part of their approved preflight. A create
+            # under a different name would still drift that hierarchy.
+            await assert_project_not_migration_fenced(
+                cluster_id=request.host,
+                project=request.project,
+                db=db,
+            )
+            await assert_instance_not_migration_fenced(
+                cluster_id=request.host,
+                project=request.project,
+                instance_name=request.name,
+                db=db,
+            )
+        except MigrationFenceConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
         evaluation = await _run_create_preflight(request, lxd_service)
         preflight = evaluation.response
         _enforce_create_preflight(request, preflight)
@@ -998,12 +1021,17 @@ async def start_instance(
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
-        vm = await lxd_service.start_vm(
-            instance_name,
-            request.host,
-            force=False,
+        async with guard_instance_mutation(
+            cluster_id=request.host,
             project=project,
-        )
+            instance_name=instance_name,
+        ):
+            vm = await lxd_service.start_vm(
+                instance_name,
+                request.host,
+                force=False,
+                project=project,
+            )
         get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance start success
@@ -1023,6 +1051,8 @@ async def start_instance(
             action="start",
             new_status=vm.status
         )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         # The cluster did not answer. Without this the retyped exception falls to
         # `except Exception` below and answers 500, which pages an engineer for an
@@ -1084,13 +1114,18 @@ async def stop_instance(
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
-        await lxd_service.stop_vm(
-            instance_name, 
-            request.host, 
-            force=request.force,
-            timeout=request.timeout,
+        async with guard_instance_mutation(
+            cluster_id=request.host,
             project=project,
-        )
+            instance_name=instance_name,
+        ):
+            await lxd_service.stop_vm(
+                instance_name,
+                request.host,
+                force=request.force,
+                timeout=request.timeout,
+                project=project,
+            )
         get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance stop success
@@ -1111,6 +1146,8 @@ async def stop_instance(
             action="stop",
             new_status=VMStatus.STOPPED  # Stop always results in Stopped
         )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         # The cluster did not answer. Without this the retyped exception falls to
         # `except Exception` below and answers 500, which pages an engineer for an
@@ -1171,13 +1208,18 @@ async def restart_instance(
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
-        await lxd_service.restart_vm(
-            instance_name,
-            request.host,
-            force=request.force,
-            timeout=request.timeout,
+        async with guard_instance_mutation(
+            cluster_id=request.host,
             project=project,
-        )
+            instance_name=instance_name,
+        ):
+            await lxd_service.restart_vm(
+                instance_name,
+                request.host,
+                force=request.force,
+                timeout=request.timeout,
+                project=project,
+            )
         get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance restart success
@@ -1198,6 +1240,8 @@ async def restart_instance(
             action="restart",
             new_status=VMStatus.RUNNING  # Restart ends in Running
         )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         # The cluster did not answer. Without this the retyped exception falls to
         # `except Exception` below and answers 500, which pages an engineer for an
@@ -1259,9 +1303,14 @@ async def delete_instance(
         # A caller that named none was resolved across projects and then had its tags, webhook,
         # upstream event and audit row written against "default", naming a project the deletion
         # never touched.
-        deleted_project = await lxd_service.delete_vm(
-            instance_name, host, force=force, project=project
-        )
+        async with guard_instance_mutation(
+            cluster_id=host,
+            project=project,
+            instance_name=instance_name,
+        ):
+            deleted_project = await lxd_service.delete_vm(
+                instance_name, host, force=force, project=project
+            )
         get_cache_manager().invalidate_instance_cache()
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
@@ -1307,6 +1356,8 @@ async def delete_instance(
             vm_name=instance_name,
             action="delete",
         )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error deleting {instance_name}: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -1440,36 +1491,45 @@ async def set_instance_nic_address(
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
 
-    client = lxd_service.get_client_with_reconnect(request.host)
-    if client is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not connect to cluster '{request.host}'",
-        )
-
     try:
-        current, _inherited = await asyncio.to_thread(
-            _read_instance_device, client, instance_name, project, device_name
-        )
-        # important: this reads the cluster over HTTP with a (3, 25) socket timeout, so it
-        # belongs off the loop like the read above it and the write below it. Called directly
-        # it parks a uvicorn worker for up to 56s on a slow daemon, and this deployment runs
-        # WEB_CONCURRENCY=4, so that is a quarter of the API including health checks.
-        await asyncio.to_thread(
-            check_address_for_network,
-            client,
-            project,
-            nic_network_of(current),
-            request.ipv4_address or "",
-        )
-        written = await asyncio.to_thread(
-            set_nic_address_sync,
-            client,
-            instance_name,
-            project,
-            device_name,
-            request.ipv4_address,
-        )
+        # The device preflight and write share migration's cluster serialization boundary.
+        # This closes the check-then-act window where a migration could commit its hierarchy
+        # fence after the old standalone check but before the daemon PATCH.
+        async with guard_instance_mutation(
+            cluster_id=request.host,
+            project=project,
+            instance_name=instance_name,
+        ):
+            client = lxd_service.get_client_with_reconnect(request.host)
+            if client is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Could not connect to cluster '{request.host}'",
+                )
+            current, _inherited = await asyncio.to_thread(
+                _read_instance_device, client, instance_name, project, device_name
+            )
+            # important: this reads the cluster over HTTP with a (3, 25) socket timeout, so it
+            # belongs off the loop like the read above it and the write below it. Called directly
+            # it parks a uvicorn worker for up to 56s on a slow daemon, and this deployment runs
+            # WEB_CONCURRENCY=4, so that is a quarter of the API including health checks.
+            await asyncio.to_thread(
+                check_address_for_network,
+                client,
+                project,
+                nic_network_of(current),
+                request.ipv4_address or "",
+            )
+            written = await asyncio.to_thread(
+                set_nic_address_sync,
+                client,
+                instance_name,
+                project,
+                device_name,
+                request.ipv4_address,
+            )
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except DeviceNotFound:
         raise HTTPException(
             status_code=404,

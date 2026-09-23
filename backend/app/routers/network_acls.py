@@ -45,6 +45,13 @@ from app.core.lxd_errors import lxd_transport_error
 from app.core.lxd_path import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd.lazy_client import client_for
+from app.core.database import get_db
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -364,30 +371,44 @@ async def create_network_acl(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new network ACL."""
     verify_cluster_access(host)
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this network ACL")
     try:
-        client = require_client(await client_for(lxd_service, host), host)
-        owner = resolve_owner(client, "network-acls", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this network ACL")
-        scope = project_params(owner)
-        
-        acl_data = {
-            "name": request.name,
-            "description": request.description,
-            "ingress": request.ingress,
-            "egress": request.egress,
-            "config": request.config
-        }
-        
-        response = client.api["network-acls"].post(
-            json=acl_data, params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
-        )
-        # LXD 6.9 answers with an operation (storage_and_network_operations); settle it before
-        # reporting success, or the list right after the create does not hold the ACL yet
-        wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
+        async with serialize_cluster_configuration(db, host):
+            client = require_client(await client_for(lxd_service, host), host)
+            owner = resolve_owner(client, "network-acls", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this network ACL")
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            scope = project_params(owner)
+
+            acl_data = {
+                "name": request.name,
+                "description": request.description,
+                "ingress": request.ingress,
+                "egress": request.egress,
+                "config": request.config
+            }
+
+            response = client.api["network-acls"].post(
+                json=acl_data, params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+            )
+            # LXD 6.9 answers with an operation (storage_and_network_operations); settle it before
+            # reporting success, or the list right after the create does not hold the ACL yet
+            wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 201, 202]:
             # Log activity for audit trail
@@ -460,50 +481,64 @@ async def update_network_acl(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a network ACL."""
     verify_cluster_access(host)
     validate_rules(ingress, "ingress")
     validate_rules(egress, "egress")
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this network ACL")
     try:
-        client = require_client(await client_for(lxd_service, host), host)
-        owner = resolve_owner(client, "network-acls", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this network ACL")
-        scope = project_params(owner)
-        
-        # Get current ACL
-        get_response = client.api["network-acls"][safe_segment(acl_name)].get(params=scope)
-        if get_response.status_code != 200:
-            raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
-        # important: compared here as well as by the daemon. The read-modify-write below is
-        # built on this read, so a precondition the read already contradicts must not be
-        # turned into a PUT at all, and a daemon that ignored If-Match would still be caught.
-        if if_match and not _etags_match(if_match, _etag_of(get_response)):
-            raise HTTPException(status_code=412, detail=STALE_ACL_DETAIL)
-        
-        acl_data = get_response.json().get('metadata', {})
-        
-        # Update fields
-        if description is not None:
-            acl_data['description'] = description
-        if ingress is not None:
-            acl_data['ingress'] = ingress
-        if egress is not None:
-            acl_data['egress'] = egress
-        if config is not None:
-            acl_data['config'] = config
-        
-        # Put updated ACL
-        put_kwargs: Dict[str, Any] = {
-            "json": acl_data,
-            "params": scope,
-            "timeout": write_timeout(ACL_WRITE_WAIT_SECONDS),
-        }
-        if if_match:
-            put_kwargs["headers"] = {"If-Match": if_match}
-        put_response = client.api["network-acls"][safe_segment(acl_name)].put(**put_kwargs)
-        wait_for_lxd_operation(client, put_response, timeout=ACL_WRITE_WAIT_SECONDS)
+        async with serialize_cluster_configuration(db, host):
+            client = require_client(await client_for(lxd_service, host), host)
+            owner = resolve_owner(client, "network-acls", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this network ACL")
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            scope = project_params(owner)
+
+            # Get current ACL
+            get_response = client.api["network-acls"][safe_segment(acl_name)].get(params=scope)
+            if get_response.status_code != 200:
+                raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
+            # important: compared here as well as by the daemon. The read-modify-write below is
+            # built on this read, so a precondition the read already contradicts must not be
+            # turned into a PUT at all, and a daemon that ignored If-Match would still be caught.
+            if if_match and not _etags_match(if_match, _etag_of(get_response)):
+                raise HTTPException(status_code=412, detail=STALE_ACL_DETAIL)
+
+            acl_data = get_response.json().get('metadata', {})
+
+            # Update fields
+            if description is not None:
+                acl_data['description'] = description
+            if ingress is not None:
+                acl_data['ingress'] = ingress
+            if egress is not None:
+                acl_data['egress'] = egress
+            if config is not None:
+                acl_data['config'] = config
+
+            # Put updated ACL
+            put_kwargs: Dict[str, Any] = {
+                "json": acl_data,
+                "params": scope,
+                "timeout": write_timeout(ACL_WRITE_WAIT_SECONDS),
+            }
+            if if_match:
+                put_kwargs["headers"] = {"If-Match": if_match}
+            put_response = client.api["network-acls"][safe_segment(acl_name)].put(**put_kwargs)
+            wait_for_lxd_operation(client, put_response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if put_response.status_code in [200, 202]:
             return {
@@ -534,19 +569,33 @@ async def delete_network_acl(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a network ACL."""
     verify_cluster_access(host)
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
+        raise HTTPException(status_code=403, detail="Access denied to this network ACL")
     try:
-        client = require_client(await client_for(lxd_service, host), host)
-        owner = resolve_owner(client, "network-acls", project)
-        if not project_is_visible(host, owner):
-            raise HTTPException(status_code=403, detail="Access denied to this network ACL")
-        scope = project_params(owner)
-        response = client.api["network-acls"][safe_segment(acl_name)].delete(
-            params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
-        )
-        wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
+        async with serialize_cluster_configuration(db, host):
+            client = require_client(await client_for(lxd_service, host), host)
+            owner = resolve_owner(client, "network-acls", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this network ACL")
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            scope = project_params(owner)
+            response = client.api["network-acls"][safe_segment(acl_name)].delete(
+                params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+            )
+            wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 202]:
             # Log activity for audit trail

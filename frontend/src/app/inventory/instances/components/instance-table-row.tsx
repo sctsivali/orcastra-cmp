@@ -25,6 +25,8 @@ export interface InstanceTableRowProps {
   pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
   writeDisabledReason?: string;
+  migrationPlanningUnavailableReason?: string;
+  migrationCopyUnavailableReason?: string;
   /** Undefined when the caller may act; otherwise why not, including "still checking". */
   permissionReason: (
     host: string,
@@ -37,6 +39,7 @@ export interface InstanceTableRowProps {
   deletePending: boolean;
   onEditSpecification: (instance: VMInfo) => void;
   onCopy: (instance: VMInfo) => void;
+  onMove: (instance: VMInfo) => void;
   onRebuild: (instance: VMInfo) => void;
   onDelete: (instance: VMInfo) => void;
 }
@@ -101,11 +104,14 @@ export function InstanceTableRow({
   pendingActions,
   isReadOnly,
   writeDisabledReason,
+  migrationPlanningUnavailableReason,
+  migrationCopyUnavailableReason,
   permissionReason,
   canDeleteInstance,
   deletePending,
   onEditSpecification,
   onCopy,
+  onMove,
   onRebuild,
   onDelete,
 }: InstanceTableRowProps) {
@@ -122,6 +128,8 @@ export function InstanceTableRow({
     isReadOnly,
     writeDisabledReason,
     canManage: canDeleteInstance,
+    migrationPlanningUnavailableReason,
+    migrationCopyUnavailableReason,
     pendingActions,
     deletePending,
     permissionReason: (permission) => permissionReason(instance.host, project, instance.name, permission),
@@ -143,6 +151,7 @@ export function InstanceTableRow({
       }),
     onEditSpecification: () => onEditSpecification(instance),
     onCopy: () => onCopy(instance),
+    onMove: () => onMove(instance),
     onRebuild: () => onRebuild(instance),
     onDelete: () => onDelete(instance),
   });

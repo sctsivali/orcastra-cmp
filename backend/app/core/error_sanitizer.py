@@ -24,17 +24,45 @@ from typing import Tuple
 # nobody controls the shape of, so it favours removing something harmless over keeping something
 # that turns out to be an endpoint.
 _SENSITIVE = re.compile(r"(https?://\S+|(?:/[\w.\-]+){2,})")
+_SECRET_LABEL = (
+    r"password|token|secret|authorization|cookie|certificate|credential|"
+    r"private[_-]?key|client[_-]?secret"
+)
+_BARE_TOKEN_PATTERNS = (
+    re.compile(
+        r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{12,}\."
+        r"[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}(?![A-Za-z0-9_-])"
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9_-])(?:github_pat_|gh[pousr]_|glpat-|sk-|xox[baprs]-)"
+        r"[A-Za-z0-9_-]{12,}(?![A-Za-z0-9_-])",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
+)
 
 GENERIC_SERVER_ERROR = "Internal server error"
 
 
-def sanitize_error(message: str, limit: int = 300) -> str:
+def sanitize_error(message: object, limit: int = 300) -> str:
     """Redact URLs and paths from a message that is still worth showing.
 
     Used where a specific message helps and the text is only partly ours, ex; a cluster driver
     error surfaced on a 4xx. `main.py` uses `reference_for` instead for server faults.
     """
-    return _SENSITIVE.sub("[redacted]", message or "").strip()[:limit]
+    try:
+        text = "" if message is None else str(message)
+    except Exception:  # noqa: BLE001 - error reporting itself must remain best-effort
+        text = "Error details unavailable"
+    text = _SENSITIVE.sub("[redacted]", text)
+    text = re.sub(
+        rf"(?i)({_SECRET_LABEL})\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        text,
+    )
+    for pattern in _BARE_TOKEN_PATTERNS:
+        text = pattern.sub("[redacted-token]", text)
+    return text.strip()[:limit]
 
 
 def reference_for(exc: BaseException) -> Tuple[str, str]:

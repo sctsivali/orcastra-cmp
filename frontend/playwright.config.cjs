@@ -2,6 +2,11 @@ const { defineConfig, devices } = require("@playwright/test");
 const path = require("node:path");
 
 const baseURL = process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025";
+const parsedBaseURL = new URL(baseURL);
+const e2ePort = Number(parsedBaseURL.port || (parsedBaseURL.protocol === "https:" ? 443 : 80));
+if (!Number.isInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) {
+  throw new Error(`Invalid ORCASTRA_E2E_BASE_URL port: ${parsedBaseURL.port}`);
+}
 const artifactRoot = process.env.ORCASTRA_E2E_ARTIFACT_ROOT || "/tmp/orcastra-playwright";
 const outputDir = process.env.ORCASTRA_E2E_OUTPUT_DIR || path.join(artifactRoot, "test-results");
 const reportDir = process.env.ORCASTRA_E2E_REPORT_DIR || path.join(artifactRoot, "playwright-report");
@@ -48,7 +53,7 @@ module.exports = defineConfig({
     },
   ],
   webServer: {
-    command: "npm run start",
+    command: `npx next start -p ${e2ePort}`,
     url: baseURL,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

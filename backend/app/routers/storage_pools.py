@@ -27,6 +27,13 @@ from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
+from app.core.database import get_db
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_cluster_not_migration_fenced,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -373,59 +380,72 @@ async def create_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new storage pool."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        if is_clustered(client):
-            # important: on a cluster a pool must be DEFINED on every member first
-            # (POST ?target=<member>, carrying only the member-specific keys) and then
-            # CREATED cluster-wide with the rest. One cluster-wide POST answered
-            # 'Pool not pending on any node (use --target <node> first)' on a 3-member
-            # MicroCloud, so no pool could be created from the console there. The console
-            # sends one config, so every member is defined with the same source and size,
-            # which is how MicroCloud itself lays out its local pool.
-            member_config = {
-                k: v for k, v in (request.config or {}).items()
-                if k in MEMBER_SPECIFIC_POOL_KEYS
-            }
-            cluster_config = {
-                k: v for k, v in (request.config or {}).items()
-                if k not in MEMBER_SPECIFIC_POOL_KEYS
-            }
-            for member in cluster_member_names(client):
+        async with serialize_cluster_configuration(db, host):
+            try:
+                await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            client = lxd_service.get_client_with_reconnect(host)
+            if client is None:
+                raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            if is_clustered(client):
+                # important: on a cluster a pool must be DEFINED on every member first
+                # (POST ?target=<member>, carrying only the member-specific keys) and then
+                # CREATED cluster-wide with the rest. One cluster-wide POST answered
+                # 'Pool not pending on any node (use --target <node> first)' on a 3-member
+                # MicroCloud, so no pool could be created from the console there. The console
+                # sends one config, so every member is defined with the same source and size,
+                # which is how MicroCloud itself lays out its local pool.
+                member_config = {
+                    k: v for k, v in (request.config or {}).items()
+                    if k in MEMBER_SPECIFIC_POOL_KEYS
+                }
+                cluster_config = {
+                    k: v for k, v in (request.config or {}).items()
+                    if k not in MEMBER_SPECIFIC_POOL_KEYS
+                }
+                for member in cluster_member_names(client):
+                    wait_for_lxd_operation(
+                        client,
+                        client.api.storage_pools.post(
+                            json={
+                                "name": request.name,
+                                "driver": request.driver,
+                                "config": member_config,
+                            },
+                            params={"target": member},
+                            timeout=write_timeout(POOL_WRITE_WAIT_SECONDS),
+                        ),
+                        timeout=POOL_WRITE_WAIT_SECONDS,
+                    )
+                # LXD 6.9 answers with an operation (storage_and_network_operations); reading the
+                # pool back before it settles is a 404 for a pool the daemon is still creating
                 wait_for_lxd_operation(
                     client,
                     client.api.storage_pools.post(
-                        json={"name": request.name, "driver": request.driver, "config": member_config},
-                        params={"target": member},
+                        json={
+                            "name": request.name,
+                            "driver": request.driver,
+                            "config": cluster_config,
+                            "description": request.description,
+                        },
                         timeout=write_timeout(POOL_WRITE_WAIT_SECONDS),
                     ),
                     timeout=POOL_WRITE_WAIT_SECONDS,
                 )
-            # LXD 6.9 answers with an operation (storage_and_network_operations); reading the
-            # pool back before it settles is a 404 for a pool the daemon is still creating
-            wait_for_lxd_operation(
-                client,
-                client.api.storage_pools.post(json={
+                pool = client.storage_pools.get(safe_segment(request.name))
+            else:
+                pool = client.storage_pools.create({
                     "name": request.name,
                     "driver": request.driver,
-                    "config": cluster_config,
-                    "description": request.description,
-                }, timeout=write_timeout(POOL_WRITE_WAIT_SECONDS)),
-                timeout=POOL_WRITE_WAIT_SECONDS,
-            )
-            pool = client.storage_pools.get(safe_segment(request.name))
-        else:
-            pool = client.storage_pools.create({
-                "name": request.name,
-                "driver": request.driver,
-                "config": request.config,
-                "description": request.description
-            })
+                    "config": request.config,
+                    "description": request.description
+                })
         
         # Log activity: storage pool creation success
         activity_logger.log_activity(
@@ -486,21 +506,27 @@ async def update_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a storage pool."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.get(safe_segment(pool_name))
-        
-        if config is not None:
-            pool.config = config
-        if description is not None and hasattr(pool, 'description'):
-            pool.description = description
-        
-        pool.save(wait=True)
+        async with serialize_cluster_configuration(db, host):
+            try:
+                await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            client = lxd_service.get_client_with_reconnect(host)
+            if client is None:
+                raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            pool = client.storage_pools.get(safe_segment(pool_name))
+
+            if config is not None:
+                pool.config = config
+            if description is not None and hasattr(pool, 'description'):
+                pool.description = description
+
+            pool.save(wait=True)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_pools", "storage_pool_resources")
@@ -531,15 +557,21 @@ async def delete_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a storage pool."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.get_client_with_reconnect(host)
-        if client is None:
-            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.get(safe_segment(pool_name))
-        pool.delete(wait=True)
+        async with serialize_cluster_configuration(db, host):
+            try:
+                await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            client = lxd_service.get_client_with_reconnect(host)
+            if client is None:
+                raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
+            pool = client.storage_pools.get(safe_segment(pool_name))
+            pool.delete(wait=True)
         
         # Log activity: storage pool deletion success
         activity_logger.log_activity(

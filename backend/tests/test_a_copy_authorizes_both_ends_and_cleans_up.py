@@ -1,19 +1,20 @@
-"""Copying a workload checks the destination as well as the source, and never strands an export.
+"""Legacy Copy Instance admission and low-level copy-payload regressions.
 
-Two failures this guards, both of which have precedent in this system:
-
-* Checking only the source would let a partner read out of a cluster they own and write into one
-  they do not. The destination is where the data lands, so it is the half that matters most.
-* The streaming transport creates a real backup object on the source's storage pool. It is
-  invisible in every UI and consumes the pool until someone notices it is full. Stranded image
-  imports are a recurring bug class here, so the cleanup is asserted on the failure path, not
-  only the happy one.
+The public endpoint is now only a compatibility adapter for the durable migration engine. It
+must still authorize both endpoints, but it may not fall back to request-scoped daemon copy or
+migration when rollout is disabled. The low-level same-cluster helper remains covered directly
+because the durable worker still relies on its exact LXD payload shape.
 """
+
+import inspect
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from app.core.config import get_settings
+from app.routers import instance_mobility
+from app.services.lxd import mobility
 from tests._snapshot_fakes import (
     HOST,
     INSTANCE,
@@ -25,18 +26,35 @@ from tests._snapshot_fakes import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _no_webhook(monkeypatch):
-    from app.routers import instance_mobility
+class _CopyableInstanceNode(FakeInstanceNode):
+    """Add the instance type required by the mobility helper to the shared fake."""
 
-    monkeypatch.setattr(instance_mobility, "schedule_orcahub_event", lambda *a, **k: None)
+    def get(self, params=None):
+        response = super().get(params=params)
+        response._payload["metadata"]["type"] = "container"
+        return response
+
+
+@pytest.fixture(autouse=True)
+def _durable_copy_disabled_by_default():
+    """Keep compatibility admission deterministic even when another test mutates settings."""
+    settings = get_settings()
+    old_center = settings.migration_center_enabled
+    old_copy = settings.migration_durable_copy_enabled
+    object.__setattr__(settings, "migration_center_enabled", False)
+    object.__setattr__(settings, "migration_durable_copy_enabled", False)
+    try:
+        yield
+    finally:
+        object.__setattr__(settings, "migration_center_enabled", old_center)
+        object.__setattr__(settings, "migration_durable_copy_enabled", old_copy)
 
 
 def _client(svc, *, allowed_clusters=None) -> TestClient:
     from app.core import org_scope
+    from app.core.database import get_db
     from app.core.org_scope import org_scope_dependency
     from app.core.rbac import get_current_user
-    from app.routers import instance_mobility
     from app.services.lxd_service import get_lxd_service
 
     app = FastAPI()
@@ -44,6 +62,11 @@ def _client(svc, *, allowed_clusters=None) -> TestClient:
     app.dependency_overrides[get_lxd_service] = lambda: svc
     app.dependency_overrides[get_current_user] = lambda: None
     app.dependency_overrides[org_scope_dependency] = lambda: None
+
+    async def test_database():
+        yield object()
+
+    app.dependency_overrides[get_db] = test_database
 
     token = org_scope._allowed_clusters_var.set(allowed_clusters)
     client = TestClient(app, raise_server_exceptions=False)
@@ -63,99 +86,107 @@ def _copy(client, **overrides):
     return client.post(f"/instances/{INSTANCE}/copy", json=body)
 
 
+def _body(**overrides) -> instance_mobility.MoveRequest:
+    values = {
+        "host": HOST,
+        "project": PROJECT,
+        "target_host": HOST,
+        "target_project": "scratch",
+        "target_name": "ct-qa-copy-0002",
+    }
+    values.update(overrides)
+    return instance_mobility.MoveRequest(**values)
+
+
 def test_a_destination_outside_the_callers_scope_is_refused():
     node = FakeInstanceNode()
-    svc = service(FakeClient(node), hosts=(HOST, OTHER_HOST))
+    fake = FakeClient(node)
+    svc = service(fake, hosts=(HOST, OTHER_HOST))
     client = _client(svc, allowed_clusters={HOST})
     try:
         response = _copy(client, target_host=OTHER_HOST)
         assert response.status_code == 403, response.text
-        assert not svc.connection_manager._client.api.instances.created, (
-            "a refused copy must not have created anything"
-        )
+        assert not fake.api.instances.created
+        assert not node.recorded
     finally:
+        client.close()
         client._cleanup()
 
 
 def test_a_source_outside_the_callers_scope_is_refused():
     node = FakeInstanceNode()
-    svc = service(FakeClient(node), hosts=(HOST, OTHER_HOST))
+    fake = FakeClient(node)
+    svc = service(fake, hosts=(HOST, OTHER_HOST))
     client = _client(svc, allowed_clusters={OTHER_HOST})
     try:
-        assert _copy(client, host=HOST, target_host=OTHER_HOST).status_code == 403
+        response = _copy(client, host=HOST, target_host=OTHER_HOST)
+        assert response.status_code == 403, response.text
+        assert not fake.api.instances.created
+        assert not node.recorded
     finally:
+        client.close()
         client._cleanup()
 
 
-def test_a_same_cluster_copy_names_the_source_project_and_targets_the_destination():
+def test_disabled_legacy_copy_fails_before_any_daemon_read_or_write():
     node = FakeInstanceNode()
     fake = FakeClient(node)
     client = _client(service(fake, hosts=(HOST,)), allowed_clusters={HOST})
     try:
         response = _copy(client)
-        assert response.status_code == 202, response.text
-        assert response.json()["transport"] == "copy"
-
-        created = fake.api.instances.created
-        assert len(created) == 1
-        body, params = created[0]
-        assert body["source"]["type"] == "copy"
-        assert body["source"]["project"] == PROJECT, "the source project must travel in the body"
-        assert params["project"] == "scratch", "the destination project is a query parameter"
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == {
+            "error": "durable_copy_admission_disabled",
+            "message": "Durable Copy Instance admission is not enabled.",
+            "remediation": (
+                "Use Migration Center preflight and enable the reviewed durable-copy "
+                "rollout stage before submitting a copy."
+            ),
+        }
+        assert not node.recorded
+        assert not fake.api.instances.created
     finally:
+        client.close()
         client._cleanup()
 
 
-def test_the_streaming_transport_is_not_reachable_from_the_router():
-    """The stream path has never executed and cannot work as written, so nothing may reach it.
-
-    It stayed in the service layer as a starting point for a queued transfer job. What must not
-    come back is a request-scoped route into it: it held a worker from the pool that also serves
-    console and terminal traffic for up to an hour, and it never awaited the backup operation it
-    read from. This asserts the absence, because a reachable half-built data path is worse than
-    no data path.
-    """
-    import inspect
-
-    from app.routers import instance_mobility
-
-    assert "force_transport" not in instance_mobility.MoveRequest.model_fields, (
-        "force_transport is what let any Partner reach the stream path over the raw API"
-    )
-    for gone in ("_stream_copy", "_pipe_backup_to_target"):
+def test_the_router_has_no_direct_or_streaming_copy_fallback():
+    """Only the durable adapter may execute a request accepted by the legacy route."""
+    assert "force_transport" not in instance_mobility.MoveRequest.model_fields
+    for gone in ("_stream_copy", "_pipe_backup_to_target", "_cross_cluster", "_settle_copy"):
         assert not hasattr(instance_mobility, gone), f"{gone} is reachable again"
 
-    source = inspect.getsource(instance_mobility)
-    assert "TRANSPORT_STREAM" not in source, "the router must not name the stream transport"
+    handler_source = inspect.getsource(instance_mobility.copy_instance)
+    assert "_durable_copy" in handler_source
+    assert "copy_within_cluster" not in handler_source
+    assert "begin_source_migration" not in handler_source
+    assert "TRANSPORT_STREAM" not in inspect.getsource(instance_mobility)
 
 
-def test_an_unknown_transport_hint_cannot_select_a_transport():
-    """An extra field is ignored rather than honoured, so the server still chooses."""
-    node = FakeInstanceNode()
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        response = _copy(client, force_transport="stream")
-        assert response.status_code == 202, response.text
-        assert response.json()["transport"] == "copy", (
-            "a same-cluster copy must stay on the copy transport whatever the body asks for"
-        )
-    finally:
-        client._cleanup()
+def test_same_cluster_helper_names_both_projects_and_target_member():
+    fake = FakeClient(_CopyableInstanceNode())
+
+    operation = mobility.copy_within_cluster(
+        fake,
+        source_name=INSTANCE,
+        source_project=PROJECT,
+        target_name="ct-qa-copy-0002",
+        target_project="scratch",
+        target_member="member-2",
+    )
+
+    assert operation == "/1.0/operations/op-copy"
+    body, params = fake.api.instances.created[0]
+    assert body["source"] == {
+        "type": "copy",
+        "source": INSTANCE,
+        "project": PROJECT,
+    }
+    assert params == {"project": "scratch", "target": "member-2"}
 
 
-def test_a_copy_reproduces_the_sources_config_and_devices():
-    """A copy must declare the config and devices it is reproducing.
-
-    Every customer project on this fleet carries limits.cpu, limits.memory and limits.disk. LXD
-    checks a destination project's quota BEFORE it resolves anything from the copy source, so a
-    body that omits them is refused with "instance has no limits.cpu config", which points at
-    the copy rather than at the project it landed in. Proven live: the same request succeeds the
-    moment config and devices travel with it.
-
-    volatile.* is excluded on purpose. It carries generated identity such as MAC addresses, and
-    reproducing it would put two instances with the same hardware identity on one network.
-    """
-    node = FakeInstanceNode(
+def test_same_cluster_helper_reproduces_config_devices_and_profiles():
+    node = _CopyableInstanceNode(
         config={
             "limits.cpu": "1",
             "limits.memory": "256MiB",
@@ -163,176 +194,91 @@ def test_a_copy_reproduces_the_sources_config_and_devices():
         },
     )
     node.devices = {"root": {"path": "/", "type": "disk", "pool": "default", "size": "2GiB"}}
-    node.profiles = ["default"]
+    node.profiles = ["default", "restricted"]
     fake = FakeClient(node)
 
-    client = _client(service(fake, hosts=(HOST,)), allowed_clusters={HOST})
-    try:
-        assert _copy(client).status_code == 202
-    finally:
-        client._cleanup()
+    mobility.copy_within_cluster(
+        fake,
+        source_name=INSTANCE,
+        source_project=PROJECT,
+        target_name="ct-qa-copy-0002",
+        target_project="scratch",
+    )
 
     body, _params = fake.api.instances.created[0]
-    assert body["config"]["limits.cpu"] == "1", "the copy must declare the source's limits"
-    assert "volatile.eth0.hwaddr" not in body["config"], (
-        "volatile identity must not be reproduced onto a second instance"
-    )
-    assert body["devices"]["root"]["size"] == "2GiB", "the root device must travel with the copy"
-    assert body["profiles"] == ["default"]
+    assert body["type"] == "container"
+    assert body["config"]["limits.cpu"] == "1"
+    assert body["config"]["limits.memory"] == "256MiB"
+    assert "volatile.eth0.hwaddr" not in body["config"]
+    assert body["devices"]["root"]["size"] == "2GiB"
+    assert body["profiles"] == ["default", "restricted"]
 
 
-def test_a_target_pool_overrides_only_the_root_pool():
-    node = FakeInstanceNode(config={"limits.cpu": "1"})
-    node.devices = {"root": {"path": "/", "type": "disk", "pool": "default", "size": "2GiB"}}
-    node.profiles = ["default"]
+def test_target_pool_overrides_only_the_effective_root_disk():
+    node = _CopyableInstanceNode(config={"limits.cpu": "1"})
+    node.devices = {
+        "os": {"path": "/", "type": "disk", "pool": "default", "size": "2GiB"},
+        "data": {"path": "/srv", "type": "disk", "pool": "bulk", "source": "data"},
+    }
     fake = FakeClient(node)
 
-    client = _client(service(fake, hosts=(HOST,)), allowed_clusters={HOST})
-    try:
-        assert _copy(client, target_pool="nvme").status_code == 202
-    finally:
-        client._cleanup()
-
-    body, _ = fake.api.instances.created[0]
-    assert body["devices"]["root"]["pool"] == "nvme"
-    assert body["devices"]["root"]["size"] == "2GiB", "overriding the pool must not drop the size"
-
-
-# ── the billing gate, and the operation actually settling ──────────────────────────────────
-
-
-def test_a_copy_of_a_billed_instance_is_refused_without_an_acknowledgement():
-    """A copy duplicates a workload whose storage another product meters and bills."""
-    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        response = _copy(client)
-        assert response.status_code == 403, response.text
-        detail = response.json()["detail"]
-        assert detail["error"] == "billing_impact_acknowledgement_required"
-        assert detail["acknowledge_field"] == "acknowledge_billing_impact"
-    finally:
-        client._cleanup()
-
-    assert not [c for c in node.recorded if c[0] == "post_instance"], (
-        "a refused copy must not reach the daemon"
+    mobility.copy_within_cluster(
+        fake,
+        source_name=INSTANCE,
+        source_project=PROJECT,
+        target_name="ct-qa-copy-0002",
+        target_project="scratch",
+        target_pool="nvme",
     )
 
+    body, _params = fake.api.instances.created[0]
+    assert body["devices"]["os"] == {
+        "path": "/",
+        "type": "disk",
+        "pool": "nvme",
+        "size": "2GiB",
+    }
+    assert body["devices"]["data"]["pool"] == "bulk"
+    assert "root" not in body["devices"]
 
-def test_an_acknowledged_copy_of_a_billed_instance_proceeds_and_records_the_override(monkeypatch):
-    from app.core import snapshot_billing_gate
 
-    rows = []
+def test_billing_gate_refuses_an_unacknowledged_external_schedule(monkeypatch):
+    audits = []
     monkeypatch.setattr(
-        snapshot_billing_gate.activity_logger, "log_activity", lambda **kw: rows.append(kw)
+        instance_mobility,
+        "_audit_move",
+        lambda *args, **kwargs: audits.append((args, kwargs)),
     )
 
-    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        response = _copy(
-            client, acknowledge_billing_impact=True, reason="moving off a failing node"
+    with pytest.raises(HTTPException) as exc:
+        instance_mobility._gate_copy(
+            {"externally_managed": True, "schedule": "@hourly", "expiry": "1d"},
+            INSTANCE,
+            _body(),
         )
-        assert response.status_code == 202, response.text
-    finally:
-        client._cleanup()
 
-    overrides = [r for r in rows if r["action"] == "instance.snapshot.billing_override"]
-    assert overrides, f"a forced copy must be separately alertable: {rows}"
-    assert overrides[0]["details"]["overridden_action"] == "copy"
-    assert overrides[0]["details"]["reason"] == "moving off a failing node"
+    assert exc.value.status_code == 403
+    assert exc.value.detail["error"] == "billing_impact_acknowledgement_required"
+    assert exc.value.detail["acknowledge_field"] == "acknowledge_billing_impact"
+    assert audits[0][1]["result"] == "denied"
 
 
-def test_an_acknowledgement_without_a_reason_is_still_refused():
-    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        assert _copy(client, acknowledge_billing_impact=True).status_code == 403
-    finally:
-        client._cleanup()
-
-
-def test_an_unscheduled_instance_needs_no_acknowledgement():
-    node = FakeInstanceNode()
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        assert _copy(client).status_code == 202
-    finally:
-        client._cleanup()
-
-
-def test_a_copy_the_cluster_fails_after_accepting_is_not_reported_as_started():
-    """The 202 says the request was understood. Everything that can go wrong happens after it."""
-    node = FakeInstanceNode()
-    node.operation_status = "Failure"
-    node.operation_err = "Failed to connect to source: connection refused"
-
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        response = _copy(client)
-        assert response.status_code == 502, response.text
-        detail = response.json()["detail"]
-        assert "connection refused" in detail
-        # The one failure an operator cannot read off the raw message.
-        assert "open a connection" in detail, detail
-    finally:
-        client._cleanup()
-
-
-def test_a_settled_copy_says_it_finished_rather_than_that_it_started():
-    node = FakeInstanceNode()
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        response = _copy(client)
-        assert response.status_code == 202, response.text
-        assert "copied to" in response.json()["message"]
-    finally:
-        client._cleanup()
-
-
-def test_an_unsettled_copy_announces_nothing_upstream(monkeypatch):
-    """`instance.created` says a resource EXISTS, and the upstream product meters what it is told.
-
-    Emitting it on the unsettled branch announced an instance whose transfer had been accepted and
-    might still fail. That is the same "reported before it happened" defect the settle check was
-    added to remove, one step further downstream. A slow copy that does complete is picked up by
-    that product's own inventory sweep, so waiting costs a delay; announcing early costs a
-    resource in a ledger that never appeared.
-    """
-    from app.routers import instance_mobility
-
-    emitted = []
-    monkeypatch.setattr(
-        instance_mobility, "schedule_orcahub_event", lambda **kw: emitted.append(kw)
+def test_billing_gate_returns_an_acknowledged_justification():
+    reason = "Capacity rebalance approved by the operator"
+    result = instance_mobility._gate_copy(
+        {"externally_managed": True, "schedule": "@hourly", "expiry": "1d"},
+        INSTANCE,
+        _body(acknowledge_billing_impact=True, reason=reason),
     )
 
-    node = FakeInstanceNode()
-    node.operation_status = "Running"  # accepted, still working
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        response = _copy(client)
-        assert response.status_code == 202, response.text
-    finally:
-        client._cleanup()
-
-    assert emitted == [], f"an unsettled copy announced a resource that may never appear: {emitted}"
+    assert result == reason
 
 
-def test_a_settled_copy_does_announce(monkeypatch):
-    """The guard must not stop the announcement it exists to make honest."""
-    from app.routers import instance_mobility
-
-    emitted = []
-    monkeypatch.setattr(
-        instance_mobility, "schedule_orcahub_event", lambda **kw: emitted.append(kw)
+def test_billing_gate_does_not_require_acknowledgement_without_external_management():
+    result = instance_mobility._gate_copy(
+        {"externally_managed": False},
+        INSTANCE,
+        _body(),
     )
 
-    node = FakeInstanceNode()
-    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
-    try:
-        assert _copy(client).status_code == 202
-    finally:
-        client._cleanup()
-
-    assert len(emitted) == 1, f"a completed copy must be announced: {emitted}"
-    assert emitted[0]["event_type"] == "instance.created"
+    assert result is None

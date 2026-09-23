@@ -66,6 +66,11 @@ from app.services.instance_specifications import (
     create_operation_job,
     get_operation_job,
 )
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_instance_not_migration_fenced,
+    assert_project_not_migration_fenced,
+)
 from app.services.lxd.create_preflight import (
     CreatePreflightEvaluation,
     CreatePreflightUnavailable,
@@ -249,6 +254,17 @@ async def _create_vm_under_policy(
 ) -> VMInfo:
     """Durably admit and submit a legacy create, then await its verified result."""
     async with serialize_cluster_configuration(db, request.host):
+        await assert_project_not_migration_fenced(
+            cluster_id=request.host,
+            project=request.project,
+            db=db,
+        )
+        await assert_instance_not_migration_fenced(
+            cluster_id=request.host,
+            project=request.project,
+            instance_name=request.name,
+            db=db,
+        )
         policy = await _cluster_write_policy(user, request.host, db)
         evaluation = await _legacy_effective_payload(request, lxd_service)
         validate_target_project_isolation(policy, evaluation.target_project_config)
@@ -610,6 +626,8 @@ async def create_vm(
             vm=vm,
         )
         
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDOperationError as e:
         temporarily_unavailable = isinstance(
             e.__cause__, (BlockingTimeout, BlockingPoolFull)
@@ -689,7 +707,9 @@ async def start_vm(
             action="start",
             new_status=vm.status,
         )
-        
+
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         # A cluster that did not answer is not a client error and is not
         # a missing resource. Without this clause the retyped exception
@@ -891,6 +911,8 @@ async def restart_vm(
             new_status=vm.status,
         )
 
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDGracefulTimeoutError as e:
         # Must precede LXDOperationError (its parent). Guest ignored the ACPI
         # shutdown during the restart; recoverable with force. 504 + GRACEFUL_TIMEOUT
@@ -1002,7 +1024,9 @@ async def delete_vm(
             vm_name=vm_name,
             action="delete",
         )
-        
+
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except LXDConnectionError as e:
         # A cluster that did not answer is not a client error and is not
         # a missing resource. Without this clause the retyped exception

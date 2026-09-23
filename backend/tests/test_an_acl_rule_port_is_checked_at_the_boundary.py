@@ -10,6 +10,7 @@ create and on update, with the direction, rule number and field named.
 
 from types import SimpleNamespace
 from typing import Any, Dict, List
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -20,6 +21,11 @@ from app.core.rbac import get_current_user
 from app.routers import network_acls as acls_module
 from app.services.lxd.acl_rules import port_list_error, rule_error
 from app.services.lxd_service import get_lxd_service
+
+
+@asynccontextmanager
+async def _no_configuration_lock(_db, _host):
+    yield
 
 
 class _Response:
@@ -68,6 +74,11 @@ def _app(monkeypatch):
     monkeypatch.setattr(acls_module, "resolve_owner", lambda c, kind, project: "default")
     monkeypatch.setattr(acls_module, "project_is_visible", lambda host, project: True)
     monkeypatch.setattr(acls_module, "verify_cluster_access", lambda host: None, raising=False)
+    monkeypatch.setattr(
+        acls_module,
+        "serialize_cluster_configuration",
+        _no_configuration_lock,
+    )
     monkeypatch.setattr(acls_module, "filter_visible_lxd_references", lambda host, refs: refs)
     monkeypatch.setattr(acls_module, "tenant_acl_active", lambda: False)
     monkeypatch.setattr(acls_module.activity_logger, "log_activity", lambda **kw: None)

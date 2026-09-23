@@ -129,6 +129,23 @@ def test_the_sanitiser_removes_endpoints_and_paths(message: str) -> None:
     assert "secret/data/clusters/prod/certs" not in cleaned
 
 
+def test_the_sanitiser_accepts_exception_objects_without_leaking_secrets() -> None:
+    cleaned = sanitize_error(
+        RuntimeError("password=SYNTHETIC_SENTINEL at https://cluster.invalid/1.0")
+    )
+
+    assert "SYNTHETIC_SENTINEL" not in cleaned
+    assert "cluster.invalid" not in cleaned
+
+
+def test_an_unprintable_error_cannot_break_error_reporting() -> None:
+    class UnprintableError(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError("SYNTHETIC_SENTINEL")
+
+    assert sanitize_error(UnprintableError()) == "Error details unavailable"
+
+
 def test_a_server_fault_answers_with_a_reference_rather_than_the_exception() -> None:
     reference, full = reference_for(RuntimeError("connect to 10.0.5.12:8443 failed"))
     assert "10.0.5.12" in full, "the full text must still reach the log"

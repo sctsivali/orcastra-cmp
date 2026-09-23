@@ -188,6 +188,28 @@ function platformNodes() {
   };
 }
 
+function platformAvailability() {
+  const generatedAt = iso();
+  const clusters = platformNodes().nodes.map((node) => ({
+    name: node.name,
+    display_name: node.display_name,
+    endpoint: node.endpoint,
+    status: node.status,
+    reason_code: node.reachable ? "ok" : "unreachable",
+    reason: node.error,
+    node_type: node.node_type,
+    checked_at: generatedAt,
+    available: Boolean(node.connected && node.reachable),
+  }));
+  return {
+    clusters,
+    online_count: clusters.filter((cluster) => cluster.available).length,
+    total_count: clusters.length,
+    source: "nodes_cache",
+    generated_at: generatedAt,
+  };
+}
+
 function tenantSpecifications({ empty = false } = {}) {
   return {
     total: empty ? 0 : 1,
@@ -392,6 +414,7 @@ module.exports = {
   iso,
   monitoringDashboard,
   monitoringHistory,
+  platformAvailability,
   platformNodes,
   tenantSpecifications,
 };

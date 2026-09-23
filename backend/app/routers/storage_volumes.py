@@ -17,6 +17,7 @@ from app.services.lxd.project_scope import (
     ALL_PROJECTS_READ_TIMEOUT,
     DEFAULT_PROJECT,
     list_pool_volumes,
+    resolve_owner,
 )
 from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
@@ -50,6 +51,13 @@ from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
 from app.services.lxd.lazy_client import client_for
+from app.core.database import get_db
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.migration_fence import (
+    MigrationFenceConflict,
+    assert_project_not_migration_fenced,
+)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -382,20 +390,32 @@ async def create_storage_volume(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
-        client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(safe_segment(request.pool))
-        
-        volume = storage_pool.volumes.create({
-            "name": request.name,
-            "type": request.type,
-            "config": request.config,
-            "description": request.description,
-            "content_type": request.content_type
-        })
+        async with serialize_cluster_configuration(db, host):
+            try:
+                await assert_project_not_migration_fenced(
+                    cluster_id=host,
+                    project=DEFAULT_PROJECT,
+                    db=db,
+                )
+            except MigrationFenceConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            client = require_client(await client_for(lxd_service, host), host)
+            storage_pool = client.storage_pools.get(safe_segment(request.pool))
+
+            volume = storage_pool.volumes.create({
+                "name": request.name,
+                "type": request.type,
+                "config": request.config,
+                "description": request.description,
+                "content_type": request.content_type
+            })
         
         # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
         # the integrations proxy vocabulary, so this router is their only source: without it two
@@ -479,27 +499,42 @@ async def update_storage_volume(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a storage volume."""
     verify_cluster_access(host)
-    if not project_is_visible(host, project or DEFAULT_PROJECT):
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
         raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
-        client = require_client(await client_for(lxd_service, host), host)
-        node = _volume_node(client, pool, volume_type, volume_name)
-        params = _address_params(project, location) or None
-        current = node.get(params=params).json().get("metadata") or {}
-        body: Dict[str, object] = {}
-        if config is not None:
-            body["config"] = config
-        elif current.get("config") is not None:
-            body["config"] = current.get("config")
-        if description is not None:
-            body["description"] = description
-        elif current.get("description") is not None:
-            body["description"] = current.get("description")
-        # PATCH would merge; the previous pylxd save() sent the whole object, which is PUT
-        node.put(json=body, params=params)
+        async with serialize_cluster_configuration(db, host):
+            client = require_client(await client_for(lxd_service, host), host)
+            owner = resolve_owner(client, "storage-volumes", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this project")
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            node = _volume_node(client, pool, volume_type, volume_name)
+            params = _address_params(owner, location) or None
+            current = node.get(params=params).json().get("metadata") or {}
+            body: Dict[str, object] = {}
+            if config is not None:
+                body["config"] = config
+            elif current.get("config") is not None:
+                body["config"] = current.get("config")
+            if description is not None:
+                body["description"] = description
+            elif current.get("description") is not None:
+                body["description"] = current.get("description")
+            # PATCH would merge; the previous pylxd save() sent the whole object, which is PUT
+            node.put(json=body, params=params)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_volumes")
@@ -574,29 +609,44 @@ async def delete_storage_volume(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a storage volume."""
     verify_cluster_access(host)
-    if not project_is_visible(host, project or DEFAULT_PROJECT):
+    requested_project = project or DEFAULT_PROJECT
+    if not project_is_visible(host, requested_project):
         raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
-        client = require_client(await client_for(lxd_service, host), host)
-        node = _volume_node(client, pool, volume_type, volume_name)
-        params = _address_params(project, location) or None
+        async with serialize_cluster_configuration(db, host):
+            client = require_client(await client_for(lxd_service, host), host)
+            owner = resolve_owner(client, "storage-volumes", project)
+            if not project_is_visible(host, owner):
+                raise HTTPException(status_code=403, detail="Access denied to this project")
+            for fenced_project in sorted({requested_project, owner}):
+                try:
+                    await assert_project_not_migration_fenced(
+                        cluster_id=host,
+                        project=fenced_project,
+                        db=db,
+                    )
+                except MigrationFenceConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+            node = _volume_node(client, pool, volume_type, volume_name)
+            params = _address_params(owner, location) or None
 
-        # important: refuse before asking the daemon. LXD rejects an attached volume anyway,
-        # but its message arrived here as a bare Exception and left as a 500, so an operator
-        # error read as a server fault and the fix it needs was never stated. Unlike an image,
-        # there is no force: an attached volume genuinely cannot be removed.
-        current = node.get(params=params).json().get("metadata") or {}
-        attached = list(current.get("used_by") or [])
-        if attached:
-            raise HTTPException(status_code=409, detail=_in_use_detail(volume_name, attached))
+            # important: refuse before asking the daemon. LXD rejects an attached volume anyway,
+            # but its message arrived here as a bare Exception and left as a 500, so an operator
+            # error read as a server fault and the fix it needs was never stated. Unlike an image,
+            # there is no force: an attached volume genuinely cannot be removed.
+            current = node.get(params=params).json().get("metadata") or {}
+            attached = list(current.get("used_by") or [])
+            if attached:
+                raise HTTPException(status_code=409, detail=_in_use_detail(volume_name, attached))
 
-        # important: on a clustered host a per-member pool holds one volume of this name per
-        # member. Without a target LXD refuses the ambiguity; the caller passes the row's
-        # location, and this never guesses a member.
-        node.delete(params=params)
+            # important: on a clustered host a per-member pool holds one volume of this name per
+            # member. Without a target LXD refuses the ambiguity; the caller passes the row's
+            # location, and this never guesses a member.
+            node.delete(params=params)
 
         # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
         # the integrations proxy vocabulary, so this router is their only source: without it two
@@ -620,7 +670,13 @@ async def delete_storage_volume(
             details={"pool": pool, "type": volume_type}
         )
         
-        schedule_orcahub_event("volume.deleted", host, project or DEFAULT_PROJECT, volume_name, resource_type="VOLUME")
+        schedule_orcahub_event(
+            "volume.deleted",
+            host,
+            owner,
+            volume_name,
+            resource_type="VOLUME",
+        )
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_volumes")
         return {

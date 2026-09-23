@@ -11,6 +11,7 @@ could not create.
 
 from types import SimpleNamespace
 from typing import Any, Dict, List
+from contextlib import asynccontextmanager
 
 import pytest
 from fastapi import FastAPI
@@ -23,6 +24,11 @@ from app.core.rbac import get_current_user
 from app.services.lxd_service import get_lxd_service
 
 MEMBERS = ["mc1", "mc2", "mc3"]
+
+
+@asynccontextmanager
+async def _no_configuration_lock(_db, _host):
+    yield
 
 
 class _Networks:
@@ -55,6 +61,11 @@ def _app(monkeypatch, clustered: bool):
         lambda c, host: {"UPLINK": {"name": "UPLINK", "type": "physical", "managed": True}},
     )
     monkeypatch.setattr(networks_module, "verify_cluster_access", lambda host: None)
+    monkeypatch.setattr(
+        networks_module,
+        "serialize_cluster_configuration",
+        _no_configuration_lock,
+    )
     monkeypatch.setattr(networks_module.activity_logger, "log_activity", lambda **kw: None)
     monkeypatch.setattr(
         networks_module, "get_cache_manager",

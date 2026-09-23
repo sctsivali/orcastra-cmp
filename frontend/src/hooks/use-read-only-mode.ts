@@ -60,3 +60,18 @@ export function useSnapshotSchedulesEnabled(): boolean | undefined {
 export function useTaskJournalEnabled(): boolean | undefined {
   return useSystemSettings().data?.task_journal_enabled;
 }
+
+export function useMigrationCapabilities() {
+  const query = useSystemSettings();
+  return {
+    isLoading: query.isLoading,
+    isError: query.isError,
+    centerEnabled: query.data?.migration_center_enabled,
+    durableCopyEnabled: query.data?.migration_durable_copy_enabled,
+    instanceMoveEnabled: query.data?.migration_instance_move_enabled,
+    projectMemberRelocationEnabled:
+      query.data?.migration_project_member_relocation_enabled,
+    projectCrossClusterEnabled:
+      query.data?.migration_project_cross_cluster_enabled,
+  };
+}
