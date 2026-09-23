@@ -8,6 +8,8 @@ cluster the registry still lists answers 503, and only a cluster the readable re
 lists is left out, as before.
 """
 
+import threading
+import time
 from typing import Any, Dict, List, Optional, Set
 
 import pytest
@@ -111,3 +113,51 @@ async def test_the_sync_handler_answers_503_through_the_route(monkeypatch):
             integrations.SyncDataRequest(include_projects=False), api_key=key, lxd_service=None, db=None
         )
     assert caught.value.status_code == 503
+
+
+class SlowCertManager(FakeCertManager):
+    """Every read takes a little while, and the peak number running at once is recorded."""
+
+    def __init__(self) -> None:
+        super().__init__(set(), RegistryRead([], "vault", True))
+        self._lock = threading.Lock()
+        self.running = 0
+        self.peak = 0
+
+    def get_cluster_info(self, cluster_id: str) -> Dict[str, Any]:
+        with self._lock:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        time.sleep(0.02)
+        with self._lock:
+            self.running -= 1
+        return super().get_cluster_info(cluster_id)
+
+
+async def test_a_key_covering_more_clusters_than_the_pool_still_syncs():
+    from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT
+
+    clusters = {f"cluster-{n:02d}" for n in range(PROXY_MAX_IN_FLIGHT + 8)}
+    cm = SlowCertManager()
+    rows = await integrations._gather_cluster_info(cm, clusters)
+    assert _ids(rows) == sorted(clusters)
+    assert cm.peak <= integrations.CLUSTER_INFO_CONCURRENCY
+
+
+async def test_a_saturated_pool_is_a_503_that_says_so(monkeypatch):
+    from app.core.blocking import BlockingPoolFull
+
+    real = integrations.run_blocking
+
+    async def shed_b(fn, *args, **kwargs):
+        if kwargs.get("label") == "sync_cluster_info[cluster-b]":
+            raise BlockingPoolFull(kwargs["label"], 32)
+        return await real(fn, *args, **kwargs)
+
+    monkeypatch.setattr(integrations, "run_blocking", shed_b)
+    cm = FakeCertManager(set(), RegistryRead(["cluster-a", "cluster-b"], "vault", True))
+    with pytest.raises(HTTPException) as caught:
+        await integrations._gather_cluster_info(cm, {"cluster-a", "cluster-b"})
+    assert caught.value.status_code == 503
+    assert caught.value.detail == integrations.CLUSTER_INFO_SATURATED
+    assert cm.registry_reads == [], "a shed read is not a Vault failure, so the registry is not asked"

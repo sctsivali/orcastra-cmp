@@ -30,6 +30,7 @@ from app.services.lxd.proxy import (
     PROXY_CONNECT_TIMEOUT,
     PROXY_MAX_IN_FLIGHT,
     PROXY_OP_TIMEOUT,
+    PROXY_POOL_WORKERS,
     RAW_PROXY_TIMEOUT,
     SYNC_CLUSTER_TIMEOUT,
     VALIDATE_KEY_TIMEOUT,
@@ -987,6 +988,15 @@ CLUSTER_INFO_UNREADABLE = (
     "Cluster details could not be read for every cluster this key covers, so this sync "
     "cannot say which clusters exist. Nothing was removed. Retry shortly."
 )
+CLUSTER_INFO_SATURATED = (
+    "The integration proxy is busy, so cluster details could not be read for every cluster "
+    "this key covers. Nothing was removed. Retry shortly."
+)
+# note: the gather shares proxy_executor and its in-flight budget with raw proxy traffic.
+# Starting one read per cluster at once shed every read past the free budget, so a key covering
+# more clusters than that failed every sync. The pool has this many threads, so reading more at
+# once only queued the rest while their timeouts ran.
+CLUSTER_INFO_CONCURRENCY = max(1, PROXY_POOL_WORKERS)
 
 
 async def _gather_cluster_info(cert_manager, cluster_ids) -> List[Dict[str, Any]]:
@@ -998,23 +1008,33 @@ async def _gather_cluster_info(cert_manager, cluster_ids) -> List[Dict[str, Any]
     read fails, the registry decides: a cluster the readable registry no longer lists is gone and
     is omitted as before, anything else answers 503 so the integrator keeps what it has.
     """
+    gate = asyncio.Semaphore(CLUSTER_INFO_CONCURRENCY)
+    shed: List[str] = []
+
     async def one(cluster_id: str) -> tuple:
-        try:
-            rows = await run_blocking(
-                _fetch_cluster_info,
-                cert_manager,
-                cluster_id,
-                timeout=SYNC_CLUSTER_TIMEOUT,
-                label=f"sync_cluster_info[{cluster_id}]",
-                executor=proxy_executor,
-                max_in_flight=PROXY_MAX_IN_FLIGHT,
-            )
-            return cluster_id, rows
-        except Exception as exc:  # noqa: BLE001 - any failure is decided by the registry below
-            logger.warning("Could not read cluster_info for %s: %s", cluster_id, sanitize_error(str(exc)))
-            return cluster_id, None
+        async with gate:
+            try:
+                rows = await run_blocking(
+                    _fetch_cluster_info,
+                    cert_manager,
+                    cluster_id,
+                    timeout=SYNC_CLUSTER_TIMEOUT,
+                    label=f"sync_cluster_info[{cluster_id}]",
+                    executor=proxy_executor,
+                    max_in_flight=PROXY_MAX_IN_FLIGHT,
+                )
+                return cluster_id, rows
+            except BlockingPoolFull:
+                shed.append(cluster_id)
+                return cluster_id, None
+            except Exception as exc:  # noqa: BLE001 - any failure is decided by the registry below
+                logger.warning("Could not read cluster_info for %s: %s", cluster_id, sanitize_error(str(exc)))
+                return cluster_id, None
 
     results = await asyncio.gather(*[one(c) for c in sorted(cluster_ids)])
+    if shed:
+        logger.warning("sync: cluster_info shed for %d cluster(s), proxy pool saturated", len(shed))
+        raise HTTPException(status_code=503, detail=CLUSTER_INFO_SATURATED)
     unreadable = [cluster_id for cluster_id, rows in results if rows is None]
     if unreadable:
         try:
