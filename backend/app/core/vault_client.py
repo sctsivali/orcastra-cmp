@@ -12,7 +12,7 @@ Secret VALUES are NEVER logged - only access paths and operation results.
 
 import logging
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import quote
 import requests
 from requests.adapters import HTTPAdapter
@@ -103,6 +103,10 @@ def _audit_vault_operation(
 class VaultClientError(Exception):
     """Base exception for Vault client errors."""
     pass
+
+
+class VaultCasMismatch(VaultClientError):
+    """A check-and-set write lost to another write made after its read."""
 
 
 def safe_vault_url(vault_addr: str, path: str) -> str:
@@ -303,18 +307,41 @@ class VaultClient:
             logger.error(f"Failed to write to Vault path {path}: {e}")
             raise VaultClientError(f"Vault write failed: {str(e)}")
     
-    def vault_kv_put(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def vault_read_versioned(self, path: str) -> Tuple[Optional[Dict[str, Any]], int]:
+        """Read a KV v2 secret and its current version, never from the cache.
+
+        Returns (None, version) for a deleted latest version and (None, 0) for a missing path.
+        The version is what a check-and-set write passes as cas.
+        """
+        url = safe_vault_url(self.vault_addr, path)
+        response = self.session.get(url, headers=self.headers, timeout=(2, 3))
+        if response.status_code == 404:
+            body = response.json() if response.content else {}
+            version = ((body.get("data") or {}).get("metadata") or {}).get("version") or 0
+            return None, int(version)
+        response.raise_for_status()
+        body = response.json().get("data") or {}
+        return body.get("data"), int((body.get("metadata") or {}).get("version") or 0)
+
+    def vault_kv_put(self, path: str, data: Dict[str, Any], cas: Optional[int] = None) -> Dict[str, Any]:
         """
         Put data into Vault KV v2 store.
         Invalidates cache for the path.
+
+        With cas, the write lands only if the secret is still at that version, and a write made
+        after the caller's read raises VaultCasMismatch instead of being overwritten.
         """
         start = time.perf_counter()
         url = safe_vault_url(self.vault_addr, path)
         
-        payload = {"data": data}
+        payload: Dict[str, Any] = {"data": data}
+        if cas is not None:
+            payload["options"] = {"cas": cas}
         
         try:
             response = self.session.post(url, headers=self.headers, json=payload, timeout=(2, 3))
+            if cas is not None and response.status_code == 400 and "check-and-set" in response.text:
+                raise VaultCasMismatch(f"{path} changed after version {cas}")
             response.raise_for_status()
             
             # Invalidate cache for this path

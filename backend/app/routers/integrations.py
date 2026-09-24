@@ -54,7 +54,7 @@ from app.core.org_scope import (
     reconcile_personal_clusters,
 )
 from app.core.cache import get_cache_manager
-from app.core.vault_client import get_vault_client, safe_vault_url
+from app.core.vault_client import VaultCasMismatch, VaultClientError, get_vault_client, safe_vault_url
 from app.core.config import get_settings
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -588,14 +588,34 @@ def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[External
         return []
 
 
+def _merge_into_key_metadata(vault_client, key_id: str, fields: Dict[str, Any], *, skip_unusable: bool = False) -> bool:
+    """Write fields into a key's Vault metadata and keep every other field as it stands now.
+
+    important: a bookkeeping write used to read the whole document and put it back, so a revoke,
+    a narrowed grant or a stored callback URL written in between was silently undone. The write
+    now lands only on the version it read (KV v2 check-and-set), and a lost race reads again.
+    A key whose metadata is gone is never written. Returns whether the fields stand.
+    """
+    path = f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+    for _attempt in range(3):
+        metadata, version = vault_client.vault_read_versioned(path)
+        if metadata is None or (skip_unusable and _api_key_is_unusable(metadata)):
+            return False
+        if all(metadata.get(name) == value for name, value in fields.items()):
+            return True
+        try:
+            vault_client.vault_kv_put(path, {**metadata, **fields}, cas=version)
+            return True
+        except VaultCasMismatch:
+            continue
+    raise VaultClientError(f"the metadata of {key_id} kept changing, {sorted(fields)} not written")
+
+
 def update_api_key_last_used(vault_client, key_id: str):
     """Update the last_used_at timestamp for an API key."""
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        metadata["last_used_at"] = datetime.utcnow().isoformat()
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-            metadata
+        _merge_into_key_metadata(
+            vault_client, key_id, {"last_used_at": datetime.utcnow().isoformat()}, skip_unusable=True
         )
     except Exception as e:
         logger.warning(f"Failed to update last_used_at: {e}")
@@ -1215,14 +1235,8 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
 def _store_app_url_in_vault(api_key_id: str, app_url: str):
     """Store external app callback URL in Vault alongside API key metadata."""
     try:
-        vault_client = get_vault_integrations_client()
-        metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
-        metadata["app_url"] = app_url
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/metadata",
-            metadata
-        )
-        logger.info(f"Stored app_url for API key {api_key_id}")
+        if _merge_into_key_metadata(get_vault_integrations_client(), api_key_id, {"app_url": app_url}):
+            logger.info(f"Stored app_url for API key {api_key_id}")
     except Exception as e:
         logger.warning(f"Failed to store app_url in Vault: {e}")
 
