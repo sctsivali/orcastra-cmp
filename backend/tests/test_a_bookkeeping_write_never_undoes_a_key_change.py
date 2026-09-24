@@ -188,3 +188,24 @@ def test_only_the_version_mismatch_counts_as_a_lost_race(monkeypatch) -> None:
 def test_a_versioned_read_names_a_vault_failure(status, body) -> None:
     with pytest.raises(vault_module.VaultClientError):
         _client(_Session({"GET": (status, body)})).vault_read_versioned(PATH)
+
+
+def test_key_metadata_never_reaches_the_shared_cache(monkeypatch) -> None:
+    """A read racing a revoke or a grant change must not put the old document back for every worker."""
+    touched: List[str] = []
+
+    class _Cache:
+        def get(self, _ns: str, key: str) -> Any:
+            touched.append(key)
+            return {"is_active": True, "is_revoked": False}
+
+        def set(self, _ns: str, key: str, *_a: Any, **_k: Any) -> None:
+            touched.append(key)
+
+    monkeypatch.setattr(vault_module, "get_cache", lambda: _Cache())
+    live = _Session({"GET": (200, {"data": {"data": {"is_active": False, "is_revoked": True}}})})
+    assert _client(live).vault_read(PATH) == {"is_active": False, "is_revoked": True}
+    assert touched == []
+    client = _client(live)
+    assert client._is_cacheable_path("secret/data/clusters/c1/metadata") is True
+    assert client._is_cacheable_path(PATH) is False

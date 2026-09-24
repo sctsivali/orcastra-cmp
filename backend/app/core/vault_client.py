@@ -181,8 +181,15 @@ class VaultClient:
     CACHEABLE_PATH_SUFFIXES = ("/metadata",)
 
     def _is_cacheable_path(self, path: str) -> bool:
-        """True only for a Vault path whose contents may be held in Redis."""
-        return (path or "").lower().rstrip("/").endswith(self.CACHEABLE_PATH_SUFFIXES)
+        """True only for a Vault path whose contents may be held in Redis.
+
+        important: integration API key metadata is never cached. It carries revocation and grants,
+        and a read racing a revoke or a grant change could put the old document back into the
+        shared cache for its whole TTL, where every worker would honour it. The process-local key
+        cache in the integrations router already covers the authentication hot path.
+        """
+        lowered = (path or "").lower().rstrip("/")
+        return lowered.endswith(self.CACHEABLE_PATH_SUFFIXES) and "/api_keys/" not in lowered
 
     def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         """

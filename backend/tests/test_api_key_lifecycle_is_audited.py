@@ -241,3 +241,82 @@ def test_the_vault_delete_of_a_key_raises_when_vault_refuses() -> None:
 
     with pytest.raises(RuntimeError):
         integrations.delete_api_key_from_vault(Refusing(), "oak_test")
+
+
+def _record_evictions(monkeypatch) -> List[str]:
+    evicted: List[str] = []
+    monkeypatch.setattr(integrations, "evict_api_key_cache", evicted.append)
+    return evicted
+
+
+async def test_a_delete_that_stops_halfway_still_drops_every_cached_copy(env, monkeypatch):
+    evicted = _record_evictions(monkeypatch)
+
+    def halfway(_vault: Any, _key: str) -> None:
+        raise RuntimeError("the metadata delete answered 503 after the secret went")
+
+    monkeypatch.setattr(integrations, "delete_api_key_from_vault", halfway)
+    with pytest.raises(HTTPException):
+        await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    assert evicted == ["oak_test"]
+
+
+def test_the_secret_goes_before_the_metadata() -> None:
+    deleted: List[str] = []
+
+    class Recording:
+        def vault_delete(self, path: str) -> bool:
+            deleted.append(path.rsplit("/", 1)[-1])
+            return True
+
+    integrations.delete_api_key_from_vault(Recording(), "oak_test")
+    assert deleted == ["secret", "metadata"]
+
+
+async def test_a_key_whose_secret_is_already_gone_can_still_be_deleted(env, monkeypatch):
+    """The delete decides on the authorized metadata alone, never on a read that needs the secret."""
+    def no_secret(_v: Any, _k: str, **_kw: Any):
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    monkeypatch.setattr(integrations, "get_api_key_from_vault", no_secret)
+    answer = await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    assert answer["success"] is True
+
+
+@pytest.mark.parametrize("action", ["revoke", "permissions"])
+async def test_a_write_whose_outcome_is_unknown_drops_every_cached_copy(env, monkeypatch, action):
+    evicted = _record_evictions(monkeypatch)
+
+    def lost(*_a: Any, **_k: Any):
+        raise RuntimeError("read timed out after the write")
+
+    monkeypatch.setattr(integrations, "_merge_into_key_metadata", lost)
+    with pytest.raises(HTTPException):
+        await _act(action)
+    assert evicted == ["oak_test"]
+
+
+@pytest.mark.parametrize("action", ["revoke", "permissions"])
+async def test_a_key_gone_mid_request_is_not_found(env, monkeypatch, action):
+    monkeypatch.setattr(integrations, "_merge_into_key_metadata", lambda *_a, **_k: None)
+    with pytest.raises(HTTPException) as caught:
+        await _act(action)
+    assert caught.value.status_code == 404 and env["spy"].events == []
+
+
+async def test_a_revoke_is_written_even_for_a_key_that_is_already_unusable(env, monkeypatch):
+    seen: List[Dict[str, Any]] = []
+    real = integrations._merge_into_key_metadata
+    monkeypatch.setattr(integrations, "_merge_into_key_metadata",
+                        lambda *a, **k: seen.append(k) or real(*a, **k))
+    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    assert seen and not seen[0].get("skip_unusable")
+
+
+async def _act(action: str) -> Any:
+    if action == "revoke":
+        return await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    return await integrations.update_api_key_permissions(
+        key_id="oak_test", permissions=[ClusterPermission(cluster_id="cluster-a", permissions=["read"], projects=["*"])],
+        _=None, _rbac=PARTNER, db=None,
+    )

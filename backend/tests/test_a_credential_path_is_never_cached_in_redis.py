@@ -28,6 +28,8 @@ CLUSTERS = "secret/data/orcastra/clusters/cluster-a"
 
 NEVER_CACHED = [
     f"{KEYS}/secret",
+    # integration key metadata carries revocation and grants, so a stale copy must never be shared
+    f"{KEYS}/metadata",
     f"{KEYS}/users/u1",
     "secret/data/orcastra/my_keys/oak_test/credentials",
     f"{CLUSTERS}/certs",
@@ -36,7 +38,7 @@ NEVER_CACHED = [
     "pki_int/certs",
     "secret/data/orcastra/something_new",
 ]
-CACHED = [f"{KEYS}/metadata", f"{CLUSTERS}/metadata"]
+CACHED = [f"{CLUSTERS}/metadata", "secret/data/orcastra/my_keys/oak_test/metadata"]
 
 
 class _Response:
@@ -109,10 +111,12 @@ def test_metadata_is_still_cached(spy: _SpyCache, path: str) -> None:
 @pytest.mark.parametrize(
     "path, expected",
     [
-        (f"{KEYS}/metadata/", True),
-        (f"{KEYS}/METADATA", True),
-        (f"{KEYS}/metadata_backup", False),
-        (f"{KEYS}/metadata/secret", False),
+        (f"{CLUSTERS}/metadata/", True),
+        (f"{CLUSTERS}/METADATA", True),
+        (f"{CLUSTERS}/metadata_backup", False),
+        (f"{CLUSTERS}/metadata/secret", False),
+        (f"{KEYS}/metadata", False),
+        (f"{KEYS}/METADATA/", False),
         ("", False),
         ("/", False),
     ],

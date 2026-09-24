@@ -528,13 +528,17 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
 
 
 def delete_api_key_from_vault(vault_client, key_id: str):
-    """Delete API key from Vault."""
+    """Delete API key from Vault.
+
+    note: the secret goes first. A delete that stops halfway then leaves a key that can no longer
+    authenticate and is still listed, so its owner sees it and deleting it again finishes the job.
+    """
     try:
         vault_client.vault_delete(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
         )
         vault_client.vault_delete(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
         )
         logger.info(f"Deleted API key {key_id} from Vault")
     except Exception as e:
@@ -2194,10 +2198,15 @@ async def update_api_key_permissions(
     try:
         metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
-        metadata = await asyncio.to_thread(
-            _merge_into_key_metadata, vault_client, key_id,
-            {"cluster_permissions": [p.model_dump() for p in permissions]},
-        )
+        try:
+            metadata = await asyncio.to_thread(
+                _merge_into_key_metadata, vault_client, key_id,
+                {"cluster_permissions": [p.model_dump() for p in permissions]},
+            )
+        except Exception:
+            # important: the write may have landed with its reply lost, so drop cached copies
+            evict_api_key_cache(key_id)
+            raise
         if metadata is None:
             raise HTTPException(status_code=404, detail="API key not found")
         
@@ -2236,10 +2245,15 @@ async def revoke_api_key(
     
     try:
         await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
-        metadata = await asyncio.to_thread(
-            _merge_into_key_metadata, vault_client, key_id,
-            {"is_revoked": True, "is_active": False, "revoked_at": datetime.utcnow().isoformat()},
-        )
+        try:
+            metadata = await asyncio.to_thread(
+                _merge_into_key_metadata, vault_client, key_id,
+                {"is_revoked": True, "is_active": False, "revoked_at": datetime.utcnow().isoformat()},
+            )
+        except Exception:
+            # important: a revoke that landed with its reply lost must still end the key at once
+            evict_api_key_cache(key_id)
+            raise
         if metadata is None:
             raise HTTPException(status_code=404, detail="API key not found")
         
@@ -2364,15 +2378,18 @@ async def delete_api_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete an API key permanently."""
-    await _authorize_api_key(key_id, _rbac, db)
+    # note: the metadata alone decides, so a key whose secret an earlier delete already removed
+    # can still be deleted
+    metadata = await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        # Verify it exists
-        metadata, _secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
-        
-        # Delete from Vault
-        await asyncio.to_thread(delete_api_key_from_vault, vault_client, key_id)
+        try:
+            await asyncio.to_thread(delete_api_key_from_vault, vault_client, key_id)
+        except Exception:
+            # important: part of the delete may have landed, so no worker may keep a cached copy
+            evict_api_key_cache(key_id)
+            raise
 
         # Clear all scoped cache variants
         cache = get_cache_manager()
