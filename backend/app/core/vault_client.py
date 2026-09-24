@@ -314,14 +314,19 @@ class VaultClient:
         The version is what a check-and-set write passes as cas.
         """
         url = safe_vault_url(self.vault_addr, path)
-        response = self.session.get(url, headers=self.headers, timeout=(2, 3))
-        if response.status_code == 404:
+        try:
+            response = self.session.get(url, headers=self.headers, timeout=(2, 3))
+            if response.status_code != 404:
+                response.raise_for_status()
             body = response.json() if response.content else {}
-            version = ((body.get("data") or {}).get("metadata") or {}).get("version") or 0
-            return None, int(version)
-        response.raise_for_status()
-        body = response.json().get("data") or {}
-        return body.get("data"), int((body.get("metadata") or {}).get("version") or 0)
+        except (requests.exceptions.RequestException, ValueError) as e:
+            raise VaultClientError(f"Vault read failed: {e}") from e
+        found = (body.get("data") if isinstance(body, dict) else None) or {}
+        version = int(((found.get("metadata") or {}) if isinstance(found, dict) else {}).get("version") or 0)
+        if response.status_code == 404:
+            return None, version
+        data = found.get("data") if isinstance(found, dict) else None
+        return (data if isinstance(data, dict) else None), version
 
     def vault_kv_put(self, path: str, data: Dict[str, Any], cas: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -340,7 +345,7 @@ class VaultClient:
         
         try:
             response = self.session.post(url, headers=self.headers, json=payload, timeout=(2, 3))
-            if cas is not None and response.status_code == 400 and "check-and-set" in response.text:
+            if cas is not None and response.status_code == 400 and "did not match the current version" in response.text:
                 raise VaultCasMismatch(f"{path} changed after version {cas}")
             response.raise_for_status()
             

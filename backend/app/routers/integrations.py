@@ -477,11 +477,11 @@ def save_api_key_to_vault(
         raise HTTPException(status_code=500, detail="Failed to save API key")
 
 
-def get_api_key_from_vault(vault_client, key_id: str) -> tuple[Dict[str, Any], str]:
+def get_api_key_from_vault(vault_client, key_id: str, use_cache: bool = True) -> tuple[Dict[str, Any], str]:
     """Get API key metadata and secret hash from Vault."""
     try:
         metadata = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata", use_cache=use_cache
         )
         secret_data = vault_client.vault_read(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
@@ -538,7 +538,10 @@ def delete_api_key_from_vault(vault_client, key_id: str):
         )
         logger.info(f"Deleted API key {key_id} from Vault")
     except Exception as e:
+        # important: a delete that did not happen must not answer success, since the key would
+        # keep authenticating while its owner believes it is gone
         logger.warning(f"Failed to delete API key from Vault: {e}")
+        raise
 
 
 def save_user_mapping_to_vault(vault_client, api_key_id: str, user_mapping: ExternalUserMapping):
@@ -588,24 +591,29 @@ def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[External
         return []
 
 
-def _merge_into_key_metadata(vault_client, key_id: str, fields: Dict[str, Any], *, skip_unusable: bool = False) -> bool:
+def _merge_into_key_metadata(
+    vault_client, key_id: str, fields: Dict[str, Any], *, skip_unusable: bool = False
+) -> Optional[Dict[str, Any]]:
     """Write fields into a key's Vault metadata and keep every other field as it stands now.
 
-    important: a bookkeeping write used to read the whole document and put it back, so a revoke,
-    a narrowed grant or a stored callback URL written in between was silently undone. The write
-    now lands only on the version it read (KV v2 check-and-set), and a lost race reads again.
-    A key whose metadata is gone is never written. Returns whether the fields stand.
+    important: a write used to read the whole document and put it back, so a revoke, a narrowed
+    grant or a stored callback URL written in between was silently undone. Every write of key
+    metadata after creation goes through here: it lands only on the version it read (KV v2
+    check-and-set), and a lost race reads again. A key whose metadata is gone is never written.
+    Returns the document as written, or None when nothing was written for a gone (or, with
+    skip_unusable, an unusable) key.
     """
     path = f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
     for _attempt in range(3):
         metadata, version = vault_client.vault_read_versioned(path)
         if metadata is None or (skip_unusable and _api_key_is_unusable(metadata)):
-            return False
-        if all(metadata.get(name) == value for name, value in fields.items()):
-            return True
+            return None
+        merged = {**metadata, **fields}
+        if merged == metadata:
+            return metadata
         try:
-            vault_client.vault_kv_put(path, {**metadata, **fields}, cas=version)
-            return True
+            vault_client.vault_kv_put(path, merged, cas=version)
+            return merged
         except VaultCasMismatch:
             continue
     raise VaultClientError(f"the metadata of {key_id} kept changing, {sorted(fields)} not written")
@@ -1207,24 +1215,23 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     (2,3) with Retry(total=2), so a degraded Vault could park a worker for a minute or more.
     """
     vault_client = get_vault_integrations_client()
-    metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
+    # important: never the shared metadata cache here. A read racing a revoke can put the
+    # pre-revoke document back into it after the revoke cleared it, and the process-local key
+    # cache already spares Vault most of these reads.
+    metadata, secret_hash = get_api_key_from_vault(vault_client, key_id, use_cache=False)
 
     if not verify_api_key_secret(key_secret, secret_hash):
         raise HTTPException(status_code=401, detail=INVALID_API_KEY_MESSAGE)
 
     # Backfill raw secret if not already stored (for callback auth)
     try:
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
-        )
-        # note: only for the hash just verified. A rotation between the two reads has already
-        # stored its own raw copy, and writing this one back would revive the old secret.
-        if not secret_data.get("raw") and secret_data.get("hash") == secret_hash:
-            secret_data["raw"] = key_secret
-            vault_client.vault_kv_put(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
-                secret_data,
-            )
+        path = f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
+        secret_data, version = vault_client.vault_read_versioned(path)
+        # note: only for the hash just verified, and only on the version read. A rotation after
+        # either read has stored its own raw copy, and writing this one back would revive the
+        # old secret, so a lost check-and-set leaves the rotation standing.
+        if secret_data and not secret_data.get("raw") and secret_data.get("hash") == secret_hash:
+            vault_client.vault_kv_put(path, {**secret_data, "raw": key_secret}, cas=version)
             logger.info(f"Backfilled raw secret for API key {key_id}")
     except Exception:
         pass  # non-critical
@@ -2187,14 +2194,12 @@ async def update_api_key_permissions(
     try:
         metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
-        # Update permissions
-        metadata["cluster_permissions"] = [p.model_dump() for p in permissions]
-        
-        # Save updated metadata
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-            metadata
+        metadata = await asyncio.to_thread(
+            _merge_into_key_metadata, vault_client, key_id,
+            {"cluster_permissions": [p.model_dump() for p in permissions]},
         )
+        if metadata is None:
+            raise HTTPException(status_code=404, detail="API key not found")
         
         # Clear all scoped cache variants
         cache = get_cache_manager()
@@ -2230,18 +2235,13 @@ async def revoke_api_key(
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
-        
-        # Mark as revoked
-        metadata["is_revoked"] = True
-        metadata["is_active"] = False
-        metadata["revoked_at"] = datetime.utcnow().isoformat()
-        
-        # Save updated metadata
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-            metadata
+        await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+        metadata = await asyncio.to_thread(
+            _merge_into_key_metadata, vault_client, key_id,
+            {"is_revoked": True, "is_active": False, "revoked_at": datetime.utcnow().isoformat()},
         )
+        if metadata is None:
+            raise HTTPException(status_code=404, detail="API key not found")
         
         # Clear all scoped cache variants for real-time revocation
         cache = get_cache_manager()
@@ -2372,7 +2372,7 @@ async def delete_api_key(
         metadata, _secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Delete from Vault
-        delete_api_key_from_vault(vault_client, key_id)
+        await asyncio.to_thread(delete_api_key_from_vault, vault_client, key_id)
 
         # Clear all scoped cache variants
         cache = get_cache_manager()

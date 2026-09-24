@@ -55,9 +55,15 @@ class Spy:
 class FakeVault:
     def __init__(self) -> None:
         self.puts: List[tuple] = []
+        self.cas: List[Any] = []
 
-    def vault_kv_put(self, path: str, data: Dict[str, Any]) -> None:
+    def vault_read_versioned(self, path: str) -> tuple:
+        # the document the fixture's get_api_key_from_vault stands for, at one version
+        return integrations.get_api_key_from_vault(self, path.split("/")[-2])[0], 1
+
+    def vault_kv_put(self, path: str, data: Dict[str, Any], cas: Any = None) -> None:
         self.puts.append((path, dict(data)))
+        self.cas.append(cas)
 
 
 class _Cache:
@@ -204,3 +210,34 @@ async def test_an_audit_failure_never_fails_the_action(env, monkeypatch):
     monkeypatch.setattr(integrations, "activity_logger", Broken())
     result = await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
     assert result.is_revoked is True
+
+
+async def test_revoke_and_a_permissions_edit_write_only_on_the_version_they_read(env):
+    """Both go through the check-and-set merge, so neither can undo the other or a last-used stamp."""
+    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    await integrations.update_api_key_permissions(
+        key_id="oak_test", permissions=[ClusterPermission(cluster_id="c1", permissions=["read"], projects=["*"])],
+        _=None, _rbac=PARTNER,
+    )
+    metadata_puts = [cas for (path, _data), cas in zip(env["vault"].puts, env["vault"].cas) if path.endswith("/metadata")]
+    assert len(metadata_puts) == 2 and all(cas is not None for cas in metadata_puts)
+
+
+async def test_a_delete_that_does_not_happen_answers_an_error_and_is_not_audited(env, monkeypatch):
+    def refused(_vault: Any, _key: str) -> None:
+        raise RuntimeError("Vault answered 503")
+
+    monkeypatch.setattr(integrations, "delete_api_key_from_vault", refused)
+    with pytest.raises(HTTPException) as caught:
+        await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    assert caught.value.status_code == 500
+    assert [e["action"] for e in env["spy"].events] == [], "a delete that failed was recorded as done"
+
+
+def test_the_vault_delete_of_a_key_raises_when_vault_refuses() -> None:
+    class Refusing:
+        def vault_delete(self, _path: str) -> bool:
+            raise RuntimeError("Vault answered 503")
+
+    with pytest.raises(RuntimeError):
+        integrations.delete_api_key_from_vault(Refusing(), "oak_test")

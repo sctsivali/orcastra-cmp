@@ -71,7 +71,11 @@ class FakeVault:
     def __init__(self) -> None:
         self.writes: List[tuple] = []
 
-    def vault_kv_put(self, path: str, data: Dict[str, Any]) -> None:
+    def vault_read_versioned(self, path: str) -> tuple:
+        # the document the test's get_api_key_from_vault stands for, at one version
+        return integrations.get_api_key_from_vault(self, path.split("/")[-2])[0], 1
+
+    def vault_kv_put(self, path: str, data: Dict[str, Any], cas: Any = None) -> None:
         self.writes.append((path, dict(data)))
 
 

@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.auth import AuthenticatedUser
+from app.core.vault_client import VaultCasMismatch
 from app.routers import integrations
 
 KEY = "oak_" + "a" * 32
@@ -22,15 +23,22 @@ class _Vault:
     def __init__(self, docs: Dict[str, Dict[str, Any]]) -> None:
         self.docs = docs
         self.writes: List[str] = []
+        self.versions: Dict[str, int] = {path: 1 for path in docs}
 
-    def vault_read(self, path: str) -> Dict[str, Any]:
+    def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         if path not in self.docs:
             raise HTTPException(status_code=404, detail="not found")
         return dict(self.docs[path])
 
-    def vault_kv_put(self, path: str, data: Dict[str, Any]) -> None:
+    def vault_read_versioned(self, path: str) -> tuple:
+        return (dict(self.docs[path]) if path in self.docs else None), self.versions.get(path, 0)
+
+    def vault_kv_put(self, path: str, data: Dict[str, Any], cas: Any = None) -> None:
+        if cas is not None and cas != self.versions.get(path, 0):
+            raise VaultCasMismatch(path)
         self.writes.append(path)
         self.docs[path] = dict(data)
+        self.versions[path] = self.versions.get(path, 0) + 1
 
 
 class _Cache:
@@ -154,7 +162,7 @@ async def test_a_key_whose_grants_no_longer_validate_is_not_rotated(world) -> No
 async def test_a_write_whose_reply_is_lost_still_drops_every_cached_copy(world, monkeypatch) -> None:
     assert await _valid(world["old"])
 
-    def lost(path: str, data: Dict[str, Any]) -> None:
+    def lost(path: str, data: Dict[str, Any], cas: Any = None) -> None:
         world["vault"].docs[path] = dict(data)  # the write lands, then its reply is lost
         raise RuntimeError("read timed out")
 
@@ -179,9 +187,41 @@ def test_the_raw_backfill_never_writes_over_a_rotation(world, monkeypatch) -> No
     old_hash = world["vault"].docs[f"{BASE}/secret"]["hash"]
     _, new_hash = integrations.generate_api_key_secret()
     world["vault"].docs[f"{BASE}/secret"] = {"hash": new_hash}  # rotated, as a legacy doc would look mid-race
-    monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k: (dict(world["metadata"]), old_hash))
+    monkeypatch.setattr(integrations, "get_api_key_from_vault",
+                        lambda _v, _k, **_kw: (dict(world["metadata"]), old_hash))
     integrations._validate_api_key_blocking(KEY, world["old"])
     assert world["vault"].writes == [], "the backfill wrote the old secret over the rotated hash"
+
+
+def test_a_rotation_after_the_backfill_read_is_never_written_over(world, monkeypatch) -> None:
+    """A legacy key without a raw copy: the rotation lands between the backfill's read and its write."""
+    vault, path = world["vault"], f"{BASE}/secret"
+    old_hash = vault.docs[path]["hash"]
+    vault.docs[path] = {"hash": old_hash}  # legacy: no raw copy yet
+    new_secret, new_hash = integrations.generate_api_key_secret()
+    monkeypatch.setattr(integrations, "get_api_key_from_vault",
+                        lambda _v, _k, **_kw: (dict(world["metadata"]), old_hash))
+    read = vault.vault_read_versioned
+
+    def read_then_rotate(p: str) -> tuple:
+        seen = read(p)
+        if p == path:
+            vault.vault_kv_put(path, {"hash": new_hash, "raw": new_secret})  # the rotation
+        return seen
+
+    monkeypatch.setattr(vault, "vault_read_versioned", read_then_rotate)
+    integrations._validate_api_key_blocking(KEY, world["old"])
+    assert vault.docs[path] == {"hash": new_hash, "raw": new_secret}, "the backfill wrote the old secret back"
+
+
+def test_validation_never_reads_key_metadata_from_the_shared_cache(world, monkeypatch) -> None:
+    """A validation racing a revoke could put the pre-revoke document back into the shared cache."""
+    seen: List[Any] = []
+    real = integrations.get_api_key_from_vault
+    monkeypatch.setattr(integrations, "get_api_key_from_vault",
+                        lambda v, k, use_cache=True: seen.append(use_cache) or real(v, k, use_cache=use_cache))
+    integrations._validate_api_key_blocking(KEY, world["old"])
+    assert seen == [False]
 
 
 @pytest.fixture

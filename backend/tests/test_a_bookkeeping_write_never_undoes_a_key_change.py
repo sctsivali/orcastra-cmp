@@ -18,7 +18,7 @@ from app.routers import integrations
 
 KEY = "oak_bookkeeping"
 PATH = f"secret/data/{integrations.VAULT_INTEGRATIONS_PATH}/api_keys/{KEY}/metadata"
-START = {"id": KEY, "is_active": True, "revoked": False, "cluster_permissions": [{"cluster_id": "c", "projects": ["*"]}]}
+START = {"id": KEY, "is_active": True, "is_revoked": False, "cluster_permissions": [{"cluster_id": "c", "projects": ["*"]}]}
 
 
 class _KvV2:
@@ -53,7 +53,7 @@ class _KvV2:
 
 
 def _revoke(kv: _KvV2) -> None:
-    kv.write(dict(kv.current(), is_active=False, revoked=True))
+    kv.write(dict(kv.current(), is_active=False, is_revoked=True))
 
 
 def test_the_last_used_stamp_lands_and_keeps_every_other_field() -> None:
@@ -69,7 +69,7 @@ def test_a_revoke_made_during_the_last_used_write_stays_revoked() -> None:
     kv.between = _revoke
     integrations.update_api_key_last_used(kv, KEY)
     final = kv.current()
-    assert final["is_active"] is False and final["revoked"] is True, "the bookkeeping write brought the key back"
+    assert final["is_active"] is False and final["is_revoked"] is True, "the bookkeeping write brought the key back"
     assert "last_used_at" not in final, "a revoked key was stamped as used"
 
 
@@ -87,7 +87,7 @@ def test_a_key_deleted_before_the_stamp_is_never_written_again() -> None:
     kv = _KvV2(START)
     kv.write(None)
     integrations.update_api_key_last_used(kv, KEY)
-    assert integrations._merge_into_key_metadata(kv, KEY, {"app_url": "https://hub.example.test"}) is False
+    assert integrations._merge_into_key_metadata(kv, KEY, {"app_url": "https://hub.example.test"}) is None
     assert kv.puts == [] and kv.current() is None
 
 
@@ -117,6 +117,18 @@ def test_a_write_that_keeps_losing_gives_up_without_clobbering() -> None:
     with pytest.raises(integrations.VaultClientError):
         integrations._merge_into_key_metadata(kv, KEY, {"app_url": "https://hub.example.test"})
     assert "app_url" not in kv.current()
+
+
+@pytest.mark.parametrize("first,second", [
+    ({"cluster_permissions": [{"cluster_id": "c", "projects": ["web"]}]}, {"is_revoked": True, "is_active": False}),
+    ({"is_revoked": True, "is_active": False}, {"cluster_permissions": [{"cluster_id": "c", "projects": ["web"]}]}),
+], ids=["revoke-during-a-permissions-edit", "permissions-edit-during-a-revoke"])
+def test_a_revoke_and_a_permissions_edit_never_undo_each_other(first, second) -> None:
+    kv = _KvV2(START)
+    kv.between = lambda store: store.write(dict(store.current(), **second))
+    assert integrations._merge_into_key_metadata(kv, KEY, first) is not None
+    final = kv.current()
+    assert {k: final[k] for k in {**first, **second}} == {**first, **second}
 
 
 class _Session:
@@ -162,3 +174,17 @@ def test_the_vault_client_reads_the_version_it_writes_against() -> None:
     assert _client(gone).vault_read_versioned(PATH) == (None, 0)
     deleted = _Session({"GET": (404, {"data": {"data": None, "metadata": {"version": 9, "deletion_time": "x"}}})})
     assert _client(deleted).vault_read_versioned(PATH) == (None, 9)
+
+
+def test_only_the_version_mismatch_counts_as_a_lost_race(monkeypatch) -> None:
+    monkeypatch.setattr(vault_module, "get_cache", lambda: None)
+    other = _Session({"POST": (400, {"errors": ["check-and-set parameter required for this call"]})})
+    with pytest.raises(vault_module.VaultClientError) as caught:
+        _client(other).vault_kv_put(PATH, {"a": 1}, cas=3)
+    assert not isinstance(caught.value, VaultCasMismatch)
+
+
+@pytest.mark.parametrize("status,body", [(503, {"errors": ["sealed"]}), (403, {"errors": ["denied"]})])
+def test_a_versioned_read_names_a_vault_failure(status, body) -> None:
+    with pytest.raises(vault_module.VaultClientError):
+        _client(_Session({"GET": (status, body)})).vault_read_versioned(PATH)
