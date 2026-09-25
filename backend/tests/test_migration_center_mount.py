@@ -9,6 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from app.core.config import get_settings
+from app.core.public_openapi import _walk_route_paths
 from app.main import create_app
 
 
@@ -22,11 +23,8 @@ def migration_center_flag(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _paths() -> set[str]:
-    return {
-        route.path
-        for route in create_app().routes
-        if isinstance(getattr(route, "path", None), str)
-    }
+    # The served paths, however FastAPI nests an include (flat up to 0.128, nested from 0.141).
+    return {path for path, _route in _walk_route_paths(create_app())}
 
 
 def test_recovery_routes_remain_mounted_while_new_admission_is_off(
@@ -71,9 +69,11 @@ def test_lifespan_always_contains_both_durable_drains() -> None:
 def test_rollout_gate_blocks_only_new_plan_and_execute_admission() -> None:
     from app.routers.migrations import require_migration_admission
 
+    # require_migration_admission is declared on the route itself, so a route found below a
+    # FastAPI 0.141 nested include still carries it in its own dependant.
     routes = {
-        (route.path, method): route
-        for route in create_app().routes
+        (path, method): route
+        for path, route in _walk_route_paths(create_app())
         for method in (getattr(route, "methods", None) or set())
     }
 
