@@ -342,15 +342,22 @@ def proxy_path_segments(path: str) -> List[str]:
     return list(canonical_proxy_path(path).lowered)
 
 
+# note: the raw-proxy path families that address instances. LXD routes all three to one handler.
+INSTANCE_PATH_FAMILIES = frozenset({"instances", "containers", "virtual-machines"})
+
+
 def policy_keys_in_raw_body(path: str, body: Any) -> List[str]:
     """The same observation for the raw proxy, which passes a body nothing inspects.
 
     Scoped to `/instances`, because that is the only resource family carrying these keys, and
     read through `proxy_path_segments` so a percent-encoded spelling cannot present a second
     answer to this classifier than it does to the traversal guard.
+
+    note: LXD serves `/containers` and `/virtual-machines` as aliases of `/instances`
+    (lxd/instances.go), so a write through either is the same write and is recorded too.
     """
     segments = proxy_path_segments(path)
-    if not segments or segments[0] != "instances":
+    if not segments or segments[0] not in INSTANCE_PATH_FAMILIES:
         return []
     if not isinstance(body, dict):
         return []
