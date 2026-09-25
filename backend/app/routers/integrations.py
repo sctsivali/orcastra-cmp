@@ -93,6 +93,7 @@ from app.core.api_key_capabilities import (
     assert_proxy_path_allowed,
     default_capabilities_for,
     granted_capabilities,
+    has_explicit_capability,
 )
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
@@ -3850,8 +3851,15 @@ async def raw_proxy(
             except Exception:
                 data = {"raw": response.text if hasattr(response, 'text') else str(response)}
             # important: an exec or console operation carries the secrets that open its websocket,
-            # and a read key may list every operation in its projects. Nothing else is changed.
-            data = redact_operation_response(canonical_proxy_path(request.path), data)
+            # and a read key may list every operation in its projects. A write's answer is the
+            # operation it started, which for a migration source holds its secrets too. An exec's
+            # environment never leaves, and its command only to a key holding instance.exec.
+            data = redact_operation_response(
+                canonical_proxy_path(request.path),
+                data,
+                method=method,
+                sees_command=has_explicit_capability(api_key, "instance.exec"),
+            )
 
             logger.info(
                 f"Raw proxy: {method} {request.path} on {request.cluster_id}/{project} "

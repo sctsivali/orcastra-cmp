@@ -34,6 +34,7 @@ from app.routers import integrations, lxd_operations
 from app.routers.integrations import ProxyRequest
 from app.services.lxd import operation_metadata, proxy_operations
 from app.services.lxd.operation_metadata import (
+    EXEC_REQUEST_KEYS,
     OPERATION_SECRET_KEYS,
     redact_operation_response,
     sanitize_operation_metadata,
@@ -293,9 +294,12 @@ def _sync(metadata: Any) -> Dict[str, Any]:
 
 
 def _without_secrets(operation: Dict[str, Any]) -> Dict[str, Any]:
+    """What a read key without instance.exec is shown: no secret and no exec request field."""
     expected = dict(operation)
     expected["metadata"] = {
-        key: value for key, value in operation["metadata"].items() if key not in OPERATION_SECRET_KEYS
+        key: value
+        for key, value in operation["metadata"].items()
+        if key not in OPERATION_SECRET_KEYS | EXEC_REQUEST_KEYS
     }
     return expected
 
