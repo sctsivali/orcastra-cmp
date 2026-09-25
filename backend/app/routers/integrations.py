@@ -2420,6 +2420,7 @@ async def delete_api_key(
     key_id: str,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete an API key permanently."""
     _authorize_api_key(get_vault_integrations_client(), key_id)
@@ -2428,7 +2429,7 @@ async def delete_api_key(
     try:
         # Read before the delete: afterwards there is nothing left to describe what was removed.
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        refuse_delete(metadata)
+        await refuse_delete(db, key_id, metadata)
 
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)

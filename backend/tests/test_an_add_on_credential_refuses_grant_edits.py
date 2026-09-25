@@ -4,7 +4,8 @@ An add-on's credential is an integration key, so PUT /api-keys/{id}/capabilities
 /permissions reached it for any partner whose clusters overlapped its grant. That changed what a
 third party holds outside the operator's install consent. The installation owns the grant now:
 those edits answer 409 and name rescope. Revoke stays, and the installation's own flows (rescope,
-rotation, the reconcile sweep) keep working after one.
+rotation, the reconcile sweep) keep working after one. A delete is refused only while an
+installation claims the key, so a superseded or reclaimed credential is deletable as before.
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -13,9 +14,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers import integrations
+from sqlalchemy import text
+
 from app.services import add_on_credential_edits, extension_install
-from app.services.add_on_credential_edits import DELETE_DETAIL, GRANT_EDIT_DETAIL
+from app.services.add_on_credential_edits import CLAIM_UNKNOWN_DETAIL, DELETE_DETAIL, GRANT_EDIT_DETAIL
 from app.services.extension_credentials import build_install_metadata, rotate_install_credential
+from tests._sqlite_session import AsyncSessionFacade, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER, SECRETS, _FakeVault, _RecordingLogger
 
 ADDON = "oak_addon"
@@ -102,6 +106,29 @@ def metadata_of(vault: Vault, key_id: str) -> Dict[str, Any]:
     return vault.store[_FakeVault._path(key_id, "metadata")]
 
 
+def installations(*claims: Tuple[str, Optional[str]]) -> AsyncSessionFacade:
+    """Real rows of the two columns the claim reads, one (api_key_id, previous_api_key_id) each.
+
+    note: the full model has Postgres-only columns, so SQLite holds only the ones the query names.
+    """
+    db = sqlite_session()
+    db.sync.execute(text(
+        "CREATE TABLE extension_installations "
+        "(id INTEGER PRIMARY KEY, api_key_id TEXT NOT NULL UNIQUE, previous_api_key_id TEXT)"
+    ))
+    for current, previous in claims:
+        db.sync.execute(
+            text("INSERT INTO extension_installations (api_key_id, previous_api_key_id) VALUES (:c, :p)"),
+            {"c": current, "p": previous},
+        )
+    db.sync.commit()
+    return db
+
+
+async def delete(key_id: str, db: Any) -> Any:
+    return await integrations.delete_api_key(key_id, None, PARTNER, db)
+
+
 async def edit_capabilities(key_id: str, capabilities: List[str]) -> Any:
     return await integrations.update_api_key_capabilities(
         key_id, integrations.APIKeyCapabilitiesRequest(capabilities=capabilities), None, PARTNER
@@ -142,13 +169,86 @@ async def test_a_permission_edit_of_an_add_on_credential_is_refused_before_any_c
     assert surface["evicted"] == [] and surface["cache"].cleared == []
 
 
-async def test_deleting_an_add_on_credential_is_refused(surface: Dict[str, Any]) -> None:
+@pytest.mark.parametrize("claim", [(ADDON, None), ("oak_next", ADDON)], ids=["current", "previous"])
+async def test_deleting_an_add_on_credential_an_installation_claims_is_refused(
+    surface: Dict[str, Any], claim: Tuple[str, Optional[str]]
+) -> None:
+    """The live key, and the previous one a rotation's grace window still honours."""
     vault = surface["use"](addon_metadata())
     with pytest.raises(HTTPException) as refused:
-        await integrations.delete_api_key(ADDON, None, PARTNER)
+        await delete(ADDON, installations(("oak_other", None), claim))
     assert refused.value.status_code == 409 and refused.value.detail == DELETE_DETAIL
     assert "Revoke" in DELETE_DETAIL and "uninstall" in DELETE_DETAIL
     assert vault.deletes == [] and surface["log"].calls == [] and surface["evicted"] == []
+
+
+async def test_a_superseded_add_on_credential_is_deletable(
+    surface: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rotation without grace stores no previous key, so uninstall never removes the old one."""
+    monkeypatch.setenv("SECRET_KEY", "a-test-secret-key-for-hmac")
+    vault = surface["use"](addon_metadata())
+    new_key, _secret, _meta = rotate_install_credential(
+        vault, old_key_id=ADDON, extension_slug="backup-bot", extension_name="Backup Bot",
+        install_id=7, organization_id=1, organization_slug="acme", capabilities=["inventory.read"],
+        cluster_permissions=[{"cluster_id": "nuc1", "permissions": ["read"]}], created_by=PARTNER.email,
+        expire_days=30, credential_generation=1, grace_seconds=0,
+    )
+    db = installations((new_key, None))
+    assert await delete(ADDON, db) == {"success": True, "message": f"API key {ADDON} deleted"}
+    assert not any(ADDON in path for path in vault.store)
+    assert vault.deletes == [_FakeVault._path(ADDON, "metadata"), _FakeVault._path(ADDON, "secret")]
+    assert surface["evicted"] == [ADDON]
+    assert [c["action"] for c in surface["log"].calls] == ["integration.api_key.delete"]
+
+    with pytest.raises(HTTPException) as refused:
+        await delete(new_key, db)
+    assert refused.value.status_code == 409
+
+
+async def test_a_key_rotated_out_twice_is_deletable(surface: Dict[str, Any]) -> None:
+    """Generation 3 is live and 2 is in its grace window, so generation 1 is claimed by nothing."""
+    vault = surface["use"](addon_metadata())
+    db = installations(("oak_gen3", "oak_gen2"))
+    for claimed in ("oak_gen3", "oak_gen2"):
+        vault.store[_FakeVault._path(claimed, "metadata")] = {**addon_metadata(), "id": claimed}
+        vault.store[_FakeVault._path(claimed, "secret")] = {"hash": SECRETS[1], "raw": SECRETS[0]}
+        with pytest.raises(HTTPException) as refused:
+            await delete(claimed, db)
+        assert refused.value.status_code == 409
+    assert (await delete(ADDON, db))["success"] is True
+    assert not any(ADDON in path for path in vault.store)
+    assert [c["action"] for c in surface["log"].calls] == ["integration.api_key.delete"]
+
+
+async def test_a_credential_the_reconcile_sweep_reclaimed_is_deletable(surface: Dict[str, Any]) -> None:
+    """The sweep revokes an add-on key no installation claims. Nothing claims it now either."""
+    vault = surface["use"](addon_metadata(is_revoked=True, is_active=False))
+    assert (await delete(ADDON, installations(("oak_other", "oak_older"))))["success"] is True
+    assert not any(ADDON in path for path in vault.store)
+
+
+async def test_a_claim_that_cannot_be_read_deletes_nothing(surface: Dict[str, Any]) -> None:
+    vault = surface["use"](addon_metadata())
+
+    class _Down:
+        async def execute(self, *_a: Any, **_k: Any) -> Any:
+            raise ConnectionError("database is down: postgresql://user:pw@db/app")
+
+    with pytest.raises(HTTPException) as refused:
+        await delete(ADDON, _Down())
+    assert refused.value.status_code == 503 and refused.value.detail == CLAIM_UNKNOWN_DETAIL
+    assert "postgresql" not in refused.value.detail
+    assert vault.deletes == [] and surface["log"].calls == [] and surface["evicted"] == []
+
+
+async def test_the_claim_reads_both_columns_for_this_key_only() -> None:
+    db = installations(("oak_a", "oak_b"), ("oak_c", None))
+    assert [await add_on_credential_edits.installation_claims(db, k) for k in ("oak_a", "oak_b", "oak_c")] == [
+        True, True, True,
+    ]
+    assert await add_on_credential_edits.installation_claims(db, "oak_d") is False
+    assert await add_on_credential_edits.installation_claims(installations(), "oak_a") is False
 
 
 @pytest.mark.parametrize("route", ["capabilities", "permissions", "delete"])
@@ -161,7 +261,7 @@ async def test_a_key_outside_the_callers_clusters_is_still_404(
     call = {
         "capabilities": lambda: edit_capabilities(ADDON, ["inventory.read"]),
         "permissions": lambda: edit_permissions(ADDON, []),
-        "delete": lambda: integrations.delete_api_key(ADDON, None, PARTNER),
+        "delete": lambda: delete(ADDON, installations((ADDON, None))),
     }[route]
     with pytest.raises(HTTPException) as refused:
         await call()
@@ -176,9 +276,9 @@ async def test_an_ordinary_key_still_takes_all_three(surface: Dict[str, Any]) ->
     await edit_permissions(PLAIN, ["nuc1"])
     assert metadata_of(vault, PLAIN)["capabilities"] == ["inventory.read", "org.sync"]
     assert surface["reached"] and len(vault.writes) == 2
-    assert await integrations.delete_api_key(PLAIN, None, PARTNER) == {
-        "success": True, "message": f"API key {PLAIN} deleted",
-    }
+    db = installations((PLAIN, None))
+    assert await delete(PLAIN, db) == {"success": True, "message": f"API key {PLAIN} deleted"}
+    assert db.statements == [], "an ordinary key never reads the installations"
     assert vault.deletes == [_FakeVault._path(PLAIN, "metadata"), _FakeVault._path(PLAIN, "secret")]
 
 
