@@ -98,6 +98,11 @@ from app.core.api_key_capabilities import (
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
 from app.core.guest_data_export import assert_guest_data_path_stays_inside, assert_guest_data_stays_inside
+from app.core.cloud_init_config import (
+    assert_cloud_init_paid_for,
+    cloud_init_keys_in,
+    proxy_cloud_init_capability_for,
+)
 from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
 from app.core.limited_key_writes import (
     assert_body_within_grant,
@@ -3742,6 +3747,13 @@ async def raw_proxy(
         except HTTPException as refusal:
             _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
             raise
+        # important: cloud-init user-data runs as root in the guest on its next boot, so an instance
+        # or profile write carrying it costs instance.exec for every key (core/cloud_init_config.py).
+        try:
+            assert_cloud_init_paid_for(request.path, method, request.body, api_key)
+        except HTTPException as refusal:
+            _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
+            raise
         # important: the project check above binds the REQUEST to a granted project, which does
         # not bound a resource whose identity is itself a project name. A key granted only
         # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass
@@ -4102,6 +4114,12 @@ async def proxy_operation(
             guest_capability = config_reaches_inside(
                 (request.params or {}).get("config"), (request.params or {}).get("devices")
             )
+        # important: cloud-init user-data runs as root in the guest on its next boot, so config
+        # carrying it costs instance.exec for every key (core/cloud_init_config.py). When a host-path
+        # disk already priced the write at instance.files, exec is asked for on top of it below.
+        cloud_init_capability = proxy_cloud_init_capability_for(operation, request.params or {})
+        if guest_capability is None:
+            guest_capability = cloud_init_capability
 
         # Observation only, and deliberately outside the capability decision above: these keys do
         # not reach inside the guest, they reach sideways into another product's ledger.
@@ -4159,6 +4177,29 @@ async def proxy_operation(
                 # capability is refused for that reason rather than for a missing grant, and
                 # BEFORE any work reaches the cluster.
                 await _assert_desktop_allowed(api_key, request, operation, guest_capability)
+
+        if cloud_init_capability not in (None, guest_capability):
+            try:
+                assert_explicit_capability(api_key, cloud_init_capability)
+            except HTTPException as refusal:
+                _audit_key_action(
+                    api_key,
+                    action=_guest_audit_action(operation),
+                    target_id=str(request.params.get("name", "")),
+                    cluster_id=request.cluster_id,
+                    project=request.project,
+                    result="failure",
+                    details={
+                        "operation": operation,
+                        "cloud_init_keys": cloud_init_keys_in((request.params or {}).get("config")),
+                        "refused": "capability_not_granted",
+                    },
+                    external_user_email=request.external_user_email,
+                    error_message=str(refusal.detail),
+                    target_organization_id=_guest_org_id,
+                    target_organization_slug=_guest_org_slug,
+                )
+                raise
 
         # important: authorising request.project binds the ambient project, not the target. These
         # operations name their target in params, and a project is not bounded by a project, so a

@@ -23,6 +23,7 @@ CAPABILITIES = APP / "core" / "api_key_capabilities.py"
 RAW_PROXY_PATH = APP / "core" / "raw_proxy_path.py"
 LIMITED_WRITES = APP / "core" / "limited_key_writes.py"
 GUEST_DATA = APP / "core" / "guest_data_export.py"
+CLOUD_INIT = APP / "core" / "cloud_init_config.py"
 ROUTER = APP / "routers" / "integrations.py"
 
 # Functions that take a raw-proxy path string, per file.
@@ -44,6 +45,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
         "assert_guest_data_path_stays_inside",
         "assert_guest_data_stays_inside",
     ),
+    CLOUD_INIT: ("cloud_init_capability_for", "assert_cloud_init_paid_for"),
     ROUTER: ("_proxy_audit_action",),
 }
 
