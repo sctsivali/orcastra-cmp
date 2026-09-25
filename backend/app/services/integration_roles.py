@@ -37,6 +37,18 @@ ROLE_ADMIN, ROLE_PARTNER, ROLE_TENANT = "role_admin", "role_partner", "role_tena
 # note: reasons that are an ordinary no-op on every scheduled sync, logged below WARNING.
 _ROUTINE = frozenset({"already_partner", "already_tenant", "still_a_member", "nothing_held"})
 
+# note: OrcaHub's organization role, pushed per member, to the member role the member sync stores.
+_ORCAHUB_ROLE_MAP = {
+    "PARTNER": "partner",
+    "TENANT": "tenant",
+    "USER": "tenant",  # legacy alias
+}
+
+
+def stored_member_role(pushed_role: str) -> str:
+    """The OrganizationMember.role the member sync stores for a pushed role. Unknown is tenant."""
+    return _ORCAHUB_ROLE_MAP.get(pushed_role.upper(), "tenant")
+
 
 class RoleGroupStore(Protocol):
     """The two Authentik calls an integration's role change is allowed to make."""

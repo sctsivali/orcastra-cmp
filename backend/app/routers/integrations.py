@@ -124,7 +124,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
-from app.services.integration_roles import apply_upsert_role, may_reconcile, revoke_if_orphaned
+from app.services.integration_roles import apply_upsert_role, may_reconcile, revoke_if_orphaned, stored_member_role
 from app.services.integration_cluster_rebind import creator_of, rebind_creator_clusters
 from app.services.add_on_credential_edits import refuse_delete, refuse_grant_edit
 from app.services.shared_cluster_audit import (
@@ -1514,14 +1514,6 @@ async def _upsert_synced_organizations(
     return synced
 
 
-# role mapping: OrcaHub OrganizationRole → Orcastra system role (Authentik group)
-_ORCAHUB_ROLE_MAP = {
-    "PARTNER": "partner",
-    "TENANT": "tenant",
-    "USER": "tenant",  # legacy alias
-}
-
-
 async def _revoke_role_if_orphaned(db: AsyncSession, sync_svc, email: str) -> None:
     """
     Strip a user's role_tenant only if they no longer belong to ANY org.
@@ -1607,7 +1599,7 @@ async def _upsert_synced_members(
             # upsert membership. map OrcaHub role → local member role.
             # Identity is (organization_id, user_email), so update-if-present / insert-else
             # is unambiguous. Per-member commit isolates a failing row from the rest.
-            orcastra_role = _ORCAHUB_ROLE_MAP.get(m.role.upper(), "tenant")
+            orcastra_role = stored_member_role(m.role)
 
             existing = (await db.execute(
                 select(OrganizationMember).where(

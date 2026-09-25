@@ -12,10 +12,13 @@ rebind is recorded with the cluster, the organization it left, the one it joined
 Nothing else of the key reaches the record.
 
 The destination is an organization this key claimed (organizations.api_key_id is the key) that
-this push names with the creator as a member. It is not the creator's primary organization from
-org_scope: that ordering puts any organization where the creator is a partner first, so another
-key could push the creator into its own older organization and choose where the creator's next
-rebind lands. Zero or several such organizations rebind nothing.
+this push names with the creator as a partner: the pushed role maps to partner the way the member
+sync maps it, and the membership row read back holds partner. It is not the creator's primary
+organization from org_scope: that ordering puts any organization where the creator is a partner
+first, so another key could push the creator into its own older organization and choose where the
+creator's next rebind lands. A buyer organization is no destination either. In OrcaHub its own
+partner can add the seller's creator with any role, and the seller's push carries every member of
+every buyer organization. Zero or several destinations rebind nothing.
 
 A creator the dashboard resolves to Admin never rebinds: role_admin, or any other group rbac.py
 maps to Admin. Their key may be held by an integration they do not run, and an Admin's personal
@@ -43,6 +46,7 @@ from app.models.db_models import Organization, OrganizationCluster, Organization
 from app.services.activity_logger import get_activity_logger
 from app.services.add_on_credential_edits import is_add_on_credential
 from app.services.authentik_role_reading import CurrentRoleReader
+from app.services.integration_roles import stored_member_role
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -55,6 +59,7 @@ class PushedMember(Protocol):
 
     email: str
     organization_id: str
+    role: str
     action: str
 
 
@@ -89,12 +94,15 @@ async def _has_unbound_clusters(db: AsyncSession, email: str) -> bool:
 async def claimed_destinations(
     db: AsyncSession, members: Sequence[PushedMember], *, email: str, api_key_id: str
 ) -> List[int]:
-    """Active organizations this key claimed that this push names `email` a member of.
+    """Active organizations this key claimed that this push names `email` a partner of.
 
-    note: the membership row is read back too, so an upsert that failed or a later remove in the
-    same push leaves the organization out.
+    note: the membership row is read back too, so an upsert that failed, a later remove in the same
+    push or a row holding another role leaves the organization out.
     """
-    named = {m.organization_id for m in members if m.email == email and m.action != "remove"}
+    named = {
+        m.organization_id for m in members
+        if m.email == email and m.action != "remove" and stored_member_role(m.role) == "partner"
+    }
     if not named or not api_key_id:
         return []
     rows = await db.execute(
@@ -106,6 +114,7 @@ async def claimed_destinations(
             Organization.api_key_id == api_key_id,
             Organization.is_active.is_(True),
             OrganizationMember.user_email == email,
+            OrganizationMember.role == "partner",
         )
         .distinct()
     )

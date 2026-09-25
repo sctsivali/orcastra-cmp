@@ -4,10 +4,11 @@ The creator rule decided who triggers a rebind, not where the clusters go. The d
 the creator's primary org from org_scope, which puts any org where they are a partner first and
 then sorts by id. So another key could push the creator as a partner into its own older org, and
 the creator's own onboarding push later moved their clusters there. The destination is now an org
-this key claimed (organizations.api_key_id) that this push names with the creator as a member,
+this key claimed (organizations.api_key_id) that this push names with the creator as a partner,
 and there must be exactly one.
 """
 
+import inspect
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -21,7 +22,7 @@ from app.routers.integrations import SyncDataRequest, SyncMember
 from app.services import authentik_sync, integration_cluster_rebind, shared_cluster_audit
 from app.services.authentik_role_reading import RoleReading, known_roles, unknown_role
 from app.services.integration_cluster_rebind import REBIND_ACTION, claimed_destinations
-from app.services.integration_roles import ROLE_ADMIN, ROLE_PARTNER
+from app.services.integration_roles import ROLE_ADMIN, ROLE_PARTNER, stored_member_role
 from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import _RecordingLogger
 
@@ -315,3 +316,95 @@ def test_the_directory_fake_refuses_role_admin_like_the_real_writer() -> None:
 
     with pytest.raises(ValueError):
         asyncio.run(Directory().change_integration_role_groups(PARTNER, add=ROLE_ADMIN))
+
+
+# ── the creator must be a partner in the destination ───────────────────────────────────────────
+
+@pytest.mark.parametrize("role", ["USER", "TENANT", "user", "OWNER", " PARTNER"])
+async def test_a_buyer_org_naming_the_creator_below_partner_is_no_destination(
+    world: Dict[str, Any], caplog: pytest.LogCaptureFixture, role: str
+) -> None:
+    """A buyer org's own partner can add the seller's creator with any role, and the seller's push
+    carries every member of every buyer org. With the creator absent from the seller's roster the
+    buyer org was the one destination. The member sync stores each of these roles as tenant."""
+    db = sqlite_session(*org_tables())
+    await personal_cluster(db, "partner-cluster", PARTNER)
+    caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
+    await push(db, key(K_PARTNER, PARTNER), body(
+        [org("cm-partner", "partner"), org("cm-buyer", "buyer")],
+        [member(BUYER, "cm-partner", "PARTNER"), member(PARTNER, "cm-buyer", role),
+         member(BUYER, "cm-buyer", "USER")],
+    ))
+    stored = (await db.execute(select(OrganizationMember.role).where(
+        OrganizationMember.user_email == PARTNER))).scalars().all()
+    assert stored == ["tenant"]
+    assert (await bound(db))["partner-cluster"] is None
+    assert world["shares"] == [] and world["log"].calls == []
+    (warning,) = [r for r in caplog.records if r.name == integration_cluster_rebind.__name__]
+    assert K_PARTNER in warning.getMessage() and " 0 organizations" in warning.getMessage()
+
+
+async def test_a_partner_in_its_own_org_and_a_user_in_a_buyer_org_binds_into_its_own(
+    world: Dict[str, Any],
+) -> None:
+    """Both orgs used to count, so two candidates rebound nothing. The buyer org is no candidate now."""
+    db = sqlite_session(*org_tables())
+    await personal_cluster(db, "partner-cluster", PARTNER)
+    await push(db, key(K_PARTNER, PARTNER), body(
+        [org("cm-partner", "partner"), org("cm-buyer", "buyer")],
+        [member(PARTNER, "cm-partner", "PARTNER"), member(PARTNER, "cm-buyer", "USER"),
+         member(BUYER, "cm-buyer", "USER")],
+    ))
+    own = await org_id(db, "partner")
+    assert (await bound(db))["partner-cluster"] == own
+    assert world["shares"] == [("partner-cluster", own)]
+    assert [c["details"]["to_organization_id"] for c in world["log"].calls] == [own]
+
+
+@pytest.mark.parametrize("role", ["PARTNER", "partner", "Partner"])
+async def test_the_pushed_role_is_read_the_way_the_member_sync_stores_it(
+    world: Dict[str, Any], role: str
+) -> None:
+    db = sqlite_session(*org_tables())
+    await personal_cluster(db, "partner-cluster", PARTNER)
+    await push(db, key(K_PARTNER, PARTNER), body([org("ext-p", "partner")], [member(PARTNER, "ext-p", role)]))
+    assert (await db.execute(select(OrganizationMember.role))).scalars().all() == ["partner"]
+    assert (await bound(db))["partner-cluster"] == await org_id(db, "partner")
+
+
+async def test_a_stale_partner_row_is_no_destination_when_this_push_says_user(world: Dict[str, Any]) -> None:
+    """The row still says partner from an earlier push (this push's upsert did not land)."""
+    db = sqlite_session(*org_tables())
+    db.add(Organization(name="Mine", slug="mine", source="orcahub", external_id="ext-m",
+                        api_key_id=K_PARTNER, created_by="system", is_active=True))
+    await db.commit()
+    db.add(OrganizationMember(organization_id=1, user_email=PARTNER, role="partner"))
+    await db.commit()
+    assert await claimed_destinations(
+        db, [SyncMember(**member(PARTNER, "ext-m", "USER"))], email=PARTNER, api_key_id=K_PARTNER
+    ) == []
+    assert await claimed_destinations(
+        db, [SyncMember(**member(PARTNER, "ext-m", "PARTNER"))], email=PARTNER, api_key_id=K_PARTNER
+    ) == [1]
+
+
+async def test_a_pushed_partner_whose_row_says_tenant_is_no_destination(world: Dict[str, Any]) -> None:
+    db = sqlite_session(*org_tables())
+    db.add(Organization(name="Mine", slug="mine", source="orcahub", external_id="ext-m",
+                        api_key_id=K_PARTNER, created_by="system", is_active=True))
+    await db.commit()
+    db.add(OrganizationMember(organization_id=1, user_email=PARTNER, role="tenant"))
+    await db.commit()
+    assert await claimed_destinations(
+        db, [SyncMember(**member(PARTNER, "ext-m", "PARTNER"))], email=PARTNER, api_key_id=K_PARTNER
+    ) == []
+
+
+def test_the_member_sync_and_the_destination_read_one_role_mapping() -> None:
+    """Two copies of the mapping could drift, and then the destination would disagree with the row."""
+    assert not hasattr(integrations, "_ORCAHUB_ROLE_MAP")
+    assert "stored_member_role(m.role)" in inspect.getsource(integrations._upsert_synced_members)
+    assert "stored_member_role(" in inspect.getsource(claimed_destinations)
+    assert [stored_member_role(r) for r in ("PARTNER", "partner", "USER", "TENANT", "OWNER", "")] == [
+        "partner", "partner", "tenant", "tenant", "tenant", "tenant",
+    ]
