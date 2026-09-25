@@ -5,11 +5,11 @@ partner's email into its own organization moved that partner's unbound clusters 
 key's own partner is a member. The share audit on that path checks a cluster's configuration, not
 anyone's consent.
 
-The rule: a push rebinds personal clusters only for the key's creator, the `created_by` written
-into the key's metadata when it was minted (create_api_key, and build_install_metadata for an
-add-on credential). Any other pushed email triggers no rebind, and a key without a creator
-triggers none. Every rebind is recorded with the cluster, the organization it left, the one it
-joined and the key id. Nothing else of the key reaches the record.
+The rule: a push rebinds personal clusters only for the key's creator, the `created_by` that
+create_api_key writes into the key's metadata when a partner mints it. Any other pushed email
+triggers no rebind, and neither does a key without a creator or an add-on credential. Every
+rebind is recorded with the cluster, the organization it left, the one it joined and the key id.
+Nothing else of the key reaches the record.
 
 note: the match is exact. `registered_by` holds the registrant's login email and the creator is
 that same login, so another spelling would find no row to move anyway.
@@ -30,7 +30,15 @@ REBIND_ACTION = "integration.cluster.rebind"
 
 
 def creator_of(api_key: Mapping[str, Any]) -> Optional[str]:
-    """The login that minted the key, or None for a key whose metadata does not say."""
+    """The login that minted the key, or None for a key whose metadata does not say.
+
+    important: None for an add-on credential. Its created_by is whoever installed or rotated it,
+    an Admin included, while a third party holds it. A push through it naming that login could
+    make an organization the add-on controls that person's primary one and move their clusters
+    there, which is the move this module exists to prevent.
+    """
+    if api_key.get("extension_install_id") is not None:
+        return None
     creator = api_key.get("created_by")
     return creator if isinstance(creator, str) and creator.strip() else None
 

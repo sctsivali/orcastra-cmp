@@ -225,10 +225,19 @@ async def test_a_partner_minting_a_key_is_written_as_its_creator(monkeypatch: py
     assert creator_of(metadata) == PARTNER.email
 
 
-def test_an_add_on_credential_names_the_login_that_minted_it() -> None:
+def test_an_add_on_credential_has_no_creator_to_rebind_for() -> None:
+    """Its created_by names the installer, but a third party holds the key."""
     metadata = build_install_metadata(
         key_id="oak_addon", extension_slug="x", extension_name="X", install_id=1,
         organization_id=1, organization_slug="mine", capabilities=["org.sync"],
-        cluster_permissions=[], created_by="installer@example.test", expire_days=30,
+        cluster_permissions=[], created_by=CREATOR, expire_days=30,
     )
-    assert creator_of(metadata) == "installer@example.test"
+    assert metadata["created_by"] == CREATOR
+    assert creator_of(metadata) is None
+
+
+async def test_an_add_on_pushing_its_installer_moves_nothing(world: Dict[str, Any]) -> None:
+    db = await _db()
+    await _sync(db, _key(extension_install_id=7), [_member(CREATOR, "PARTNER")])
+    assert await _bound(db) == {"creator-cluster": None, "victim-cluster": None}
+    assert world["shares"] == [] and world["log"].calls == []
