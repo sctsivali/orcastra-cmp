@@ -112,6 +112,7 @@ from app.core.limited_key_writes import (
 from app.core.raw_proxy_path import assert_server_state_unchanged, canonical_proxy_path
 from app.core.storage_bucket_keys import assert_bucket_keys_unreached
 from app.core.lxd_segment import lxd_segment
+from app.core.lxd_body_names import assert_body_names_addressable
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
@@ -3763,6 +3764,9 @@ async def raw_proxy(
         except HTTPException as refusal:
             _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
             raise
+        # important: LXD addresses an object by the name its create or rename body gave it, and several of its
+        # name checks allow `.` and `..`, which no key door can address afterwards (core/lxd_body_names.py).
+        assert_body_names_addressable(request.path, method, request.body)
         # important: the project check above binds the REQUEST to a granted project, which does
         # not bound a resource whose identity is itself a project name. A key granted only
         # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass

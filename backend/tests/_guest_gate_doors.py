@@ -113,6 +113,22 @@ class Cluster:
         return self.built == [] and self.session.calls == [] and not getattr(self.client, "sent", [])
 
 
+class SnapshotClient(FakeClient):
+    """Records a snapshot create the way pylxd posts it: the name goes in the body."""
+
+    def __init__(self) -> None:
+        super().__init__(ConfigSession())
+        get = self.instances.get
+
+        def _instance(name: str) -> Any:
+            instance = get(name)
+            instance.snapshots = type("S", (), {"create": staticmethod(
+                lambda snapshot, stateful=False, wait=True: self.sent.append(("snapshot", instance.name, snapshot)))})
+            return instance
+
+        self.instances.get = _instance
+
+
 def proxy_cluster(held: Optional[Dict[str, Any]] = None, project: str = "default", fail: Any = None) -> Cluster:
     """A /proxy cluster whose instance `web` holds `held` as its own config (absent when None)."""
     records = {} if held is None else {(project, "/instances/web"): {"name": "web", "config": dict(held)}}

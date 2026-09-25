@@ -25,6 +25,7 @@ LIMITED_WRITES = APP / "core" / "limited_key_writes.py"
 GUEST_DATA = APP / "core" / "guest_data_export.py"
 CLOUD_INIT = APP / "core" / "cloud_init_config.py"
 BUCKET_KEYS = APP / "core" / "storage_bucket_keys.py"
+BODY_NAMES = APP / "core" / "lxd_body_names.py"
 ROUTER = APP / "routers" / "integrations.py"
 
 # Functions that take a raw-proxy path string, per file.
@@ -48,6 +49,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
     ),
     CLOUD_INIT: ("cloud_init_capability_for", "cloud_init_compared_at", "assert_cloud_init_paid_for"),
     BUCKET_KEYS: ("reaches_bucket_keys", "assert_bucket_keys_unreached"),
+    BODY_NAMES: ("assert_body_names_addressable",),
     ROUTER: ("_proxy_audit_action",),
 }
 

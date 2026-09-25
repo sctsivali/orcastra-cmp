@@ -29,7 +29,7 @@ from app.services.lxd.proxy_path_params import PATH_PARAMS
 from app.services.lxd.utils import find_instance_in_projects
 from tests._cloud_init_fakes import ConfigSession
 from tests._guest_gate_doors import (  # noqa: F401
-    EVERY, NARROW, TWO, Cluster, door_fixture,
+    EVERY, NARROW, TWO, Cluster, SnapshotClient, door_fixture,
 )
 from tests._limited_write_fakes import FakeClient, ProjectSession, _no_webhook_events  # noqa: F401
 from tests._raw_proxy_fakes import CLUSTER_ID, ENDPOINT, _clean_breaker, fence_calls  # noqa: F401
@@ -94,29 +94,18 @@ def test_proxy_refuses_a_dot_name_before_any_client(door: Any, operation: str, f
     _refused(door.proxy(EVERY, operation, _params(operation, field, value)))
 
 
-class _SnapshotClient(FakeClient):
-    """Records a snapshot create the way pylxd posts it: the name goes in the body."""
-
-    def __init__(self) -> None:
-        super().__init__(ConfigSession())
-        get = self.instances.get
-
-        def _instance(name: str) -> Any:
-            instance = get(name)
-            instance.snapshots = type("S", (), {"create": staticmethod(
-                lambda snapshot, stateful=False, wait=True: self.sent.append(("snapshot", instance.name, snapshot)))})
-            return instance
-
-        self.instances.get = _instance
-
-
-@pytest.mark.xfail(strict=True, reason="DEFECT: create_snapshot sends a dot snapshot name, which LXD accepts "
-                                        "(IsURLSegmentSafe) and no key door can then address")
 @pytest.mark.parametrize("value", [".", ".."])
 def test_proxy_refuses_a_dot_snapshot_name_on_create(door: Any, value: str) -> None:
     seen = door.proxy(EVERY, "create_snapshot", {"name": "web", "snapshot_name": value},
-                      cluster=Cluster(client=_SnapshotClient()))
+                      cluster=Cluster(client=SnapshotClient()))
     _refused(seen)
+    assert seen.cluster.client.sent == []
+
+
+def test_proxy_still_creates_a_named_snapshot(door: Any) -> None:
+    seen = door.proxy(EVERY, "create_snapshot", {"name": "web", "snapshot_name": "snap-1"},
+                      cluster=Cluster(client=SnapshotClient()))
+    assert seen.status == 200 and seen.cluster.client.sent == [("snapshot", "web", "snap-1")], seen.text
 
 
 MCP_CASES = [

@@ -7,7 +7,9 @@ branch encodes its name with core/lxd_segment.lxd_segment, and this gate refuses
 with 400 before a client is built, which on the real cluster is already a request.
 
 note: a create's name is a path segment too. pylxd reads a new network, project or storage pool
-back by name, and an instance model syncs itself by name.
+back by name, and an instance model syncs itself by name. A snapshot's name is the path a later read,
+rename or delete of it addresses, and LXD accepts `.` and `..` for one (validate.IsURLSegmentSafe),
+so a snapshot created with a dot name could not be deleted through any key door afterwards.
 """
 
 from typing import Any, Dict, Tuple
@@ -24,6 +26,7 @@ _INSTANCE_OPERATIONS = (
 
 PATH_PARAMS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     **{operation: (("name", "Instance name"),) for operation in _INSTANCE_OPERATIONS},
+    "create_snapshot": (("name", "Instance name"), ("snapshot_name", "Snapshot name")),
     "delete_snapshot": (("name", "Instance name"), ("snapshot_name", "Snapshot name")),
     "get_operation": (("operation_id", "Operation id"),),
     "create_network": (("name", "Network name"),),
