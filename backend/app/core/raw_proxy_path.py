@@ -11,19 +11,32 @@ raw_proxy builds the URL it sends from the same result, so no spelling is judged
 sent in another. tests/test_raw_proxy_guards_read_one_path.py holds that with an AST ratchet.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional, Tuple
 from urllib.parse import quote, unquote, unquote_plus, urlencode
 
 from fastapi import HTTPException
 
+logger = logging.getLogger(__name__)
+
 _API_VERSION = "1.0"
 _DEFAULT_PROJECT = "default"
 PROJECT_QUERY_KEY = "project"
 ALL_PROJECTS_QUERY_KEY = "all-projects"
+MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # note: a spelling still changing after this many rounds is refused rather than judged half-decoded.
 _MAX_DECODE_ROUNDS = 8
+
+# Server-wide state no integration may change, whatever its grant. Reads stay open: the integrator
+# reads GET /1.0/cluster/members for a node count and never writes either one.
+#
+# important: a write to the bare /1.0 sets server configuration, which includes the OIDC issuer and,
+# before LXD 6, core.trust_password, and either one hands out trust like the trust store does.
+# `/cluster` holds the cluster certificate, join tokens (POST /1.0/cluster/members admits a new
+# trusted member), member state and member removal.
+_SERVER_WRITE_PREFIXES = ("cluster",)
 
 _TRAVERSAL_DETAIL = "Path may not contain traversal segments"
 QueryPairs = Tuple[Tuple[str, str], ...]
@@ -135,3 +148,18 @@ def canonical_proxy_path(path: Optional[str]) -> ProxyPath:
         query_key_name(name)
     return ProxyPath(segments=tuple(segments), query=tuple(pairs))
 
+
+def assert_server_state_unchanged(path: str, method: str) -> None:
+    """Raise 403 for a write to the server configuration or the cluster, for every grant.
+
+    Paired with assert_proxy_path_allowed, which refuses the trust store for every method. These two
+    resources are refused only for writes, because the integrator reads them.
+    """
+    if method.upper() not in MUTATING_METHODS:
+        return
+    canonical = canonical_proxy_path(path)
+    if canonical.segments and not any(canonical.is_under(prefix) for prefix in _SERVER_WRITE_PREFIXES):
+        return
+    resource = "/" + canonical.lowered[0] if canonical.segments else "the server configuration"
+    logger.warning("Refusing a %s to %s through the proxy", method.upper(), resource)
+    raise HTTPException(status_code=403, detail=f"The proxy does not change {resource}")

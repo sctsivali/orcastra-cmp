@@ -10,6 +10,7 @@ LXD served another:
 |----------------------------------------------|---------------------------|-----------------------|
 | /1.0/certificates#x                          | allowed                   | the trust store       |
 | /1.0/./certificates                          | allowed                   | the trust store       |
+| /1.0/auth/identities/tls                     | allowed                   | a trusted TLS client  |
 | /1.0/instances/c1/./exec                     | allowed, no capability    | exec as root          |
 | /1.0/instances/c1/exec#                      | allowed, no capability    | exec as root          |
 | /1.0/instances/c1/./files?path=/etc/shadow   | allowed, no capability    | the guest's files     |
@@ -192,6 +193,8 @@ def test_the_policy_observer_sees_a_write_behind_a_fragment() -> None:
         ("GET", "/1.0/certificates#x", 403),
         ("POST", "/1.0/certificates#x", 403),
         ("GET", "/1.0/./certificates", 400),
+        ("POST", "/1.0/auth/identities/tls", 403),
+        ("GET", "/1.0/auth/identities/tls", 403),
         ("POST", "/1.0/./certificates", 400),
         ("POST", "/1.0/instances/c1/./exec", 400),
         ("POST", "/1.0/instances/c1/exec#", 403),

@@ -9,6 +9,10 @@ query name, joined back raw, added a key LXD read or turned the authorised `&pro
 fragment requests never sends. A `*` grant, which the integrator's connection keys carry, is
 untouched.
 
+A narrow key could also change anything outside the four prefixes this line refused (the server
+config, the cluster, network ACLs and zones, warnings, and every resource LXD adds above
+projects). The write rule is now an allowlist: instances, images and operations.
+
 Ported from the RC4-hotfix2 line and adapted to this line: /proxy list_projects and /sync were
 already narrowed here (`_within_granted_projects`), and /sync reads instances from every project,
 so the tests assert the effect on this line's shapes.
@@ -23,6 +27,7 @@ import requests
 from fastapi import HTTPException
 
 from app.core.api_key_capabilities import assert_project_scope_allows_path
+from app.core.raw_proxy_path import canonical_proxy_path
 from app.routers import integrations
 from app.routers.integrations import ProxyRequest, SyncDataRequest, proxy_operation, sync_data
 from tests._raw_proxy_fakes import (  # noqa: F401 - fixtures are registered by import
@@ -138,6 +143,97 @@ async def test_a_narrow_key_cannot_change_an_unbounded_resource_in_any_spelling(
     assert isinstance(outcome, HTTPException)
     assert outcome.status_code == 403
     assert session.calls == []
+
+
+# A project grant is a boundary for instances (with their snapshots), images and operations only.
+# Everything else a narrow key could write sits above a project or is shared with `default`.
+UNBOUNDABLE_WRITES = [
+    ("PUT", "/1.0/projects/tenant-b"),
+    ("DELETE", "/1.0/projects/tenant-b"),
+    ("POST", "/1.0/projects"),
+    ("PATCH", "/1.0/profiles/default"),
+    ("POST", "/1.0/networks"),
+    ("DELETE", "/1.0/networks/lxdbr0"),
+    ("POST", "/1.0/storage-pools"),
+    ("DELETE", "/1.0/Storage-Pools/default/"),
+    ("PUT", "/1.0/%70rofiles/default"),
+    ("PUT", "/1.0"),
+    ("PATCH", "/1.0/"),
+    ("PUT", "/1.0/cluster"),
+    ("PUT", "/1.0/cluster/certificate"),
+    ("POST", "/1.0/cluster/members"),
+    ("POST", "/1.0/cluster/members/m1/state"),
+    ("PUT", "/1.0/warnings/0f3c9a"),
+    ("DELETE", "/1.0/warnings/0f3c9a"),
+    ("POST", "/1.0/network-acls"),
+    ("POST", "/1.0/network-zones"),
+    ("PUT", "/1.0/network-address-sets/set-a"),
+    ("POST", "/1.0/storage-pools/default/volumes/custom"),
+    ("POST", "/1.0/storage-pools/default/buckets"),
+    ("PUT", "/1.0projects/tenant-b"),
+    ("POST", "/1.0/instances-archive"),
+    ("DELETE", "/1.0/storage-pools-not-really"),
+    ("POST", "/1.0/placement-groups"),
+]
+
+# What a project grant does bound. A narrow key keeps every one of these.
+BOUNDED_WRITES = [
+    ("POST", "/1.0/instances"),
+    ("PATCH", "/1.0/instances/web-1"),
+    ("PUT", "/1.0/instances/web-1/state"),
+    ("DELETE", "/1.0/instances/web-1"),
+    ("POST", "/1.0/instances/web-1/snapshots"),
+    ("DELETE", "/1.0/instances/web-1/snapshots/snap0"),
+    ("POST", "/1.0/images"),
+    ("POST", "/1.0/images/aliases"),
+    ("DELETE", "/1.0/images/0f3c9a1b2c3d"),
+    ("DELETE", "/1.0/operations/5b1e0a4c-0000-4000-8000-000000000001"),
+    ("PUT", "/1.0/INSTANCES/web-1/state"),
+]
+
+
+def _is_server_state(path: str) -> bool:
+    """The bare /1.0 or /cluster: refused for every grant by assert_server_state_unchanged."""
+    segments = canonical_proxy_path(path).lowered
+    return not segments or segments[0] == "cluster"
+
+
+@pytest.mark.parametrize("method,path", UNBOUNDABLE_WRITES)
+async def test_a_narrow_key_cannot_change_what_no_project_bounds(method: str, path: str) -> None:
+    outcome, session = await call_raw_proxy(NARROW, method, path, project="tenant-a")
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("method,path", [(m, p) for m, p in UNBOUNDABLE_WRITES if not _is_server_state(p)])
+async def test_a_wildcard_key_is_untouched_by_the_write_rule(method: str, path: str) -> None:
+    outcome, session = await call_raw_proxy(WILDCARD, method, path)
+    assert outcome.status_code == 200
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("method,path", [(m, p) for m, p in UNBOUNDABLE_WRITES if _is_server_state(p)])
+async def test_a_wildcard_key_still_cannot_change_the_server_or_cluster(method: str, path: str) -> None:
+    outcome, session = await call_raw_proxy(WILDCARD, method, path)
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("method,path", BOUNDED_WRITES)
+async def test_a_narrow_key_may_change_what_its_project_bounds(method: str, path: str) -> None:
+    outcome, session = await call_raw_proxy(NARROW, method, path, project="tenant-a")
+    assert outcome.status_code == 200
+    segments, query = lxd_reads(session.urls[0], method)
+    assert segments == list(canonical_proxy_path(path).segments)
+    assert query == [("project", "tenant-a")]
+
+
+async def test_a_narrow_key_may_still_read_topology() -> None:
+    outcome, session = await call_raw_proxy(NARROW, "GET", "/1.0/networks", project="tenant-a")
+    assert outcome.status_code == 200
+    assert len(session.calls) == 1
 
 
 def test_the_guard_leaves_a_missing_grant_closed() -> None:

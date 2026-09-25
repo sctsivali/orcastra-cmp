@@ -88,7 +88,7 @@ from app.core.api_key_capabilities import (
     granted_capabilities,
 )
 from app.core import build_identity
-from app.core.raw_proxy_path import canonical_proxy_path
+from app.core.raw_proxy_path import assert_server_state_unchanged, canonical_proxy_path
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
@@ -3626,6 +3626,9 @@ async def raw_proxy(
             raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
 
         assert_proxy_path_allowed(request.path)
+        # important: server configuration and the cluster hand out trust (the OIDC issuer, a join
+        # token for a new member), so writes to them are refused for every grant, `*` included.
+        assert_server_state_unchanged(request.path, method)
         # important: reaching inside a guest is a different power from managing it, and this path
         # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
         # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with

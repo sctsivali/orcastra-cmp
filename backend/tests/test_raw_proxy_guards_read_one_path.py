@@ -34,6 +34,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
         "assert_project_scope_allows_path",
         "assert_proxy_path_allowed",
     ),
+    RAW_PROXY_PATH: ("assert_server_state_unchanged",),
     ROUTER: ("_proxy_audit_action",),
 }
 
@@ -47,7 +48,7 @@ ROUTER_HANDLERS = (
 )
 
 # Calls that may receive the path: the parser, and guards that read it through the parser.
-PATH_READERS: Set[str] = {"canonical_proxy_path", *GUARDS[CAPABILITIES], *GUARDS[ROUTER]}
+PATH_READERS: Set[str] = {"canonical_proxy_path", *(name for names in GUARDS.values() for name in names)}
 # Keyword arguments that only record the path as text.
 RECORD_KEYWORDS = {"target", "target_id"}
 URL_PARSERS = {"unquote", "unquote_plus", "urlsplit", "urlparse", "parse_qs", "parse_qsl", "urljoin"}

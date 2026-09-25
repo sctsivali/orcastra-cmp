@@ -20,6 +20,7 @@ import requests
 from fastapi import HTTPException
 
 from app.core.api_key_capabilities import assert_proxy_path_allowed
+from app.core.raw_proxy_path import assert_server_state_unchanged
 from tests._raw_proxy_fakes import (  # noqa: F401 - fixtures are registered by import
     ENDPOINT,
     ORCAHUB_READS,
@@ -81,6 +82,35 @@ def test_every_spelling_of_the_trust_store_is_refused(path: str) -> None:
     assert caught.value.detail == "The proxy does not expose /certificates"
 
 
+# LXD 5.21 and later: a TLS identity is a trusted client, and a group gives it entitlements up to
+# server-wide admin. The dashboard itself creates both with the same unrestricted cluster client.
+REFUSED_AUTH = [
+    "/1.0/auth",
+    "/1.0/auth/",
+    "/1.0/auth/identities",
+    "/1.0/auth/identities/tls",
+    "/1.0/auth/identities/tls/oak_test",
+    "/1.0/auth/groups",
+    "/1.0/auth/groups/g",
+    "/1.0/auth/identity-provider-groups",
+    "/1.0/AUTH/groups",
+    "/1.0/%61uth/identities/tls",
+    "/1.0/%2561uth/groups",
+    "/auth/identities/tls",
+    "auth/groups",
+    "/1.0/auth/groups?project=default",
+    "/1.0/auth/groups#x",
+]
+
+
+@pytest.mark.parametrize("path", REFUSED_AUTH)
+def test_every_spelling_of_the_auth_api_is_refused(path: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        assert_proxy_path_allowed(path)
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "The proxy does not expose /auth"
+
+
 @pytest.mark.parametrize("path", MALFORMED + TRAVERSAL)
 def test_a_malformed_or_traversing_spelling_is_refused(path: str) -> None:
     with pytest.raises(HTTPException) as caught:
@@ -93,9 +123,57 @@ def test_the_integrator_paths_are_allowed(path: str) -> None:
     assert_proxy_path_allowed(path)
 
 
+# Server configuration and the cluster: writes hand out trust (the OIDC issuer, a trust password,
+# a join token for a new member), so they are refused for every grant. Reads stay open.
+SERVER_WRITES = [
+    "/1.0",
+    "/1.0/",
+    "",
+    "/",
+    "1.0",
+    "/1.0?target=m1",
+    "/1.0#x",
+    "/1.0/cluster",
+    "/1.0/cluster/certificate",
+    "/1.0/cluster/members",
+    "/1.0/cluster/members/m1",
+    "/1.0/cluster/members/m1/state",
+    "/1.0/cluster/groups/default",
+    "/1.0/CLUSTER/members",
+    "/1.0/%63luster/members",
+    "/1.0/%2563luster/members",
+    "/cluster/members",
+    "/1.0/cluster/members#x",
+]
+WRITE_METHODS = ["POST", "PUT", "PATCH", "DELETE", "patch"]
+
+
+@pytest.mark.parametrize("method", WRITE_METHODS)
+@pytest.mark.parametrize("path", SERVER_WRITES)
+def test_a_server_or_cluster_write_is_refused_for_every_grant(path: str, method: str) -> None:
+    with pytest.raises(HTTPException) as caught:
+        assert_server_state_unchanged(path, method)
+    assert caught.value.status_code == 403
+    assert caught.value.detail in {
+        "The proxy does not change the server configuration",
+        "The proxy does not change /cluster",
+    }
+
+
+@pytest.mark.parametrize("path", SERVER_WRITES)
+def test_a_server_or_cluster_read_is_allowed(path: str) -> None:
+    assert_server_state_unchanged(path, "GET")
+
+
+@pytest.mark.parametrize("path", ["/1.0/clusters", "/1.0/cluster-archive", "/1.0/instances/cluster"])
+def test_a_cluster_lookalike_is_not_over_blocked(path: str) -> None:
+    assert_server_state_unchanged(path, "POST")
+
+
 @pytest.mark.parametrize("method,path", ORCAHUB_WRITES)
 def test_the_integrator_writes_are_allowed(method: str, path: str) -> None:
     assert_proxy_path_allowed(path)
+    assert_server_state_unchanged(path, method)
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])
@@ -108,6 +186,36 @@ async def test_the_endpoint_never_calls_the_session_for_the_trust_store(path: st
     outcome, session = await call_raw_proxy(API_KEY, method, path)
     assert isinstance(outcome, HTTPException)
     assert outcome.status_code == status
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/1.0/auth/identities/tls"),
+        ("POST", "/1.0/auth/groups"),
+        ("PUT", "/1.0/auth/groups/g"),
+        ("PATCH", "/1.0/auth/identities/tls/oak_test"),
+        ("GET", "/1.0/auth/identities"),
+        ("GET", "/1.0/auth/groups#x"),
+    ],
+)
+async def test_the_endpoint_never_calls_the_session_for_the_auth_api(method: str, path: str) -> None:
+    outcome, session = await call_raw_proxy(API_KEY, method, path)
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("POST", "/1.0/cluster/members"), ("PUT", "/1.0"), ("PATCH", "/1.0/"), ("PUT", "/1.0/cluster/certificate"),
+     ("DELETE", "/1.0/cluster/members/m1"), ("POST", "/1.0/cluster/members/m1/state#x"), ("PUT", "")],
+)
+async def test_the_endpoint_never_calls_the_session_for_a_server_write(method: str, path: str) -> None:
+    outcome, session = await call_raw_proxy(API_KEY, method, path)
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
     assert session.calls == []
 
 

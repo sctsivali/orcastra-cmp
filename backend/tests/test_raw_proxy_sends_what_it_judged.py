@@ -144,6 +144,9 @@ REFUSED = [
     ("GET", "/1.0/instances/c1/files#?path=/etc/shadow"),
     ("GET", "/1.0//certificates"),
     ("GET", "/1.0/instances/%2e%2e/certificates"),
+    ("POST", "/1.0/auth/identities/tls"),
+    ("PUT", "/1.0"),
+    ("POST", "/1.0/cluster/members"),
 ]
 
 

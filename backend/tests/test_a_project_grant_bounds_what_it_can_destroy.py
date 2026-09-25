@@ -79,8 +79,11 @@ def test_reading_topology_is_still_allowed(path: str) -> None:
     assert_project_scope_allows_path(path, "GET", NARROW)
 
 
+# note: the narrow-key write rule is an allowlist now, so a lookalike such as
+# `/storage-pools-not-really` is refused like any resource outside it, and the prefix-boundary
+# case (`/instances-archive`) lives in test_project_limited_keys_are_bounded.py.
 @pytest.mark.parametrize(
-    "path", ["/1.0/instances/web-1", "/1.0/images/abc", "/1.0/storage-pools-not-really"]
+    "path", ["/1.0/instances/web-1", "/1.0/images/abc", "/1.0/operations/abc"]
 )
 def test_a_project_bounded_resource_is_untouched(path: str) -> None:
     """The rule must not swallow the ordinary write surface a narrow grant is meant to have."""

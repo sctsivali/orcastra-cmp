@@ -213,7 +213,9 @@ def default_capabilities_for(app_type: str) -> Set[str]:
 # nothing but `read` on one cluster could enumerate the trust store of the whole control plane.
 # `/cluster/members` and `/resources` are omitted deliberately: they are topology, an integration
 # has legitimate reasons to read them, and the audit rated them lower than the certificate store.
-_REFUSED_PROXY_PREFIXES = ("/certificates",)
+# `/auth` is the same sink on LXD 5.21 and later: `/auth/identities/tls` adds a trusted TLS client
+# and `/auth/groups` gives it server-wide entitlements, a credential that outlives the key.
+_REFUSED_PROXY_PREFIXES = ("/certificates", "/auth")
 
 # Resources the per-key project allow-list cannot bound.
 #
@@ -230,6 +232,15 @@ _REFUSED_PROXY_PREFIXES = ("/certificates",)
 # integrations that legitimately enumerate topology, and disclosure is a smaller harm than
 # destruction.
 _PROJECT_UNBOUNDABLE_PREFIXES = ("/projects", "/storage-pools", "/networks", "/profiles")
+
+# The only resources a project grant bounds, so the only ones a key that is not `*` may change.
+#
+# important: an allowlist, not the four prefixes above as a refusal list. The server config, the
+# cluster, network ACLs and zones, warnings and every resource LXD adds above projects were open
+# to a narrow key under the refusal list. Storage volumes stay refused, as before, because
+# `/storage-pools` also holds the pools themselves.
+# note: images are bounded only while the project keeps its own image store (features.images).
+_PROJECT_BOUNDED_WRITE_PREFIXES = ("/instances", "/images", "/operations")
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -519,7 +530,7 @@ def assert_project_scope_allows_path(
     Paired with `assert_proxy_path_allowed`, which refuses paths nobody may reach. This one
     refuses paths this particular grant may not reach, which is why it needs the grant.
     That includes an `all-projects` query in any spelling, which reads every project on the
-    cluster.
+    cluster, and a change to anything outside `_PROJECT_BOUNDED_WRITE_PREFIXES`.
     """
     if project_grant_is_unrestricted(allowed_projects):
         return
@@ -536,17 +547,19 @@ def assert_project_scope_allows_path(
         )
     if method.upper() not in _MUTATING_METHODS:
         return
+    if any(canonical.is_under(prefix) for prefix in _PROJECT_BOUNDED_WRITE_PREFIXES):
+        return
 
-    for prefix in _PROJECT_UNBOUNDABLE_PREFIXES:
-        if canonical.is_under(prefix):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"{prefix} is not bounded by a project, so changing it needs a key granted "
-                    f"all projects on this cluster. This key is limited to "
-                    f"{sorted(allowed_projects or ['default'])}."
-                ),
-            )
+    prefix = "/" + (canonical.lowered[0] if canonical.segments else "")
+    logger.warning("Refusing a %s to %s for a key limited to %s", method.upper(), prefix, granted)
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"{prefix} is not bounded by a project, so changing it needs a key granted "
+            f"all projects on this cluster. This key is limited to "
+            f"{sorted(allowed_projects or ['default'])}."
+        ),
+    )
 
 
 def assert_proxy_path_allowed(path: str) -> None:
