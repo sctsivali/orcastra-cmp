@@ -8,16 +8,18 @@ the same data whole, so they cost the same capability:
   criu) that stream the filesystem to anyone who presents them, and a `target` pushes it to a
   server the caller names;
 - GET /1.0/images/<fp>/export returns the image tarball;
-- POST /1.0/images/<fp>/secret returns a secret that lets an untrusted client download the image.
+- POST /1.0/images/<fp>/secret returns a secret that lets an untrusted client download the image;
+- a POST /1.0/images that publishes an instance or a snapshot with `public: true`, and a PUT or
+  PATCH of /1.0/images/<fp> that sets `public: true`. LXD serves a public image to any client that
+  reaches it, trusted or not, without passing this proxy.
+
+note: a private publish is not priced. The integrator publishes its marketplace images from a
+snapshot with `public: false`, with a key that never holds `instance.files`, and LXD serves a
+private image only to a trusted client or to one holding a secret, which is priced.
 
 note: `/proxy` and MCP have no operation that sends one of these, so the raw proxy is the only
 door. tests/test_guest_data_leaves_only_with_files.py holds that with a ratchet over the /proxy
 vocabulary.
-
-note: a publish (POST /1.0/images whose source is an instance or a snapshot) is not priced here.
-The integrator publishes its marketplace images that way, with a key that never holds
-`instance.files`. Known limit: an image made public (at publish, or by a later PUT or PATCH) can be
-downloaded by any client that reaches LXD, without passing this proxy.
 """
 
 from collections.abc import Mapping
@@ -39,6 +41,9 @@ GUEST_DATA_CAPABILITY = "instance.files"
 # note: LXD routes images/{fingerprint}/export and images/{fingerprint}/secret before the alias
 # route, so images/aliases/export is an export of an image named "aliases" to LXD as well.
 _IMAGE_HANDOUTS = frozenset({"export", "secret"})
+# note: the source types LXD publishes from (images.go imgPostInstanceInfo). `image` and `url` copy
+# an image from elsewhere, and LXD refuses any other type.
+_PUBLISHED_FROM_A_GUEST = frozenset({"instance", "container", "virtual-machine", "snapshot"})
 
 
 def _is_migration_source(segments: Tuple[str, ...]) -> bool:
@@ -50,15 +55,25 @@ def _is_migration_source(segments: Tuple[str, ...]) -> bool:
     return False
 
 
+def _asks_for(body: Any, field: str) -> bool:
+    # important: LXD decodes `migration` and `public` as a JSON bool and answers 400 for any other
+    # value, so anything but absent, null or false is priced rather than guessed at. The body is the
+    # canonical one (core/api_key_body.py), so no other spelling of the field reaches LXD.
+    return isinstance(body, Mapping) and body.get(field) not in (None, False)
+
+
 def _starts_a_migration(segments: Tuple[str, ...], method: str, body: Any) -> bool:
-    # important: LXD decodes `migration` as a bool, so anything but absent, null or false is priced
-    # rather than guessed at. The body is the canonical one (core/api_key_body.py), so no other
-    # spelling of the field reaches LXD.
-    if method != "POST" or not isinstance(body, Mapping):
+    return method == "POST" and _asks_for(body, "migration") and _is_migration_source(segments)
+
+
+def _makes_a_guest_image_public(segments: Tuple[str, ...], method: str, body: Any) -> bool:
+    """A publish from an instance or a snapshot with public true, or an image made public later."""
+    if not _asks_for(body, "public"):
         return False
-    if body.get("migration") in (None, False):
-        return False
-    return _is_migration_source(segments)
+    if method == "POST" and segments == ("images",):
+        source = body.get("source")
+        return isinstance(source, Mapping) and str(source.get("type")).lower() in _PUBLISHED_FROM_A_GUEST
+    return method in ("PUT", "PATCH") and len(segments) == 2 and segments[0] == "images"
 
 
 def _hands_out_an_image(segments: Tuple[str, ...]) -> bool:
@@ -83,7 +98,12 @@ def guest_data_path_capability_for(path: str) -> Optional[str]:
 def guest_data_capability_for(path: str, method: str, body: Any) -> Optional[str]:
     """The capability a raw-proxy request costs because it hands out guest data, else None."""
     segments = canonical_proxy_path(path).lowered
-    if _priced_by_its_path(segments) or _starts_a_migration(segments, method.upper(), body):
+    method = method.upper()
+    if (
+        _priced_by_its_path(segments)
+        or _starts_a_migration(segments, method, body)
+        or _makes_a_guest_image_public(segments, method, body)
+    ):
         return GUEST_DATA_CAPABILITY
     return None
 
