@@ -113,14 +113,23 @@ def _image_reach(get: Callable[..., Any], profiles_in: Callable[[str], Callable[
             str(name) for image in held if isinstance(image, dict) for name in image.get("profiles") or []
         ]
         return profile_reach(profiles_in(step.project), list(dict.fromkeys(names)))
+    # note: an image a project does not hold fails the create in LXD versions that look there, so the
+    # union of the records that exist is what any version can apply
+    held = [image for image in (_local_image(get, step, in_project) for in_project in step.lookup_projects)
+            if isinstance(image, dict)]
+    if not held:
+        return "an image this proxy could not resolve, so name the profiles in the request"
+    names = [str(name) for image in held for name in image.get("profiles") or []]
+    return profile_reach(profiles_in(step.project), list(dict.fromkeys(names)))
+
+
+def _local_image(get: Callable[..., Any], step: ImageApplied, in_project: str) -> Any:
+    """The record of a local image create's source as `in_project` resolves it, or None."""
     fingerprint = step.fingerprint
     if not fingerprint and step.alias:
-        alias = get(f"/images/aliases/{safe_segment(step.alias)}", step.project) or {}
+        alias = get(f"/images/aliases/{safe_segment(step.alias)}", in_project) or {}
         fingerprint = alias.get("target") if isinstance(alias, dict) else None
-    image = get(f"/images/{safe_segment(fingerprint)}", step.project) if fingerprint else None
-    if not isinstance(image, dict):
-        return "an image this proxy could not resolve, so name the profiles in the request"
-    return profile_reach(profiles_in(step.project), [str(name) for name in image.get("profiles") or []])
+    return get(f"/images/{safe_segment(fingerprint)}", in_project) if fingerprint else None
 
 
 def _carried_reach(get: Callable[..., Any], profiles_in: Callable[[str], Callable[[str], Any]],

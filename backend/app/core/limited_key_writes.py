@@ -168,13 +168,27 @@ class CarriedFrom:
 
 @dataclass(frozen=True)
 class ImageApplied:
-    """The image an instance create of type `kind` applies the profiles of."""
+    """The image an instance create of type `kind` applies the profiles of, read in `project`.
+
+    important: a local image create naming `source.project` is resolved in the target project by
+    LXD 5.21 and in `source.project` by later LXD, and either version then reads the profiles in the
+    target project. Which one a cluster runs is not known here, so `source_project` is read as well
+    and the profiles of every record that exists are judged.
+    """
 
     project: str
     kind: str
     fingerprint: Optional[str] = None
     alias: Optional[str] = None
     server: Optional[str] = None
+    source_project: Optional[str] = None
+
+    @property
+    def lookup_projects(self) -> Tuple[str, ...]:
+        """The projects LXD may resolve a local image in: the target, then any source.project."""
+        if self.server or not self.source_project:
+            return (self.project,)
+        return tuple(dict.fromkeys((self.project, self.source_project)))
 
 
 PlanStep = Union[NamedProfiles, CarriedFrom, ImageApplied]
@@ -223,6 +237,7 @@ def instance_write_plan(
             return [ImageApplied(
                 here, str(body.get("type") or "container"),
                 _text(source.get("fingerprint")), _text(source.get("alias")), _text(source.get("server")),
+                _text(source.get("project")),
             )]
         return [NamedProfiles(("default",), here)]
     if verb == "POST":
