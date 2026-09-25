@@ -12,9 +12,13 @@ the same data whole, so they cost the same capability:
 - any request under storage-pools/<pool>/volumes/<type>/<volume>/backups creates, lists, reads,
   exports or deletes a backup of the volume, which is its data in a tarball. The instance /backups
   path already costs `instance.files` (core/api_key_capabilities.py), for every method;
-- a POST /1.0/images that publishes an instance or a snapshot with `public: true`, and a PUT or
-  PATCH of /1.0/images/<fp> that sets `public: true`. LXD serves a public image to any client that
-  reaches it, trusted or not, without passing this proxy.
+- a POST /1.0/images with `public: true`, whatever its source, and a PUT or PATCH of
+  /1.0/images/<fp> that sets `public: true`. LXD serves a public image to any client that reaches
+  it, trusted or not, without passing this proxy. A publish from an instance or a snapshot makes
+  the guest's image public, and a copy (source `image` or `url`) that names a fingerprint the
+  project already holds sets `public` on that image too (images.go imgPostRemoteInfo and
+  imgPostURLInfo call UpdateImage with req.Public), so a copy could make a privately published
+  guest image public.
 
 note: a private publish is not priced. The integrator publishes its marketplace images from a
 snapshot with `public: false`, with a key that never holds `instance.files`, and LXD serves a
@@ -44,9 +48,6 @@ GUEST_DATA_CAPABILITY = "instance.files"
 # note: LXD routes images/{fingerprint}/export and images/{fingerprint}/secret before the alias
 # route, so images/aliases/export is an export of an image named "aliases" to LXD as well.
 _IMAGE_HANDOUTS = frozenset({"export", "secret"})
-# note: the source types LXD publishes from (images.go imgPostInstanceInfo). `image` and `url` copy
-# an image from elsewhere, and LXD refuses any other type.
-_PUBLISHED_FROM_A_GUEST = frozenset({"instance", "container", "virtual-machine", "snapshot"})
 
 
 def _is_migration_source(segments: Tuple[str, ...]) -> bool:
@@ -69,13 +70,12 @@ def _starts_a_migration(segments: Tuple[str, ...], method: str, body: Any) -> bo
     return method == "POST" and _asks_for(body, "migration") and _is_migration_source(segments)
 
 
-def _makes_a_guest_image_public(segments: Tuple[str, ...], method: str, body: Any) -> bool:
-    """A publish from an instance or a snapshot with public true, or an image made public later."""
+def _makes_an_image_public(segments: Tuple[str, ...], method: str, body: Any) -> bool:
+    """Any image create or copy with public true, or an image made public later."""
     if not _asks_for(body, "public"):
         return False
     if method == "POST" and segments == ("images",):
-        source = body.get("source")
-        return isinstance(source, Mapping) and str(source.get("type")).lower() in _PUBLISHED_FROM_A_GUEST
+        return True
     return method in ("PUT", "PATCH") and len(segments) == 2 and segments[0] == "images"
 
 
@@ -115,7 +115,7 @@ def guest_data_capability_for(path: str, method: str, body: Any) -> Optional[str
     if (
         _priced_by_its_path(segments)
         or _starts_a_migration(segments, method, body)
-        or _makes_a_guest_image_public(segments, method, body)
+        or _makes_an_image_public(segments, method, body)
     ):
         return GUEST_DATA_CAPABILITY
     return None

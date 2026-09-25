@@ -4,11 +4,15 @@ Making an image of a guest public costs `instance.files`.
 LXD serves a public image to any client that reaches it, trusted or not, so publishing an instance or
 a snapshot with `public: true`, or setting `public: true` on an image later, hands the guest's
 filesystem out as surely as an image export does. A write key without `instance.files` could do it,
-a `*` key included.
+a `*` key included. A copy is priced the same whatever its source: LXD's remote and URL copy
+(images.go imgPostRemoteInfo, imgPostURLInfo) call UpdateImage with the request's `public` when the
+project already holds the fingerprint, so a copy naming a privately published guest image made it
+public.
 
 A private publish stays unpriced. The integrator publishes its marketplace images from a snapshot
 with `public: false` (its client source, publishImageFromSnapshotViaProxy), with a key whose preset
-never holds `instance.files`, so that body is pinned as still sent. LXD decodes `public` as a JSON
+never holds `instance.files`, so that body is pinned as still sent, and so is its pre-cache pull
+(`public: false`). LXD decodes `public` as a JSON
 bool and answers 400 for any other value, so a value that is not absent, null or false is priced
 rather than refused here: nothing LXD would accept is let through, and the rule reads `public` the
 way the migration rule beside it reads `migration`.
@@ -56,6 +60,16 @@ PRICED: List[Tuple[str, str, Dict[str, Any]]] = [
     ("PATCH", f"/1.0/images/{FP}", {"public": True}),
     ("PATCH", f"/1.0/IMAGES/{FP}/", {"public": True}),
     ("PATCH", f"/1.0/images/{FP}?project=tenant-a", {"public": True}),
+    # A copy is priced whatever its source, since a copy of a fingerprint the project holds sets public
+    # on that image (imgPostRemoteInfo, imgPostURLInfo).
+    ("POST", "/1.0/images", {"source": {"type": "image", "fingerprint": FP}, "public": True}),
+    ("POST", "/1.0/images", {"source": {"type": "image", "fingerprint": FP, "server": "https://cluster-a.example.test:8443",
+                                        "protocol": "lxd"}, "public": True}),
+    ("POST", "/1.0/images", {**ORCAHUB_PULL, "public": True}),
+    ("POST", "/1.0/images", {"source": {"type": "url", "url": "https://example.test/i"}, "public": True}),
+    ("POST", "/1.0/images", {"source": {"type": "image", "mode": "push", "fingerprint": FP}, "public": True}),
+    ("POST", "/1.0/images", {"source": {"type": "none"}, "public": True}),
+    ("POST", "/1.0/images", {"public": True}),
     # A value LXD would refuse with 400 is priced, never read as private.
     ("POST", "/1.0/images", {"source": SNAPSHOT, "public": "true"}),
     ("POST", "/1.0/images", {"source": SNAPSHOT, "public": 1}),
@@ -65,7 +79,8 @@ PRICED: List[Tuple[str, str, Dict[str, Any]]] = [
 PRICED_IDS = [
     "publish-snapshot", "publish-instance", "publish-container", "publish-vm", "publish-query",
     "publish-encoded-path", "publish-odd-type", "put", "patch", "patch-upper-path", "patch-query",
-    "publish-string", "publish-number", "patch-string", "put-object",
+    "copy-local-fingerprint", "copy-from-a-server", "pull-public", "url-public", "push-public", "source-none",
+    "no-source", "publish-string", "publish-number", "patch-string", "put-object",
 ]
 
 NOT_PRICED: List[Tuple[str, str, Optional[Dict[str, Any]]]] = [
@@ -74,10 +89,9 @@ NOT_PRICED: List[Tuple[str, str, Optional[Dict[str, Any]]]] = [
     ("POST", "/1.0/images", {"source": SNAPSHOT, "public": None}),
     ("POST", "/1.0/images", {"source": {"type": "instance", "name": "web-1"}, "public": False}),
     ("POST", "/1.0/images", ORCAHUB_PULL),
-    # A copy from elsewhere is not the guest's data.
-    ("POST", "/1.0/images", {**ORCAHUB_PULL, "public": True}),
-    ("POST", "/1.0/images", {"source": {"type": "url", "url": "https://example.test/i"}, "public": True}),
-    ("POST", "/1.0/images", {"public": True}),
+    ("POST", "/1.0/images", {"source": {"type": "image", "fingerprint": FP}, "public": False}),
+    ("POST", "/1.0/images", {"source": {"type": "url", "url": "https://example.test/i"}}),
+    ("POST", "/1.0/images", {"source": {"type": "image", "mode": "push", "fingerprint": FP}, "public": None}),
     ("PUT", f"/1.0/images/{FP}", {"public": False, "auto_update": True, "properties": {}}),
     ("PATCH", f"/1.0/images/{FP}", {"auto_update": True}),
     ("PATCH", f"/1.0/images/{FP}", {"public": False}),
@@ -87,9 +101,9 @@ NOT_PRICED: List[Tuple[str, str, Optional[Dict[str, Any]]]] = [
     ("DELETE", f"/1.0/images/{FP}", None),
 ]
 NOT_PRICED_IDS = [
-    "orcahub-publish", "public-absent", "public-null", "public-false", "orcahub-pull", "pull-public",
-    "url-public", "no-source", "put-private", "patch-auto-update", "patch-private", "read", "alias-create",
-    "alias-patch", "delete",
+    "orcahub-publish", "public-absent", "public-null", "public-false", "orcahub-pull", "copy-private",
+    "url-public-absent", "push-public-null", "put-private", "patch-auto-update", "patch-private", "read",
+    "alias-create", "alias-patch", "delete",
 ]
 
 ORCAHUB = key(["*"], capabilities=sorted(APP_TYPE_CAPABILITIES["orcahub"]))
@@ -145,7 +159,8 @@ async def test_the_raw_proxy_refuses_it_without_files(
 
 
 @pytest.mark.usefixtures("fence_calls")
-@pytest.mark.parametrize("method,path,body", PRICED[:5] + PRICED[7:9], ids=PRICED_IDS[:5] + PRICED_IDS[7:9])
+@pytest.mark.parametrize("method,path,body", PRICED[:5] + PRICED[7:9] + PRICED[11:18],
+                         ids=PRICED_IDS[:5] + PRICED_IDS[7:9] + PRICED_IDS[11:18])
 async def test_a_key_granted_files_sends_it_as_asked(
     method: str, path: str, body: Dict[str, Any], audits: List[Dict[str, Any]]
 ) -> None:
@@ -171,6 +186,24 @@ async def test_the_integrators_image_writes_are_still_sent(body: Dict[str, Any],
     assert outcome.status_code == 200, outcome
     assert [(verb, kwargs.get("json")) for verb, _url, kwargs in session.calls] == [("POST", body)]
     assert [record["result"] for record in audits] == ["success"]
+
+
+@pytest.mark.usefixtures("fence_calls")
+async def test_a_private_publish_cannot_be_made_public_by_a_copy(audits: List[Dict[str, Any]]) -> None:
+    """The integrator's key publishes privately, which is sent. Copying the fingerprint it now holds with
+    public true would make that guest image public through LXD's copy path, so it costs files."""
+    publish, session = await call_raw_proxy(ORCAHUB, "POST", "/1.0/images", body=ORCAHUB_PUBLISH)
+    assert publish.status_code == 200 and [verb for verb, *_ in session.calls] == ["POST"]
+
+    copy = {"source": {"type": "image", "fingerprint": FP}, "aliases": [{"name": "mkt/org-7/app-public"}],
+            "public": True}
+    outcome, session = await call_raw_proxy(ORCAHUB, "POST", "/1.0/images", body=copy)
+
+    assert isinstance(outcome, HTTPException) and outcome.status_code == 403 and "instance.files" in outcome.detail
+    assert session.calls == []
+    assert [(record["result"], record["details"].get("refused")) for record in audits] == [
+        ("success", None), ("failure", "capability_not_granted")
+    ]
 
 
 @pytest.mark.usefixtures("fence_calls")
