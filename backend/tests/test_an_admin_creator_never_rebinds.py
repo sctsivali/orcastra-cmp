@@ -7,7 +7,8 @@ written, and the clusters had moved.
 
 The role is read from Authentik when the push arrives. The key's metadata names who minted it and
 not their role, there is no users table, and a role can change after the key was minted. A role
-Authentik cannot answer for rebinds nothing.
+Authentik cannot answer for rebinds nothing. The strict read itself, against Authentik's HTTP
+answers, is in test_a_creator_role_authentik_cannot_confirm_rebinds_nothing.
 """
 
 import logging
@@ -57,7 +58,7 @@ async def test_a_key_an_admin_minted_never_moves_the_admins_clusters(
     assert world["directory"].groups[ADMIN] == {ROLE_ADMIN}
     assert not [c for c in world["directory"].changes if c[0] == ADMIN]
     (warning,) = [r for r in caplog.records if r.name == integration_cluster_rebind.__name__]
-    assert K_ADMIN in warning.getMessage() and "role_admin" in warning.getMessage()
+    assert K_ADMIN in warning.getMessage() and "is an Admin" in warning.getMessage()
     assert not any(secret in caplog.text for secret in SECRETS)
 
 
@@ -74,7 +75,8 @@ async def test_a_role_authentik_cannot_answer_for_rebinds_nothing(
     assert (await bound(db))["partner-cluster"] is None
     assert world["shares"] == [] and world["log"].calls == []
     (warning,) = [r for r in caplog.records if r.name == integration_cluster_rebind.__name__]
-    assert "oak_partner" in warning.getMessage() and "could not be read" in warning.getMessage()
+    assert "oak_partner" in warning.getMessage()
+    assert "could not be read (authentik_unreachable)" in warning.getMessage()
 
 
 async def test_an_unconfigured_authentik_rebinds_nothing(

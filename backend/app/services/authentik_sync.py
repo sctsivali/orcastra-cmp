@@ -19,6 +19,7 @@ from typing import Iterable, Optional
 import httpx
 
 from app.core.config import get_settings
+from app.services.authentik_role_reading import RoleReading, fetch_current_roles, unknown_role
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,16 @@ class AuthentikSyncService:
         except Exception as e:  # noqa: BLE001 - unknown, not empty
             logger.warning("Could not read Authentik groups for %s: %s", user_email, e)
             return None
+
+    async def read_current_roles(self, user_email: str) -> RoleReading:
+        """The user's roles as the dashboard's RBAC resolves their groups, or an explicit unknown.
+
+        important: use this, not get_user_role_groups, to refuse something to an Admin. That one
+        reads a failed search, a missing user and a duplicate email as "holds nothing".
+        """
+        if not self.enabled:
+            return unknown_role("authentik_not_configured")
+        return await fetch_current_roles(self.api_url, self._headers(), user_email)
 
     async def sync_user_role(self, user_email: str, target_role: str) -> bool:
         """

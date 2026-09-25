@@ -19,6 +19,7 @@ from app.models.db_models import Organization, OrganizationCluster, Organization
 from app.routers import integrations
 from app.routers.integrations import SyncDataRequest, SyncMember
 from app.services import authentik_sync, integration_cluster_rebind, shared_cluster_audit
+from app.services.authentik_role_reading import RoleReading, known_roles, unknown_role
 from app.services.integration_cluster_rebind import REBIND_ACTION, claimed_destinations
 from app.services.integration_roles import ROLE_ADMIN, ROLE_PARTNER
 from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
@@ -43,6 +44,12 @@ class Directory:
         self.reads.append(email)
         held = self.groups.get(email, set())
         return None if held is None else set(held)
+
+    async def read_current_roles(self, email: str) -> RoleReading:
+        """The strict read, resolved through the real resolver. None stands for any unknown."""
+        self.reads.append(email)
+        held = self.groups.get(email, set())
+        return unknown_role("authentik_unreachable") if held is None else known_roles(held)
 
     async def change_integration_role_groups(
         self, email: str, add: Optional[str] = None, remove: Any = frozenset()

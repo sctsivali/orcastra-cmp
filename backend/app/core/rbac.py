@@ -170,6 +170,11 @@ def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
     return list(set(roles)) if roles else [Role.TENANT]
 
 
+def roles_for_group_names(group_names: list[str]) -> list[Role]:
+    """Roles for these Authentik group names, resolved exactly as a request's groups claim is."""
+    return _resolve_roles_uncached(AuthenticatedUser(user_id="", groups=list(group_names)))
+
+
 def resolve_roles(user: AuthenticatedUser) -> list[Role]:
     """Map Authentik groups to internal Role values with caching."""
     try:

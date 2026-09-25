@@ -17,10 +17,13 @@ org_scope: that ordering puts any organization where the creator is a partner fi
 key could push the creator into its own older organization and choose where the creator's next
 rebind lands. Zero or several such organizations rebind nothing.
 
-A creator holding role_admin never rebinds. Their key may be held by an integration they do not
-run, and an Admin's personal clusters are not a partner's. The role is read from Authentik at the
-time of the push, because nothing else holds it: the key's metadata records who minted it, not
-their role, and there is no users table. A role Authentik cannot answer for rebinds nothing.
+A creator the dashboard resolves to Admin never rebinds: role_admin, or any other group rbac.py
+maps to Admin. Their key may be held by an integration they do not run, and an Admin's personal
+clusters are not a partner's. The role is read from Authentik at the time of the push, because
+nothing else holds it: the key's metadata records who minted it, not their role, and there is no
+users table. A role Authentik cannot answer for rebinds nothing: a user search or detail read that
+fails, times out or answers anything but 200, an email no account carries and one that two
+accounts carry (authentik_role_reading).
 
 A rebind that fails partway is rolled back, so no move is committed without its record.
 
@@ -35,10 +38,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.org_scope import reconcile_personal_clusters
+from app.core.rbac import Role
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services.activity_logger import get_activity_logger
 from app.services.add_on_credential_edits import is_add_on_credential
-from app.services.integration_roles import ROLE_ADMIN, RoleGroupStore
+from app.services.authentik_role_reading import CurrentRoleReader
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -108,18 +112,18 @@ async def claimed_destinations(
     return sorted(rows.scalars().all())
 
 
-async def _creator_role_allows_rebind(roles: RoleGroupStore, email: str, api_key_id: str) -> bool:
-    """False for a creator holding role_admin, and for one whose role Authentik cannot answer for."""
-    groups = await roles.get_user_role_groups(email)
-    if groups is None:
+async def _creator_role_allows_rebind(roles: CurrentRoleReader, email: str, api_key_id: str) -> bool:
+    """False for a creator the dashboard resolves to Admin, and for one whose role is unknown."""
+    reading = await roles.read_current_roles(email)
+    if reading.roles is None:
         logger.warning(
-            "Integration key %s rebinds no personal cluster: its creator's role could not be read",
-            api_key_id,
+            "Integration key %s rebinds no personal cluster: its creator's role could not be read (%s)",
+            api_key_id, reading.reason,
         )
         return False
-    if ROLE_ADMIN in groups:
+    if Role.ADMIN in reading.roles:
         logger.warning(
-            "Integration key %s rebinds no personal cluster: its creator holds role_admin", api_key_id
+            "Integration key %s rebinds no personal cluster: its creator is an Admin", api_key_id
         )
         return False
     return True
@@ -152,7 +156,7 @@ async def rebind_creator_clusters(
     *,
     api_key_id: str,
     creator: Optional[str],
-    roles: RoleGroupStore,
+    roles: CurrentRoleReader,
 ) -> int:
     """Bind the creator's unbound clusters to the one organization this push names them in."""
     if not may_rebind(email, creator):

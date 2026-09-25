@@ -18,6 +18,7 @@ from app.models.db_models import Organization, OrganizationCluster, Organization
 from app.routers import integrations
 from app.routers.integrations import SyncMember, SyncOrganization
 from app.services import authentik_sync
+from app.services.authentik_role_reading import RoleReading, known_roles, unknown_role
 from app.services.integration_roles import (
     ROLE_ADMIN,
     ROLE_PARTNER,
@@ -228,6 +229,9 @@ class FakeAuthentik:
 
     async def get_user_role_groups(self, email: str) -> Optional[set]:
         return None if self.groups is None else set(self.groups)
+
+    async def read_current_roles(self, email: str) -> RoleReading:
+        return unknown_role("authentik_unreachable") if self.groups is None else known_roles(self.groups)
 
     async def change_integration_role_groups(
         self, email: str, add: Optional[str] = None, remove: Iterable[str] = frozenset()
