@@ -3698,14 +3698,21 @@ async def raw_proxy(
         if method not in ALLOWED_METHODS:
             raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
 
-        assert_proxy_path_allowed(request.path)
-        # important: server configuration and the cluster hand out trust (the OIDC issuer, a join
-        # token for a new member), so writes to them are refused for every grant, `*` included.
-        assert_server_state_unchanged(request.path, method)
-        # important: a storage bucket key answers with the bucket's S3 secret, a credential that
-        # outlives the API key, so the keys are refused for every grant and method like the trust
-        # store (core/storage_bucket_keys.py).
-        assert_bucket_keys_unreached(request.path)
+        # important: the trust surface is refused for every grant, and each refusal is recorded like the guest
+        # gates below, so a key probing it shows in the trail. A malformed path is the parser's 400, not recorded.
+        try:
+            assert_proxy_path_allowed(request.path)
+            # important: server configuration and the cluster hand out trust (the OIDC issuer, a join
+            # token for a new member), so writes to them are refused for every grant, `*` included.
+            assert_server_state_unchanged(request.path, method)
+            # important: a storage bucket key answers with the bucket's S3 secret, a credential that
+            # outlives the API key, so the keys are refused for every grant and method like the trust
+            # store (core/storage_bucket_keys.py).
+            assert_bucket_keys_unreached(request.path)
+        except HTTPException as refusal:
+            if refusal.status_code == 403:
+                _audit_raw_refusal(api_key, request, method, project, refusal, "refused_for_every_key")
+            raise
         # important: reaching inside a guest is a different power from managing it, and this path
         # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
         # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with

@@ -11,8 +11,8 @@ reached the cluster. Covered here:
 - decision 13 and round 1d: public truthy on POST /1.0/images, for every source type, and on PUT or
   PATCH of an image, costs instance.files, while public false, null or absent is sent.
 - custom volume backups cost instance.files for every volume type and method (decided with 10).
-- decision 17: storage bucket keys are refused for every key and method, without a record, like
-  /certificates, and /proxy and MCP have no bucket operation.
+- decision 17: storage bucket keys are refused for every key and method, like /certificates, with a
+  refused_for_every_key record since the security review, and /proxy and MCP have no bucket operation.
 """
 
 from typing import Any, Dict, Optional
@@ -402,7 +402,7 @@ def test_bucket_keys_are_refused_for_every_key_and_method(
     project = "tenant-a" if api_key is NARROW else None
     body = {"name": "k2", "role": "admin"} if method in BODY_METHODS else None
     seen = door.raw(api_key, method, f"/1.0/storage-pools/s3/buckets/b1/{tail}", body=body, project=project)
-    _refused(seen, 403, "storage bucket keys", None)
+    _refused(seen, 403, "storage bucket keys", "refused_for_every_key")
 
 
 @pytest.mark.parametrize("path", [
@@ -411,7 +411,7 @@ def test_bucket_keys_are_refused_for_every_key_and_method(
     "/1.0/storage-pools/s3/buckets/b1/%256Beys", "/1.0/storage-pools/s3/buckets/b1/keys?recursion=1",
 ], ids=[*SPELLING_IDS, "encoded-slash-in-bucket", "fragment", "double-encoded-keys", "recursion"])
 def test_every_spelling_of_bucket_keys_is_refused(door: Any, path: str) -> None:
-    _refused(door.raw(LEGACY, "GET", path), 403, "storage bucket keys", None)
+    _refused(door.raw(LEGACY, "GET", path), 403, "storage bucket keys", "refused_for_every_key")
 
 
 @pytest.mark.parametrize("method,path", [
