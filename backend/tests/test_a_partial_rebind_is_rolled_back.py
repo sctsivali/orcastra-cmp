@@ -103,10 +103,11 @@ async def test_the_failure_is_rolled_back_and_raised_to_the_member_sync(
     with pytest.raises(RuntimeError, match="share audit refused b-refused"):
         await integration_cluster_rebind.rebind_creator_clusters(
             db, PARTNER, pushed, api_key_id=K_PARTNER, creator=PARTNER, roles=world["directory"],
+            pushed_organizations=("ext-p",),
         )
     await db.commit()
     assert await bound(db) == {"a-ok": None, "b-refused": None}, "nothing was left flushed to commit"
 
-    await integrations._upsert_synced_members(db, pushed, K_PARTNER, PARTNER)
+    await integrations._upsert_synced_members(db, pushed, K_PARTNER, PARTNER, ("ext-p",))
     assert "share audit refused b-refused" in caplog.text
     assert world["log"].calls == []

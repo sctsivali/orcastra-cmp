@@ -11,13 +11,22 @@ triggers no rebind, and neither does a key without a creator or an add-on creden
 rebind is recorded with the cluster, the organization it left, the one it joined and the key id.
 Nothing else of the key reaches the record.
 
-The key must claim exactly one organization after the push: organizations.api_key_id is the key,
-active or not. A seller's key also claims every buyer organization it syncs or provisions, and
-the pushed role cannot tell the seller's organization from a buyer's. In OrcaHub a buyer
+The push's `organizations` list must name exactly one organization, and after the push the key
+must claim exactly that one: organizations.api_key_id is the key, active or not, for it and for
+no other. A seller's key also claims every buyer organization it syncs or provisions, and the
+pushed role cannot tell the seller's organization from a buyer's. In OrcaHub a buyer
 organization's partner can add the seller's creator as PARTNER, and the seller's push carries
-every member of every buyer organization. So a key holding more than one organization rebinds
-nothing and logs its id and the count, and the partner binds those clusters from the dashboard.
-A buyer then can neither choose the destination nor block it.
+every member of every buyer organization. The one organization a key claims can itself be a
+buyer's: a new key or a second connection is refused the seller organization another key holds,
+and a seller slug a local organization holds is skipped by every push. So a push naming more than
+one organization, or a key claiming more than one, rebinds nothing and logs the key id and the
+count, and the partner binds those clusters from the dashboard.
+
+A buyer organization is then the destination only when a push names it alone and the key claims
+nothing else. OrcaHub v1.32.0 lists the connection's own organization first in every push while
+that organization exists (orcastra.service.js syncOrcastraClustersUnlocked), so a one-org push from
+it names the seller's own organization, and what a buyer organization's roster says never changes
+where or whether the creator's clusters move.
 
 The destination is that one organization, if it is active and this push names the creator a
 partner there: the pushed role maps to partner the way the member sync maps it, and the
@@ -113,6 +122,20 @@ async def claimed_organization_count(db: AsyncSession, api_key_id: str) -> int:
     return int(counted.scalar_one())
 
 
+async def claims_organization(db: AsyncSession, api_key_id: str, external_id: str) -> bool:
+    """Whether this key claimed the OrcaHub organization with this external id."""
+    if not api_key_id:
+        return False
+    row = (await db.execute(
+        select(Organization.id).where(
+            Organization.api_key_id == api_key_id,
+            Organization.source == "orcahub",
+            Organization.external_id == external_id,
+        ).limit(1)
+    )).first()
+    return row is not None
+
+
 async def claimed_destinations(
     db: AsyncSession, members: Sequence[PushedMember], *, email: str, api_key_id: str
 ) -> List[int]:
@@ -188,8 +211,12 @@ async def rebind_creator_clusters(
     api_key_id: str,
     creator: Optional[str],
     roles: CurrentRoleReader,
+    pushed_organizations: Sequence[str],
 ) -> int:
-    """Bind the creator's unbound clusters to the one organization this key claims."""
+    """Bind the creator's unbound clusters to the one organization this push names and this key claims.
+
+    `pushed_organizations` holds the external ids of the push's `organizations` list.
+    """
     if not may_rebind(email, creator):
         return 0
     if not await _has_unbound_clusters(db, email):
@@ -200,6 +227,21 @@ async def rebind_creator_clusters(
             "Integration key %s rebinds no personal cluster: it claims %d organizations, "
             "exactly one is required",
             api_key_id, claimed,
+        )
+        return 0
+    named = set(pushed_organizations)
+    if len(named) != 1:
+        logger.warning(
+            "Integration key %s rebinds no personal cluster: its push names %d organizations, "
+            "exactly one is required",
+            api_key_id, len(named),
+        )
+        return 0
+    if not await claims_organization(db, api_key_id, next(iter(named))):
+        logger.warning(
+            "Integration key %s rebinds no personal cluster: the organization its push names is "
+            "not the one it claims",
+            api_key_id,
         )
         return 0
     destinations = await claimed_destinations(db, members, email=email, api_key_id=api_key_id)

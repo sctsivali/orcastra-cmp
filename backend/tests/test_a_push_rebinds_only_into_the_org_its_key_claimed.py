@@ -239,7 +239,7 @@ async def test_zero_claimed_orgs_naming_the_creator_rebind_nothing(
 
     moved = await integration_cluster_rebind.rebind_creator_clusters(
         db, PARTNER, [SyncMember(**member(PARTNER, "ext-t", "PARTNER"))],
-        api_key_id=K_PARTNER, creator=PARTNER, roles=world["directory"],
+        api_key_id=K_PARTNER, creator=PARTNER, roles=world["directory"], pushed_organizations=("ext-t",),
     )
     assert moved == 0 and (await bound(db))["partner-cluster"] is None
     assert world["shares"] == [] and world["log"].calls == []

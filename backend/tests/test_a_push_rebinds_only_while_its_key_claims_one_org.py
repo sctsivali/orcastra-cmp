@@ -4,7 +4,8 @@ A seller's key claims every buyer org it syncs or provisions, and a buyer org's 
 the seller's creator as PARTNER. The pushed role cannot tell the seller's org from a buyer's, so a
 buyer org could be the one destination, or a second one that blocked the seller's own. The key's
 claims are counted after the push, active or not, and anything but one rebinds nothing. The warning
-names the key id and the count, never an email.
+names the key id and the count, never an email. The one org claimed must also be the one org the
+push lists (test_the_one_org_rule_holds_through_the_sync_route.py drives that through the route).
 """
 
 import logging
@@ -14,7 +15,7 @@ import pytest
 
 from app.models.db_models import Organization, OrganizationMember
 from app.services import integration_cluster_rebind
-from app.services.integration_cluster_rebind import claimed_organization_count
+from app.services.integration_cluster_rebind import claimed_organization_count, claims_organization
 from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
 from tests.test_a_push_rebinds_only_into_the_org_its_key_claimed import (
     BUYER,
@@ -65,6 +66,20 @@ async def test_the_count_takes_every_org_the_key_claimed_active_or_not() -> None
     assert await claimed_organization_count(db, K_ATTACKER) == 1
     assert await claimed_organization_count(db, "") == 0
     assert await claimed_organization_count(db, "oak_nobody") == 0
+
+
+async def test_the_one_pushed_org_must_be_an_orcahub_org_this_key_claimed() -> None:
+    db = sqlite_session(*org_tables())
+    await claim(db, "ext-p", "partner")
+    await claim(db, "ext-l", "local", source="local")
+    await claim(db, "ext-a", "theirs", owner=K_ATTACKER)
+    await claim(db, "ext-e", "empty", owner="")
+    assert await claims_organization(db, K_PARTNER, "ext-p")
+    assert not await claims_organization(db, K_PARTNER, "EXT-P")
+    assert not await claims_organization(db, K_PARTNER, "ext-l")
+    assert not await claims_organization(db, K_PARTNER, "ext-a")
+    assert not await claims_organization(db, "", "ext-e")
+    assert not await claims_organization(db, K_PARTNER, "ext-none")
 
 
 async def test_a_buyer_org_claimed_by_an_earlier_push_still_counts(

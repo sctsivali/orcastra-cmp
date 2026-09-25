@@ -99,7 +99,7 @@ async def test_pushing_another_partners_email_moves_none_of_their_clusters(
 ) -> None:
     db = await _db()
     await integrations._upsert_synced_members(
-        db, [_member(VICTIM), _member(ATTACKER, "PARTNER")], KEY, creator
+        db, [_member(VICTIM), _member(ATTACKER, "PARTNER")], KEY, creator, ("ext-mine",)
     )
     assert (await _bound(db))["victim-cluster"] is None
     assert world["shares"] == []
@@ -164,11 +164,11 @@ def test_the_creator_comparison_is_exact() -> None:
 
 async def test_the_creators_push_binds_their_clusters_once(world: Dict[str, Any]) -> None:
     db = await _db()
-    await integrations._upsert_synced_members(db, [_member(CREATOR, "PARTNER")], KEY, CREATOR)
+    await integrations._upsert_synced_members(db, [_member(CREATOR, "PARTNER")], KEY, CREATOR, ("ext-mine",))
     assert await _bound(db) == {"creator-cluster": 1, "victim-cluster": None}
     assert len(world["log"].calls) == 1
 
-    await integrations._upsert_synced_members(db, [_member(CREATOR, "PARTNER")], KEY, CREATOR)
+    await integrations._upsert_synced_members(db, [_member(CREATOR, "PARTNER")], KEY, CREATOR, ("ext-mine",))
     assert len(world["log"].calls) == 1, "a repeat push moves nothing, so it records nothing"
 
 
@@ -193,7 +193,7 @@ async def test_each_move_is_reported_and_a_dropped_duplicate_is_not(world: Dict[
     db.add(OrganizationCluster(organization_id=1, cluster_id="already-there"))
     db.add(OrganizationCluster(organization_id=None, cluster_id="already-there", registered_by=CREATOR))
     await db.commit()
-    await integrations._upsert_synced_members(db, [_member(CREATOR, "PARTNER")], KEY, None)
+    await integrations._upsert_synced_members(db, [_member(CREATOR, "PARTNER")], KEY, None, ("ext-mine",))
 
     moved: List[Tuple[str, Optional[int], int]] = []
     rebound = await reconcile_personal_clusters(

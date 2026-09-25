@@ -1538,6 +1538,7 @@ async def _upsert_synced_members(
     members: List["SyncMember"],
     api_key_id: str,
     key_creator: Optional[str] = None,
+    pushed_organizations: Tuple[str, ...] = (),
 ) -> tuple[int, int]:
     """
     Upsert organization members pushed from external app.
@@ -1644,13 +1645,14 @@ async def _upsert_synced_members(
 
     # Backstop reconcile: now that these members are linked to their org, bind any
     # clusters they registered while org-less. Best-effort, idempotent, per member.
-    # important: only the key's creator, and only into the one org this key claimed that this push
-    # names them in. Every pushed email used to rebind into its primary org, so a key could push
-    # another partner's email into its own org and take that partner's unbound clusters.
+    # important: only the key's creator, and only into the one org this push lists and this key
+    # claims. Every pushed email used to rebind into its primary org, so a key could push another
+    # partner's email into its own org and take that partner's unbound clusters.
     for email in upserted_emails:
         try:
             await rebind_creator_clusters(
-                db, email, members, api_key_id=api_key_id, creator=key_creator, roles=sync_svc
+                db, email, members, api_key_id=api_key_id, creator=key_creator, roles=sync_svc,
+                pushed_organizations=pushed_organizations,
             )
         except Exception as e:
             logger.warning(f"reconcile_personal_clusters failed for {email}: {e}")
@@ -2688,7 +2690,8 @@ async def sync_data(
         # ── Sync members from external app ──
         if request.members:
             members_synced, members_removed = await _upsert_synced_members(
-                db, request.members, api_key_id, creator_of(api_key)
+                db, request.members, api_key_id, creator_of(api_key),
+                tuple(o.id for o in request.organizations),
             )
             result.members_synced = members_synced
             result.members_removed = members_removed

@@ -15,7 +15,7 @@ records the side effect the real call makes.
 
 import json
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import httpx
 import pytest
@@ -157,7 +157,10 @@ async def _local_org(db: Any) -> Dict[str, int]:
     return {}
 
 
-# note: id, setup, pushes [(key id, orgs, members)], destination slug or None, count warned or None
+NAMES_NONE = "its push names 0 organizations, exactly one is required"
+
+# note: id, setup, pushes [(key id, orgs, members)], destination slug or None, count warned (or the warning's
+# own words) or None
 D15 = [
     ("own_org_as_partner", None, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("two_claimed_orgs_as_partner", None,
@@ -193,8 +196,9 @@ D15 = [
     ("another_key_pushed_the_creator_first", None,
      [(K_ATTACKER, [A], [m(C, A, "PARTNER")]), (K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("members_only_for_an_org_claimed_earlier", None,
-     [(K_PARTNER, [P], [m(CO, P, "PARTNER")]), (K_PARTNER, [], [m(C, P, "PARTNER")])], "partner", None),
-    ("members_only_for_an_inactive_claimed_org", _inactive, [(K_PARTNER, [], [m(C, P, "PARTNER")])], None, 0),
+     [(K_PARTNER, [P], [m(CO, P, "PARTNER")]), (K_PARTNER, [], [m(C, P, "PARTNER")])], None, NAMES_NONE),
+    ("members_only_for_an_inactive_claimed_org", _inactive, [(K_PARTNER, [], [m(C, P, "PARTNER")])], None,
+     NAMES_NONE),
     ("pushed_org_reactivates_an_inactive_one", _inactive, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("unclaimed_org_claimed_by_this_push", _unclaimed, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("members_only_for_an_unclaimed_org", _unclaimed, [(K_PARTNER, [], [m(C, P, "PARTNER")])], None, None),
@@ -206,7 +210,7 @@ D15 = [
 @pytest.mark.parametrize("setup, pushes, dest, warned", [c[1:] for c in D15], ids=[c[0] for c in D15])
 async def test_decision_15_destination(
     world: Dict[str, Any], caplog: pytest.LogCaptureFixture, setup: Any,  # noqa: F811
-    pushes: List[Tuple[str, List[str], List[Dict[str, Any]]]], dest: Optional[str], warned: Optional[int],
+    pushes: List[Tuple[str, List[str], List[Dict[str, Any]]]], dest: Optional[str], warned: Union[int, str, None],
 ) -> None:
     db = sqlite_session(*org_tables())
     caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
@@ -225,7 +229,8 @@ async def test_decision_15_destination(
         assert warnings == []
     else:
         (warning,) = warnings
-        assert f" {warned} organizations" in warning and (pushes[-1][0] or "") in warning
+        said = warned if isinstance(warned, str) else f" {warned} organizations"
+        assert said in warning and (pushes[-1][0] or "") in warning
 
 
 PUSHED_ROLES = [("PARTNER", True), ("partner", True), ("Partner", True), ("pArTnEr", True),
