@@ -22,6 +22,7 @@ APP = Path(__file__).resolve().parents[1] / "app"
 CAPABILITIES = APP / "core" / "api_key_capabilities.py"
 RAW_PROXY_PATH = APP / "core" / "raw_proxy_path.py"
 LIMITED_WRITES = APP / "core" / "limited_key_writes.py"
+GUEST_DATA = APP / "core" / "guest_data_export.py"
 ROUTER = APP / "routers" / "integrations.py"
 
 # Functions that take a raw-proxy path string, per file.
@@ -37,6 +38,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
     ),
     RAW_PROXY_PATH: ("assert_server_state_unchanged",),
     LIMITED_WRITES: ("assert_body_within_grant", "limited_write_plan"),
+    GUEST_DATA: ("guest_data_capability_for", "assert_guest_data_stays_inside"),
     ROUTER: ("_proxy_audit_action",),
 }
 

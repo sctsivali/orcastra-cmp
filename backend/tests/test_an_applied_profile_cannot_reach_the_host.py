@@ -126,10 +126,20 @@ async def test_a_narrow_key_cannot_apply_a_reaching_profile_through_the_raw_prox
 
 
 async def test_a_narrow_key_cannot_apply_a_reaching_profile_through_a_move() -> None:
-    outcome, session = await _raw(NARROW, "POST", "/1.0/instances/web", {"migration": True, "pool": "p2",
-                                                                          "profiles": ["priv"]})
+    # note: a move sends migration: true, which costs instance.files (core/guest_data_export.py), so
+    # the key holds it here and the limited-key rule is what refuses.
+    narrow_with_files = key(["tenant-a"], capabilities=["lxd.proxy", "instance.files"])
+    move = {"migration": True, "pool": "p2", "profiles": ["priv"]}
+
+    outcome, session = await _raw(narrow_with_files, "POST", "/1.0/instances/web", move)
     assert isinstance(outcome, HTTPException) and outcome.status_code == 403
+    assert "profile" in outcome.detail
     assert [call[0] for call in session.calls] == ["GET"]
+
+    outcome, session = await _raw(NARROW, "POST", "/1.0/instances/web", move)
+    assert isinstance(outcome, HTTPException) and outcome.status_code == 403
+    assert "instance.files" in outcome.detail
+    assert session.calls == []
 
 
 async def test_a_narrow_key_create_reads_default_and_goes_on_when_it_is_plain() -> None:

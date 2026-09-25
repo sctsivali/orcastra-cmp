@@ -96,6 +96,7 @@ from app.core.api_key_capabilities import (
 )
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
+from app.core.guest_data_export import assert_guest_data_stays_inside
 from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
 from app.core.limited_key_writes import (
     assert_body_within_grant,
@@ -3658,6 +3659,11 @@ async def raw_proxy(
         # important: server configuration and the cluster hand out trust (the OIDC issuer, a join
         # token for a new member), so writes to them are refused for every grant, `*` included.
         assert_server_state_unchanged(request.path, method)
+        # important: LXD reads body field names without regard to case, so every guard below (the
+        # guest-data price, the migration fence, the policy observer, the limited-key rules) and the
+        # request sent read this one dict, which refuses a field spelled any other way
+        # (core/api_key_body.py).
+        request = request.model_copy(update={"body": canonical_raw_proxy_body(method, request.body)})
         # important: reaching inside a guest is a different power from managing it, and this path
         # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
         # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with
@@ -3682,15 +3688,29 @@ async def raw_proxy(
                 error_message=str(refusal.detail),
             )
             raise
+        # important: a migration source, an image export and an image secret hand the guest's
+        # filesystem out whole, which /files prices one file at a time (core/guest_data_export.py).
+        # Recorded when refused, like the guest-access refusal above.
+        try:
+            assert_guest_data_stays_inside(request.path, method, request.body, api_key)
+        except HTTPException as refusal:
+            _audit_key_action(
+                api_key,
+                action=_proxy_audit_action(method, request.path),
+                target_id=request.path[:512],
+                cluster_id=request.cluster_id,
+                project=project,
+                result="failure",
+                details={"method": method, "refused": "capability_not_granted"},
+                external_user_email=request.external_user_email,
+                error_message=str(refusal.detail),
+            )
+            raise
         # important: the project check above binds the REQUEST to a granted project, which does
         # not bound a resource whose identity is itself a project name. A key granted only
         # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass
         # every check here. Same for a cluster-wide storage pool.
         assert_project_scope_allows_path(request.path, method, allowed_projects)
-        # important: LXD reads body field names without regard to case, so every guard below (the
-        # migration fence, the policy observer, the limited-key rules) and the request sent read
-        # this one dict, which refuses a field spelled any other way (core/api_key_body.py).
-        request = request.model_copy(update={"body": canonical_raw_proxy_body(method, request.body)})
         assert_body_within_grant(request.path, method, request.body, allowed_projects)
 
         required_permission = "read"
