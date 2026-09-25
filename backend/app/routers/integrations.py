@@ -1571,10 +1571,13 @@ async def _upsert_synced_members(
             # key that owns nothing could name another integration's org and rewrite its
             # members, which pushes a global Authentik role change for those emails. Same
             # ownership rule as the organisation upsert above.
-            if org.api_key_id and org.api_key_id != api_key_id:
+            # important: strict for an unclaimed org too, like the policy sync. A key writes the
+            # members of an org only after its organisation push claimed it, which a normal sync
+            # does in the same request before this runs.
+            if org.api_key_id != api_key_id:
                 logger.warning(
                     "Refusing member sync into organization %s: owned by api key %s, caller is %s",
-                    org.slug, org.api_key_id, api_key_id,
+                    org.slug, org.api_key_id or "<none>", api_key_id,
                 )
                 continue
 
