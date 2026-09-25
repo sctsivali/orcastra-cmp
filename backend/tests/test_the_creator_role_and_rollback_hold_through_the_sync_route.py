@@ -3,13 +3,15 @@
 Decision 14 runs the real AuthentikSyncService against Authentik's HTTP answers: every group the
 request path resolves to Admin never rebinds, and every answer that does not confirm a role is
 unknown and never rebinds. The rollback cases refuse a later cluster in the share audit. The
-OrcaHub cases send the body orcastra.service.js syncOrcastraClustersUnlocked builds.
+OrcaHub cases send the body orcastra.service.js syncOrcastraClustersUnlocked builds: with a buyer
+org in it the key claims two orgs and nothing binds (decision 19), with the seller org alone the
+partner's clusters bind into it.
 """
 
 import ast
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import anyio
 import httpx
@@ -38,7 +40,6 @@ from tests.test_a_push_rebinds_only_into_the_org_its_key_claimed import (
     K_PARTNER,
     bound,
     key,
-    org_id,
     personal_cluster,
     world,  # noqa: F401
 )
@@ -257,16 +258,18 @@ async def test_a_partial_rebind_leaves_nothing_and_the_next_push_moves_all(
 # note: OrcaHub v1.32.0's own sync body
 
 SELLER, BUYER_ORG = "5b0c7a4e-0d7c-4f6e-9a57-1c3f0b8e2d11", "9e1f5d2a-4b6c-4c8d-8e0f-2a3b4c5d6e7f"
+HUB_ORGS = {
+    SELLER: {"id": SELLER, "name": "Acme Cloud", "slug": "acme-cloud", "description": None},
+    BUYER_ORG: {"id": BUYER_ORG, "name": "Buyer Co", "slug": "buyer-co", "description": "bought a plan"},
+}
 
 
-def orcahub_body(members: List[Dict[str, Any]], app_url: Any = "https://hub.example.test") -> Dict[str, Any]:
+def orcahub_body(members: List[Dict[str, Any]], app_url: Any = "https://hub.example.test",
+                 orgs: Tuple[str, ...] = (SELLER, BUYER_ORG)) -> Dict[str, Any]:
     """orcastra.client.js sync(): axios drops app_url when it is undefined."""
     sent: Dict[str, Any] = {
         "include_clusters": True, "include_projects": True,
-        "organizations": [
-            {"id": SELLER, "name": "Acme Cloud", "slug": "acme-cloud", "description": None},
-            {"id": BUYER_ORG, "name": "Buyer Co", "slug": "buyer-co", "description": "bought a plan"},
-        ],
+        "organizations": [HUB_ORGS[ext] for ext in orgs],
         "members": members,
     }
     if app_url is not None:
@@ -293,21 +296,31 @@ def onboarding(world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[s
     return {**world, "vault": vault, "lookups": lookups}
 
 
+def assert_nothing_bound_and_warned(caplog: pytest.LogCaptureFixture, onboarding: Dict[str, Any],
+                                    clusters: Dict[str, Optional[int]]) -> None:
+    assert all(org is None for org in clusters.values())
+    assert onboarding["shares"] == [] and onboarding["log"].calls == []
+    (warning,) = rebind_warnings(caplog)
+    assert K_PARTNER in warning and "it claims 2 organizations" in warning and "@" not in warning
+
+
 ONBOARD = [
     ("partner_and_buyer", [hub(C, SELLER, "PARTNER"), hub(FOUNDER, BUYER_ORG, "PARTNER"),
-                           hub("buyer@example.test", BUYER_ORG, "USER")], "https://hub.example.test", "acme-cloud"),
-    ("no_app_url", [hub(C, SELLER, "PARTNER"), hub(FOUNDER, BUYER_ORG, "PARTNER")], None, "acme-cloud"),
+                           hub("buyer@example.test", BUYER_ORG, "USER")], "https://hub.example.test"),
+    ("no_app_url", [hub(C, SELLER, "PARTNER"), hub(FOUNDER, BUYER_ORG, "PARTNER")], None),
     ("seller_added_as_user_in_a_buyer_org", [hub(C, SELLER, "PARTNER"), hub(C, BUYER_ORG, "USER"),
-                                             hub(FOUNDER, BUYER_ORG, "PARTNER")], None, "acme-cloud"),
+                                             hub(FOUNDER, BUYER_ORG, "PARTNER")], None),
     ("seller_org_with_a_tenant", [hub(C, SELLER, "PARTNER"), hub("t@example.test", SELLER, "TENANT"),
-                                  hub(FOUNDER, BUYER_ORG, "PARTNER")], None, "acme-cloud"),
+                                  hub(FOUNDER, BUYER_ORG, "PARTNER")], None),
 ]
 
 
-@pytest.mark.parametrize("members, app_url, dest", [c[1:] for c in ONBOARD], ids=[c[0] for c in ONBOARD])
-async def test_orcahubs_sync_body_binds_the_partner_into_its_own_org(
-    onboarding: Dict[str, Any], members: List[Dict[str, Any]], app_url: Any, dest: str,
+@pytest.mark.parametrize("members, app_url", [c[1:] for c in ONBOARD], ids=[c[0] for c in ONBOARD])
+async def test_orcahubs_sync_body_with_a_buyer_org_binds_nothing(
+    onboarding: Dict[str, Any], caplog: pytest.LogCaptureFixture, members: List[Dict[str, Any]], app_url: Any,
 ) -> None:
+    """The seller's key claims the buyer org too, so it claims two orgs. The partner binds from the dashboard."""
+    caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "c-cluster", C)
     await personal_cluster(db, "founder-cluster", FOUNDER)
@@ -315,8 +328,35 @@ async def test_orcahubs_sync_body_binds_the_partner_into_its_own_org(
     response = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)
     assert response.status_code == 200, response.text
     assert (response.json()["organizations_synced"], response.json()["members_synced"]) == (2, len(members))
-    assert (await bound(db))["founder-cluster"] is None
-    await assert_bound_to(db, onboarding, dest)
+    assert_nothing_bound_and_warned(caplog, onboarding, await bound(db))
+    stored = _FakeVault._path(K_PARTNER, "metadata")
+    assert [w[1].get("app_url") for w in onboarding["vault"].writes if w[0] == stored] == ([app_url] if app_url else [])
+    assert onboarding["lookups"] == (["hub.example.test"] if app_url else [])
+
+    again = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)
+    assert again.status_code == 200 and onboarding["log"].calls == []
+    assert (await bound(db)) == {"c-cluster": None, "founder-cluster": None}
+
+
+SELLER_ALONE = [
+    ("partner_only", [hub(C, SELLER, "PARTNER")], "https://hub.example.test"),
+    ("no_app_url", [hub(C, SELLER, "PARTNER")], None),
+    ("with_a_tenant", [hub(C, SELLER, "PARTNER"), hub("t@example.test", SELLER, "TENANT")], None),
+    ("with_a_user", [hub("u@example.test", SELLER, "USER"), hub(C, SELLER, "PARTNER")], "https://hub.example.test"),
+]
+
+
+@pytest.mark.parametrize("members, app_url", [c[1:] for c in SELLER_ALONE], ids=[c[0] for c in SELLER_ALONE])
+async def test_orcahubs_sync_body_with_the_seller_org_alone_binds_into_it(
+    onboarding: Dict[str, Any], members: List[Dict[str, Any]], app_url: Any,
+) -> None:
+    db = sqlite_session(*org_tables())
+    await personal_cluster(db, "c-cluster", C)
+    sent = orcahub_body(members, app_url, orgs=(SELLER,))
+    response = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)
+    assert response.status_code == 200, response.text
+    assert (response.json()["organizations_synced"], response.json()["members_synced"]) == (1, len(members))
+    await assert_bound_to(db, onboarding, "acme-cloud")
     stored = _FakeVault._path(K_PARTNER, "metadata")
     assert [w[1].get("app_url") for w in onboarding["vault"].writes if w[0] == stored] == ([app_url] if app_url else [])
     assert onboarding["lookups"] == (["hub.example.test"] if app_url else [])
@@ -325,30 +365,34 @@ async def test_orcahubs_sync_body_binds_the_partner_into_its_own_org(
     assert again.status_code == 200 and len(onboarding["log"].calls) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT: a buyer org naming the seller's creator as PARTNER is a destination")
 async def test_a_buyer_org_naming_the_sellers_creator_as_partner_is_never_the_destination(
-    onboarding: Dict[str, Any],
+    onboarding: Dict[str, Any], caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Round 1d: 'a buyer org naming the seller's creator is never a destination'. OrcaHub lets a buyer
-    org's PARTNER add any existing user as PARTNER (members.js invite, organizationRoleSchema)."""
+    """OrcaHub lets a buyer org's PARTNER add any existing user as PARTNER (members.js invite,
+    organizationRoleSchema). With the creator absent from the seller's roster the buyer org was the
+    one destination. The key claims both orgs, so nothing binds."""
+    caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "c-cluster", C)
     sent = orcahub_body([hub(FOUNDER, SELLER, "PARTNER"), hub(FOUNDER, BUYER_ORG, "PARTNER"),
                          hub(C, BUYER_ORG, "PARTNER")], None)
     assert (await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)).status_code == 200
-    assert (await bound(db))["c-cluster"] != await org_id(db, "buyer-co")
+    assert_nothing_bound_and_warned(caplog, onboarding, await bound(db))
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT: a buyer org naming the creator as PARTNER blocks the seller's rebind")
-async def test_a_buyer_org_naming_the_sellers_creator_as_partner_does_not_block_the_own_org(
-    onboarding: Dict[str, Any],
+@pytest.mark.parametrize("in_buyer_org", ["PARTNER", "USER", None])
+async def test_a_key_that_also_claims_a_buyer_org_binds_nothing_into_its_own(
+    onboarding: Dict[str, Any], caplog: pytest.LogCaptureFixture, in_buyer_org: Optional[str],
 ) -> None:
+    """The creator is a partner in the seller org. The key claims the buyer org too, so nothing binds
+    whether the buyer org names the creator PARTNER, USER or not at all: the buyer decides nothing."""
+    caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "c-cluster", C)
-    sent = orcahub_body([hub(C, SELLER, "PARTNER"), hub(FOUNDER, BUYER_ORG, "PARTNER"),
-                         hub(C, BUYER_ORG, "PARTNER")], None)
+    named = [hub(C, BUYER_ORG, in_buyer_org)] if in_buyer_org else []
+    sent = orcahub_body([hub(C, SELLER, "PARTNER"), hub(FOUNDER, BUYER_ORG, "PARTNER"), *named], None)
     assert (await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)).status_code == 200
-    assert (await bound(db))["c-cluster"] == await org_id(db, "acme-cloud")
+    assert_nothing_bound_and_warned(caplog, onboarding, await bound(db))
 
 
 # note: no other surface reaches the rebind or the key edits

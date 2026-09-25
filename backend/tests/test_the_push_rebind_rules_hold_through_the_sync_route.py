@@ -1,10 +1,12 @@
 """The push rebind rules, sent through the real POST /api/v1/integrations/sync route.
 
-Decision 15: the one destination is an active org this key claimed, that this push names with the
-creator as a partner (pushed role and stored row), read back after the member writes. Decision 14:
-a creator the dashboard resolves to Admin, or whose role Authentik cannot confirm, never rebinds.
-A rebind that fails partway leaves nothing. OrcaHub v1.32.0's own sync body still binds the
-partner into its own org.
+Decision 19: the key must claim exactly one org after the push, active or not, so a key that also
+claims a buyer org rebinds nothing and the warning names the key id and the count. Decision 15:
+that org is the destination only while it is active and this push names the creator a partner
+there (pushed role and stored row), read back after the member writes. Decision 14: a creator the
+dashboard resolves to Admin, or whose role Authentik cannot confirm, never rebinds. A rebind that
+fails partway leaves nothing. OrcaHub v1.32.0's sync body binds the partner into its own org only
+while the key holds no buyer org.
 
 Every case asserts the status, the detail, the rebind record, what reached the share audit (the
 call that reads the cluster), and the committed binding. The fakes are the existing ones, and each
@@ -129,7 +131,7 @@ async def assert_unmoved(db: Any, world: Dict[str, Any], cluster: str = "c-clust
     assert world["shares"] == [] and world["log"].calls == []
 
 
-# note: decision 15: the destination
+# note: decisions 15 and 19: the destination
 
 async def _inactive(db: Any) -> Dict[str, int]:
     return {P: await claimed(db, P, active=False)}
@@ -137,6 +139,14 @@ async def _inactive(db: Any) -> Dict[str, int]:
 
 async def _unclaimed(db: Any) -> Dict[str, int]:
     return {P: await claimed(db, P, owner=None)}
+
+
+async def _inactive_second(db: Any) -> Dict[str, int]:
+    return {Q: await claimed(db, Q, active=False)}
+
+
+async def _unclaimed_second(db: Any) -> Dict[str, int]:
+    return {Q: await claimed(db, Q, owner=None, rows=[(C, "partner")])}
 
 
 async def _local_org(db: Any) -> Dict[str, int]:
@@ -147,21 +157,33 @@ async def _local_org(db: Any) -> Dict[str, int]:
     return {}
 
 
-# note: id, setup, pushes [(key id, orgs, members)], destination slug or None, candidate count warned or None
+# note: id, setup, pushes [(key id, orgs, members)], destination slug or None, count warned or None
 D15 = [
     ("own_org_as_partner", None, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("two_claimed_orgs_as_partner", None,
      [(K_PARTNER, [P, Q], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")])], None, 2),
     ("partner_in_own_user_in_buyer", None,
-     [(K_PARTNER, [P, B], [m(C, P, "PARTNER"), m(C, B, "USER"), m(FOUNDER, B, "PARTNER")])], "partner", None),
-    ("user_in_a_buyer_org_only", None, [(K_PARTNER, [P, B], [m(CO, P, "PARTNER"), m(C, B, "USER")])], None, 0),
+     [(K_PARTNER, [P, B], [m(C, P, "PARTNER"), m(C, B, "USER"), m(FOUNDER, B, "PARTNER")])], None, 2),
+    ("user_in_a_buyer_org_only", None, [(K_PARTNER, [P, B], [m(CO, P, "PARTNER"), m(C, B, "USER")])], None, 2),
+    ("buyer_org_names_the_creator_as_partner", None,
+     [(K_PARTNER, [P, B], [m(FOUNDER, P, "PARTNER"), m(FOUNDER, B, "PARTNER"), m(C, B, "PARTNER")])], None, 2),
+    ("partner_in_own_and_in_a_buyer_org", None,
+     [(K_PARTNER, [P, B], [m(C, P, "PARTNER"), m(C, B, "PARTNER"), m(FOUNDER, B, "PARTNER")])], None, 2),
+    ("buyer_org_claimed_by_an_earlier_push", None,
+     [(K_PARTNER, [B], [m(FOUNDER, B, "PARTNER")]), (K_PARTNER, [P], [m(C, P, "PARTNER")])], None, 2),
+    ("inactive_org_claimed_earlier", _inactive_second, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], None, 2),
+    ("inactive_own_org_beside_a_buyer_naming_the_creator", _inactive,
+     [(K_PARTNER, [B], [m(FOUNDER, B, "PARTNER"), m(C, B, "PARTNER")])], None, 2),
+    ("unclaimed_org_does_not_count", _unclaimed_second, [(K_PARTNER, [P], [m(C, P, "PARTNER")])], "partner", None),
     ("removed_later_in_the_same_push", None,
-     [(K_PARTNER, [P, Q], [m(C, P, "PARTNER"), m(C, Q, "PARTNER"), m(C, Q, "PARTNER", "remove")])], "partner", None),
+     [(K_PARTNER, [P, Q], [m(C, P, "PARTNER"), m(C, Q, "PARTNER"), m(C, Q, "PARTNER", "remove")])], None, 2),
     ("removed_from_its_only_org", None,
      [(K_PARTNER, [P], [m(C, P, "PARTNER"), m(C, P, "PARTNER", "remove")])], None, 0),
     ("remove_in_capitals_is_an_upsert_on_both_sides", None,
      [(K_PARTNER, [P, Q], [m(C, P, "PARTNER"), m(C, Q, "PARTNER"), m(C, Q, "PARTNER", "REMOVE")])], None, 2),
     ("partner_then_user_in_one_org", None, [(K_PARTNER, [P], [m(C, P, "PARTNER"), m(C, P, "USER")])], None, 0),
+    ("partner_then_user_beside_another_partner", None,
+     [(K_PARTNER, [P], [m(CO, P, "PARTNER"), m(C, P, "PARTNER"), m(C, P, "USER")])], None, 0),
     ("user_then_partner_in_one_org", None, [(K_PARTNER, [P], [m(C, P, "USER"), m(C, P, "PARTNER")])], "partner", None),
     ("org_another_key_claimed", None,
      [(K_ATTACKER, [A], [m(ATTACKER, A, "PARTNER")]), (K_PARTNER, [A], [m(C, A, "PARTNER")])], None, None),
@@ -227,48 +249,73 @@ async def test_decision_15_pushed_role_spellings(world: Dict[str, Any], role: st
 
 
 class FailingMemberWrites(AsyncSessionFacade):
-    """The database refuses a commit carrying a member write or delete for one of `refused` (org id, email)."""
+    """The database refuses a commit carrying one of `refused` (org id, email, role written or "delete")."""
 
-    def __init__(self, db: AsyncSessionFacade, refused: Set[Tuple[int, str]]) -> None:
+    def __init__(self, db: AsyncSessionFacade, refused: Set[Tuple[int, str, str]]) -> None:
         super().__init__(db.sync)
         self.refused = refused
-        self.refusals: List[Tuple[int, str]] = []
+        self.refusals: List[Tuple[int, str, str]] = []
 
     async def commit(self) -> None:
-        touched = [*self.sync.new, *self.sync.dirty, *self.sync.deleted]
-        pending = [o for o in touched if isinstance(o, OrganizationMember)]
-        hit = [(o.organization_id, o.user_email) for o in pending if (o.organization_id, o.user_email) in self.refused]
+        pending = [(o, o.role) for o in [*self.sync.new, *self.sync.dirty] if isinstance(o, OrganizationMember)]
+        pending += [(o, "delete") for o in self.sync.deleted if isinstance(o, OrganizationMember)]
+        hit = [(o.organization_id, o.user_email, what) for o, what in pending]
+        hit = [h for h in hit if h in self.refused]
         if hit:
             self.refusals.extend(hit)
             raise RuntimeError("the database refused the member write")
         self.sync.commit()
 
 
-# note: id, rows before the push (org, email, role), members pushed, org whose write of the creator fails, destination
+# note: id, orgs the key claimed, rows before the push (org, email, role), members pushed, the creator's
+# write that fails (org, role or "delete"), destination, count warned. With two claimed orgs a failed write
+# never leaves one destination (decision 19). With one, the rows read back decide (decision 15).
 READ_BACK = [
-    ("second_org_member_write_failed", [], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")], Q, "partner"),
-    ("second_org_write_failed_beside_another_partner", [(Q, CO, "partner")],
-     [m(C, P, "PARTNER"), m(C, Q, "PARTNER")], Q, "partner"),
-    ("stale_partner_row_update_to_user_failed", [(P, C, "partner")],
-     [m(C, P, "USER"), m(C, Q, "PARTNER")], P, "second"),
-    ("tenant_row_update_to_partner_failed", [(P, C, "tenant")], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")], P, "second"),
-    ("failed_remove_is_still_no_destination", [(Q, C, "partner")],
-     [m(C, P, "PARTNER"), m(C, Q, "PARTNER", "remove")], Q, "partner"),
+    ("second_org_member_write_failed", [P, Q], [], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")],
+     (Q, "partner"), None, 2),
+    ("second_org_write_failed_beside_another_partner", [P, Q], [(Q, CO, "partner")],
+     [m(C, P, "PARTNER"), m(C, Q, "PARTNER")], (Q, "partner"), None, 2),
+    ("stale_partner_row_update_to_user_failed", [P, Q], [(P, C, "partner")],
+     [m(C, P, "USER"), m(C, Q, "PARTNER")], (P, "tenant"), None, 2),
+    ("tenant_row_update_to_partner_failed", [P, Q], [(P, C, "tenant")], [m(C, P, "PARTNER"), m(C, Q, "PARTNER")],
+     (P, "partner"), None, 2),
+    ("failed_remove_is_still_no_destination", [P, Q], [(Q, C, "partner")],
+     [m(C, P, "PARTNER"), m(C, Q, "PARTNER", "remove")], (Q, "delete"), None, 2),
+    ("only_org_partner_write_failed_then_user_landed", [P], [], [m(C, P, "PARTNER"), m(C, P, "USER")],
+     (P, "partner"), None, 0),
+    ("only_org_partner_write_failed_beside_another_partner", [P], [(P, CO, "partner")],
+     [m(C, P, "PARTNER"), m(C, P, "USER")], (P, "partner"), None, 0),
+    ("only_org_tenant_row_update_to_partner_failed", [P], [(P, C, "tenant")], [m(C, P, "PARTNER"), m(C, P, "USER")],
+     (P, "partner"), None, 0),
+    ("only_org_the_one_write_failed", [P], [], [m(C, P, "PARTNER")], (P, "partner"), None, None),
 ]
 
 
-@pytest.mark.parametrize("rows, members, failing, dest", [c[1:] for c in READ_BACK], ids=[c[0] for c in READ_BACK])
+@pytest.mark.parametrize("claims, rows, members, failing, dest, warned", [c[1:] for c in READ_BACK],
+                         ids=[c[0] for c in READ_BACK])
 async def test_decision_15_reads_the_member_rows_back(
-    world: Dict[str, Any], rows: List[Tuple[str, str, str]], members: List[Dict[str, Any]],  # noqa: F811
-    failing: str, dest: str,
+    world: Dict[str, Any], caplog: pytest.LogCaptureFixture, claims: List[str],  # noqa: F811
+    rows: List[Tuple[str, str, str]], members: List[Dict[str, Any]], failing: Tuple[str, str],
+    dest: Optional[str], warned: Optional[int],
 ) -> None:
+    caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
     base = sqlite_session(*org_tables())
-    ids = {e: await claimed(base, e, rows=[(who, r) for o, who, r in rows if o == e]) for e in (P, Q)}
-    db = FailingMemberWrites(base, {(ids[failing], C)})
+    ids = {e: await claimed(base, e, rows=[(who, r) for o, who, r in rows if o == e]) for e in claims}
+    refused = (ids[failing[0]], C, failing[1])
+    db = FailingMemberWrites(base, {refused})
     await personal_cluster(db, "c-cluster", C)
     assert (await push(db, K_PARTNER, [], members)).status_code == 200
-    assert db.refusals == [(ids[failing], C)]
-    await assert_bound_to(db, world, dest)
+    assert db.refusals == [refused]
+    if dest is None:
+        await assert_unmoved(db, world)
+    else:
+        await assert_bound_to(db, world, dest)
+    warnings = rebind_warnings(caplog)
+    if warned is None:
+        assert warnings == []
+    else:
+        (warning,) = warnings
+        assert f" {warned} organizations" in warning and K_PARTNER in warning and "@" not in warning
 
 
 # note: who triggers a rebind

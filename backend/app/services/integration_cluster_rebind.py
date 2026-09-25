@@ -11,14 +11,20 @@ triggers no rebind, and neither does a key without a creator or an add-on creden
 rebind is recorded with the cluster, the organization it left, the one it joined and the key id.
 Nothing else of the key reaches the record.
 
-The destination is an organization this key claimed (organizations.api_key_id is the key) that
-this push names with the creator as a partner: the pushed role maps to partner the way the member
-sync maps it, and the membership row read back holds partner. It is not the creator's primary
-organization from org_scope: that ordering puts any organization where the creator is a partner
-first, so another key could push the creator into its own older organization and choose where the
-creator's next rebind lands. A buyer organization is no destination either. In OrcaHub its own
-partner can add the seller's creator with any role, and the seller's push carries every member of
-every buyer organization. Zero or several destinations rebind nothing.
+The key must claim exactly one organization after the push: organizations.api_key_id is the key,
+active or not. A seller's key also claims every buyer organization it syncs or provisions, and
+the pushed role cannot tell the seller's organization from a buyer's. In OrcaHub a buyer
+organization's partner can add the seller's creator as PARTNER, and the seller's push carries
+every member of every buyer organization. So a key holding more than one organization rebinds
+nothing and logs its id and the count, and the partner binds those clusters from the dashboard.
+A buyer then can neither choose the destination nor block it.
+
+The destination is that one organization, if it is active and this push names the creator a
+partner there: the pushed role maps to partner the way the member sync maps it, and the
+membership row read back holds partner. It is not the creator's primary organization from
+org_scope: that ordering puts any organization where the creator is a partner first, so another
+key could push the creator into its own older organization and choose where the creator's next
+rebind lands.
 
 A creator the dashboard resolves to Admin never rebinds: role_admin, or any other group rbac.py
 maps to Admin. Their key may be held by an integration they do not run, and an Admin's personal
@@ -37,7 +43,7 @@ that same login, so another spelling would find no row to move anyway.
 import logging
 from typing import Any, List, Mapping, Optional, Protocol, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.org_scope import reconcile_personal_clusters
@@ -89,6 +95,22 @@ async def _has_unbound_clusters(db: AsyncSession, email: str) -> bool:
         ).limit(1)
     )).first()
     return row is not None
+
+
+async def claimed_organization_count(db: AsyncSession, api_key_id: str) -> int:
+    """How many organizations this key claimed, active or not.
+
+    note: an inactive organization counts. It keeps its api_key_id, this key's next push naming it
+    makes it active again, and no dashboard path switches one off, so it is still a party the key
+    serves. Leaving it out would make a buyer organization the key's only one whenever the seller's
+    own organization is inactive, and the buyer could then name the creator into it.
+    """
+    if not api_key_id:
+        return 0
+    counted = await db.execute(
+        select(func.count()).select_from(Organization).where(Organization.api_key_id == api_key_id)
+    )
+    return int(counted.scalar_one())
 
 
 async def claimed_destinations(
@@ -167,10 +189,18 @@ async def rebind_creator_clusters(
     creator: Optional[str],
     roles: CurrentRoleReader,
 ) -> int:
-    """Bind the creator's unbound clusters to the one organization this push names them in."""
+    """Bind the creator's unbound clusters to the one organization this key claims."""
     if not may_rebind(email, creator):
         return 0
     if not await _has_unbound_clusters(db, email):
+        return 0
+    claimed = await claimed_organization_count(db, api_key_id)
+    if claimed != 1:
+        logger.warning(
+            "Integration key %s rebinds no personal cluster: it claims %d organizations, "
+            "exactly one is required",
+            api_key_id, claimed,
+        )
         return 0
     destinations = await claimed_destinations(db, members, email=email, api_key_id=api_key_id)
     if len(destinations) != 1:

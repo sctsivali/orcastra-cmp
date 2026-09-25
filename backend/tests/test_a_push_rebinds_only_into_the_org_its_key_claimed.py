@@ -4,8 +4,9 @@ The creator rule decided who triggers a rebind, not where the clusters go. The d
 the creator's primary org from org_scope, which puts any org where they are a partner first and
 then sorts by id. So another key could push the creator as a partner into its own older org, and
 the creator's own onboarding push later moved their clusters there. The destination is now an org
-this key claimed (organizations.api_key_id) that this push names with the creator as a partner,
-and there must be exactly one.
+this key claimed (organizations.api_key_id) that this push names with the creator as a partner.
+The key must claim exactly one org after the push, so a key that also claims a buyer org binds
+nothing (test_a_push_rebinds_only_while_its_key_claims_one_org).
 """
 
 import inspect
@@ -147,24 +148,39 @@ async def test_another_key_cannot_choose_where_the_creators_own_push_rebinds(wor
     assert call["details"]["to_organization_id"] == own and call["details"]["api_key_id"] == K_PARTNER
 
 
-async def test_orcahubs_onboarding_push_binds_the_partner_into_its_own_org(world: Dict[str, Any]) -> None:
-    """The partner's org and a buyer org, each with its members, in one push, as OrcaHub sends it."""
+async def test_orcahubs_onboarding_push_of_the_partner_org_alone_binds_into_it(world: Dict[str, Any]) -> None:
+    """The partner's own org and its members, as OrcaHub sends it before the partner has a buyer."""
+    db = sqlite_session(*org_tables())
+    await personal_cluster(db, "partner-cluster", PARTNER)
+    onboarding = body([org("cm-partner", "partner")], [member(PARTNER, "cm-partner", "PARTNER")])
+    result = await push(db, key(K_PARTNER, PARTNER), onboarding)
+    assert (result.organizations_synced, result.members_synced) == (1, 1)
+    own = await org_id(db, "partner")
+    assert (await bound(db))["partner-cluster"] == own
+    assert world["shares"] == [("partner-cluster", own)]
+    assert [c["details"]["to_organization_id"] for c in world["log"].calls] == [own]
+
+    await push(db, key(K_PARTNER, PARTNER), onboarding)
+    assert len(world["log"].calls) == 1, "the scheduled re-push moves nothing"
+
+
+async def test_orcahubs_push_of_the_partner_org_and_a_buyer_org_binds_nothing(
+    world: Dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The same key claims the buyer org, so it claims two orgs and neither is known to be the partner's."""
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "partner-cluster", PARTNER)
     await personal_cluster(db, "buyer-cluster", BUYER)
+    caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
     result = await push(db, key(K_PARTNER, PARTNER), body(
         [org("cm-partner", "partner"), org("cm-buyer", "buyer")],
         [member(PARTNER, "cm-partner", "PARTNER"), member(BUYER, "cm-buyer", "USER")],
     ))
     assert (result.organizations_synced, result.members_synced) == (2, 2)
-    assert await bound(db) == {"partner-cluster": await org_id(db, "partner"), "buyer-cluster": None}
-    assert len(world["log"].calls) == 1
-
-    await push(db, key(K_PARTNER, PARTNER), body(
-        [org("cm-partner", "partner"), org("cm-buyer", "buyer")],
-        [member(PARTNER, "cm-partner", "PARTNER"), member(BUYER, "cm-buyer", "USER")],
-    ))
-    assert len(world["log"].calls) == 1, "the scheduled re-push moves nothing"
+    assert await bound(db) == {"partner-cluster": None, "buyer-cluster": None}
+    assert world["shares"] == [] and world["log"].calls == []
+    (warning,) = [r.getMessage() for r in caplog.records if r.name == integration_cluster_rebind.__name__]
+    assert K_PARTNER in warning and " 2 organizations" in warning and "@" not in warning
 
 
 async def test_the_primary_org_ordering_is_not_consulted(
@@ -228,7 +244,7 @@ async def test_zero_claimed_orgs_naming_the_creator_rebind_nothing(
     assert moved == 0 and (await bound(db))["partner-cluster"] is None
     assert world["shares"] == [] and world["log"].calls == []
     (warning,) = [r for r in caplog.records if r.name == integration_cluster_rebind.__name__]
-    assert K_PARTNER in warning.getMessage() and " 0 organizations" in warning.getMessage()
+    assert K_PARTNER in warning.getMessage() and "it claims 0 organizations" in warning.getMessage()
 
 
 async def test_nothing_to_move_asks_for_no_destination(
@@ -245,14 +261,15 @@ async def test_nothing_to_move_asks_for_no_destination(
 
 
 async def test_a_remove_in_the_same_push_is_not_a_destination(world: Dict[str, Any]) -> None:
+    """The key's only org names the creator a partner and then removes them, so no row reads back."""
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "partner-cluster", PARTNER)
     await push(db, key(K_PARTNER, PARTNER), body(
-        [org("ext-p", "partner"), org("ext-q", "second")],
-        [member(PARTNER, "ext-p", "PARTNER"), member(PARTNER, "ext-q", "PARTNER"),
-         {**member(PARTNER, "ext-q", "PARTNER"), "action": "remove"}],
+        [org("ext-p", "partner")],
+        [member(PARTNER, "ext-p", "PARTNER"), {**member(PARTNER, "ext-p", "PARTNER"), "action": "remove"}],
     ))
-    assert (await bound(db))["partner-cluster"] == await org_id(db, "partner")
+    assert (await bound(db))["partner-cluster"] is None
+    assert world["shares"] == [] and world["log"].calls == []
 
 
 async def test_an_inactive_claimed_org_is_not_a_destination(world: Dict[str, Any]) -> None:
@@ -320,13 +337,14 @@ def test_the_directory_fake_refuses_role_admin_like_the_real_writer() -> None:
 
 # ── the creator must be a partner in the destination ───────────────────────────────────────────
 
-@pytest.mark.parametrize("role", ["USER", "TENANT", "user", "OWNER", " PARTNER"])
-async def test_a_buyer_org_naming_the_creator_below_partner_is_no_destination(
+@pytest.mark.parametrize("role", ["PARTNER", "USER", "TENANT", "user", "OWNER", " PARTNER"])
+async def test_a_buyer_org_naming_the_creator_with_any_role_binds_nothing(
     world: Dict[str, Any], caplog: pytest.LogCaptureFixture, role: str
 ) -> None:
-    """A buyer org's own partner can add the seller's creator with any role, and the seller's push
-    carries every member of every buyer org. With the creator absent from the seller's roster the
-    buyer org was the one destination. The member sync stores each of these roles as tenant."""
+    """A buyer org's own partner can add the seller's creator with any role, PARTNER included, and
+    the seller's push carries every member of every buyer org. With the creator absent from the
+    seller's roster the buyer org was the one destination. The key claims both orgs now, so nothing
+    binds whatever role the buyer org gave."""
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "partner-cluster", PARTNER)
     caplog.set_level(logging.WARNING, logger=integration_cluster_rebind.__name__)
@@ -337,28 +355,28 @@ async def test_a_buyer_org_naming_the_creator_below_partner_is_no_destination(
     ))
     stored = (await db.execute(select(OrganizationMember.role).where(
         OrganizationMember.user_email == PARTNER))).scalars().all()
-    assert stored == ["tenant"]
+    assert stored == [stored_member_role(role)]
     assert (await bound(db))["partner-cluster"] is None
     assert world["shares"] == [] and world["log"].calls == []
-    (warning,) = [r for r in caplog.records if r.name == integration_cluster_rebind.__name__]
-    assert K_PARTNER in warning.getMessage() and " 0 organizations" in warning.getMessage()
+    (warning,) = [r.getMessage() for r in caplog.records if r.name == integration_cluster_rebind.__name__]
+    assert K_PARTNER in warning and " 2 organizations" in warning and "@" not in warning
 
 
-async def test_a_partner_in_its_own_org_and_a_user_in_a_buyer_org_binds_into_its_own(
-    world: Dict[str, Any],
+@pytest.mark.parametrize("role", ["USER", "PARTNER"])
+async def test_a_partner_in_its_own_org_and_in_a_buyer_org_binds_nothing(
+    world: Dict[str, Any], role: str,
 ) -> None:
-    """Both orgs used to count, so two candidates rebound nothing. The buyer org is no candidate now."""
+    """The creator is a partner in the key's own org. The buyer org names them too and is claimed by
+    the same key, so the key claims two orgs and nothing binds, whichever role the buyer org gave."""
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "partner-cluster", PARTNER)
     await push(db, key(K_PARTNER, PARTNER), body(
         [org("cm-partner", "partner"), org("cm-buyer", "buyer")],
-        [member(PARTNER, "cm-partner", "PARTNER"), member(PARTNER, "cm-buyer", "USER"),
+        [member(PARTNER, "cm-partner", "PARTNER"), member(PARTNER, "cm-buyer", role),
          member(BUYER, "cm-buyer", "USER")],
     ))
-    own = await org_id(db, "partner")
-    assert (await bound(db))["partner-cluster"] == own
-    assert world["shares"] == [("partner-cluster", own)]
-    assert [c["details"]["to_organization_id"] for c in world["log"].calls] == [own]
+    assert (await bound(db))["partner-cluster"] is None
+    assert world["shares"] == [] and world["log"].calls == []
 
 
 @pytest.mark.parametrize("role", ["PARTNER", "partner", "Partner"])
