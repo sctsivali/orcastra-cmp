@@ -7,7 +7,6 @@ Supports integration with Orcahub and other external applications (soon with Orc
 import asyncio
 import secrets
 import hashlib
-from urllib.parse import unquote, urlsplit
 import hmac
 import logging
 import threading
@@ -89,6 +88,7 @@ from app.core.api_key_capabilities import (
     granted_capabilities,
 )
 from app.core import build_identity
+from app.core.raw_proxy_path import canonical_proxy_path
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
@@ -576,12 +576,7 @@ def _raw_proxy_fenced_write_target(request: RawProxyRequest) -> Optional[str]:
     if method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
 
-    parsed = urlsplit(request.path)
-    if parsed.scheme or parsed.netloc or parsed.fragment:
-        return None
-    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
-    if segments and segments[0] == "1.0":
-        segments = segments[1:]
+    segments = list(canonical_proxy_path(request.path).segments)
     if not segments or segments[0] not in {
         "instances",
         "containers",
@@ -612,12 +607,7 @@ def _raw_proxy_fenced_project(request: RawProxyRequest, ambient_project: str) ->
     if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
 
-    parsed = urlsplit(request.path)
-    if parsed.scheme or parsed.netloc or parsed.fragment:
-        return None
-    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
-    if segments and segments[0] == "1.0":
-        segments = segments[1:]
+    segments = list(canonical_proxy_path(request.path).segments)
     if not segments:
         return None
 
@@ -653,12 +643,7 @@ def _raw_proxy_has_cluster_wide_write(request: RawProxyRequest) -> bool:
     """Identify infrastructure writes that can invalidate every project on a cluster."""
     if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
         return False
-    parsed = urlsplit(request.path)
-    if parsed.scheme or parsed.netloc or parsed.fragment:
-        return False
-    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
-    if segments and segments[0] == "1.0":
-        segments = segments[1:]
+    segments = list(canonical_proxy_path(request.path).segments)
     if not segments:
         return False
     if segments[0] in {"cluster", "cluster-members"}:
@@ -3738,51 +3723,18 @@ async def raw_proxy(
                 detail=f"Cluster {request.cluster_id} is not connected"
             )
 
-        # Use pylxd client's API directly
-        # The path should be relative to /1.0, ex;, "/1.0/instances" or just "/instances"
-        path = request.path
-        
-        # Normalize path - remove leading /1.0 if present since client.api is already at /1.0
-        if path.startswith("/1.0"):
-            path = path[4:]  # Remove "/1.0"
-        if not path.startswith("/"):
-            path = "/" + path
-        
-        # Parse query parameters from path
-        base_path = path
-        query_params = {}
-        if "?" in path:
-            base_path, query_string = path.split("?", 1)
-            for param in query_string.split("&"):
-                if "=" in param:
-                    key, value = param.split("=", 1)
-                    # important: compare on the DECODED key. The raw split leaves "%70roject"
-                    # distinct from "project", so the pop below missed it while LXD's own HTTP
-                    # layer decoded it and honoured the smuggled project. Normalising here means
-                    # one spelling reaches the check.
-                    query_params[unquote(key)] = value
-
         # important: `project` is authorised above from request.project, so a copy of it
         # inside `path` is not the caller's to set. Dropping it closes a scope bypass: a key
         # allowed only on "default" could otherwise declare project="default" (passing the
-        # check, and skipping the override below because it IS default) while sending
+        # check, and skipping the override because it IS default) while sending
         # ?project=<other> in the path, which LXD honours because these certs are registered
         # unrestricted. Every other query key is legitimate passthrough and is left alone.
-        query_params.pop("project", None)
-
-        # Add project parameter if not default
-        if project and project != "default":
-            query_params["project"] = project
-
-        # Build endpoint URL directly using client's session
+        # important: the URL is rebuilt from the same canonical_proxy_path every guard above
+        # judged, every spelling of `project` (`%2570roject` included) replaced by the authorised
+        # one and the query re-encoded with urlencode, so a decoded `&`, `#` or `=` stays data and
+        # no fragment can drop the authorised project (core/raw_proxy_path.py).
         endpoint = client.api._api_endpoint
-        
-        # Reconstruct full URL
-        full_path = base_path
-        if query_params:
-            full_path += "?" + "&".join(f"{k}={v}" for k, v in query_params.items())
-        
-        full_url = f"{endpoint}{full_path}"
+        full_url = f"{endpoint}{canonical_proxy_path(request.path).request_target(project)}"
 
         # The raw path inspects no body at all, so this is the only place a policy-key write
         # through it is visible to anyone.

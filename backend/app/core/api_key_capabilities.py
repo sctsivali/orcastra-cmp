@@ -22,11 +22,11 @@ an empty one.
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set
-from urllib.parse import unquote
 
 from fastapi import HTTPException
 
 from app.core.lxd_names import POLICY_CONFIG_KEYS
+from app.core.raw_proxy_path import ALL_PROJECTS_QUERY_KEY, canonical_proxy_path
 
 logger = logging.getLogger(__name__)
 
@@ -322,19 +322,13 @@ def policy_keys_in_config(config: Any) -> List[str]:
     return [key for key in POLICY_CONFIG_KEYS if key in present]
 
 
-def proxy_path_segments(path: str) -> list:
+def proxy_path_segments(path: str) -> List[str]:
     """A raw-proxy path as lowercase segments, with the API version and query stripped.
 
-    important: double-unquoted, because the traversal guard beside this is, and a classifier
-    that decodes once while its neighbour decodes twice gives a percent-encoded spelling a
-    second answer. One parser, so the two cannot drift apart.
+    important: read off canonical_proxy_path, the parser the traversal guard and the sent URL
+    read, so a percent-encoded, dotted or fragment spelling cannot get a second answer here.
     """
-    normalised = unquote(unquote(path or "")).split("?", 1)[0]
-    if normalised.startswith("/1.0"):
-        normalised = normalised[4:]
-    if not normalised.startswith("/"):
-        normalised = "/" + normalised
-    return [segment for segment in normalised.lower().split("/") if segment]
+    return list(canonical_proxy_path(path).lowered)
 
 
 def policy_keys_in_raw_body(path: str, body: Any) -> List[str]:
@@ -524,21 +518,27 @@ def assert_project_scope_allows_path(
 
     Paired with `assert_proxy_path_allowed`, which refuses paths nobody may reach. This one
     refuses paths this particular grant may not reach, which is why it needs the grant.
+    That includes an `all-projects` query in any spelling, which reads every project on the
+    cluster.
     """
     if project_grant_is_unrestricted(allowed_projects):
         return
+    granted = sorted(allowed_projects or ['default'])
+    canonical = canonical_proxy_path(path)
+    if ALL_PROJECTS_QUERY_KEY in canonical.query_names:
+        logger.warning("Refusing all-projects for a key limited to %s", granted)
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "all-projects reads every project on the cluster, so it needs a key granted all "
+                f"projects. This key is limited to {granted}."
+            ),
+        )
     if method.upper() not in _MUTATING_METHODS:
         return
 
-    normalised = unquote(unquote(path or "")).split("?", 1)[0]
-    if normalised.startswith("/1.0"):
-        normalised = normalised[4:]
-    if not normalised.startswith("/"):
-        normalised = "/" + normalised
-    lowered = normalised.lower().rstrip("/")
-
     for prefix in _PROJECT_UNBOUNDABLE_PREFIXES:
-        if lowered == prefix or lowered.startswith(prefix + "/"):
+        if canonical.is_under(prefix):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -552,31 +552,20 @@ def assert_project_scope_allows_path(
 def assert_proxy_path_allowed(path: str) -> None:
     """Raise 403 for a proxy path no integration may reach, or 400 for a malformed one.
 
-    Traversal is refused rather than normalised. `requests` does not remove dot segments, so a
-    `..` reached LXD, whose Go mux cleaned the path and answered a redirect to somewhere outside
-    `/1.0`; following it carried the cluster's client certificate along. Redirects are no longer
-    followed (`services/lxd/proxy.py`), and this refuses the input that produced them, because
-    one of those two alone leaves the other as the only thing standing.
+    Traversal is refused rather than normalised. A `..` reached LXD, whose Go mux cleaned the
+    path and answered a redirect to somewhere outside `/1.0`; following it carried the cluster's
+    client certificate along. Redirects are no longer followed (`services/lxd/proxy.py`), and
+    this refuses the input that produced them, because one of those two alone leaves the other
+    as the only thing standing.
+
+    important: read off canonical_proxy_path, which refuses `.`, `..`, empty segments and a
+    backslash with 400 and drops the fragment. requests (urllib3 2.x) removes dot segments and
+    never sends a fragment, so `/1.0/./certificates` and `/1.0/certificates#x` reached the trust
+    store past a check that looked for `..` in the raw string only.
     """
-    raw = path or ""
-    # Compare on the decoded form: `%2e%2e` and `..` must not be two different answers, which is
-    # the same lesson the project-smuggling filter in raw_proxy already learned.
-    decoded = unquote(unquote(raw))
-    if ".." in decoded or "\\" in decoded:
-        raise HTTPException(
-            status_code=400,
-            detail="Path may not contain traversal segments",
-        )
-
-    normalised = decoded.split("?", 1)[0]
-    if normalised.startswith("/1.0"):
-        normalised = normalised[4:]
-    if not normalised.startswith("/"):
-        normalised = "/" + normalised
-
-    lowered = normalised.lower().rstrip("/")
+    canonical = canonical_proxy_path(path)
     for prefix in _REFUSED_PROXY_PREFIXES:
-        if lowered == prefix or lowered.startswith(prefix + "/"):
+        if canonical.is_under(prefix):
             logger.warning("Refusing proxy request to %s", prefix)
             raise HTTPException(
                 status_code=403,
