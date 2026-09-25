@@ -134,6 +134,10 @@ jobs:
         run: node scripts/checks/check-instance-create-orchestration.mjs .
       - name: Image and ISO upload terminal durability
         run: node scripts/checks/check-upload-terminal-durability.mjs .
+      - name: Migration authority read errors
+        run: node scripts/checks/check-migration-authority-read-errors.mjs .
+      - name: Guard parity with make test-frontend
+        run: node scripts/checks/check-guard-parity.mjs .
       - name: Instance specification workflow
         run: node scripts/checks/check-instance-specification-workflow.mjs .
       # Pure filesystem AST walk over frontend/src, no install needed. Catches a mutation form
