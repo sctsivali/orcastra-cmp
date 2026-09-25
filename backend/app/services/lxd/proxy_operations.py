@@ -43,6 +43,7 @@ from .proxy import (
     proxy_executor,
 )
 from app.core.lxd_path import safe_segment
+from app.core.lxd_segment import lxd_segment
 
 logger = logging.getLogger(__name__)
 
@@ -610,9 +611,17 @@ def execute_proxy_operation(
 
     if operation == "delete_snapshot":
         snapshot_name = _required(params, "snapshot_name", "Snapshot name")
+        # important: pylxd puts a name into the URL as it is, so `x?project=other&` deleted a
+        # snapshot in a project this key was never granted, and requests folded `..` out of the
+        # path, leaving the instance's own URL. Both paths send the one encoded segment: pylxd's
+        # Snapshot model rebuilds the URL from the name LXD returns, and LXD accepts `?`, `&` and
+        # `#` in a snapshot name (it refuses only a space and `/`), so create_snapshot can make one.
+        snapshot_segment = lxd_segment(snapshot_name, what="Snapshot name")
+        response = instance_api().snapshots[snapshot_segment].delete()
         if not wait:
-            return _accepted(instance_api().snapshots[snapshot_name].delete())
-        instance().snapshots.get(snapshot_name).delete(wait=True)
+            return _accepted(response)
+        if response.json().get("type") == "async":
+            client.operations.wait_for_operation(response.json()["operation"])
         return {"deleted": True, "snapshot": snapshot_name}
 
     if operation == "create_network":

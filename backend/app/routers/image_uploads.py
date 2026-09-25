@@ -44,6 +44,8 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
+from app.core.lxd_path import safe_segment
+from app.core.lxd_segment import is_dot_segment, lxd_segment
 from app.models.db_models import ImageUploadSession
 from app.routers.integrations import require_capability
 from app.services.lxd_service import get_lxd_service
@@ -223,6 +225,10 @@ async def create_upload(
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
     _assert_project_permission(api_key, body.cluster_id, body.project, "write")
+    # important: the alias is a path segment of the alias reads and the repoint delete, where requests
+    # would fold a `.` or `..` out of the path (core/lxd_segment.py).
+    if is_dot_segment(body.alias):
+        raise HTTPException(status_code=422, detail="Invalid image alias")
     # Both figures come from the client, so clamp against the server ceiling too.
     if body.total_bytes > MAX_UPLOAD_BYTES or body.max_bytes > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -494,10 +500,10 @@ def _ensure_alias(session, endpoint: str, project_q: str, alias: str, fingerprin
     if "already exists" not in r.text.lower():
         raise RuntimeError(f"Failed to create image alias: {r.status_code} {r.text[:200]}")
     # Alias name is taken -> repoint only if it points somewhere else.
-    g = session.get(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
+    g = session.get(f"{endpoint}/images/aliases/{lxd_segment(alias, what='Image alias')}{project_q}", verify=False, timeout=60)
     if g.status_code < 400 and ((g.json().get("metadata") or {}).get("target") == fingerprint):
         return
-    session.delete(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
+    session.delete(f"{endpoint}/images/aliases/{lxd_segment(alias, what='Image alias')}{project_q}", verify=False, timeout=60)
     r2 = session.post(
         f"{endpoint}/images/aliases{project_q}",
         json={"name": alias, "target": fingerprint, "description": description},
@@ -510,6 +516,8 @@ def _ensure_alias(session, endpoint: str, project_q: str, alias: str, fingerprin
 
 def _resolve_alias_sync(cluster_id: str, alias: str, project: str) -> Optional[Dict[str, Any]]:
     """Return {fingerprint, size} if the alias already resolves to an image on the cluster, else None."""
+    if is_dot_segment(alias):
+        return None
     svc = get_lxd_service()
     client = svc.connection_manager.get_client(cluster_id)
     if client is None:
@@ -517,13 +525,13 @@ def _resolve_alias_sync(cluster_id: str, alias: str, project: str) -> Optional[D
     endpoint = client.api._api_endpoint
     session = client.api.session
     project_q = f"?project={quote(project, safe='')}" if project and project != "default" else ""
-    r = session.get(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
+    r = session.get(f"{endpoint}/images/aliases/{lxd_segment(alias, what='Image alias')}{project_q}", verify=False, timeout=60)
     if r.status_code >= 400:
         return None
     target = (r.json().get("metadata") or {}).get("target")
     if not target:
         return None
-    g = session.get(f"{endpoint}/images/{target}{project_q}", verify=False, timeout=60)
+    g = session.get(f"{endpoint}/images/{safe_segment(target)}{project_q}", verify=False, timeout=60)
     size = (g.json().get("metadata") or {}).get("size") if g.status_code < 400 else None
     return {"fingerprint": target, "size": size}
 
@@ -551,7 +559,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
     # Fast-path: image already in the store. A unified image's LXD fingerprint == its file sha256, so a
     # caller that hashed the staging file can probe by that fingerprint and skip re-streaming.
     if precomputed_fp:
-        probe = session.get(f"{endpoint}/images/{precomputed_fp}{project_q}", verify=False, timeout=60)
+        probe = session.get(f"{endpoint}/images/{safe_segment(precomputed_fp)}{project_q}", verify=False, timeout=60)
         if probe.status_code < 400:
             meta = probe.json().get("metadata") or {}
             fingerprint = meta.get("fingerprint") or precomputed_fp
@@ -570,7 +578,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
         if resp.status_code >= 400:
             # A duplicate-fingerprint store error means the image is already there - resolve + continue.
             if precomputed_fp and "already exists" in resp.text.lower():
-                g = session.get(f"{endpoint}/images/{precomputed_fp}{project_q}", verify=False, timeout=60)
+                g = session.get(f"{endpoint}/images/{safe_segment(precomputed_fp)}{project_q}", verify=False, timeout=60)
                 if g.status_code < 400:
                     meta = g.json().get("metadata") or {}
                     fingerprint = meta.get("fingerprint") or precomputed_fp
@@ -611,7 +619,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
     _ensure_alias(session, endpoint, project_q, alias, fingerprint, description)
 
     if size is None:
-        gresp = session.get(f"{endpoint}/images/{fingerprint}{project_q}", verify=False, timeout=60)
+        gresp = session.get(f"{endpoint}/images/{safe_segment(fingerprint)}{project_q}", verify=False, timeout=60)
         size = (gresp.json().get("metadata") or {}).get("size") if gresp.status_code < 400 else None
     return {"fingerprint": fingerprint, "size": size}
 
