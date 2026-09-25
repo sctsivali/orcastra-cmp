@@ -970,6 +970,9 @@ async def reconcile_personal_clusters(
     user_email: str,
     # note: called as (cluster_id, from_org, to_org) for each row it moves, before the commit
     on_rebind: Optional[Callable[[str, Optional[int], int], None]] = None,
+    # important: when given, the caller has decided the destination and the primary-org
+    # ordering is not consulted. An integration push passes the one org its key claimed.
+    organization_id: Optional[int] = None,
 ) -> int:
     """
     Bind a user's still-unbound (organization_id NULL) clusters to their primary org.
@@ -990,10 +993,13 @@ async def reconcile_personal_clusters(
         serialize_cluster_share,
     )
 
-    org_ids = await _ordered_org_ids_for_email(user_email, db)
-    if not org_ids:
-        return 0
-    primary = org_ids[0]
+    if organization_id is not None:
+        primary = organization_id
+    else:
+        org_ids = await _ordered_org_ids_for_email(user_email, db)
+        if not org_ids:
+            return 0
+        primary = org_ids[0]
 
     # PostgreSQL transaction advisory locks live until the commit below. Acquire several
     # cluster locks in one deterministic order so two concurrent reconciliations cannot form

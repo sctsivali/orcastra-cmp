@@ -1651,11 +1651,14 @@ async def _upsert_synced_members(
 
     # Backstop reconcile: now that these members are linked to their org, bind any
     # clusters they registered while org-less. Best-effort, idempotent, per member.
-    # important: only the key's creator. Every pushed email used to rebind, so a key could push
+    # important: only the key's creator, and only into the one org this key claimed that this push
+    # names them in. Every pushed email used to rebind into its primary org, so a key could push
     # another partner's email into its own org and take that partner's unbound clusters.
     for email in upserted_emails:
         try:
-            await rebind_creator_clusters(db, email, api_key_id=api_key_id, creator=key_creator)
+            await rebind_creator_clusters(
+                db, email, members, api_key_id=api_key_id, creator=key_creator
+            )
         except Exception as e:
             logger.warning(f"reconcile_personal_clusters failed for {email}: {e}")
 

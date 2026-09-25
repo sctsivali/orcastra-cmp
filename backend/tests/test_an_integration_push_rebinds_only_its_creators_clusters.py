@@ -139,10 +139,25 @@ async def test_a_key_without_a_creator_rebinds_nothing(world: Dict[str, Any], cr
 
 
 async def test_another_spelling_of_the_creator_is_not_the_creator(world: Dict[str, Any]) -> None:
+    """A cluster registered under the other spelling, so only the creator comparison stops it."""
+    other = CREATOR.upper()
     db = await _db()
-    await _sync(db, _key(), [_member(CREATOR.upper(), "PARTNER")])
-    assert (await _bound(db))["creator-cluster"] is None
-    assert world["log"].calls == []
+    db.add(OrganizationCluster(organization_id=None, cluster_id="other-spelling", registered_by=other))
+    await db.commit()
+    await _sync(db, _key(), [_member(other, "PARTNER")])
+    assert (await _bound(db))["other-spelling"] is None
+    assert world["shares"] == [] and world["log"].calls == []
+
+    # control: the same push under a key whose creator is that spelling does move it
+    await _sync(db, _key(created_by=other), [_member(other, "PARTNER")])
+    assert (await _bound(db))["other-spelling"] == 1
+
+
+def test_the_creator_comparison_is_exact() -> None:
+    assert integration_cluster_rebind.may_rebind(CREATOR, CREATOR)
+    assert not integration_cluster_rebind.may_rebind(CREATOR.upper(), CREATOR)
+    assert not integration_cluster_rebind.may_rebind(f" {CREATOR}", CREATOR)
+    assert not integration_cluster_rebind.may_rebind(CREATOR, None)
 
 
 # ── the creator's own push ──────────────────────────────────────────────────────────────────────

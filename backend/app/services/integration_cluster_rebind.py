@@ -1,4 +1,4 @@
-"""Which personal clusters an integration push may rebind, and the record each rebind leaves.
+"""Which personal clusters an integration push may rebind, where they go, and the record each leaves.
 
 A member sync ran reconcile_personal_clusters for every pushed email. A key that pushed another
 partner's email into its own organization moved that partner's unbound clusters into it, where the
@@ -11,22 +11,38 @@ triggers no rebind, and neither does a key without a creator or an add-on creden
 rebind is recorded with the cluster, the organization it left, the one it joined and the key id.
 Nothing else of the key reaches the record.
 
+The destination is an organization this key claimed (organizations.api_key_id is the key) that
+this push names with the creator as a member. It is not the creator's primary organization from
+org_scope: that ordering puts any organization where the creator is a partner first, so another
+key could push the creator into its own older organization and choose where the creator's next
+rebind lands. Zero or several such organizations rebind nothing.
+
 note: the match is exact. `registered_by` holds the registrant's login email and the creator is
 that same login, so another spelling would find no row to move anyway.
 """
 
 import logging
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Protocol, Sequence, Tuple
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.org_scope import reconcile_personal_clusters
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
 REBIND_ACTION = "integration.cluster.rebind"
+
+
+class PushedMember(Protocol):
+    """The fields of a pushed member this module reads."""
+
+    email: str
+    organization_id: str
+    action: str
 
 
 def creator_of(api_key: Mapping[str, Any]) -> Optional[str]:
@@ -45,6 +61,42 @@ def creator_of(api_key: Mapping[str, Any]) -> Optional[str]:
 
 def may_rebind(email: str, creator: Optional[str]) -> bool:
     return creator is not None and email == creator
+
+
+async def _has_unbound_clusters(db: AsyncSession, email: str) -> bool:
+    row = (await db.execute(
+        select(OrganizationCluster.id).where(
+            OrganizationCluster.organization_id.is_(None),
+            OrganizationCluster.registered_by == email,
+        ).limit(1)
+    )).first()
+    return row is not None
+
+
+async def claimed_destinations(
+    db: AsyncSession, members: Sequence[PushedMember], *, email: str, api_key_id: str
+) -> List[int]:
+    """Active organizations this key claimed that this push names `email` a member of.
+
+    note: the membership row is read back too, so an upsert that failed or a later remove in the
+    same push leaves the organization out.
+    """
+    named = {m.organization_id for m in members if m.email == email and m.action != "remove"}
+    if not named or not api_key_id:
+        return []
+    rows = await db.execute(
+        select(Organization.id)
+        .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+        .where(
+            Organization.source == "orcahub",
+            Organization.external_id.in_(sorted(named)),
+            Organization.api_key_id == api_key_id,
+            Organization.is_active.is_(True),
+            OrganizationMember.user_email == email,
+        )
+        .distinct()
+    )
+    return sorted(rows.scalars().all())
 
 
 def _record(cluster_id: str, from_org: Optional[int], to_org: int, email: str, api_key_id: str) -> None:
@@ -68,14 +120,31 @@ def _record(cluster_id: str, from_org: Optional[int], to_org: int, email: str, a
 
 
 async def rebind_creator_clusters(
-    db: AsyncSession, email: str, *, api_key_id: str, creator: Optional[str]
+    db: AsyncSession,
+    email: str,
+    members: Sequence[PushedMember],
+    *,
+    api_key_id: str,
+    creator: Optional[str],
 ) -> int:
-    """Bind the creator's unbound clusters to their organization. Any other email moves nothing."""
+    """Bind the creator's unbound clusters to the one organization this push names them in."""
     if not may_rebind(email, creator):
+        return 0
+    if not await _has_unbound_clusters(db, email):
+        return 0
+    destinations = await claimed_destinations(db, members, email=email, api_key_id=api_key_id)
+    if len(destinations) != 1:
+        logger.warning(
+            "Integration key %s rebinds no personal cluster: %d organizations it claimed name "
+            "its creator in this push, exactly one is required",
+            api_key_id, len(destinations),
+        )
         return 0
     moved: List[Tuple[str, Optional[int], int]] = []
     rebound = await reconcile_personal_clusters(
-        db, email, on_rebind=lambda cluster_id, from_org, to_org: moved.append((cluster_id, from_org, to_org))
+        db, email,
+        on_rebind=lambda cluster_id, from_org, to_org: moved.append((cluster_id, from_org, to_org)),
+        organization_id=destinations[0],
     )
     # note: recorded after reconcile_personal_clusters committed, so a rolled-back move leaves no record
     for cluster_id, from_org, to_org in moved:
