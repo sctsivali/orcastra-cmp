@@ -7,6 +7,10 @@
 # For a 0.x package the ceiling is the next MINOR, because that is the breaking axis there; for
 # 1.0 and above it is the next major. Floors are left where they were: raising them is a separate
 # decision from bounding them.
+# note: the exact set lives in constraints.txt, so a rebuild installs the tested set, not the newest
+# one inside these ranges.
+-c constraints.txt
+
 # FastAPI and server
 fastapi>=0.109.0,<0.142.0  # running 0.141.1
 uvicorn[standard]>=0.27.0,<0.53.0  # running 0.52.4
