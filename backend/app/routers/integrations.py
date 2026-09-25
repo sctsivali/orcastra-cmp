@@ -97,7 +97,7 @@ from app.core.api_key_capabilities import (
 )
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
-from app.core.guest_data_export import assert_guest_data_stays_inside
+from app.core.guest_data_export import assert_guest_data_path_stays_inside, assert_guest_data_stays_inside
 from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
 from app.core.limited_key_writes import (
     assert_body_within_grant,
@@ -3197,6 +3197,32 @@ def _audit_raw_proxy(
     )
 
 
+def _audit_raw_refusal(
+    api_key: Dict[str, Any],
+    request: Any,
+    method: str,
+    project: Optional[str],
+    refusal: HTTPException,
+    refused: str,
+) -> None:
+    """The failure record a raw-proxy gate leaves when it refuses a request before it is sent.
+
+    note: reads the path, the cluster and the claimed email only, never the body, so a gate that
+    runs before the body is held to one spelling may hand it the request.
+    """
+    _audit_key_action(
+        api_key,
+        action=_proxy_audit_action(method, request.path),
+        target_id=request.path[:512],
+        cluster_id=request.cluster_id,
+        project=project,
+        result="failure",
+        details={"method": method, "refused": refused},
+        external_user_email=request.external_user_email,
+        error_message=str(refusal.detail),
+    )
+
+
 def _observe_policy_key_write(
     api_key: Dict[str, Any],
     keys: List[str],
@@ -3667,11 +3693,6 @@ async def raw_proxy(
         # important: server configuration and the cluster hand out trust (the OIDC issuer, a join
         # token for a new member), so writes to them are refused for every grant, `*` included.
         assert_server_state_unchanged(request.path, method)
-        # important: LXD reads body field names without regard to case, so every guard below (the
-        # guest-data price, the migration fence, the policy observer, the limited-key rules) and the
-        # request sent read this one dict, which refuses a field spelled any other way
-        # (core/api_key_body.py).
-        request = request.model_copy(update={"body": canonical_raw_proxy_body(method, request.body)})
         # important: reaching inside a guest is a different power from managing it, and this path
         # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
         # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with
@@ -3696,23 +3717,30 @@ async def raw_proxy(
                 error_message=str(refusal.detail),
             )
             raise
-        # important: a migration source, an image export and an image secret hand the guest's
-        # filesystem out whole, which /files prices one file at a time (core/guest_data_export.py).
-        # Recorded when refused, like the guest-access refusal above.
+        # important: an image export and an image secret hand the guest's filesystem out whole,
+        # which /files prices one file at a time (core/guest_data_export.py). Priced on the path
+        # alone, like the guest-access gate above, so both run before the body is read and a
+        # refused path is recorded whatever the body says.
+        try:
+            assert_guest_data_path_stays_inside(request.path, api_key)
+        except HTTPException as refusal:
+            _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
+            raise
+        # important: LXD reads body field names without regard to case, so every guard below (the
+        # guest-data price, the migration fence, the policy observer, the limited-key rules) and the
+        # request sent read this one dict, which refuses a field spelled any other way
+        # (core/api_key_body.py). A refusal is recorded: no correct caller sends one.
+        try:
+            request = request.model_copy(update={"body": canonical_raw_proxy_body(method, request.body)})
+        except HTTPException as refusal:
+            _audit_raw_refusal(api_key, request, method, project, refusal, "field_name_not_canonical")
+            raise
+        # important: a migration source hands the guest's filesystem out whole too, which only its
+        # body says (core/guest_data_export.py). Recorded when refused, like the gates above.
         try:
             assert_guest_data_stays_inside(request.path, method, request.body, api_key)
         except HTTPException as refusal:
-            _audit_key_action(
-                api_key,
-                action=_proxy_audit_action(method, request.path),
-                target_id=request.path[:512],
-                cluster_id=request.cluster_id,
-                project=project,
-                result="failure",
-                details={"method": method, "refused": "capability_not_granted"},
-                external_user_email=request.external_user_email,
-                error_message=str(refusal.detail),
-            )
+            _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
             raise
         # important: the project check above binds the REQUEST to a granted project, which does
         # not bound a resource whose identity is itself a project name. A key granted only
@@ -4043,7 +4071,23 @@ async def proxy_operation(
         # important: create_instance sends params to LXD as the body and create_storage_pool its
         # definition, and LXD reads their field names without regard to case, so every guard below
         # reads params held to one spelling (core/api_key_body.py). MCP tools arrive here too.
-        assert_canonical_proxy_params(operation, request.params or {})
+        # A refusal is recorded, like the guest-capability refusal below: no correct caller sends
+        # one, and an exec whose params were refused here would otherwise leave no trace.
+        try:
+            assert_canonical_proxy_params(operation, request.params or {})
+        except HTTPException as refusal:
+            _audit_key_action(
+                api_key,
+                action=_guest_audit_action(operation),
+                target_id=str((request.params or {}).get("name") or operation)[:512],
+                cluster_id=request.cluster_id,
+                project=request.project,
+                result="failure",
+                details={"operation": operation, "refused": "field_name_not_canonical"},
+                external_user_email=request.external_user_email,
+                error_message=str(refusal.detail),
+            )
+            raise
 
         # important: an operation that reaches inside a guest costs a capability of its own, on
         # top of lxd.proxy and the level. It is never inherited by a key issued before

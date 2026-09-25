@@ -28,8 +28,10 @@ from app.core.raw_proxy_path import canonical_proxy_path
 
 __all__ = [
     "GUEST_DATA_CAPABILITY",
+    "assert_guest_data_path_stays_inside",
     "assert_guest_data_stays_inside",
     "guest_data_capability_for",
+    "guest_data_path_capability_for",
 ]
 
 GUEST_DATA_CAPABILITY = "instance.files"
@@ -63,12 +65,34 @@ def _hands_out_an_image(segments: Tuple[str, ...]) -> bool:
     return len(segments) == 3 and segments[0] == "images" and segments[2] in _IMAGE_HANDOUTS
 
 
+def _priced_by_its_path(segments: Tuple[str, ...]) -> bool:
+    return _hands_out_an_image(segments)
+
+
+def guest_data_path_capability_for(path: str) -> Optional[str]:
+    """The capability a raw-proxy path costs whatever its method and body, else None.
+
+    note: raw_proxy asks this before the body is held to one spelling, so a refused path is
+    recorded as a refused path whatever the body says.
+    """
+    if _priced_by_its_path(canonical_proxy_path(path).lowered):
+        return GUEST_DATA_CAPABILITY
+    return None
+
+
 def guest_data_capability_for(path: str, method: str, body: Any) -> Optional[str]:
     """The capability a raw-proxy request costs because it hands out guest data, else None."""
     segments = canonical_proxy_path(path).lowered
-    if _hands_out_an_image(segments) or _starts_a_migration(segments, method.upper(), body):
+    if _priced_by_its_path(segments) or _starts_a_migration(segments, method.upper(), body):
         return GUEST_DATA_CAPABILITY
     return None
+
+
+def assert_guest_data_path_stays_inside(path: str, api_key: Dict[str, Any]) -> None:
+    """Raise 403 for a path that hands out guest data, unless the key was granted that."""
+    capability = guest_data_path_capability_for(path)
+    if capability is not None:
+        assert_explicit_capability(api_key, capability)
 
 
 def assert_guest_data_stays_inside(path: str, method: str, body: Any, api_key: Dict[str, Any]) -> None:

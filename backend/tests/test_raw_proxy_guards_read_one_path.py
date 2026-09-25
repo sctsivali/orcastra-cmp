@@ -38,7 +38,12 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
     ),
     RAW_PROXY_PATH: ("assert_server_state_unchanged",),
     LIMITED_WRITES: ("assert_body_within_grant", "limited_write_plan"),
-    GUEST_DATA: ("guest_data_capability_for", "assert_guest_data_stays_inside"),
+    GUEST_DATA: (
+        "guest_data_path_capability_for",
+        "guest_data_capability_for",
+        "assert_guest_data_path_stays_inside",
+        "assert_guest_data_stays_inside",
+    ),
     ROUTER: ("_proxy_audit_action",),
 }
 
@@ -46,6 +51,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
 ROUTER_HANDLERS = (
     "raw_proxy",
     "_audit_raw_proxy",
+    "_audit_raw_refusal",
     "_raw_proxy_fenced_write_target",
     "_raw_proxy_fenced_project",
     "_raw_proxy_has_cluster_wide_write",

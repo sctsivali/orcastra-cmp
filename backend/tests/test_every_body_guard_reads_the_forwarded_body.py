@@ -23,6 +23,9 @@ BODY_READERS_IN_THE_ROUTER = (
     "_raw_proxy_fenced_write_target",
     "_raw_proxy_fenced_project",
 )
+# Helpers that only record a refusal. They may be handed the request before the body is canonical,
+# because the path gates run first and are recorded, and they never read its body.
+RECORD_ONLY_IN_THE_ROUTER = ("_audit_raw_refusal",)
 
 
 def _functions() -> Dict[str, ast.AST]:
@@ -76,9 +79,19 @@ def test_raw_proxy_hands_the_request_to_a_body_guard_only_after_it_is_canonical(
         and any(isinstance(arg, ast.Name) and arg.id == "request" for arg in node.args)
     ]
     assert handed, "raw_proxy no longer hands the request to any guard"
-    assert [call for call in handed if call[0] < line] == [], handed
+    assert [call for call in handed if call[0] < line and call[1] not in RECORD_ONLY_IN_THE_ROUTER] == [], handed
     guards = {name for _, name in handed}
     assert set(BODY_READERS_IN_THE_ROUTER) <= guards, guards
+
+
+def test_a_record_only_helper_never_reads_the_body() -> None:
+    functions = _functions()
+    for name in RECORD_ONLY_IN_THE_ROUTER:
+        reads = [
+            ast.unparse(node) for node in ast.walk(functions[name])
+            if isinstance(node, ast.Attribute) and node.attr in ("body", "model_copy")
+        ]
+        assert reads == [], f"{name} reads {reads}, so it is a body guard and must run after the canonical line"
 
 
 def test_the_fence_helpers_read_the_body_of_the_request_they_are_given() -> None:
