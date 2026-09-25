@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.api_key_capability_audit import issued_credential_audit_fields
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.org_scope import get_user_org_ids, org_scope_dependency
@@ -173,6 +174,7 @@ async def install(
             "extension_slug": slug,
             "api_key_id": key_id,
             "capabilities": list(record.granted_capabilities),
+            **issued_credential_audit_fields({"capabilities": list(record.granted_capabilities)}),
             "cluster_ids": [
                 g.get("cluster_id") for g in record.granted_scope if isinstance(g, dict)
             ],
@@ -284,6 +286,7 @@ async def rescope(
     db: AsyncSession = Depends(get_db),
 ) -> InstallResponse:
     record, extension, org_slug = await _load(db, install_id, user)
+    key_change: Dict[str, Any] = {}
     record = await extension_install.rescope_install(
         db, get_vault_integrations_client(),
         install=record,
@@ -294,12 +297,15 @@ async def rescope(
         consent_digest=request.consent.manifest_digest,
         capabilities=request.capabilities,
         grants=request.cluster_permissions,
+        audit_fields=key_change,
     )
     _audit(
         "extension.install.rescope", install_id,
         organization_id=record.organization_id, organization_slug=org_slug,
         details={
             "capabilities": list(record.granted_capabilities),
+            "api_key_id": record.api_key_id,
+            **key_change,
             "cluster_ids": [
                 g.get("cluster_id") for g in record.granted_scope if isinstance(g, dict)
             ],
@@ -391,7 +397,12 @@ async def rotate(
     _audit(
         "extension.install.credential.rotate", install_id,
         organization_id=record.organization_id, organization_slug=org_slug,
-        details={"api_key_id": key_id, "grace_seconds": grace_seconds},
+        details={
+            "api_key_id": key_id,
+            "grace_seconds": grace_seconds,
+            "capabilities": list(record.granted_capabilities or []),
+            **issued_credential_audit_fields({"capabilities": list(record.granted_capabilities or [])}),
+        },
     )
     return InstallCreateResponse(
         install=extension_install.to_response(record, extension, org_slug),

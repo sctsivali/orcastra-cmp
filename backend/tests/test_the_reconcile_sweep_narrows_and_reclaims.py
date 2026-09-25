@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.core.api_key_capability_audit import capability_audit_fields
 from app.services import extension_reconcile as sweep
 
 
@@ -102,10 +103,12 @@ class CredentialStore:
     revoked: List[str] = field(default_factory=list)
     fail_on: Optional[str] = None
 
-    def rewrite(self, _client, install) -> None:
+    def rewrite(self, _client, install) -> Dict[str, Any]:
         if self.fail_on == install.api_key_id:
             raise RuntimeError("vault is sealed")
         self.rewritten[install.api_key_id] = list(install.granted_scope or [])
+        # note: what the real rewrite returns for a key whose capabilities it left unchanged
+        return capability_audit_fields({"capabilities": []}, {"capabilities": []})
 
     def revoke(self, _client, key_id: str) -> None:
         if self.fail_on == key_id:

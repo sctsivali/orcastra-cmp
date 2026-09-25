@@ -123,12 +123,13 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
         # contradiction - so the row keeps its last grant as the record of what was withdrawn and
         # the credential is revoked instead.
         total_loss = not kept
+        key_change: Dict[str, Any] = {}
         try:
             if total_loss:
                 revoke_install_credential(vault_client, install.api_key_id)
             else:
                 install.granted_scope = kept
-                _rewrite_key_grant(vault_client, install)
+                key_change = _rewrite_key_grant(vault_client, install)
             if total_loss and install.status == "active":
                 install.status = "suspended"
                 install.suspend_reason = (
@@ -154,6 +155,8 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
                 "dropped_clusters": dropped,
                 "remaining": len(kept),
                 "suspended": not kept,
+                "api_key_id": install.api_key_id,
+                **key_change,
             },
         )
         logger.info(

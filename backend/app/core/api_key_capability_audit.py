@@ -56,3 +56,8 @@ def capability_audit_fields(
         "elevated_capabilities_granted": sorted(granted & ELEVATED_CAPABILITIES),
     })
     return fields
+
+
+def issued_credential_audit_fields(metadata: Mapping[str, Any]) -> Dict[str, Any]:
+    """Audit fields for a credential minted holding this set. It held nothing before, so all of it is a grant."""
+    return capability_audit_fields(metadata, {"capabilities": []})

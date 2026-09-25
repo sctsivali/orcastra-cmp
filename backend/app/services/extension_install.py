@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import CAPABILITIES
+from app.core.api_key_capability_audit import capability_audit_fields
 from app.core.api_key_expiry import now_utc
 from app.core.config import get_settings
 from app.core.org_scope import get_current_allowed_clusters
@@ -305,6 +306,8 @@ async def rescope_install(
     consent_digest: str,
     capabilities: Sequence[str],
     grants: Sequence[Any],
+    # note: filled with what the credential write changed, for the caller's audit record
+    audit_fields: Optional[Dict[str, Any]] = None,
 ) -> ExtensionInstallation:
     """Declarative: the request states the whole grant, so a repeat converges."""
     if not extension_service.manifest_matches(extension, consent_digest):
@@ -337,7 +340,9 @@ async def rescope_install(
     install.last_scope_change_at = now_utc()
 
     # The Vault key carries the same grant, because that is what the request path reads.
-    _rewrite_key_grant(vault_client, install)
+    key_change = _rewrite_key_grant(vault_client, install)
+    if audit_fields is not None:
+        audit_fields.update(key_change)
 
     from app.services.webhooks.emitter import emit_installation_event
 
@@ -350,7 +355,7 @@ async def rescope_install(
     return install
 
 
-def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> None:
+def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> Dict[str, Any]:
     from app.routers.integrations import (
         VAULT_INTEGRATIONS_PATH,
         evict_api_key_cache,
@@ -374,6 +379,9 @@ def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> None:
                 "Nothing was altered. Try again once it is reachable."
             ),
         ) from exc
+    # important: the key's own set before the write, not the row's. A key edited through the
+    # integration capabilities route differs from its row, and this rewrite then withdraws that.
+    previous = dict(metadata)
     metadata["capabilities"] = list(install.granted_capabilities or [])
     metadata["cluster_permissions"] = list(install.granted_scope or [])
     try:
@@ -391,6 +399,7 @@ def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> None:
             ),
         ) from exc
     evict_api_key_cache(install.api_key_id)
+    return capability_audit_fields(metadata, previous)
 
 
 async def set_install_status(

@@ -11,9 +11,9 @@ metadata never reaches it.
 """
 
 import ast
-import inspect
-import textwrap
-from typing import Any, Dict, List, Tuple
+import collections
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -222,38 +222,143 @@ async def test_a_partner_minting_an_orcahub_key_records_the_elevated_grant(
 
 
 # ── the ratchet ────────────────────────────────────────────────────────────────────────────────
+#
+# Every function under app/ that writes a key's capability set is found by shape, and every call
+# chain above it must end at a function that writes an audit record, with the capability fields
+# built somewhere on that chain. The behavioural tests (this file for integration keys,
+# test_an_add_on_credential_grant_leaves_a_record for add-on credentials) prove the fields land.
+
+APP = Path(__file__).resolve().parents[1] / "app"
+AUDIT_SINKS = {"log_activity", "_audit", "_audit_credential_lifecycle"}
+FIELD_BUILDERS = {"capability_audit_fields", "issued_credential_audit_fields", "_audit_credential_lifecycle"}
+
+KEY_WRITERS = {
+    ("app.routers.integrations", "create_api_key"),
+    ("app.routers.integrations", "update_api_key_capabilities"),
+    ("app.services.extension_credentials", "build_install_metadata"),
+    ("app.services.extension_install", "_rewrite_key_grant"),
+}
+# Each recording point a key writer reaches, and the action its record carries.
+RECORDS = {
+    ("app.routers.integrations", "create_api_key"): "integration.api_key.create",
+    ("app.routers.integrations", "update_api_key_capabilities"): CAPABILITIES_UPDATE_ACTION,
+    ("app.routers.extension_installs", "install"): "extension.install",
+    ("app.routers.extension_installs", "rescope"): "extension.install.rescope",
+    ("app.routers.extension_installs", "rotate"): "extension.install.credential.rotate",
+    ("app.services.extension_reconcile", "_narrow_drifted_scope"): "extension.install.scope_narrowed",
+}
+# A "capabilities" field that is not an integration key's grant.
+NOT_A_KEY = {
+    ("app.routers.extensions", "get_vocabulary"): "the capability vocabulary an add-on author reads",
+    ("app.routers.extensions", "register_extension"): "an add-on manifest's requested capabilities",
+    ("app.routers.extensions", "publish_extension_version"): "an add-on manifest's requested capabilities",
+    ("app.services.extension_install", "build_install_preview"): "the consent preview shown before install",
+    ("app.services.instance_specifications", "read_specification_sync"): "an LXD instance's capabilities",
+    ("app.services.migrations.plan_contracts", "_preflight_payload"): "a migration plan's capability snapshot",
+    ("app.services.migrations.plan_contracts", "approval_report_hash"): "a migration plan's capability snapshot",
+    ("app.services.migrations.planning", "_preflight"): "a migration plan's capability snapshot",
+}
+
+
+def _callee(node: ast.Call) -> Optional[str]:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else None
+
+
+def _exempt_dicts(fn: ast.AST) -> set:
+    """A dict handed to an audit record or to a field builder describes a grant, it is not one."""
+    exempt = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.keyword) and node.arg == "details":
+            exempt.add(id(node.value))
+        if isinstance(node, ast.Call) and _callee(node) in FIELD_BUILDERS:
+            exempt.update(id(arg) for arg in node.args)
+    return exempt
+
 
 def _writes_capabilities(fn: ast.AST) -> bool:
+    exempt = _exempt_dicts(fn)
     for node in ast.walk(fn):
         if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
             if isinstance(node.slice, ast.Constant) and node.slice.value == "capabilities":
                 return True
-        if isinstance(node, ast.Dict) and any(
+        if isinstance(node, ast.Dict) and id(node) not in exempt and any(
             isinstance(k, ast.Constant) and k.value == "capabilities" for k in node.keys
-        ) and not _is_audit_details(fn, node):
+        ):
+            return True
+        if isinstance(node, ast.Call) and _callee(node) in {"dict", "update", "setdefault"} and any(
+            kw.arg == "capabilities" for kw in node.keywords
+        ):
             return True
     return False
 
 
-def _is_audit_details(fn: ast.AST, target: ast.Dict) -> bool:
-    for node in ast.walk(fn):
-        if isinstance(node, ast.keyword) and node.arg == "details" and node.value is target:
-            return True
-    return False
+def _index() -> Tuple[Dict[Tuple[str, str], ast.AST], Dict[str, set]]:
+    functions: Dict[Tuple[str, str], ast.AST] = {}
+    callers: Dict[str, set] = collections.defaultdict(set)
+    for path in sorted(APP.rglob("*.py")):
+        module = ".".join(path.relative_to(APP.parent).with_suffix("").parts)
+        for fn in ast.walk(ast.parse(path.read_text())):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions[(module, fn.name)] = fn
+                for node in ast.walk(fn):
+                    if isinstance(node, ast.Call) and _callee(node):
+                        callers[_callee(node)].add((module, fn.name))
+    return functions, callers
 
 
-def _calls(fn: ast.AST, name: str) -> bool:
-    return any(
-        isinstance(node, ast.Call) and getattr(node.func, "id", None) == name for node in ast.walk(fn)
+def _calls(fn: ast.AST) -> set:
+    return {_callee(node) for node in ast.walk(fn) if isinstance(node, ast.Call)}
+
+
+def _chains(writer: Tuple[str, str], functions: Dict, callers: Dict) -> List[List[Tuple[str, str]]]:
+    """Every call chain from the writer up to a function that records, or to a root that does not."""
+    chains, stack = [], [[writer]]
+    while stack:
+        chain = stack.pop()
+        top = chain[-1]
+        above = [c for c in sorted(callers.get(top[1], ())) if c not in chain]
+        if _calls(functions[top]) & AUDIT_SINKS or not above:
+            chains.append(chain)
+            continue
+        stack.extend(chain + [c] for c in above)
+    return chains
+
+
+def test_every_writer_of_a_key_capability_set_is_known() -> None:
+    functions, _ = _index()
+    writers = {name for name, fn in functions.items() if _writes_capabilities(fn)}
+    assert writers - set(NOT_A_KEY) == KEY_WRITERS, (
+        "a new function writes a 'capabilities' field: if it is a key's grant add it to KEY_WRITERS "
+        "and record it, otherwise add it to NOT_A_KEY with the reason"
     )
+    assert set(NOT_A_KEY) <= writers, f"stale NOT_A_KEY entries: {sorted(set(NOT_A_KEY) - writers)}"
 
 
-def test_every_handler_that_writes_a_capability_set_records_it() -> None:
-    tree = ast.parse(textwrap.dedent(inspect.getsource(integrations)))
-    writers = [
-        fn for fn in ast.walk(tree)
-        if isinstance(fn, ast.AsyncFunctionDef) and fn.decorator_list and _writes_capabilities(fn)
-    ]
-    assert {fn.name for fn in writers} >= {"create_api_key", "update_api_key_capabilities"}
-    silent = sorted(fn.name for fn in writers if not _calls(fn, "_audit_credential_lifecycle"))
-    assert silent == [], f"these handlers write a key's capabilities without an audit record: {silent}"
+def test_every_key_capability_write_reaches_a_record_with_the_fields() -> None:
+    functions, callers = _index()
+    reached = set()
+    for writer in sorted(KEY_WRITERS):
+        for chain in _chains(writer, functions, callers):
+            point = chain[-1]
+            assert _calls(functions[point]) & AUDIT_SINKS, (
+                f"{' <- '.join(f'{m}.{n}' for m, n in chain)} writes a key's capabilities with no audit record"
+            )
+            assert any(_calls(functions[link]) & FIELD_BUILDERS for link in chain), (
+                f"{' <- '.join(n for _m, n in chain)} records without the capability audit fields"
+            )
+            reached.add(point)
+    assert reached == set(RECORDS)
+    for point, action in RECORDS.items():
+        source = ast.unparse(functions[point])
+        named = f"'{action}'" in source or (
+            action == CAPABILITIES_UPDATE_ACTION and "CAPABILITIES_UPDATE_ACTION" in source
+        )
+        assert named, f"{point[0]}.{point[1]} does not write {action}"
+
+
+def test_the_lifecycle_record_builds_the_capability_fields() -> None:
+    functions, _ = _index()
+    assert "capability_audit_fields" in _calls(functions[("app.routers.integrations", "_audit_credential_lifecycle")])
