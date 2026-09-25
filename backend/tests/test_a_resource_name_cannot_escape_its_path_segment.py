@@ -100,10 +100,11 @@ def _offending_subscripts():
             # collection names it chooses itself.
             if isinstance(index, ast.Name) and index.id == "collection":
                 continue
+            # note: lxd_segment is safe_segment plus a 400 for an empty or dot segment
             if (
                 isinstance(index, ast.Call)
                 and isinstance(index.func, ast.Name)
-                and index.func.id == "safe_segment"
+                and index.func.id in ("safe_segment", "lxd_segment")
             ):
                 continue
             offenders.append(
@@ -178,7 +179,7 @@ def _offending_manager_calls():
             if (
                 isinstance(first, ast.Call)
                 and isinstance(first.func, ast.Name)
-                and first.func.id == "safe_segment"
+                and first.func.id in ("safe_segment", "lxd_segment")
             ):
                 continue
             offenders.append(

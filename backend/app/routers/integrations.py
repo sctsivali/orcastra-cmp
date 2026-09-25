@@ -43,6 +43,7 @@ from app.services.lxd.availability import require_client, unreachable_detail
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.limited_write_reach import (
     ChecksNotFinished,
+    assert_plan_segments,
     limited_write_reach,
     proxy_write_reach,
     refuse_what_a_limited_write_applies,
@@ -3801,6 +3802,16 @@ async def raw_proxy(
                 cluster_id=request.cluster_id,
             )
 
+        # important: LXD applies profiles a write does not name (a create gets default, a copy its
+        # source's, a move the target project's), so a project-limited key's write is judged by
+        # what it applies before it is sent (core/limited_key_writes.py). The names it reads are held
+        # to one path segment here, before the cluster is asked anything.
+        plan = (
+            [] if project_grant_is_unrestricted(allowed_projects)
+            else limited_write_plan(request.path, method, request.body, project)
+        )
+        assert_plan_segments(plan)
+
         # important: the breaker check sits AFTER the permission checks on purpose, so
         # response timing cannot be used to probe which clusters exist without permission.
         if health.is_tripped(request.cluster_id):
@@ -3862,14 +3873,7 @@ async def raw_proxy(
             target=request.path,
             external_user_email=request.external_user_email,
         )
-        # important: LXD applies profiles a write does not name (a create gets default, a copy its
-        # source's, a move the target project's), so a project-limited key's write is judged by
-        # what it applies before it is sent (core/limited_key_writes.py).
-        plan = (
-            [] if project_grant_is_unrestricted(allowed_projects)
-            else limited_write_plan(request.path, method, request.body, project)
-        )
-        
+
         # important: this reaches into client.api.session, which bypasses pylxd's _APINode and
         # therefore the timeout _APINode would have injected. The socket timeout is passed
         # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
@@ -4342,6 +4346,7 @@ async def proxy_operation(
         # important: the profiles and sources the write applies are read as a job of their own,
         # so a write whose checks time out is never started (see raw_proxy).
         limited_plan = instance_write_plan(*limited_write, request.project) if limited_write else []
+        assert_plan_segments(limited_plan)
         if limited_plan:
             try:
                 await refuse_what_a_limited_write_applies(

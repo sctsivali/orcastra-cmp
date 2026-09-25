@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.lxd_names import POLICY_CONFIG_KEYS
 from app.core.lxd_path import safe_segment
+from app.core.lxd_segment import lxd_segment
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +277,7 @@ def list_instance_snapshots(
     kwargs: Dict[str, Any] = {"params": _project_params(project, recursion=1)}
     if timeout is not None:
         kwargs["timeout"] = timeout
-    response = client.api.instances[safe_segment(instance_name)].snapshots.get(**kwargs)
+    response = client.api.instances[lxd_segment(instance_name, what="Instance name")].snapshots.get(**kwargs)
     rows = [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
     # important: stamped HERE, not in `_normalize`. This read is what the fleet size phase calls
     # to obtain a size, so a null size on this path means the driver reported nothing, not that
@@ -398,7 +399,7 @@ def create_instance_snapshot(
     stateful: bool = False,
     expires_at: Optional[str] = None,
 ):
-    response = client.api.instances[safe_segment(instance_name)].snapshots.post(
+    response = client.api.instances[lxd_segment(instance_name, what="Instance name")].snapshots.post(
         json={
             "name": snapshot_name,
             "stateful": bool(stateful),
@@ -410,14 +411,16 @@ def create_instance_snapshot(
 
 
 def restore_instance_snapshot(client, instance_name: str, project: str, snapshot_name: str):
-    response = client.api.instances[safe_segment(instance_name)].put(
+    response = client.api.instances[lxd_segment(instance_name, what="Instance name")].put(
         json={"restore": snapshot_name}, params=_project_params(project)
     )
     return _operation_id(response)
 
 
 def delete_instance_snapshot(client, instance_name: str, project: str, snapshot_name: str):
-    response = client.api.instances[safe_segment(instance_name)].snapshots[safe_segment(snapshot_name)].delete(
+    response = client.api.instances[lxd_segment(instance_name, what="Instance name")].snapshots[
+        lxd_segment(snapshot_name, what="Snapshot name")
+    ].delete(
         params=_project_params(project)
     )
     return _operation_id(response)
@@ -511,7 +514,7 @@ def read_instance_config_and_policy(
     it tells whether the metered product upstream has claimed the instance since. Two reads for one
     decision is a second chance to see two different instants.
     """
-    response = client.api.instances[safe_segment(instance_name)].get(params=_project_params(project))
+    response = client.api.instances[lxd_segment(instance_name, what="Instance name")].get(params=_project_params(project))
     config = (_metadata(response) or {}).get("config") or {}
     return config, _policy_from_config(config)
 

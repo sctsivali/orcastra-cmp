@@ -21,6 +21,7 @@ from typing import Any, Dict, FrozenSet, Tuple
 from fastapi import HTTPException
 
 from .availability import require_client
+from .proxy_path_params import assert_path_params
 from .guest_exec import exec_instance
 from .guest_files import get_file, put_file
 from .instance_view import instance_detail, instance_summary, status_name
@@ -42,7 +43,6 @@ from .proxy import (
     exec_executor,
     proxy_executor,
 )
-from app.core.lxd_path import safe_segment
 from app.core.lxd_segment import lxd_segment
 
 logger = logging.getLogger(__name__)
@@ -429,13 +429,14 @@ def execute_proxy_operation(
     Project scoping goes through ``get_project_client``, which is what that method exists for.
     """
     assert_required_params(operation, params)
+    assert_path_params(operation, params)
     client = _client_for(lxd_service, cluster_id, project, operation)
 
     def instance() -> Any:
-        return client.instances.get(safe_segment(_required(params, "name", "Instance name")))
+        return client.instances.get(lxd_segment(_required(params, "name", "Instance name"), what="Instance name"))
 
     def instance_api() -> Any:
-        return client.api.instances[safe_segment(_required(params, "name", "Instance name"))]
+        return client.api.instances[lxd_segment(_required(params, "name", "Instance name"), what="Instance name")]
 
     # ── reads ──────────────────────────────────────────────────────────────────────────────
 
@@ -508,7 +509,9 @@ def execute_proxy_operation(
 
     if operation == "get_operation":
         return _serialize_operation(
-            client.operations.get(safe_segment(_required(params, "operation_id", "Operation id")))
+            client.operations.get(
+                lxd_segment(_required(params, "operation_id", "Operation id"), what="Operation id")
+            )
         )
 
     # ── writes ─────────────────────────────────────────────────────────────────────────────
@@ -648,7 +651,7 @@ def execute_proxy_operation(
 
     if operation == "delete_network":
         name = _required(params, "name", "Network name")
-        client.networks.get(safe_segment(name)).delete()
+        client.networks.get(lxd_segment(name, what="Network name")).delete()
         return {"deleted": True, "name": name}
 
     if operation == "create_storage_pool":
@@ -660,7 +663,7 @@ def execute_proxy_operation(
 
     if operation == "delete_storage_pool":
         name = _required(params, "name", "Storage pool name")
-        client.storage_pools.get(safe_segment(name)).delete()
+        client.storage_pools.get(lxd_segment(name, what="Storage pool name")).delete()
         return {"deleted": True, "name": name}
 
     if operation == "create_project":
@@ -674,7 +677,7 @@ def execute_proxy_operation(
 
     if operation == "delete_project":
         name = _required(params, "name", "Project name")
-        client.projects.get(safe_segment(name)).delete()
+        client.projects.get(lxd_segment(name, what="Project name")).delete()
         return {"deleted": True, "name": name}
 
     # Unreachable while the contract test passes: an unknown name is refused by the router
@@ -690,5 +693,6 @@ def fetch_operation_status(
     # fails. The fallback answered from the DEFAULT project for a request authorised against a
     # different one, so an operation id from `default` could be read by a key granted only
     # `tenant-a`, including the resource URLs it names. _client_for raises 503 instead.
+    assert_path_params("get_operation", {"operation_id": operation_id})
     client = _client_for(lxd_service, cluster_id, project, "get_operation")
-    return _serialize_operation(client.operations.get(safe_segment(operation_id)))
+    return _serialize_operation(client.operations.get(lxd_segment(operation_id, what="Operation id")))

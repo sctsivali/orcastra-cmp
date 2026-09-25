@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
-from app.core.lxd_path import safe_segment
+from app.core.lxd_segment import lxd_segment
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.models.db_models import IsoUploadSession
 from app.routers.integrations import require_capability
@@ -476,7 +476,9 @@ def _resolve_volume_sync(cluster_id: str, pool: str, volume_name: str, project: 
     endpoint = client.api._api_endpoint
     session = client.api.session
     project_q = _volume_project_q(project)
-    r = session.get(f"{endpoint}/storage-pools/{safe_segment(pool)}/volumes/custom/{safe_segment(volume_name)}{project_q}", verify=False, timeout=60)
+    pool_segment = lxd_segment(pool, what="Storage pool name")
+    volume_segment = lxd_segment(volume_name, what="Volume name")
+    r = session.get(f"{endpoint}/storage-pools/{pool_segment}/volumes/custom/{volume_segment}{project_q}", verify=False, timeout=60)
     if r.status_code >= 400:
         return None
     meta = r.json().get("metadata") or {}
@@ -526,7 +528,7 @@ def _lxd_import_iso_sync(cluster_id: str, path: str, pool: str, volume_name: str
 
     with open(path, "rb") as f:
         resp = session.post(
-            f"{endpoint}/storage-pools/{safe_segment(pool)}/volumes/custom{project_q}",
+            f"{endpoint}/storage-pools/{lxd_segment(pool, what='Storage pool name')}/volumes/custom{project_q}",
             data=f,
             headers={
                 "Content-Type": "application/octet-stream",

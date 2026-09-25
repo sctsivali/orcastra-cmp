@@ -5,7 +5,8 @@ gets implicitly, a copy's source, a restored snapshot, an image. This module mak
 names the first thing that reaches the host.
 
 important: fails closed. A source, snapshot or image that cannot be read refuses the write, because
-what it would apply cannot be judged. A named profile that does not exist is left to LXD, which
+what it would apply cannot be judged. A name the plan would read that is empty, `.` or `..` is refused
+with 400 before any read (assert_plan_segments), since requests folds a dot segment out of the path. A named profile that does not exist is left to LXD, which
 refuses the write itself. A read that does not finish in time, or that the cluster answers with an
 error, sends nothing (ChecksNotFinished), and the cluster's breaker is left alone for it.
 """
@@ -27,7 +28,7 @@ from app.core.limited_key_writes import (
     limited_key_refusal,
     profile_reach,
 )
-from app.core.lxd_path import safe_segment
+from app.core.lxd_segment import lxd_segment
 from app.services.lxd.availability import require_client
 from app.services.lxd.proxy import socket_timeout_for
 
@@ -74,6 +75,41 @@ def reader(session: Any, endpoint: str, socket_timeout: Tuple[int, int]) -> Call
     return get
 
 
+def _profile_path(name: Any) -> str:
+    return f"/profiles/{lxd_segment(name, what='Profile name')}"
+
+
+def _instance_path(instance: Any, snapshot: Optional[str]) -> str:
+    path = f"/instances/{lxd_segment(instance, what='Instance name')}"
+    return f"{path}/snapshots/{lxd_segment(snapshot, what='Snapshot name')}" if snapshot else path
+
+
+def _image_path(fingerprint: Any) -> str:
+    return f"/images/{lxd_segment(fingerprint, what='Image fingerprint')}"
+
+
+def _alias_path(alias: Any) -> str:
+    return f"/images/aliases/{lxd_segment(alias, what='Image alias')}"
+
+
+def assert_plan_segments(plan: Iterable[PlanStep]) -> None:
+    """Raise 400 for a name the plan's reads would put in a path that is empty, `.` or `..`.
+
+    note: run before the cluster is asked anything, with the same path builders the reads use.
+    """
+    for step in plan:
+        if isinstance(step, NamedProfiles):
+            for name in step.names:
+                _profile_path(name)
+        elif isinstance(step, CarriedFrom):
+            _instance_path(step.instance, step.snapshot)
+        else:
+            if step.fingerprint:
+                _image_path(step.fingerprint)
+            if step.alias:
+                _alias_path(step.alias)
+
+
 def _cached_fingerprints(get: Callable[..., Any], step: ImageApplied) -> Optional[List[str]]:
     """Every fingerprint of the create's type cached from that server and alias, in any project.
 
@@ -108,7 +144,7 @@ def _image_reach(get: Callable[..., Any], profiles_in: Callable[[str], Callable[
         if found is None:
             return (f"an image cached from {step.server} that this proxy could not list, "
                     "so name the profiles in the request")
-        held = [get(f"/images/{safe_segment(fingerprint)}", step.project) for fingerprint in found]
+        held = [get(_image_path(fingerprint), step.project) for fingerprint in found]
         # note: a fresh download gets the default profile, so default is judged whatever is cached
         names = ["default"] + [
             str(name) for image in held if isinstance(image, dict) for name in image.get("profiles") or []
@@ -128,17 +164,14 @@ def _local_image(get: Callable[..., Any], step: ImageApplied, in_project: str) -
     """The record of a local image create's source as `in_project` resolves it, or None."""
     fingerprint = step.fingerprint
     if not fingerprint and step.alias:
-        alias = get(f"/images/aliases/{safe_segment(step.alias)}", in_project) or {}
+        alias = get(_alias_path(step.alias), in_project) or {}
         fingerprint = alias.get("target") if isinstance(alias, dict) else None
-    return get(f"/images/{safe_segment(fingerprint)}", in_project) if fingerprint else None
+    return get(_image_path(fingerprint), in_project) if fingerprint else None
 
 
 def _carried_reach(get: Callable[..., Any], profiles_in: Callable[[str], Callable[[str], Any]],
                    step: CarriedFrom) -> Optional[str]:
-    path = f"/instances/{safe_segment(step.instance)}"
-    if step.snapshot:
-        path += f"/snapshots/{safe_segment(step.snapshot)}"
-    held = get(path, step.read_project)
+    held = get(_instance_path(step.instance, step.snapshot), step.read_project)
     if not isinstance(held, dict):
         what = f"snapshot {step.snapshot} of instance" if step.snapshot else "instance"
         return f"{what} {step.instance}, which could not be read"
@@ -161,7 +194,7 @@ def limited_write_reach(
     get = reader(session, endpoint, socket_timeout)
 
     def profiles_in(in_project: str) -> Callable[[str], Any]:
-        return lambda name: get(f"/profiles/{safe_segment(name)}", in_project)
+        return lambda name: get(_profile_path(name), in_project)
 
     for step in plan:
         if isinstance(step, NamedProfiles):

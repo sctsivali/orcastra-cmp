@@ -7,7 +7,10 @@ Found on /proxy delete_snapshot and on the image-upload alias reads and repoint 
 
 Every path segment built from a variable must be `safe_segment(...)` or `lxd_segment(...)`
 (core/lxd_segment.py refuses a dot segment too), or a name assigned only from one of those in the
-same function. Three shapes are read:
+same function. A value that came from a request must use `lxd_segment`, since `safe_segment` leaves
+`.` and `..` for requests to fold out of the path. `safe_segment` stays only where the code read the
+value from LXD or built it itself, and each such site is listed in SAFE_SEGMENT_SITES with the reason.
+Three shapes are read:
 
 - an f-string naming an LXD resource, where a value follows a `/`;
 - a subscript on a pylxd node (`client.api.instances[...]`, `...snapshots[...]`);
@@ -49,6 +52,25 @@ PYLXD_NODE = re.compile(
     r"storage_pools|volumes|operations|projects|logs)$"
 )
 MANAGER_LOOKUPS = {"get", "get_by_alias", "exists"}
+
+# Every safe_segment call in the scanned modules, as (file, function, call), and why its value cannot
+# come from a request. A new call fails until it is either lxd_segment or listed here.
+SAFE_SEGMENT_SITES: Dict[Tuple[str, str, str], str] = {
+    ("app/routers/image_uploads.py", "_resolve_alias_sync", "safe_segment(target)"):
+        "the fingerprint LXD's alias record points at",
+    ("app/routers/image_uploads.py", "_lxd_import_sync", "safe_segment(precomputed_fp)"):
+        "the sha256 this process computed of the staged file (_run_import passes its digest)",
+    ("app/routers/image_uploads.py", "_lxd_import_sync", "safe_segment(fingerprint)"):
+        "the fingerprint LXD's import answered with, or the computed digest",
+    ("app/services/lxd/snapshots.py", "wait_for_operation", "safe_segment(operation_id)"):
+        "the operation id LXD answered a snapshot write with",
+    ("app/services/lxd/guest_output.py", "_fetch_log", "safe_segment(name)"):
+        "the exec-output log name LXD's exec operation reports",
+    ("app/services/lxd/guest_output.py", "_discard_log", "safe_segment(name)"):
+        "the exec-output log name LXD's exec operation reports",
+    ("app/services/lxd/guest_output.py", "run_recorded", "safe_segment(operation_id)"):
+        "the operation id LXD answered the exec with",
+}
 
 
 def _is_encoder_call(node: ast.AST) -> bool:
@@ -123,6 +145,56 @@ def _unencoded_segments(source: str, label: str) -> List[str]:
         ):
             found.add((node.lineno, ast.unparse(node)))
     return [f"{label}:{line}: {text}" for line, text in sorted(found)]
+
+
+def _safe_segment_calls(source: str, label: str) -> List[Tuple[str, str, str, int]]:
+    """Every safe_segment call, as (file, enclosing function, call, line)."""
+    found: List[Tuple[str, str, str, int]] = []
+
+    def visit(node: ast.AST, function: str) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            function = node.name
+        if _is_encoder_call(node) and ast.unparse(node).startswith(("safe_segment(", "lxd_path.safe_segment(")):
+            found.append((label, function, ast.unparse(node), node.lineno))
+        for child in ast.iter_child_nodes(node):
+            visit(child, function)
+
+    visit(ast.parse(source), "<module>")
+    return found
+
+
+def _all_safe_segment_calls() -> List[Tuple[str, str, str, int]]:
+    return [
+        call for path in KEY_REACHABLE
+        for call in _safe_segment_calls(path.read_text(), str(path.relative_to(APP.parent)))
+    ]
+
+
+def test_a_request_value_is_encoded_with_lxd_segment() -> None:
+    unlisted = [
+        f"{label}:{line}: {call} in {function}" for label, function, call, line in _all_safe_segment_calls()
+        if (label, function, call) not in SAFE_SEGMENT_SITES
+    ]
+    assert unlisted == [], (
+        "safe_segment keeps a `.` or `..` a request sent, so use lxd_segment, or list the site in "
+        "SAFE_SEGMENT_SITES with why the value cannot come from a request:\n" + "\n".join(unlisted)
+    )
+
+
+def test_every_listed_safe_segment_site_still_exists() -> None:
+    present = {(label, function, call) for label, function, call, _ in _all_safe_segment_calls()}
+    assert sorted(set(SAFE_SEGMENT_SITES) - present) == []
+
+
+def test_the_safe_segment_scan_sees_a_request_name() -> None:
+    sample = (
+        "def f(client, params):\n"
+        "    client.api.instances[safe_segment(params['name'])].get()\n"
+        "    client.api.instances[lxd_segment(params['name'], what='x')].get()\n"
+    )
+    assert [(function, call) for _, function, call, _ in _safe_segment_calls(sample, "probe")] == [
+        ("f", "safe_segment(params['name'])")
+    ]
 
 
 def test_every_lxd_path_segment_on_a_key_surface_is_encoded() -> None:
