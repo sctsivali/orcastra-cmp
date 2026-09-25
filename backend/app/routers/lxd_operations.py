@@ -32,6 +32,11 @@ from app.models.db_models import Organization, OrganizationMember
 from app.services.instance_job_identity import resolve_instance_job_organization
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.lazy_client import client_for
+# note: the allowlist moved beside the secret key set so every API-key surface reads this same
+# function. The alias keeps this router's call site as it was.
+from app.services.lxd.operation_metadata import (
+    sanitize_operation_metadata as _sanitize_operation_metadata,
+)
 from app.services.migration_fence import (
     MigrationFenceConflict,
     assert_instance_not_migration_fenced,
@@ -70,20 +75,6 @@ _OPERATION_LOOKUP_TIMEOUT_SECONDS = 12.0
 _OPERATION_CANCEL_TIMEOUT_SECONDS = 12.0
 _OPERATION_WAIT_GRACE_SECONDS = 10.0
 _OperationResult = TypeVar("_OperationResult")
-
-# LXD operation metadata is not a presentation object. Console and exec operations can carry
-# per-fd websocket secrets there, while migration operations can carry transport credentials.
-# Only scalar progress fields have a browser use and are safe to return.
-_SAFE_OPERATION_METADATA_KEYS = frozenset(
-    {
-        "progress",
-        "download_progress",
-        "upload_progress",
-        "fs_progress",
-        "create_progress",
-        "migration_progress",
-    }
-)
 
 # An operation is project-owned only when every resource URL names one of these API families.
 # Cluster members, certificates, storage pools themselves, and any future/unknown family are
@@ -176,17 +167,6 @@ def _operation_value(operation: Any, key: str, default: Any = None) -> Any:
     if isinstance(operation, Mapping):
         return operation.get(key, default)
     return getattr(operation, key, default)
-
-
-def _sanitize_operation_metadata(value: Any) -> Dict[str, Any]:
-    if not isinstance(value, Mapping):
-        return {}
-    return {
-        key: sanitize_error(item, limit=500) if isinstance(item, str) else item
-        for key, item in value.items()
-        if key in _SAFE_OPERATION_METADATA_KEYS
-        and (item is None or isinstance(item, (str, int, float, bool)))
-    }
 
 
 def _resource_project(kind: str, raw_url: Any) -> Optional[tuple[str, str]]:

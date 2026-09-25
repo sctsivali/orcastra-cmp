@@ -41,6 +41,7 @@ from app.services.lxd.proxy import (
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.availability import require_client, unreachable_detail
 from app.services.lxd.lazy_client import connect_or_get_client
+from app.services.lxd.operation_metadata import redact_operation_response
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
     GUEST_ACCESS_OPERATIONS,
@@ -3775,6 +3776,9 @@ async def raw_proxy(
                 data = response.json()
             except Exception:
                 data = {"raw": response.text if hasattr(response, 'text') else str(response)}
+            # important: an exec or console operation carries the secrets that open its websocket,
+            # and a read key may list every operation in its projects. Nothing else is changed.
+            data = redact_operation_response(canonical_proxy_path(request.path), data)
 
             logger.info(
                 f"Raw proxy: {method} {request.path} on {request.cluster_id}/{project} "

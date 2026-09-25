@@ -24,6 +24,7 @@ from .availability import require_client
 from .guest_exec import exec_instance
 from .guest_files import get_file, put_file
 from .instance_view import instance_detail, instance_summary, status_name
+from .operation_metadata import sanitize_operation_metadata
 from ..desktop.entry import desktop_action, desktop_probe
 from ..desktop.runtime import (
     DESKTOP_ACTION_TIMEOUT,
@@ -259,6 +260,10 @@ def _attr(item: Any, name: str) -> Any:
 
 def _serialize_operation(operation: Any) -> Dict[str, Any]:
     payload = {name: _attr(operation, name) for name in _OPERATION_FIELDS}
+    # important: the dashboard's allowlist, the same function. An exec or console operation holds
+    # its websocket secrets in `metadata.fds`, and a read key polls any operation id in its
+    # projects, so passing metadata through let it attach to another caller's session.
+    payload["metadata"] = sanitize_operation_metadata(getattr(operation, "metadata", None))
     payload["error"] = getattr(operation, "err", None) or None
     return payload
 
