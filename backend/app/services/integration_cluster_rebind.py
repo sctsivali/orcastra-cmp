@@ -22,6 +22,8 @@ run, and an Admin's personal clusters are not a partner's. The role is read from
 time of the push, because nothing else holds it: the key's metadata records who minted it, not
 their role, and there is no users table. A role Authentik cannot answer for rebinds nothing.
 
+A rebind that fails partway is rolled back, so no move is committed without its record.
+
 note: the match is exact. `registered_by` holds the registrant's login email and the creator is
 that same login, so another spelling would find no row to move anyway.
 """
@@ -167,11 +169,18 @@ async def rebind_creator_clusters(
     if not await _creator_role_allows_rebind(roles, email, api_key_id):
         return 0
     moved: List[Tuple[str, Optional[int], int]] = []
-    rebound = await reconcile_personal_clusters(
-        db, email,
-        on_rebind=lambda cluster_id, from_org, to_org: moved.append((cluster_id, from_org, to_org)),
-        organization_id=destinations[0],
-    )
+    try:
+        rebound = await reconcile_personal_clusters(
+            db, email,
+            on_rebind=lambda cluster_id, from_org, to_org: moved.append((cluster_id, from_org, to_org)),
+            organization_id=destinations[0],
+        )
+    except Exception:
+        # important: each move is flushed before the one commit at the end, so a later cluster the
+        # share audit refused left the earlier moves in the session, and the next commit of this
+        # request wrote them without a record. Nothing of a failed rebind may survive it.
+        await db.rollback()
+        raise
     # note: recorded after reconcile_personal_clusters committed, so a rolled-back move leaves no record
     for cluster_id, from_org, to_org in moved:
         _record(cluster_id, from_org, to_org, email, api_key_id)
