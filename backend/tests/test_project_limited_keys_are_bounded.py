@@ -27,6 +27,7 @@ import requests
 from fastapi import HTTPException
 
 from app.core.api_key_capabilities import assert_project_scope_allows_path
+from app.core.limited_key_writes import host_reach
 from app.core.raw_proxy_path import canonical_proxy_path
 from app.routers import integrations
 from app.routers.integrations import ProxyRequest, SyncDataRequest, proxy_operation, sync_data
@@ -35,6 +36,7 @@ from tests._raw_proxy_fakes import (  # noqa: F401 - fixtures are registered by 
     ENDPOINT,
     NARROW,
     WILDCARD,
+    RecordingSession,
     _clean_breaker,
     call_raw_proxy,
     key,
@@ -225,7 +227,10 @@ async def test_a_wildcard_key_still_cannot_change_the_server_or_cluster(method: 
 async def test_a_narrow_key_may_change_what_its_project_bounds(method: str, path: str) -> None:
     outcome, session = await call_raw_proxy(NARROW, method, path, project="tenant-a")
     assert outcome.status_code == 200
-    segments, query = lxd_reads(session.urls[0], method)
+    # note: a create first reads the profile it applies, see test_an_applied_profile_cannot_reach_the_host
+    writes = [url for verb, url, _ in session.calls if verb == method]
+    assert len(writes) == 1
+    segments, query = lxd_reads(writes[0], method)
     assert segments == list(canonical_proxy_path(path).segments)
     assert query == [("project", "tenant-a")]
 
@@ -321,3 +326,170 @@ async def test_sync_follows_a_grant_that_covers_default() -> None:
     result = await _sync(key(["default", "tenant-a"]))
     assert [p["name"] for p in result.projects] == ["default", "tenant-a"]
     assert [i["name"] for i in result.instances] == ["web-default", "web-tenant-a"]
+
+
+# -- the body cannot take a project-limited key out of its project (a335b0d, 441213a) ---------------
+
+
+class _PlainCluster(RecordingSession):
+    """Answers the reads a limited write plan makes with plain resources: every profile, instance and
+    image exists and reaches nothing, and every alias resolves."""
+
+    def get(self, url: str, **kwargs: Any) -> requests.Response:
+        response = super().get(url, **kwargs)
+        if "/images/aliases/" in url:
+            response._content = b'{"metadata": {"target": "fp1"}}'
+        elif any(part in url for part in ("/images/", "/instances/", "/profiles/")):
+            response._content = b'{"metadata": {"profiles": ["default"], "config": {}, "devices": {}}}'
+        return response
+
+    @property
+    def writes(self) -> List[str]:
+        return [url for verb, url, _ in self.calls if verb != "GET"]
+
+
+ROOT_DISK = {"root": {"type": "disk", "path": "/", "pool": "default"}}
+FOREIGN_BODIES = [
+    ("POST", "/1.0/instances", {"name": "c1", "source": {"type": "copy", "source": "db", "project": "tenant-b"}}),
+    ("POST", "/1.0/instances/web", {"name": "web", "project": "tenant-b"}),
+    ("POST", "/1.0/images", {"source": {"type": "instance", "name": "db", "project": "tenant-b"}}),
+    ("POST", "/1.0/instances", {"name": "c1", "target": {"project": "tenant-b"}}),
+]
+HOST_BODIES = [
+    ("POST", "/1.0/instances", {"name": "c1", "config": {"security.privileged": "true"}}),
+    ("PUT", "/1.0/instances/web", {"config": {"raw.lxc": "lxc.apparmor.profile=unconfined"}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"Security.IDMap.Size": "65536"}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"linux.kernel_modules": "overlay"}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"host": {"type": "disk", "source": "/", "path": "/mnt"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"sock": {"type": "proxy", "listen": "tcp:0.0.0.0:1",
+                                                            "connect": "unix:/var/lib/lxd/unix.socket"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"r": {"type": "disk", "source": "ceph:rbd/vol", "path": "/r"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"eth1": {"type": "nic", "nictype": "physical", "parent": "eno1"}}}),
+    ("POST", "/1.0/instances", {"name": "c1", "devices": {"d": {"type": "unix-block", "source": "/dev/sda"}}}),
+]
+PLAIN_BODIES = [
+    ("POST", "/1.0/instances", {"name": "c1", "source": {"type": "image", "alias": "ubuntu"},
+                                "devices": dict(ROOT_DISK), "config": {"limits.cpu": "2"}}),
+    ("POST", "/1.0/instances", {"name": "c1", "source": {"type": "copy", "source": "web", "project": "tenant-a"}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"data": {"type": "disk", "pool": "default", "source": "vol1",
+                                                            "path": "/data"}}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"eth0": {"type": "nic", "network": "lxdbr0"}}}),
+    ("PUT", "/1.0/instances/web/state", {"action": "stop", "force": True}),
+    # a GPU, a switch set off and a VM's own config drive do not reach the host
+    ("PATCH", "/1.0/instances/web", {"devices": {"g": {"type": "gpu"}}}),
+    ("PATCH", "/1.0/instances/web", {"config": {"security.privileged": "false", "security.idmap.isolated": "true"}}),
+    ("PATCH", "/1.0/instances/web", {"devices": {"cloud": {"type": "disk", "source": "cloud-init:config"}}}),
+]
+
+
+@pytest.mark.parametrize("method,path,body", FOREIGN_BODIES + HOST_BODIES)
+async def test_a_narrow_key_body_cannot_leave_its_project(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await call_raw_proxy(NARROW, method, path, project="tenant-a", body=body)
+    assert isinstance(outcome, HTTPException)
+    assert outcome.status_code == 403
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("method,path,body", PLAIN_BODIES)
+async def test_a_narrow_key_body_inside_its_project_goes_through(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await call_raw_proxy(NARROW, method, path, project="tenant-a", body=body,
+                                            session=_PlainCluster())
+    assert outcome.status_code == 200
+    assert len(session.writes) == 1
+
+
+@pytest.mark.parametrize("method,path,body", FOREIGN_BODIES + HOST_BODIES)
+async def test_a_wildcard_key_body_is_untouched(method: str, path: str, body: Dict[str, Any]) -> None:
+    outcome, session = await call_raw_proxy(WILDCARD, method, path, body=body)
+    assert outcome.status_code == 200
+    assert len(session.calls) == 1
+
+
+# The value table the rule is judged by (441213a): a switch is refused only when it is not off,
+# raw.*, kernel modules and an idmap base or size whenever set, a disk from outside a storage pool
+# for any source but LXD's own VM drives, and a GPU stays allowed.
+REACHING = [
+    ({"config": {"security.privileged": "true"}}, "security.privileged"),
+    ({"config": {"Security.Privileged": " YES "}}, "Security.Privileged"),
+    ({"config": {"security.privileged": "garbage"}}, "security.privileged"),
+    ({"config": {"raw.lxc": "lxc.apparmor.profile=unconfined"}}, "raw.lxc"),
+    ({"config": {"security.idmap.base": "0"}}, "security.idmap.base"),
+    ({"config": {"security.idmap.size": "65536"}}, "security.idmap.size"),
+    ({"config": {"security.syscalls.intercept.mount.allowed": "ext4"}}, "intercept"),
+    ({"config": {"linux.kernel_modules": "overlay"}}, "kernel_modules"),
+    ({"devices": {"h": {"type": "disk", "source": "/", "path": "/mnt/h"}}}, "host path"),
+    ({"devices": {"r": {"type": "disk", "source": "ceph:rbd-pool/other-project_vol", "path": "/r"}}}, "storage pool"),
+    ({"devices": {"f": {"type": "disk", "source": "cephfs:fs/some/path", "path": "/f"}}}, "storage pool"),
+    ({"devices": {"s": {"type": "proxy", "listen": "tcp:0.0.0.0:1", "connect": "unix:/var/lib/x"}}}, "proxy"),
+    ({"devices": {"u": {"type": "usb"}}}, "usb"),
+    ({"devices": {"k": {"type": "unix-char", "source": "/dev/kvm"}}}, "unix-char"),
+    ({"devices": {"e": {"type": "nic", "nictype": "physical", "parent": "eno1"}}}, "physical"),
+]
+SAFE = [
+    {"config": {"security.privileged": "false"}},
+    {"config": {"security.privileged": "0", "security.syscalls.intercept.mknod": "false"}},
+    {"config": {"security.idmap.isolated": "true"}},
+    {"config": {"security.idmap.isolated": "false", "raw.lxc": ""}},
+    {"config": {"limits.cpu": "2", "security.nesting": "true"}},
+    {"devices": {"g": {"type": "gpu", "gputype": "physical"}}},
+    {"devices": {"data": {"type": "disk", "pool": "default", "source": "vol1", "path": "/data"}}},
+    {"devices": {"cloud": {"type": "disk", "source": "cloud-init:config"}}},
+    {"devices": {"agent": {"type": "disk", "source": "agent:config"}}},
+    {"devices": {"eth0": {"type": "nic", "network": "br0"}, "root": {"type": "disk", "path": "/", "pool": "default"}}},
+]
+
+
+@pytest.mark.parametrize("body,reason", REACHING)
+def test_host_reach_is_judged_by_value(body: Dict[str, Any], reason: str) -> None:
+    assert reason in (host_reach(body) or "")
+
+
+@pytest.mark.parametrize("body", SAFE)
+def test_a_setting_that_does_not_reach_the_host_passes_whatever_its_key(body: Dict[str, Any]) -> None:
+    assert host_reach(body) is None
+
+
+# -- /proxy create_instance sends params as the instance body (6bcae64) --------------------------
+
+
+@pytest.mark.parametrize(
+    "params,reason",
+    [
+        ({"name": "vm", "source": {"type": "none"}, "config": {"security.privileged": "true"}}, "security.privileged"),
+        ({"name": "vm", "source": {"type": "copy", "source": "x", "project": "tenant-b"}}, "tenant-b"),
+        ({"name": "vm", "source": {"type": "none"}, "devices": {"h": {"type": "disk", "source": "/", "path": "/h"}}},
+         "host path"),
+    ],
+)
+async def test_proxy_create_holds_a_narrow_key_to_the_body_rule(monkeypatch, params: Dict[str, Any],
+                                                               reason: str) -> None:
+    sent: List[Any] = []
+    monkeypatch.setattr(integrations, "execute_proxy_operation", lambda *a, **_k: sent.append(a) or {"ok": True})
+    # note: exec and files are granted so the body rule is what refuses, not the guest-capability price
+    narrow = key(["tenant-a"], capabilities=["lxd.proxy", "instance.exec", "instance.files"])
+    with pytest.raises(HTTPException) as caught:
+        await proxy_operation(
+            request=ProxyRequest(cluster_id=CLUSTER_ID, operation="create_instance", project="tenant-a", params=params),
+            api_key=narrow, lxd_service=SimpleNamespace(), _=None,
+        )
+    assert caught.value.status_code == 403 and reason in caught.value.detail
+    assert sent == [], "the refused body reached the cluster"
+
+
+async def test_proxy_create_still_works_inside_the_grant_and_for_a_star_key(monkeypatch) -> None:
+    sent: List[Any] = []
+    monkeypatch.setattr(integrations, "execute_proxy_operation", lambda *a, **_k: sent.append(a[2]) or {"ok": True})
+    monkeypatch.setattr(integrations, "proxy_write_reach", lambda *_a: None)
+    plain = {"name": "vm", "source": {"type": "none"}}
+    answer = await proxy_operation(
+        request=ProxyRequest(cluster_id=CLUSTER_ID, operation="create_instance", project="tenant-a", params=plain),
+        api_key=NARROW, lxd_service=SimpleNamespace(), _=None,
+    )
+    assert answer.success is True
+    privileged = dict(plain, config={"security.privileged": "true"})
+    answer = await proxy_operation(
+        request=ProxyRequest(cluster_id=CLUSTER_ID, operation="create_instance", project="tenant-a",
+                             params=privileged),
+        api_key=key(["*"], capabilities=["lxd.proxy", "instance.exec"]), lxd_service=SimpleNamespace(), _=None,
+    )
+    assert answer.success is True and sent == ["create_instance", "create_instance"]

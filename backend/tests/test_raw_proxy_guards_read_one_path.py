@@ -21,6 +21,7 @@ import pytest
 APP = Path(__file__).resolve().parents[1] / "app"
 CAPABILITIES = APP / "core" / "api_key_capabilities.py"
 RAW_PROXY_PATH = APP / "core" / "raw_proxy_path.py"
+LIMITED_WRITES = APP / "core" / "limited_key_writes.py"
 ROUTER = APP / "routers" / "integrations.py"
 
 # Functions that take a raw-proxy path string, per file.
@@ -35,6 +36,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
         "assert_proxy_path_allowed",
     ),
     RAW_PROXY_PATH: ("assert_server_state_unchanged",),
+    LIMITED_WRITES: ("assert_body_within_grant", "limited_write_plan"),
     ROUTER: ("_proxy_audit_action",),
 }
 

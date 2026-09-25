@@ -41,6 +41,12 @@ from app.services.lxd.proxy import (
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.availability import require_client, unreachable_detail
 from app.services.lxd.lazy_client import connect_or_get_client
+from app.services.lxd.limited_write_reach import (
+    ChecksNotFinished,
+    limited_write_reach,
+    proxy_write_reach,
+    refuse_what_a_limited_write_applies,
+)
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
@@ -89,6 +95,14 @@ from app.core.api_key_capabilities import (
     granted_capabilities,
 )
 from app.core import build_identity
+from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
+from app.core.limited_key_writes import (
+    assert_body_within_grant,
+    assert_limited_body,
+    instance_write_plan,
+    limited_write_plan,
+    proxy_instance_write,
+)
 from app.core.raw_proxy_path import assert_server_state_unchanged, canonical_proxy_path
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
@@ -3659,6 +3673,11 @@ async def raw_proxy(
         # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass
         # every check here. Same for a cluster-wide storage pool.
         assert_project_scope_allows_path(request.path, method, allowed_projects)
+        # important: LXD reads body field names without regard to case, so every guard below (the
+        # migration fence, the policy observer, the limited-key rules) and the request sent read
+        # this one dict, which refuses a field spelled any other way (core/api_key_body.py).
+        request = request.model_copy(update={"body": canonical_raw_proxy_body(method, request.body)})
+        assert_body_within_grant(request.path, method, request.body, allowed_projects)
 
         required_permission = "read"
 
@@ -3750,12 +3769,32 @@ async def raw_proxy(
             target=request.path,
             external_user_email=request.external_user_email,
         )
+        # important: LXD applies profiles a write does not name (a create gets default, a copy its
+        # source's, a move the target project's), so a project-limited key's write is judged by
+        # what it applies before it is sent (core/limited_key_writes.py).
+        plan = (
+            [] if project_grant_is_unrestricted(allowed_projects)
+            else limited_write_plan(request.path, method, request.body, project)
+        )
         
         # important: this reaches into client.api.session, which bypasses pylxd's _APINode and
         # therefore the timeout _APINode would have injected. The socket timeout is passed
         # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
         # and then goes silent must degrade this one cluster, never the whole process.
         try:
+            if plan:
+                await refuse_what_a_limited_write_applies(
+                    limited_write_reach,
+                    client.api.session,
+                    endpoint,
+                    plan,
+                    socket_timeout_for(client),
+                    allowed_projects=allowed_projects,
+                    timeout=RAW_PROXY_TIMEOUT,
+                    label=f"raw_proxy[checks {request.cluster_id}]",
+                    executor=proxy_executor,
+                    max_in_flight=PROXY_MAX_IN_FLIGHT,
+                )
             response = await run_blocking(
                 raw_request,
                 client.api.session,
@@ -3826,6 +3865,10 @@ async def raw_proxy(
                 data=None,
                 error=str(pool_error),
             )
+        except ChecksNotFinished as not_sent:
+            # note: only reads ran, so the cluster is not marked unreachable for them
+            _audit_raw_proxy(api_key, request, method, project, "failure", error=not_sent.error_code)
+            return RawProxyResponse(status_code=not_sent.status_code, data=None, error=str(not_sent))
         except HTTPException:
             # note: re-raised so a real transport status is never downgraded to a 200 envelope
             # by the generic handler below.
@@ -3948,6 +3991,10 @@ async def proxy_operation(
         # while the raw proxy beside it worked. tests/test_cluster_scope_ratchet.py now covers
         # both.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
+        # important: create_instance sends params to LXD as the body and create_storage_pool its
+        # definition, and LXD reads their field names without regard to case, so every guard below
+        # reads params held to one spelling (core/api_key_body.py). MCP tools arrive here too.
+        assert_canonical_proxy_params(operation, request.params or {})
 
         # important: an operation that reaches inside a guest costs a capability of its own, on
         # top of lxd.proxy and the level. It is never inherited by a key issued before
@@ -4036,6 +4083,14 @@ async def proxy_operation(
                     f"{sorted(perm.get('projects', ['default']))}."
                 ),
             )
+        # important: a project-limited key is held to the raw proxy's body rule on the operations
+        # that write an instance's config, devices or profiles (core/limited_key_writes.py).
+        limited_write = (
+            None if project_grant_is_unrestricted(allowed_projects)
+            else proxy_instance_write(operation, request.params or {})
+        )
+        if limited_write is not None:
+            assert_limited_body(limited_write[2], allowed_projects, instance=True)
 
         if operation in {
             "create_instance",
@@ -4091,6 +4146,25 @@ async def proxy_operation(
                     f"{health.get_reason(request.cluster_id) or 'unknown'}"
                 ),
             )
+
+        # important: the profiles and sources the write applies are read as a job of their own,
+        # so a write whose checks time out is never started (see raw_proxy).
+        limited_plan = instance_write_plan(*limited_write, request.project) if limited_write else []
+        if limited_plan:
+            try:
+                await refuse_what_a_limited_write_applies(
+                    proxy_write_reach,
+                    lxd_service,
+                    request.cluster_id,
+                    limited_plan,
+                    allowed_projects=allowed_projects,
+                    timeout=PROXY_OP_TIMEOUT,
+                    label=f"proxy_operation[checks {request.cluster_id}]",
+                    executor=proxy_executor,
+                    max_in_flight=PROXY_MAX_IN_FLIGHT,
+                )
+            except ChecksNotFinished as not_sent:
+                return ProxyResponse(success=False, error_code=not_sent.error_code, error=str(not_sent))
 
         # Every branch below is a blocking pylxd call, and the waiting ones poll an LXD
         # operation to completion. Inline on the loop that is the same failure mode as the
