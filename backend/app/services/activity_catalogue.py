@@ -116,6 +116,8 @@ ACTION_CATEGORIES = {
     "integration.api_key.capabilities.update": EventCategory.ADMIN,
     "integration.api_key.revoke": EventCategory.ADMIN,
     "integration.api_key.delete": EventCategory.ADMIN,
+    # An integration push moving its creator's unbound cluster into an organization.
+    "integration.cluster.rebind": EventCategory.ADMIN,
     # Add-ons. Installing one hands a third party a credential into an organization, so the
     # grant-shaped actions are high severity and the descriptive ones are not.
     "extension.register": EventCategory.SETTINGS,
@@ -239,6 +241,7 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.api_key.capabilities.update",
     "integration.api_key.revoke",
     "integration.api_key.delete",
+    "integration.cluster.rebind",
     "extension.install",
     "extension.install.rescope",
     "extension.install.resume",

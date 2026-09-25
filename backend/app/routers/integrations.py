@@ -121,6 +121,7 @@ from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.services.integration_roles import apply_upsert_role, may_reconcile, revoke_if_orphaned
+from app.services.integration_cluster_rebind import creator_of, rebind_creator_clusters
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
     assert_cluster_safe_to_share,
@@ -1537,6 +1538,7 @@ async def _upsert_synced_members(
     db: AsyncSession,
     members: List["SyncMember"],
     api_key_id: str,
+    key_creator: Optional[str] = None,
 ) -> tuple[int, int]:
     """
     Upsert organization members pushed from external app.
@@ -1640,9 +1642,11 @@ async def _upsert_synced_members(
 
     # Backstop reconcile: now that these members are linked to their org, bind any
     # clusters they registered while org-less. Best-effort, idempotent, per member.
+    # important: only the key's creator. Every pushed email used to rebind, so a key could push
+    # another partner's email into its own org and take that partner's unbound clusters.
     for email in upserted_emails:
         try:
-            await reconcile_personal_clusters(db, email)
+            await rebind_creator_clusters(db, email, api_key_id=api_key_id, creator=key_creator)
         except Exception as e:
             logger.warning(f"reconcile_personal_clusters failed for {email}: {e}")
 
@@ -2675,7 +2679,7 @@ async def sync_data(
         # ── Sync members from external app ──
         if request.members:
             members_synced, members_removed = await _upsert_synced_members(
-                db, request.members, api_key_id
+                db, request.members, api_key_id, creator_of(api_key)
             )
             result.members_synced = members_synced
             result.members_removed = members_removed

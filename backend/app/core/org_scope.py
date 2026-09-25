@@ -12,6 +12,7 @@ Tenant:  sees clusters bound to assigned access policies (ACL)
 import contextvars
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -967,6 +968,8 @@ async def get_visible_projects(
 async def reconcile_personal_clusters(
     db: AsyncSession,
     user_email: str,
+    # note: called as (cluster_id, from_org, to_org) for each row it moves, before the commit
+    on_rebind: Optional[Callable[[str, Optional[int], int], None]] = None,
 ) -> int:
     """
     Bind a user's still-unbound (organization_id NULL) clusters to their primary org.
@@ -1031,6 +1034,8 @@ async def reconcile_personal_clusters(
                     prospective_registered_by=user_email,
                     force_audit=True,
                 )
+                if on_rebind is not None:
+                    on_rebind(row.cluster_id, row.organization_id, primary)
                 row.organization_id = primary
                 rebound += 1
             # Establish the DB write while the SQLite/test fallback lock is still held. On
