@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.org_scope import reconcile_personal_clusters
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services.activity_logger import get_activity_logger
+from app.services.add_on_credential_edits import is_add_on_credential
 from app.services.integration_roles import ROLE_ADMIN, RoleGroupStore
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ def creator_of(api_key: Mapping[str, Any]) -> Optional[str]:
     make an organization the add-on controls that person's primary one and move their clusters
     there, which is the move this module exists to prevent.
     """
-    if api_key.get("extension_install_id") is not None:
+    if is_add_on_credential(api_key):
         return None
     creator = api_key.get("created_by")
     return creator if isinstance(creator, str) and creator.strip() else None

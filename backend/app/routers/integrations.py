@@ -128,6 +128,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.services.integration_roles import apply_upsert_role, may_reconcile, revoke_if_orphaned
 from app.services.integration_cluster_rebind import creator_of, rebind_creator_clusters
+from app.services.add_on_credential_edits import refuse_delete, refuse_grant_edit
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
     assert_cluster_safe_to_share,
@@ -2238,7 +2239,8 @@ async def update_api_key_permissions(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Update API key cluster permissions."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    # important: before the cluster reads below. An add-on installation owns its grant.
+    refuse_grant_edit(_authorize_api_key(get_vault_integrations_client(), key_id))
 
     # important: creation validates the requested clusters against the caller's own set
     # (see create_api_key), and this path did not, so a partner could create a key scoped to
@@ -2330,6 +2332,7 @@ async def update_api_key_capabilities(
 
     try:
         metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+        refuse_grant_edit(metadata)
         previous = dict(metadata)
         was_legacy = "capabilities" not in metadata
         metadata["capabilities"] = sorted(set(request.capabilities))
@@ -2427,6 +2430,7 @@ async def delete_api_key(
     try:
         # Read before the delete: afterwards there is nothing left to describe what was removed.
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
+        refuse_delete(metadata)
 
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)
