@@ -19,12 +19,14 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 import requests
+from fastapi import HTTPException
 from pylxd.client import _APINode
 
 from app.mcp import tools_admin, tools_desktop, tools_guest, tools_inventory, tools_read, tools_write
 from app.routers import integrations
 from app.services.lxd.proxy_operations import PROXY_OPERATION_LEVELS
 from app.services.lxd.proxy_path_params import PATH_PARAMS
+from app.services.lxd.utils import find_instance_in_projects
 from tests._cloud_init_fakes import ConfigSession
 from tests._guest_gate_doors import (  # noqa: F401
     EVERY, NARROW, TWO, Cluster, door_fixture,
@@ -246,20 +248,53 @@ def _root_cluster(monkeypatch: pytest.MonkeyPatch) -> Cluster:
     return cluster
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT: GET /integrations/instances/{name} puts a dot name into the path "
-                                        "with safe_segment (utils.find_instance_in_projects), so '..' reads GET /1.0 "
-                                        "and answers the server config as an instance")
-@pytest.mark.parametrize("spelled", ["%2E%2E", "%2E"])
-def test_the_instance_read_refuses_a_dot_name(door: Any, monkeypatch: pytest.MonkeyPatch, spelled: str) -> None:
+@pytest.mark.parametrize("api_key,project", [(NARROW, "tenant-a"), (EVERY, None)], ids=["narrow", "every-project"])
+@pytest.mark.parametrize("spelled", ["%2E%2E", "%2E", "%2e%2e"])
+def test_the_instance_read_refuses_a_dot_name(door: Any, monkeypatch: pytest.MonkeyPatch, spelled: str,
+                                              api_key: Dict[str, Any], project: Any) -> None:
     cluster = _root_cluster(monkeypatch)
-    seen = door.get(NARROW, f"/api/v1/integrations/instances/{spelled}", cluster=cluster, project="tenant-a")
-    assert seen.status == 400 and cluster.session.calls == [], (seen.status, seen.text, cluster.session.calls)
+    params = {} if project is None else {"project": project}
+    seen = door.get(api_key, f"/api/v1/integrations/instances/{spelled}", cluster=cluster, **params)
+    assert seen.status == 400 and "cannot name an LXD object" in seen.text, (seen.status, seen.text)
+    assert cluster.session.calls == [] and seen.refusals == []
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT: MCP orcastra_get_instance reaches GET /1.0 for the name '..'")
-async def test_mcp_instance_read_refuses_a_dot_name(door: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("value", DOTS)
+async def test_mcp_instance_read_refuses_a_dot_name(door: Any, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     cluster = _root_cluster(monkeypatch)
-    seen = await door.mcp(tools_inventory, "orcastra_get_instance", NARROW, cluster, name="..", cluster_id=CLUSTER_ID,
+    seen = await door.mcp(tools_inventory, "orcastra_get_instance", NARROW, cluster, name=value, cluster_id=CLUSTER_ID,
                           project="tenant-a")
-    assert seen.status == 0 and cluster.session.calls == [], (seen.text, cluster.session.calls)
+    assert seen.status == 0 and "cannot name an LXD object" in seen.text, seen.text
+    assert cluster.session.calls == []
+
+
+def test_the_instance_read_still_answers_a_real_name(door: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    cluster = _root_cluster(monkeypatch)
+    seen = door.get(NARROW, "/api/v1/integrations/instances/web", cluster=cluster, project="tenant-a")
+    assert seen.status == 404 and [url for _verb, url, _kw in cluster.session.calls] == [
+        f"{ENDPOINT}/instances/web?project=tenant-a"]
+
+
+class _Projects:
+    """A pylxd client's project list and instance node, recording every request either makes."""
+
+    def __init__(self, calls: List[str]) -> None:
+        self.calls = calls
+
+    def all(self) -> List[Any]:
+        self.calls.append("projects.all")
+        return [type("P", (), {"name": "default"})()]
+
+
+@pytest.mark.parametrize("project", [None, "tenant-a"], ids=["every-project", "one-project"])
+@pytest.mark.parametrize("value", DOTS)
+def test_the_shared_instance_lookup_refuses_a_dot_name_before_any_request(value: str, project: Any) -> None:
+    calls: List[str] = []
+    client = type("Client", (), {})()
+    client.projects = _Projects(calls)
+    client.api = _APINode(ENDPOINT, session=_LxdRoot(), timeout=(3, 8))
+    with pytest.raises(HTTPException) as refused:
+        find_instance_in_projects(client, value, project)
+    assert refused.value.status_code == 400 and "Instance name" in str(refused.value.detail)
+    assert calls == [] and client.api.session.calls == []
 

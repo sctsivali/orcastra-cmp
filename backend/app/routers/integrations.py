@@ -111,6 +111,7 @@ from app.core.limited_key_writes import (
 )
 from app.core.raw_proxy_path import assert_server_state_unchanged, canonical_proxy_path
 from app.core.storage_bucket_keys import assert_bucket_keys_unreached
+from app.core.lxd_segment import lxd_segment
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
@@ -3474,6 +3475,9 @@ async def get_integration_instance(
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
+    # important: requests folds a dot segment out of the path it sends, so ".." read LXD's server root
+    # and answered its config as an instance. Refused here, which MCP's orcastra_get_instance calls too.
+    lxd_segment(name, what="Instance name")
     clusters = _clusters_for_key(api_key, cluster_id)
     fanout = await _gather_per_cluster(
         _fetch_instance_detail,

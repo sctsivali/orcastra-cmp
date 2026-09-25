@@ -12,6 +12,7 @@ from requests import exceptions as requests_exceptions
 
 from app.models.schemas import VMStatus
 from app.core.lxd_path import safe_segment
+from app.core.lxd_segment import lxd_segment
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,10 @@ def find_instance_in_projects(
     Find an instance by name across all projects.
     Returns tuple of (instance, project_name) or (None, None) if not found.
     """
+    # important: `name` is the caller's, so an empty, `.` or `..` name is refused with 400 before any
+    # request, the project list included (core/lxd_segment.py). requests folds a dot segment out of
+    # the path, and `..` read LXD's server root, whose config the one-instance read answered as an instance.
+    lxd_segment(name, what="Instance name")
     if project:
         project_names = [project]
     else:
@@ -139,7 +144,7 @@ def find_instance_in_projects(
     for project_name in project_names:
         try:
             # Try to get instance from this project using API directly
-            response = client.api.instances[safe_segment(name)].get(params={'project': project_name})
+            response = client.api.instances[lxd_segment(name, what="Instance name")].get(params={'project': project_name})
             
             # If successful, create instance object from the response
             instance_data = response.json()['metadata']
