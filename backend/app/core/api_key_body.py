@@ -32,6 +32,8 @@ NESTED_STRUCTS = ("source", "target")
 BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 # /proxy operations that forward a caller dict other than `params` itself as the LXD body.
 _FORWARDED_DEFINITIONS = {"create_storage_pool": "definition"}
+# /proxy params LXD reads as maps, and every guard reads as a dict.
+MAP_PARAMS = ("config", "devices")
 
 
 def odd_field_name(body: Mapping[str, Any]) -> Optional[str]:
@@ -77,6 +79,39 @@ def canonical_raw_proxy_body(method: str, body: Optional[Dict[str, Any]]) -> Opt
 def assert_canonical_proxy_params(operation: str, params: Mapping[str, Any]) -> None:
     """Hold /proxy params, and any definition an operation forwards in their place, to the rule."""
     assert_canonical_body(params, where="params")
+    assert_proxy_maps_are_objects(params, where="params")
     nested = _FORWARDED_DEFINITIONS.get(operation)
     if nested is not None:
-        assert_canonical_body(params.get(nested), where=f"params {nested}")
+        definition = params.get(nested)
+        if definition is not None and not isinstance(definition, Mapping):
+            raise _not_an_object(f"params.{nested}", definition)
+        assert_canonical_body(definition, where=f"params {nested}")
+        if isinstance(definition, Mapping):
+            assert_proxy_maps_are_objects(definition, where=f"params.{nested}")
+
+
+def _not_an_object(field: str, value: Any) -> HTTPException:
+    logger.warning("Refusing a %s that is a %s, not a JSON object", field, type(value).__name__)
+    return HTTPException(
+        status_code=400,
+        detail=f"{field} must be a JSON object, not {type(value).__name__}. LXD reads it as a map.",
+    )
+
+
+def assert_proxy_maps_are_objects(params: Mapping[str, Any], *, where: str) -> None:
+    """Raise 400 naming the first of config, devices or a device entry that is not a JSON object.
+
+    important: update_instance merges config and devices into the instance with dict.update, which
+    also takes a list of [key, value] pairs, while every guard reads a dict and skips any other
+    shape. `"config": [["raw.lxc", "..."]]` passed the instance.exec price and the limited-key host
+    rule as an empty config and reached LXD as raw.lxc. A null config or devices is left alone: it
+    carries nothing, and the operations read it as empty.
+    """
+    for field in MAP_PARAMS:
+        value = params.get(field)
+        if value is not None and not isinstance(value, Mapping):
+            raise _not_an_object(f"{where}.{field}", value)
+    devices = params.get("devices")
+    for name, device in (devices.items() if isinstance(devices, Mapping) else ()):
+        if not isinstance(device, Mapping):
+            raise _not_an_object(f"{where}.devices.{name}", device)
