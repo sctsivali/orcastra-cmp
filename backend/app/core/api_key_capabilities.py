@@ -276,6 +276,10 @@ _GUEST_ACCESS_PREFIXES: Dict[str, str] = {
 # reason to want them and forcing it to hold root-in-guest to read a crash log is worse than the
 # disclosure it prevents.
 _EXEC_LOG_PREFIX = "exec_"
+# important: LXD 5.21 and later record exec output under logs/exec-output/<file>, where
+# services/lxd/guest_output.py reads it. LXD itself serves that listing and each file only to a
+# can_exec entitlement (instance_logs.go), so the directory and anything below it costs exec here.
+_EXEC_OUTPUT_DIR = "exec-output"
 
 
 # Instance configuration keys and device shapes that are execution by another name.
@@ -424,6 +428,8 @@ def guest_access_capability_for(path: str) -> Optional[str]:
     # `/logs` is split: the directory listing and any exec_<uuid>.stdout is exec output and costs
     # the exec capability; a named ordinary log does not.
     if segments[2] == "logs":
+        if len(segments) > 3 and segments[3] == _EXEC_OUTPUT_DIR:
+            return "instance.exec"
         if len(segments) == 3 or segments[3].startswith(_EXEC_LOG_PREFIX):
             return "instance.exec"
     return None
