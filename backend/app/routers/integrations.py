@@ -47,6 +47,7 @@ from app.services.lxd.limited_write_reach import (
     proxy_write_reach,
     refuse_what_a_limited_write_applies,
 )
+from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
@@ -98,11 +99,7 @@ from app.core.api_key_capabilities import (
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
 from app.core.guest_data_export import assert_guest_data_path_stays_inside, assert_guest_data_stays_inside
-from app.core.cloud_init_config import (
-    assert_cloud_init_paid_for,
-    cloud_init_keys_in,
-    proxy_cloud_init_capability_for,
-)
+from app.core.cloud_init_config import assert_cloud_init_paid_for, cloud_init_keys_in
 from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
 from app.core.limited_key_writes import (
     assert_body_within_grant,
@@ -3215,7 +3212,7 @@ def _audit_raw_refusal(
     request: Any,
     method: str,
     project: Optional[str],
-    refusal: HTTPException,
+    refusal: Exception,
     refused: str,
 ) -> None:
     """The failure record a raw-proxy gate leaves when it refuses a request before it is sent.
@@ -3232,7 +3229,7 @@ def _audit_raw_refusal(
         result="failure",
         details={"method": method, "refused": refused},
         external_user_email=request.external_user_email,
-        error_message=str(refusal.detail),
+        error_message=str(getattr(refusal, "detail", refusal)),
     )
 
 
@@ -3761,8 +3758,10 @@ async def raw_proxy(
             raise
         # important: cloud-init user-data runs as root in the guest on its next boot, so an instance
         # or profile write carrying it costs instance.exec for every key (core/cloud_init_config.py).
+        # A create is refused here. A write to an existing object is judged by what it changes, after
+        # the object is read below.
         try:
-            assert_cloud_init_paid_for(request.path, method, request.body, api_key)
+            cloud_init_read = assert_cloud_init_paid_for(request.path, method, request.body, api_key)
         except HTTPException as refusal:
             _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
             raise
@@ -3876,6 +3875,30 @@ async def raw_proxy(
         # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
         # and then goes silent must degrade this one cluster, never the whole process.
         try:
+            # important: only the object's own config says whether a cloud-init value changes, so it is
+            # read as a job of its own and a read that fails sends nothing (services/lxd/cloud_init_reach.py).
+            if cloud_init_read is not None:
+                try:
+                    await refuse_changed_cloud_init(
+                        cloud_init_changes,
+                        client.api.session,
+                        endpoint,
+                        cloud_init_read,
+                        project,
+                        request.body.get("config"),
+                        socket_timeout_for(client),
+                        api_key=api_key,
+                        timeout=RAW_PROXY_TIMEOUT,
+                        label=f"raw_proxy[cloud-init {request.cluster_id}]",
+                        executor=proxy_executor,
+                        max_in_flight=PROXY_MAX_IN_FLIGHT,
+                    )
+                except ChecksNotFinished as not_sent:
+                    _audit_raw_refusal(api_key, request, method, project, not_sent, "cloud_init_not_compared")
+                    return RawProxyResponse(status_code=not_sent.status_code, data=None, error=str(not_sent))
+                except HTTPException as refusal:
+                    _audit_raw_refusal(api_key, request, method, project, refusal, "capability_not_granted")
+                    raise
             if plan:
                 await refuse_what_a_limited_write_applies(
                     limited_write_reach,
@@ -4128,8 +4151,31 @@ async def proxy_operation(
             )
         # important: cloud-init user-data runs as root in the guest on its next boot, so config
         # carrying it costs instance.exec for every key (core/cloud_init_config.py). When a host-path
-        # disk already priced the write at instance.files, exec is asked for on top of it below.
-        cloud_init_capability = proxy_cloud_init_capability_for(operation, request.params or {})
+        # disk already priced the write at instance.files, exec is asked for on top of it below. An
+        # update from a key without exec owes it only for a value the instance does not already hold,
+        # so the instance is read first and a read that fails sends nothing.
+        try:
+            cloud_init_capability = await proxy_cloud_init_owed(
+                lxd_service, request.cluster_id, operation, request.params or {}, request.project, api_key,
+                timeout=PROXY_OP_TIMEOUT, executor=proxy_executor, max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+        except ChecksNotFinished as not_sent:
+            _audit_key_action(
+                api_key,
+                action=_guest_audit_action(operation),
+                target_id=str((request.params or {}).get("name") or operation)[:512],
+                cluster_id=request.cluster_id,
+                project=request.project,
+                result="failure",
+                details={
+                    "operation": operation,
+                    "cloud_init_keys": cloud_init_keys_in((request.params or {}).get("config")),
+                    "refused": "cloud_init_not_compared",
+                },
+                external_user_email=request.external_user_email,
+                error_message=str(not_sent),
+            )
+            return ProxyResponse(success=False, error_code=not_sent.error_code, error=str(not_sent))
         if guest_capability is None:
             guest_capability = cloud_init_capability
 

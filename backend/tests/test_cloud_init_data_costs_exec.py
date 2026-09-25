@@ -4,7 +4,9 @@ A key write carrying cloud-init user-data or vendor-data costs `instance.exec`, 
 LXD hands `cloud-init.user-data`, `cloud-init.vendor-data`, `user.user-data` and `user.vendor-data`
 to cloud-init in the guest, and gives the guest a new cloud-init instance-id when one of them changes
 (needsNewInstanceID, lxd/instance/drivers/driver_common.go), so the next boot applies the new data.
-The rule reads key presence only, so every value here is an inert placeholder.
+A create carrying one costs exec outright. A write to an existing instance or profile is judged by
+what it changes (tests/test_cloud_init_is_judged_by_what_changes.py), so here the object it writes
+holds other values, read from a recording cluster, and every value is an inert placeholder.
 
 Only these four keys are new for every key: raw.*, security.privileged and host devices keep today's
 rule on each surface, so the integrator's GPU recipe still goes through on a `*` key. The
@@ -19,7 +21,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.api_key_capabilities import APP_TYPE_CAPABILITIES
-from app.core.cloud_init_config import CLOUD_INIT_KEYS, cloud_init_capability_for, proxy_cloud_init_capability_for
+from app.core.cloud_init_config import (
+    CLOUD_INIT_KEYS,
+    cloud_init_capability_for,
+    cloud_init_compared_at,
+    proxy_cloud_init_capability_for,
+)
 from app.mcp import tools_write
 from app.mcp.contract import TOOL_CONTRACT
 from app.routers import integrations
@@ -32,7 +39,8 @@ from tests._limited_write_fakes import (  # noqa: F401 - fixtures are registered
     mcp_call,
     proxy_call,
 )
-from tests._raw_proxy_fakes import _clean_breaker, call_raw_proxy, fence_calls, key  # noqa: F401
+from tests._cloud_init_fakes import ConfigSession
+from tests._raw_proxy_fakes import ENDPOINT, _clean_breaker, call_raw_proxy, fence_calls, key  # noqa: F401
 
 PLACEHOLDER = "#cloud-config\n"
 IMAGE = {"type": "image", "alias": "ubuntu/24.04"}
@@ -63,6 +71,23 @@ PRICED_IDS = [
     "patch", "patch-vm", "move-with-config", "profile-create", "profile-put", "profile-patch-empty",
     "key-mixed-case", "key-upper", "encoded-path", "profile-upper-path",
 ]
+
+# What every instance and profile these writes name already holds: other values for all four keys.
+OLD = "#cloud-config\nruncmd: [true]\n"
+HELD = {name: OLD for name in ("cloud-init.user-data", "cloud-init.vendor-data", "user.user-data", "user.vendor-data")}
+
+
+def holding_other_values(project: str = "default") -> ConfigSession:
+    """A cluster whose written objects hold other cloud-init values than every write here sends."""
+    targets = {cloud_init_compared_at(path, method) for method, path, _ in PRICED} - {None}
+    return ConfigSession({(project, str(target)): {"config": dict(HELD)} for target in targets})
+
+
+def read_of(method: str, path: str) -> List[str]:
+    """The read a raw-proxy write costs before it is judged: none for a create."""
+    target = cloud_init_compared_at(path, method)
+    return [] if target is None else [ENDPOINT + target]
+
 
 NOT_PRICED: List[Tuple[str, str, Dict[str, Any]]] = [
     ("PATCH", "/1.0/instances/web-1", {"config": {"cloud-init.network-config": PLACEHOLDER}}),
@@ -167,27 +192,30 @@ def test_other_config_and_other_writes_are_not_priced(method: str, path: str, bo
 async def test_the_raw_proxy_refuses_it_without_exec_and_records_it(
     method: str, path: str, body: Dict[str, Any], api_key: Dict[str, Any], audits: List[Dict[str, Any]]
 ) -> None:
-    outcome, session = await call_raw_proxy(api_key, method, path, body=body)
+    outcome, session = await call_raw_proxy(api_key, method, path, body=body, session=holding_other_values())
 
     assert isinstance(outcome, HTTPException) and outcome.status_code == 403, outcome
     assert "instance.exec" in outcome.detail
-    assert session.calls == []
+    assert [url for url, _project in session.reads] == read_of(method, path)
+    assert session.writes == []
     assert _failures(audits) == [("failure", "capability_not_granted")]
 
 
 @pytest.mark.usefixtures("fence_calls")
 async def test_a_narrow_key_is_refused_too(audits: List[Dict[str, Any]]) -> None:
-    outcome, session = await call_raw_proxy(NARROW_NO_EXEC, *PRICED[6][:2], project="tenant-a", body=PRICED[6][2])
+    outcome, session = await call_raw_proxy(NARROW_NO_EXEC, *PRICED[6][:2], project="tenant-a", body=PRICED[6][2],
+                                            session=holding_other_values("tenant-a"))
 
     assert isinstance(outcome, HTTPException) and outcome.status_code == 403 and "instance.exec" in outcome.detail
-    assert session.calls == []
+    assert session.reads == [(ENDPOINT + "/instances/web-1", "tenant-a")] and session.writes == []
 
 
 async def test_a_legacy_key_never_inherits_it(audits: List[Dict[str, Any]]) -> None:
-    outcome, session = await call_raw_proxy(key(["*"]), *PRICED[6][:2], body=PRICED[6][2])
+    outcome, session = await call_raw_proxy(key(["*"]), *PRICED[6][:2], body=PRICED[6][2],
+                                            session=holding_other_values())
 
     assert isinstance(outcome, HTTPException) and outcome.status_code == 403
-    assert session.calls == []
+    assert session.writes == []
 
 
 @pytest.mark.usefixtures("fence_calls")
@@ -238,17 +266,27 @@ async def test_a_star_key_keeps_todays_rule_for_host_reaching_config(
 
 
 @pytest.mark.usefixtures("fence_calls")
-async def test_an_unchanged_value_carried_by_a_round_trip_is_priced_too(audits: List[Dict[str, Any]]) -> None:
-    """A PUT carries the whole editable config, so an instance already holding user-data costs exec to
-    rewrite. Known limit, recorded for the owner: LXD would not run anything for an unchanged value."""
-    body = {**EDITABLE, "config": {**ORCAHUB_ROUND_TRIP_CONFIG, "user.user-data": PLACEHOLDER}}
-    outcome, session = await call_raw_proxy(ORCAHUB, "PUT", "/1.0/instances/web-9", body=body)
+async def test_an_unchanged_value_carried_by_a_round_trip_is_sent(audits: List[Dict[str, Any]]) -> None:
+    """A PUT carries the whole editable config back, and LXD reruns nothing for a value it already holds,
+    so an instance the dashboard built with user-data stays writable by the integrator's key."""
+    config = {**ORCAHUB_ROUND_TRIP_CONFIG, "user.user-data": PLACEHOLDER}
+    session = ConfigSession({("default", "/instances/web-9"): {**EDITABLE, "config": dict(config)}})
+    body = {**EDITABLE, "config": {**config, "limits.cpu": "4"}}
 
-    assert isinstance(outcome, HTTPException) and outcome.status_code == 403
-    assert session.calls == []
+    outcome, session = await call_raw_proxy(ORCAHUB, "PUT", "/1.0/instances/web-9", body=body, session=session)
+
+    assert outcome.status_code == 200, outcome
+    assert session.reads == [(ENDPOINT + "/instances/web-9", "default")]
+    assert session.writes == [("PUT", body)]
+    assert _failures(audits) == []
 
 
 # -- /proxy, and MCP which calls the same handler ----------------------------------------------------
+
+
+def client_holding_other_values() -> FakeClient:
+    """A cluster whose instance `web` in default holds other cloud-init values than these writes send."""
+    return FakeClient(ConfigSession({("default", "/instances/web"): {"name": "web", "config": dict(HELD)}}))
 
 
 @pytest.mark.parametrize(
@@ -265,10 +303,13 @@ async def test_proxy_refuses_it_without_exec_and_records_it(
 ) -> None:
     assert proxy_cloud_init_capability_for(operation, params) == "instance.exec"
 
-    outcome, client = await proxy_call(operation, "default", params, api_key=STAR_NO_EXEC)
+    outcome, client = await proxy_call(operation, "default", params, api_key=STAR_NO_EXEC,
+                                       client=client_holding_other_values())
 
     assert isinstance(outcome, HTTPException) and outcome.status_code == 403 and "instance.exec" in outcome.detail
-    assert client.sent == [] and client.api.session.calls == []
+    assert client.sent == [] and client.api.session.writes == []
+    reads = [] if operation == "create_instance" else [(client.api._api_endpoint + "/instances/web", "default")]
+    assert client.api.session.reads == reads
     assert _failures(audits) == [("failure", "capability_not_granted")]
 
 
@@ -293,7 +334,7 @@ async def test_a_proxy_refusal_is_attributed_to_the_clusters_organization(
 
     outcome, _ = await proxy_call("update_instance", "default",
                                   {"name": "web", "config": {"cloud-init.user-data": PLACEHOLDER}},
-                                  api_key=STAR_NO_EXEC)
+                                  api_key=STAR_NO_EXEC, client=client_holding_other_values())
 
     assert isinstance(outcome, HTTPException) and outcome.status_code == 403
     assert [(record["target_organization_id"], record["target_organization_slug"]) for record in audits] == [
@@ -306,7 +347,8 @@ async def test_proxy_asks_for_exec_on_top_of_files_for_a_host_disk(audits: List[
     params = {"name": "web", "config": {"cloud-init.user-data": PLACEHOLDER},
               "devices": {"host": {"type": "disk", "source": "/srv/data", "path": "/mnt/data"}}}
 
-    files_only, client = await proxy_call("update_instance", "default", params, api_key=STAR_NO_EXEC)
+    files_only, client = await proxy_call("update_instance", "default", params, api_key=STAR_NO_EXEC,
+                                          client=client_holding_other_values())
     assert isinstance(files_only, HTTPException) and files_only.status_code == 403
     assert "instance.exec" in files_only.detail and client.sent == []
     assert audits[-1]["details"]["cloud_init_keys"] == ["cloud-init.user-data"]
@@ -332,6 +374,7 @@ async def test_proxy_sends_it_for_a_key_granted_exec(operation: str, params: Dic
 
     assert not isinstance(outcome, HTTPException) and outcome.success, outcome
     assert [verb for verb, *_ in client.sent] == ["create" if operation == "create_instance" else "save"]
+    assert client.api.session.calls == []
 
 
 async def test_proxy_config_without_cloud_init_is_unchanged() -> None:
@@ -345,7 +388,7 @@ async def test_proxy_config_without_cloud_init_is_unchanged() -> None:
 
 @pytest.mark.parametrize("tool", ["lxd_create_instance", "lxd_update_instance"])
 async def test_mcp_refuses_it_without_exec(tool: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    client = FakeClient(ProjectSession())
+    client = client_holding_other_values()
     result = await mcp_call(tools_write, tool, client, STAR_NO_EXEC, monkeypatch, cluster_id="cluster-a",
                             name="web", project="default", config={"cloud-init.user-data": PLACEHOLDER})
 

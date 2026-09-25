@@ -46,7 +46,7 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
         "assert_guest_data_path_stays_inside",
         "assert_guest_data_stays_inside",
     ),
-    CLOUD_INIT: ("cloud_init_capability_for", "assert_cloud_init_paid_for"),
+    CLOUD_INIT: ("cloud_init_capability_for", "cloud_init_compared_at", "assert_cloud_init_paid_for"),
     BUCKET_KEYS: ("reaches_bucket_keys", "assert_bucket_keys_unreached"),
     ROUTER: ("_proxy_audit_action",),
 }
