@@ -3717,10 +3717,10 @@ async def raw_proxy(
                 error_message=str(refusal.detail),
             )
             raise
-        # important: an image export and an image secret hand the guest's filesystem out whole,
-        # which /files prices one file at a time (core/guest_data_export.py). Priced on the path
-        # alone, like the guest-access gate above, so both run before the body is read and a
-        # refused path is recorded whatever the body says.
+        # important: an image export, an image secret and a custom volume backup hand a guest's
+        # data out whole, which /files prices one file at a time (core/guest_data_export.py).
+        # Priced on the path alone, like the guest-access gate above, so both run before the body
+        # is read and a refused path is recorded whatever the body says.
         try:
             assert_guest_data_path_stays_inside(request.path, api_key)
         except HTTPException as refusal:

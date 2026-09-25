@@ -9,6 +9,9 @@ the same data whole, so they cost the same capability:
   server the caller names;
 - GET /1.0/images/<fp>/export returns the image tarball;
 - POST /1.0/images/<fp>/secret returns a secret that lets an untrusted client download the image;
+- any request under storage-pools/<pool>/volumes/<type>/<volume>/backups creates, lists, reads,
+  exports or deletes a backup of the volume, which is its data in a tarball. The instance /backups
+  path already costs `instance.files` (core/api_key_capabilities.py), for every method;
 - a POST /1.0/images that publishes an instance or a snapshot with `public: true`, and a PUT or
   PATCH of /1.0/images/<fp> that sets `public: true`. LXD serves a public image to any client that
   reaches it, trusted or not, without passing this proxy.
@@ -80,8 +83,18 @@ def _hands_out_an_image(segments: Tuple[str, ...]) -> bool:
     return len(segments) == 3 and segments[0] == "images" and segments[2] in _IMAGE_HANDOUTS
 
 
+def _reaches_a_volume_backup(segments: Tuple[str, ...]) -> bool:
+    """storage-pools/<pool>/volumes/<type>/<volume>/backups and anything below it, any volume type."""
+    return (
+        len(segments) >= 6
+        and segments[0] == "storage-pools"
+        and segments[2] == "volumes"
+        and segments[5] == "backups"
+    )
+
+
 def _priced_by_its_path(segments: Tuple[str, ...]) -> bool:
-    return _hands_out_an_image(segments)
+    return _hands_out_an_image(segments) or _reaches_a_volume_backup(segments)
 
 
 def guest_data_path_capability_for(path: str) -> Optional[str]:
