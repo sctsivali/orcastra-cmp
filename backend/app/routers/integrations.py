@@ -96,6 +96,7 @@ from app.core.api_key_capabilities import (
 )
 from app.core import build_identity
 from app.core.api_key_body import assert_canonical_proxy_params, canonical_raw_proxy_body
+from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capability_audit_fields
 from app.core.limited_key_writes import (
     assert_body_within_grant,
     assert_limited_body,
@@ -2311,6 +2312,7 @@ async def update_api_key_capabilities(
 
     try:
         metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+        previous = dict(metadata)
         was_legacy = "capabilities" not in metadata
         metadata["capabilities"] = sorted(set(request.capabilities))
         vault_client.vault_kv_put(
@@ -2325,6 +2327,9 @@ async def update_api_key_capabilities(
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         evict_api_key_cache(key_id)
+        _audit_credential_lifecycle(
+            action=CAPABILITIES_UPDATE_ACTION, key_id=key_id, metadata=metadata, previous=previous
+        )
 
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         return _key_info(metadata, len(user_mappings))
@@ -3033,6 +3038,7 @@ def _audit_credential_lifecycle(
     metadata: Optional[Dict[str, Any]] = None,
     result: str = "success",
     error_message: Optional[str] = None,
+    previous: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record an operator creating, revoking or deleting an integration credential.
 
@@ -3046,6 +3052,9 @@ def _audit_credential_lifecycle(
     note: `api_key_id` is deliberately public and is allowlisted by the audit sanitiser. The
     secret never passes through here, and the metadata is reduced to the fields that describe
     the grant rather than handed over whole.
+
+    note: an edit passes `previous`, the metadata before the write, so the record also says which
+    capabilities it granted and withdrew.
     """
     metadata = metadata or {}
     try:
@@ -3060,6 +3069,7 @@ def _audit_credential_lifecycle(
                 "app_name": metadata.get("app_name"),
                 "app_type": metadata.get("app_type"),
                 "capabilities": metadata.get("capabilities"),
+                **capability_audit_fields(metadata, previous),
                 "cluster_ids": [
                     grant.get("cluster_id")
                     for grant in (metadata.get("cluster_permissions") or [])

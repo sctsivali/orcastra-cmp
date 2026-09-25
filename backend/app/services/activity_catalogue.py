@@ -113,6 +113,7 @@ ACTION_CATEGORIES = {
     # Credential lifecycle. The actor here is a human operator holding a JWT, not the key,
     # so these carry the operator in `actor` and the key only as an annotation in details.
     "integration.api_key.create": EventCategory.ADMIN,
+    "integration.api_key.capabilities.update": EventCategory.ADMIN,
     "integration.api_key.revoke": EventCategory.ADMIN,
     "integration.api_key.delete": EventCategory.ADMIN,
     # Add-ons. Installing one hands a third party a credential into an organization, so the
@@ -235,6 +236,7 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.instance.desktop_input",
     "integration.instance.desktop_clipboard",
     "integration.api_key.create",
+    "integration.api_key.capabilities.update",
     "integration.api_key.revoke",
     "integration.api_key.delete",
     "extension.install",
