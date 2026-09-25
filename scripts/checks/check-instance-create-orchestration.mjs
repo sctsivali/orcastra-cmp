@@ -8,10 +8,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// createRequire needs an absolute path, and CI passes the root as ".", so resolve it here the way
+// the other guards that load typescript from the frontend do.
+const root = resolve(
+  process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), "..", ".."),
+);
 const read = (path) => readFileSync(join(root, path), "utf8");
 const failures = [];
 const requireFromFrontend = createRequire(join(root, "frontend/package.json"));
