@@ -17,6 +17,11 @@ org_scope: that ordering puts any organization where the creator is a partner fi
 key could push the creator into its own older organization and choose where the creator's next
 rebind lands. Zero or several such organizations rebind nothing.
 
+A creator holding role_admin never rebinds. Their key may be held by an integration they do not
+run, and an Admin's personal clusters are not a partner's. The role is read from Authentik at the
+time of the push, because nothing else holds it: the key's metadata records who minted it, not
+their role, and there is no users table. A role Authentik cannot answer for rebinds nothing.
+
 note: the match is exact. `registered_by` holds the registrant's login email and the creator is
 that same login, so another spelling would find no row to move anyway.
 """
@@ -30,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.org_scope import reconcile_personal_clusters
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services.activity_logger import get_activity_logger
+from app.services.integration_roles import ROLE_ADMIN, RoleGroupStore
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -99,6 +105,23 @@ async def claimed_destinations(
     return sorted(rows.scalars().all())
 
 
+async def _creator_role_allows_rebind(roles: RoleGroupStore, email: str, api_key_id: str) -> bool:
+    """False for a creator holding role_admin, and for one whose role Authentik cannot answer for."""
+    groups = await roles.get_user_role_groups(email)
+    if groups is None:
+        logger.warning(
+            "Integration key %s rebinds no personal cluster: its creator's role could not be read",
+            api_key_id,
+        )
+        return False
+    if ROLE_ADMIN in groups:
+        logger.warning(
+            "Integration key %s rebinds no personal cluster: its creator holds role_admin", api_key_id
+        )
+        return False
+    return True
+
+
 def _record(cluster_id: str, from_org: Optional[int], to_org: int, email: str, api_key_id: str) -> None:
     try:
         activity_logger.log_activity(
@@ -126,6 +149,7 @@ async def rebind_creator_clusters(
     *,
     api_key_id: str,
     creator: Optional[str],
+    roles: RoleGroupStore,
 ) -> int:
     """Bind the creator's unbound clusters to the one organization this push names them in."""
     if not may_rebind(email, creator):
@@ -139,6 +163,8 @@ async def rebind_creator_clusters(
             "its creator in this push, exactly one is required",
             api_key_id, len(destinations),
         )
+        return 0
+    if not await _creator_role_allows_rebind(roles, email, api_key_id):
         return 0
     moved: List[Tuple[str, Optional[int], int]] = []
     rebound = await reconcile_personal_clusters(

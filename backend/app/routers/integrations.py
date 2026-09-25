@@ -1657,7 +1657,7 @@ async def _upsert_synced_members(
     for email in upserted_emails:
         try:
             await rebind_creator_clusters(
-                db, email, members, api_key_id=api_key_id, creator=key_creator
+                db, email, members, api_key_id=api_key_id, creator=key_creator, roles=sync_svc
             )
         except Exception as e:
             logger.warning(f"reconcile_personal_clusters failed for {email}: {e}")
