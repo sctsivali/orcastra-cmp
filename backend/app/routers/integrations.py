@@ -112,6 +112,7 @@ from app.core.limited_key_writes import (
     proxy_instance_write,
 )
 from app.core.raw_proxy_path import assert_server_state_unchanged, canonical_proxy_path
+from app.core.storage_bucket_keys import assert_bucket_keys_unreached
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
@@ -3698,6 +3699,10 @@ async def raw_proxy(
         # important: server configuration and the cluster hand out trust (the OIDC issuer, a join
         # token for a new member), so writes to them are refused for every grant, `*` included.
         assert_server_state_unchanged(request.path, method)
+        # important: a storage bucket key answers with the bucket's S3 secret, a credential that
+        # outlives the API key, so the keys are refused for every grant and method like the trust
+        # store (core/storage_bucket_keys.py).
+        assert_bucket_keys_unreached(request.path)
         # important: reaching inside a guest is a different power from managing it, and this path
         # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
         # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with
