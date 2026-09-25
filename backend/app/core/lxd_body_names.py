@@ -124,6 +124,8 @@ def assert_body_names_addressable(path: str, method: str, body: Any) -> None:
         return
     segments = canonical_proxy_path(path).lowered
     if segments == ("images",):
+        # note: the body rule (core/api_key_body.py) refused any other spelling of an entry's fields first, so
+        # `name` is the one field LXD reads as the alias name.
         aliases = body.get("aliases")
         for alias in aliases if isinstance(aliases, list) else []:
             if isinstance(alias, Mapping):

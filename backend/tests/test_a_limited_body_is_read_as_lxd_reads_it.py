@@ -137,6 +137,17 @@ def test_the_body_forwarded_is_the_body_judged() -> None:
     assert odd_field_name({"name\n": 1}) == "name\n", "a trailing newline must not pass the pattern"
 
 
+def test_each_alias_entry_is_a_struct_and_nothing_below_it_is() -> None:
+    """LXD decodes an image create's aliases into api.ImageAlias structs, so each entry's field names fold."""
+    assert odd_field_name({"aliases": [{"name": "ok", "NAME": ".."}]}) == "NAME"
+    assert odd_field_name({"aliases": [{"name": "a"}, {"Name": ".."}]}) == "Name"
+    assert odd_field_name({"aliases": [{"name": "ok", "description": "Up"}], "properties": {"OS": "x"}}) is None
+    assert odd_field_name({"aliases": [{"name": "ok", "extra": {"Nested": 1}}]}) is None
+    assert odd_field_name({"aliases": "mkt/acme/app"}) is None
+    assert odd_field_name({"aliases": [None, "a", 1, ["NAME"]]}) is None
+    assert odd_field_name({"source": {"aliases": [{"NAME": ".."}]}}) is None
+
+
 # -- /proxy params and the body each operation forwards -------------------------------------------
 
 

@@ -8,11 +8,12 @@ spellings is worse: Python keeps both keys, the guard reads one and LXD takes wh
 `{"action": "stop", "Action": "restart"}` passed the migration fence as a stop and reached LXD as a
 restart.
 
-important: the rule is on the field NAMES of a struct, at the top level and in the nested `source`
-and `target` structs, for every key. Map keys (config keys, device names, environment variables,
-image properties) are matched exactly by LXD and are left alone. A name outside `[a-z0-9_-]` is
-refused with 400 naming it, never folded: folding would pick one of two spellings, which is the
-ambiguity being removed.
+important: the rule is on the field NAMES of a struct, at the top level, in the nested `source`
+and `target` structs and in each entry of an `aliases` list (an image create's api.ImageAlias
+entries, whose `name` core/lxd_body_names.py judges), for every key. Map keys (config keys, device
+names, environment variables, image properties) are matched exactly by LXD and are left alone. A
+name outside `[a-z0-9_-]` is refused with 400 naming it, never folded: folding would pick one of
+two spellings, which is the ambiguity being removed.
 
 note: the integrator (OrcaHub) sends only lowercase field names (its source was read to confirm),
 and every field LXD defines is spelled that way, so a correct caller never meets this rule.
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 FIELD_NAME = re.compile(r"[a-z0-9_-]+")
 NESTED_STRUCTS = ("source", "target")
+NESTED_STRUCT_LISTS = ("aliases",)
 # The raw proxy forwards a body on these verbs only (services/lxd/proxy.raw_request).
 BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 # /proxy operations that forward a caller dict other than `params` itself as the LXD body.
@@ -39,6 +41,10 @@ MAP_PARAMS = ("config", "devices")
 def odd_field_name(body: Mapping[str, Any]) -> Optional[str]:
     """The first field name LXD could read as a different field, or None."""
     scopes = [body] + [body[key] for key in NESTED_STRUCTS if isinstance(body.get(key), Mapping)]
+    scopes += [
+        entry for key in NESTED_STRUCT_LISTS if isinstance(body.get(key), list)
+        for entry in body[key] if isinstance(entry, Mapping)
+    ]
     for scope in scopes:
         for name in scope:
             if not isinstance(name, str) or not FIELD_NAME.fullmatch(name):
