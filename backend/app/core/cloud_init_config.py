@@ -6,7 +6,9 @@ them changes in an instance's expanded config, LXD gives the guest a new cloud-i
 (needsNewInstanceID in lxd/instance/drivers/driver_common.go, called from each driver's Update), so
 cloud-init treats the next boot as a first boot and runs the new data even on an instance that has
 booted before. A profile carrying them reaches every instance that uses it. Writing one is running a
-command in the guest, so it costs `instance.exec` for every key, `*` included.
+command in the guest, so it costs `instance.exec` for every key, `*` included. So does
+`cloud-init.ssh-keys.<name>` (LXD's cloud_init_ssh_keys extension, 5.21 and later), whose `<user>:<key>`
+value cloud-init installs as a login for that user, root included, on instances and profiles alike.
 
 Read wherever a key writes instance or profile config:
 
@@ -25,7 +27,7 @@ which sends back the whole config it just read. A new, changed or removed value 
 does any cloud-init key in a create, which has no config to compare with. A copy is a create: LXD
 copies the source's config anyway, so carrying the source's value adds nothing a caller needs.
 
-important: only these four keys are new for every key. The host-reaching config rule (raw.*,
+important: only these keys are new for every key. The host-reaching config rule (raw.*,
 security.privileged, host devices) keeps the reach it has on each surface today, so the integrator's
 GPU recipe keeps working on a `*` key.
 
@@ -48,6 +50,7 @@ from app.core.raw_proxy_path import canonical_proxy_path
 __all__ = [
     "CLOUD_INIT_CAPABILITY",
     "CLOUD_INIT_KEYS",
+    "CLOUD_INIT_SSH_KEYS_PREFIX",
     "assert_cloud_init_paid_for",
     "changed_cloud_init_keys",
     "cloud_init_capability_for",
@@ -64,6 +67,7 @@ CLOUD_INIT_KEYS = frozenset({
     "user.user-data",
     "user.vendor-data",
 })
+CLOUD_INIT_SSH_KEYS_PREFIX = "cloud-init.ssh-keys."
 # /proxy operations whose params carry an instance's config to LXD.
 _PROXY_CONFIG_WRITES = frozenset({"create_instance", "update_instance"})
 
@@ -72,7 +76,10 @@ def cloud_init_keys_in(config: Any) -> List[str]:
     """The cloud-init keys a config map carries, in the caller's spelling."""
     if not isinstance(config, Mapping):
         return []
-    return [str(name) for name in config if str(name).lower() in CLOUD_INIT_KEYS]
+    return [
+        str(name) for name in config
+        if str(name).lower() in CLOUD_INIT_KEYS or str(name).lower().startswith(CLOUD_INIT_SSH_KEYS_PREFIX)
+    ]
 
 
 def _writes_config(segments: Tuple[str, ...], method: str) -> bool:

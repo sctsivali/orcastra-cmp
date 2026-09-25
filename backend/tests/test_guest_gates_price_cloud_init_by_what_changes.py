@@ -6,7 +6,8 @@ Each case sends one request through the real route (tests/_guest_gate_doors.py) 
 status, the capability the refusal names, the audit record, what was read and what was written.
 Covered here:
 
-- decisions 16 and 18: a create carrying a cloud-init key costs exec without a read. A write to an
+- decisions 16 and 18, and cloud-init.ssh-keys.<name> since the security review: a create carrying a
+  cloud-init key costs exec without a read. A write to an
   existing instance or profile is compared with the object's own config, read once: an unchanged
   value is sent, a new, changed or removed value costs exec, and a read that fails sends nothing and
   leaves a record. A key holding exec is never read for. Raw proxy, /proxy and MCP.
@@ -33,7 +34,10 @@ from tests._raw_proxy_fakes import ORCAHUB_READS, CLUSTER_ID, ENDPOINT, _clean_b
 X = "#cloud-config\npackages: [nginx]\n"
 Y = "#cloud-config\nruncmd: [id]\n"
 UD, VD, CUD, CVD = "user.user-data", "user.vendor-data", "cloud-init.user-data", "cloud-init.vendor-data"
-CLOUD_INIT_KEYS = [UD, VD, CUD, CVD]
+SSH, SSH_DEPLOY = "cloud-init.ssh-keys.root", "cloud-init.ssh-keys.deploy"
+CLOUD_INIT_KEYS = [UD, VD, CUD, CVD, SSH, SSH_DEPLOY]
+KEY_A = "root:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA ops@example.test"
+KEY_B = "root:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB intruder@example.test"
 FAMILIES = ["instances", "containers", "virtual-machines"]
 DENIED, GRANTED = [NO_GUEST, FILES, ORCAHUB, LEGACY], [EXEC, BOTH, EVERY]
 DENIED_IDS, GRANTED_IDS = ["no-guest", "files", "orcahub", "legacy"], ["exec", "both", "every"]
@@ -73,7 +77,8 @@ CREATE_VALUES = [X, "", None, 1, True, [X]]
 
 
 @pytest.mark.parametrize("value", CREATE_VALUES, ids=repr)
-@pytest.mark.parametrize("name", [*CLOUD_INIT_KEYS, "User.User-Data", "CLOUD-INIT.VENDOR-DATA"])
+@pytest.mark.parametrize("name", [*CLOUD_INIT_KEYS, "User.User-Data", "CLOUD-INIT.VENDOR-DATA",
+                                  "Cloud-Init.SSH-Keys.Root"])
 @pytest.mark.parametrize("method,path,body", CREATES, ids=CREATE_IDS)
 def test_a_create_carrying_cloud_init_costs_exec_without_a_read(
     door: Any, method: str, path: str, body: Dict[str, Any], name: str, value: Any
@@ -221,7 +226,7 @@ def test_proxy_create_with_cloud_init_costs_exec_with_an_attributed_record(
     assert (seen.records[-1]["target_organization_id"], seen.records[-1]["target_organization_slug"]) == ORG
 
 
-@pytest.mark.parametrize("name", [UD, CUD])
+@pytest.mark.parametrize("name", [UD, CUD, SSH])
 @pytest.mark.parametrize("combo,held,config,priced", COMBOS, ids=[c[0] for c in COMBOS])
 def test_proxy_update_is_priced_by_what_it_changes(door: Any, combo: str, held: Dict[str, Any],
                                                   config: Dict[str, Any], priced: bool, name: str) -> None:
@@ -291,6 +296,9 @@ async def test_mcp_prices_cloud_init_the_same_way(door: Any) -> None:
     create = await door.mcp(tools_write, "lxd_create_instance", NO_GUEST, cluster_id=CLUSTER_ID, name="c1",
                             source={"type": "image", "alias": "a"}, config={VD: X})
     assert create.status == 0 and "instance.exec" in create.text and create.cluster.untouched
+    ssh_create = await door.mcp(tools_write, "lxd_create_instance", NO_GUEST, cluster_id=CLUSTER_ID, name="c2",
+                                source={"type": "image", "alias": "a"}, config={SSH: KEY_A})
+    assert ssh_create.status == 0 and "instance.exec" in ssh_create.text and ssh_create.cluster.untouched
     same = await door.mcp(tools_write, "lxd_update_instance", NO_GUEST, proxy_cluster({CUD: X}), cluster_id=CLUSTER_ID,
                           name="web", config={CUD: X, "limits.memory": "4GiB"})
     assert same.status == 200 and [verb for verb, *_ in same.cluster.writes] == ["save"]
@@ -301,7 +309,35 @@ async def test_mcp_prices_cloud_init_the_same_way(door: Any) -> None:
                           name="web", config={CUD: X})
     assert gone.status == 0 and gone.code == "not_found" and gone.cluster.writes == []
     assert [reason for reason, _ in door.trail.refusals] == [
-        "capability_not_granted", "capability_not_granted", "cloud_init_not_compared"]
+        "capability_not_granted", "capability_not_granted", "capability_not_granted", "cloud_init_not_compared"]
+
+
+@pytest.mark.parametrize("door_name", ["raw", "proxy", "mcp"])
+async def test_an_ssh_key_is_priced_by_what_it_changes_on_every_door(door: Any, door_name: str) -> None:
+    """A login key for root costs exec when it is new or changed, and a round trip carrying it unchanged is sent."""
+
+    async def write(held: Dict[str, Any], config: Dict[str, Any]) -> Any:
+        if door_name == "raw":
+            return door.raw(NO_GUEST, "PUT", "/1.0/instances/web", body={"config": config},
+                            cluster=_held(held, "/instances/web"))
+        if door_name == "proxy":
+            return door.proxy(NO_GUEST, "update_instance", {"name": "web", "config": config},
+                              cluster=proxy_cluster(held))
+        return await door.mcp(tools_write, "lxd_update_instance", NO_GUEST, proxy_cluster(held), cluster_id=CLUSTER_ID,
+                              name="web", config=config)
+
+    for held, config, priced in (({}, {SSH: KEY_A}, True), ({SSH: KEY_A}, {SSH: KEY_B}, True),
+                                 ({SSH: KEY_A}, {SSH: KEY_A, "limits.cpu": "2"}, False)):
+        seen = await write(held, config)
+        assert (seen.status in (0, 403) and "instance.exec" in seen.text) is priced, (held, config, seen.text)
+        assert (seen.cluster.writes == []) is priced
+        assert [reason for reason, _ in seen.refusals] == (["capability_not_granted"] if priced else [])
+
+
+@pytest.mark.parametrize("name", ["cloud-init.ssh-keys", "cloud-init.ssh-keysroot", "user.ssh-keys.root"])
+def test_a_key_that_only_looks_like_an_ssh_key_is_not_priced(door: Any, name: str) -> None:
+    body = {"name": "c1", "source": {"type": "none"}, "config": {name: KEY_A}}
+    _passed(door.raw(NO_GUEST, "POST", "/1.0/instances", body=body), [], "POST", body)
 
 
 # note: decision 3: a '*' key keeps its host-reaching config
