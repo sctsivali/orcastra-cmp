@@ -130,6 +130,17 @@ class ClusterShareAuditResponse(BaseModel):
     findings: list[ClusterShareFindingResponse]
 
 
+
+class ClusterOrganizationResponse(BaseModel):
+    cluster_id: str
+    organization_id: Optional[int] = None
+    organization_name: Optional[str] = None
+
+
+class ClusterOrganizationUpdateRequest(BaseModel):
+    organization_id: Optional[int] = None
+
+
 class OrgPreferencesBody(BaseModel):
     """Full personalization settings (JSONB). Mirrors PersonalizationSettings on frontend."""
     settings: dict = Field(default_factory=dict)
@@ -280,6 +291,84 @@ async def get_my_org_preferences_version(
         updated_at=version.updated_at,
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Cluster organization (one binding per cluster)
+# ---------------------------------------------------------------------------
+
+@router.get("/clusters/{cluster_id}/organization", response_model=ClusterOrganizationResponse)
+@router.get("/clusters/{cluster_id}/organization/", response_model=ClusterOrganizationResponse, include_in_schema=False)
+async def get_cluster_organization(
+    cluster_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the organization bound to this cluster, or 404 if no binding row."""
+    svc = OrganizationService(db)
+    bindings = await svc.get_cluster_bindings(cluster_id)
+    if not bindings:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster binding not found")
+    binding = bindings[0]
+    org_name = None
+    if binding.organization_id is not None:
+        org = await svc.get_organization(binding.organization_id)
+        org_name = org.name if org else None
+    return ClusterOrganizationResponse(
+        cluster_id=cluster_id,
+        organization_id=binding.organization_id,
+        organization_name=org_name,
+    )
+
+
+@router.put("/clusters/{cluster_id}/organization", response_model=ClusterOrganizationResponse)
+@router.put("/clusters/{cluster_id}/organization/", response_model=ClusterOrganizationResponse, include_in_schema=False)
+async def reassign_cluster_organization(
+    cluster_id: str,
+    body: ClusterOrganizationUpdateRequest,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reassign this cluster to a native organization (or None to unbind). Partner or Admin."""
+    svc = OrganizationService(db)
+    role = _get_user_role(user)
+    if body.organization_id is not None:
+        if not await svc.user_has_access(body.organization_id, user.email, role):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+    # Same ownership rule as bind_cluster: partners may only reassign clusters they already hold.
+    if role != "admin":
+        owned = await get_owned_clusters_ignoring_admin(user, db)
+        if cluster_id not in owned:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Not permitted to reassign cluster {cluster_id}",
+            )
+
+    async with _guard_cluster_write(db, cluster_id):
+        if body.organization_id is not None:
+            if not await svc.user_has_access(body.organization_id, user.email, role):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+        try:
+            binding = await svc.reassign_cluster_organization(
+                cluster_id=cluster_id,
+                organization_id=body.organization_id,
+                registered_by=user.email,
+            )
+        except LookupError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    from app.core.cache import get_cache_manager
+    get_cache_manager().invalidate_cluster_cache()
+
+    org_name = None
+    if binding.organization_id is not None:
+        org = await svc.get_organization(binding.organization_id)
+        org_name = org.name if org else None
+    return ClusterOrganizationResponse(
+        cluster_id=cluster_id,
+        organization_id=binding.organization_id,
+        organization_name=org_name,
+    )
 
 @router.get("/{org_id}", response_model=OrgResponse)
 async def get_organization(

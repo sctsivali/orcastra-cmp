@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -60,7 +61,7 @@ import {
   Wifi,
   ShieldCheck,
 } from "lucide-react";
-import { api, integrationsAPI } from "@/lib/api";
+import { api } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { PolicyManagementSection } from "@/components/policy-management-section";
 import { TenantAccessDialog } from "@/components/tenant-access-dialog";
@@ -73,7 +74,7 @@ import { formatLabel } from "@/lib/utils";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import type {
   UserGroupEntry,
-  IntegrationOrganization,
+  Organization,
   AuthentikSyncStatus,
 } from "@/types";
 
@@ -158,6 +159,9 @@ function UserGroupsSettingsContent() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("tenant");
   const [orgId, setOrgId] = useState<string>("");
+  const [newOrgOpen, setNewOrgOpen] = useState(false);
+  const [newOrgName, setNewOrgName] = useState("");
+  const [newOrgDescription, setNewOrgDescription] = useState("");
 
   // fetch user list
   const {
@@ -171,10 +175,10 @@ function UserGroupsSettingsContent() {
     queryFn: () => api.userGroups.list(),
   });
 
-  // fetch organizations synced from external apps (OrcaHub)
+  // fetch native local organizations (not OrcaHub)
   const { data: orgs } = useQuery({
-    queryKey: ["integration-organizations"],
-    queryFn: () => integrationsAPI.listOrganizations(),
+    queryKey: ["organizations"],
+    queryFn: () => api.organizations.list(),
   });
 
   // fetch identity provider sync status
@@ -228,6 +232,19 @@ function UserGroupsSettingsContent() {
     currentPage * pageSize,
   );
 
+  const createOrgMutation = useMutation({
+    mutationFn: api.organizations.create,
+    onSuccess: (org) => {
+      queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      setNewOrgOpen(false);
+      setNewOrgName("");
+      setNewOrgDescription("");
+      if (assignOpen) {
+        setOrgId(String(org.id));
+      }
+    },
+  });
+
   // assign mutation
   const assignMutation = useMutation({
     mutationFn: api.userGroups.assign,
@@ -251,6 +268,14 @@ function UserGroupsSettingsContent() {
     setEmail("");
     setRole("tenant");
     setOrgId("");
+  }
+
+  function handleCreateOrg() {
+    if (!newOrgName.trim()) return;
+    createOrgMutation.mutate({
+      name: newOrgName.trim(),
+      description: newOrgDescription.trim() || undefined,
+    });
   }
 
   // org is required for partner/tenant roles
@@ -365,6 +390,10 @@ function UserGroupsSettingsContent() {
               </CardDescription>
             </div>
             <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setNewOrgOpen(true)}>
+                <Building2 className="h-4 w-4 mr-1.5" />
+                New organization
+              </Button>
               <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm" onClick={resetForm}>
@@ -433,19 +462,14 @@ function UserGroupsSettingsContent() {
                           {!orgRequired && (
                             <SelectItem value="__none__">None</SelectItem>
                           )}
-                          {orgs?.map((org: IntegrationOrganization) => (
+                          {orgs?.map((org: Organization) => (
                             <SelectItem key={org.id} value={String(org.id)}>
                               {org.name}
-                              {org.app_name && (
-                                <span className="text-muted-foreground ml-1">
-                                  via {org.app_name}
-                                </span>
-                              )}
                             </SelectItem>
                           ))}
                           {(!orgs || orgs.length === 0) && orgRequired && (
                             <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                              No organizations synced. Connect OrcaHub via Integrations first.
+                              No local organizations yet
                             </div>
                           )}
                         </SelectContent>
@@ -670,6 +694,58 @@ function UserGroupsSettingsContent() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={newOrgOpen} onOpenChange={setNewOrgOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New organization</DialogTitle>
+            <DialogDescription>
+              Create a local organization without OrcaHub. Name is required.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="new-org-name">Name <span className="text-destructive">(required)</span></Label>
+              <Input
+                id="new-org-name"
+                placeholder="Acme Corp"
+                value={newOrgName}
+                onChange={(e) => setNewOrgName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-org-desc">Description (optional)</Label>
+              <Textarea
+                id="new-org-desc"
+                placeholder="Optional description"
+                value={newOrgDescription}
+                onChange={(e) => setNewOrgDescription(e.target.value)}
+                className="resize-none h-20"
+              />
+            </div>
+            {createOrgMutation.error && (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                {(createOrgMutation.error as Error).message}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewOrgOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateOrg}
+              disabled={!newOrgName.trim() || createOrgMutation.isPending}
+            >
+              {createOrgMutation.isPending && (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              )}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Tenant Access Dialog */}
       {accessEmail && (

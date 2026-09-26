@@ -252,6 +252,10 @@ async def get_all_storage_pool_resources(
             return cached
         list_generation = get_resource_list_generation(cache, "storage_pool_resources")
 
+        if tenant_acl_active():
+            # host pool capacity is partner-only; tenants keep pools/volumes via used_by
+            return {"resources": {}}
+
         nodes = lxd_service.connection_manager.get_node_names()
         tenant_acl = get_tenant_acl()
 
@@ -632,6 +636,9 @@ async def get_all_storage_pool_resources_legacy_path(
             return cached
         list_generation = get_resource_list_generation(cache, "storage_pool_resources")
 
+        if tenant_acl_active():
+            return {"resources": {}}
+
         nodes = lxd_service.connection_manager.get_node_names()
         tenant_acl = get_tenant_acl()
 
@@ -714,6 +721,8 @@ async def get_storage_pool_resources(
         pool = client.storage_pools.get(safe_segment(pool_name))
         if not tenant_acl_can_view_lxd_used_by(get_tenant_acl(), host, pool.used_by or []):
             raise HTTPException(status_code=403, detail="Access denied to this storage pool")
+        if tenant_acl_active():
+            return {"name": pool_name, "resources": {"space": {}, "inodes": {}}}
         resources = pool.resources.get()
         
         return {

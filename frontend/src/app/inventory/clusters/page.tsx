@@ -615,6 +615,11 @@ function ClustersContent() {
         onOpenChange={(next) => {
           if (!next) setDetailCluster(null);
         }}
+        onOrganizationChange={(organization_id, organization_name) => {
+          setDetailCluster((prev) =>
+            prev ? { ...prev, organization_id, organization_name } : prev
+          );
+        }}
       />
 
       {/* Delete Confirmation Modal */}

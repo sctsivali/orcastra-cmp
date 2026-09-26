@@ -37,6 +37,8 @@ import { Layers, Plus } from "lucide-react";
 import { ProfileInfo } from "@/types/api";
 import { useDeleteProfile, useProfiles } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -428,6 +430,13 @@ function ProfilesContent() {
 // Suspense is required because useTableFilters reads useSearchParams, which opts the
 // component out of prerendering.
 export default function ProfilesPage() {
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartner) return null;
+
+  // The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
+  // imports.
   return (
     <Suspense fallback={<LoadingLottiePage />}>
       <ProfilesContent />

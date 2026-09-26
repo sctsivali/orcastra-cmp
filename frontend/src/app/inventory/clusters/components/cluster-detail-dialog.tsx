@@ -9,8 +9,19 @@ import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { formatContinent, formatDateTime } from "@/lib/utils";
-import { MapPin } from "lucide-react";
-import type { ClusterInfo } from "@/types/api";
+import { MapPin, Loader2 } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { api } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import type { ClusterInfo, Organization } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
 
 // Everything the clusters table already receives and shows none of.
@@ -39,11 +50,13 @@ export function ClusterDetailDialog({
   open,
   onOpenChange,
   footer,
+  onOrganizationChange,
 }: {
   cluster: ClusterInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   footer?: React.ReactNode;
+  onOrganizationChange?: (organization_id: number | null, organization_name: string | null) => void;
 }) {
   if (!cluster) return null;
 
@@ -80,6 +93,10 @@ export function ClusterDetailDialog({
                   {/* Free text supplied at registration, so it is often absent or stale. The
                       shared placeholder says so rather than rendering an empty field. */}
                   <DetailField label="Merchant ID" value={cluster.merchant_id} mono copyable />
+                  <ClusterOrganizationField
+                    cluster={cluster}
+                    onOrganizationChange={onOrganizationChange}
+                  />
                   <DetailField label="Registered" value={formatDateTime(cluster.created_at)} />
                   <DetailField label="Last Checked" value={formatDateTime(cluster.last_checked)} />
                 </DetailGrid>
@@ -152,5 +169,74 @@ export function ClusterDetailDialog({
         },
       ]}
     />
+  );
+}
+
+
+function ClusterOrganizationField({
+  cluster,
+  onOrganizationChange,
+}: {
+  cluster: ClusterInfo;
+  onOrganizationChange?: (organization_id: number | null, organization_name: string | null) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const current = cluster.organization_id != null ? String(cluster.organization_id) : "__none__";
+  const [selected, setSelected] = React.useState(current);
+
+  React.useEffect(() => {
+    setSelected(cluster.organization_id != null ? String(cluster.organization_id) : "__none__");
+  }, [cluster.cluster_id, cluster.organization_id]);
+
+  const { data: orgs } = useQuery({
+    queryKey: ["organizations"],
+    queryFn: () => api.organizations.list(),
+  });
+
+  const mutation = useMutation({
+    mutationFn: (organizationId: number | null) =>
+      api.organizations.reassignCluster(cluster.cluster_id, organizationId),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
+      queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      onOrganizationChange?.(result.organization_id, result.organization_name);
+      toast({ title: "Organization updated", description: "Cluster organization binding saved." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update organization", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const dirty = selected !== current;
+
+  return (
+    <div className="min-w-0 sm:col-span-2">
+      <dt className="text-xs text-muted-foreground">Organization</dt>
+      <dd className="mt-0.5 flex items-center gap-2">
+        <Select value={selected} onValueChange={setSelected}>
+          <SelectTrigger className="h-8 text-sm">
+            <SelectValue placeholder="None (unbound)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">None (unbound)</SelectItem>
+            {(orgs || []).map((org: Organization) => (
+              <SelectItem key={org.id} value={String(org.id)}>
+                {org.name} ({org.id})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          className="h-8"
+          disabled={!dirty || mutation.isPending}
+          onClick={() => mutation.mutate(selected === "__none__" ? null : Number(selected))}
+        >
+          {mutation.isPending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+          Apply
+        </Button>
+      </dd>
+    </div>
   );
 }

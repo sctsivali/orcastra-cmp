@@ -336,16 +336,31 @@ async def list_ipam_allocations(
         cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
         ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 120
 
-        all_allocations = [
-            allocation for allocation in fan.rows
-            if project_is_visible(allocation.node, allocation.project or "default")
-            and check_tenant_permission(
-                allocation.node,
-                allocation.project or "default",
-                allocation.used_by if allocation.type == "instance" else None,
-                "view",
-            )
-        ]
+        if tenant_acl_active():
+            # tenants only see instance allocations they are allowed to view — never
+            # host/network-wide or other users' IPs
+            all_allocations = [
+                allocation for allocation in fan.rows
+                if allocation.type == "instance"
+                and project_is_visible(allocation.node, allocation.project or "default")
+                and check_tenant_permission(
+                    allocation.node,
+                    allocation.project or "default",
+                    allocation.used_by,
+                    "view",
+                )
+            ]
+        else:
+            all_allocations = [
+                allocation for allocation in fan.rows
+                if project_is_visible(allocation.node, allocation.project or "default")
+                and check_tenant_permission(
+                    allocation.node,
+                    allocation.project or "default",
+                    allocation.used_by if allocation.type == "instance" else None,
+                    "view",
+                )
+            ]
 
         response = IPAMListResponse(
             total=len(all_allocations),

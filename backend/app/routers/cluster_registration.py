@@ -46,6 +46,7 @@ from app.core.type_utils import (
 from app.services.activity_logger import get_activity_logger
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.organization_service import OrganizationService
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
     assert_cluster_safe_to_share,
@@ -64,6 +65,19 @@ router = APIRouter(
     tags=["Cluster Registration"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+
+async def _stamp_cluster_organizations(db: AsyncSession, clusters: list[ClusterInfo]) -> None:
+    """Attach native organization_id/name from organization_clusters onto ClusterInfo rows."""
+    if not clusters:
+        return
+    svc = OrganizationService(db)
+    stamps = await svc.get_cluster_org_stamps([c.cluster_id for c in clusters])
+    for cluster in clusters:
+        org_id, org_name = stamps.get(cluster.cluster_id, (None, None))
+        cluster.organization_id = org_id
+        cluster.organization_name = org_name
 
 
 def get_cert_manager() -> LXDCertificateManager:
@@ -831,6 +845,7 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
 )
 async def list_clusters(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    db: AsyncSession = Depends(get_db),
     fresh: bool = False
 ):
     """List all registered clusters. Set fresh=true to bypass cache."""
@@ -864,6 +879,7 @@ async def list_clusters(
         
         # Filter out None values (shouldn't happen but just in case)
         clusters = [c for c in clusters if c is not None]
+        await _stamp_cluster_organizations(db, clusters)
         
         response = ClusterListResponse(
             clusters=clusters,
@@ -959,7 +975,8 @@ async def get_facility_suggestions(
 )
 async def get_cluster(
     cluster_id: str,
-    cert_manager: LXDCertificateManager = Depends(get_cert_manager)
+    cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    db: AsyncSession = Depends(get_db),
 ):
     """Get information about a specific cluster."""
     # verify caller has access to this cluster
@@ -995,7 +1012,7 @@ async def get_cluster(
             cluster_type = resolve_cluster_type(info["metadata"].get("type"), live_client)
         clustered = resolve_clustered(stored_clustered, live_client)
 
-        return ClusterInfo(
+        cluster = ClusterInfo(
             cluster_id=cluster_id,
             display_name=info["metadata"].get("display_name", cluster_id),
             endpoint=info["metadata"]["endpoint"],
@@ -1016,6 +1033,8 @@ async def get_cluster(
             # so only API callers hit it, which is why it went unseen.
             location=info["metadata"].get("location") or None
         )
+        await _stamp_cluster_organizations(db, [cluster])
+        return cluster
         
     except LXDLocalStorageError:
         # important: above LXDCertManagerError and the generic handler. probe_connection

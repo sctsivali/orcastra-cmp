@@ -365,6 +365,8 @@ export const authConfig: NextAuthConfig = {
       const adminOrPartnerPaths = [
         "/inventory/identities",
         "/inventory/groups",
+        "/inventory/profiles",
+        "/settings",
         // Installing an add-on hands a third party a credential into an organization, so the
         // gate is a real redirect here rather than a component that renders null.
         "/extensions",

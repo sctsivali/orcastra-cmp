@@ -29,7 +29,7 @@ import {
   Loader2, Plus, Trash2, ChevronDown,
   ChevronRight, Edit, X, Check,
 } from "lucide-react";
-import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
+import { api, projectAPI, instanceAPI } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { queryKeys, useClusters } from "@/hooks/use-lxd";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
@@ -42,7 +42,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
   PolicyAssignment, AssignmentCreateRequest, TenantPermission,
-  IntegrationOrganization,
+  Organization,
 } from "@/types";
 import {
   TENANT_PERMISSION_LABELS, TENANT_PERMISSION_DESCRIPTIONS,
@@ -313,7 +313,7 @@ function InlinePolicyEditor({
   onOpenChange: (open: boolean) => void;
   editPolicy?: AccessPolicy | null;
   clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
-  organizations: IntegrationOrganization[];
+  organizations: Array<{ id: number | string; name: string }>;
   orgIdFilter?: number;
   onSubmit: (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => void;
   isPending: boolean;
@@ -547,15 +547,8 @@ export function TenantAccessDialog({
   // clusters for rule builder
   const { data: clustersData } = useClusters();
 
-  // orgs for policy editor
+  // native orgs for policy editor
   const { data: orgs } = useQuery({
-    queryKey: ["integration-organizations"],
-    queryFn: () => integrationsAPI.listOrganizations(),
-    enabled: open,
-  });
-
-  // user's accessible orgs (filtered by membership on backend)
-  const { data: myOrgs } = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api.organizations.list(),
     enabled: open,
@@ -571,14 +564,9 @@ export function TenantAccessDialog({
     }));
   }, [clustersData]);
 
-  // filter orgs to only those the user has access to
-  const myOrgIds = useMemo(
-    () => new Set((myOrgs || []).map((o) => Number(o.id))),
-    [myOrgs],
-  );
-  const organizations: IntegrationOrganization[] = useMemo(
-    () => (orgs || []).filter((o) => myOrgIds.has(o.id)),
-    [orgs, myOrgIds],
+  const organizations: Array<{ id: number | string; name: string }> = useMemo(
+    () => (orgs || []).map((o: Organization) => ({ id: o.id, name: o.name })),
+    [orgs],
   );
   const assignments = assignmentsData?.assignments || [];
   const allPolicies = policiesData?.policies || [];

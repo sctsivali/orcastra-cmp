@@ -2707,7 +2707,7 @@ export const api = {
 
   // ── Organizations ──
   organizations: {
-    list: () => fetchAPI<Organization[]>("/organizations"),
+    list: () => fetchAPI<Organization[]>("/organizations/"),
     get: (id: string) => fetchAPI<Organization>(`/organizations/${id}`),
     // Whether an agent may see and drive this organization's guest desktops. Four separate
     // decisions rather than one, because they are four separate disclosures: a screenshot, a
@@ -2722,10 +2722,19 @@ export const api = {
         }),
     },
     create: (data: OrganizationCreateRequest) =>
-      fetchAPI<Organization>("/organizations", {
+      fetchAPI<Organization>("/organizations/", {
         method: "POST",
         body: JSON.stringify(data),
       }),
+    getClusterOrganization: (clusterId: string) =>
+      fetchAPI<{ cluster_id: string; organization_id: number | null; organization_name: string | null }>(
+        `/organizations/clusters/${encodeURIComponent(clusterId)}/organization`
+      ),
+    reassignCluster: (clusterId: string, organizationId: number | null) =>
+      fetchAPI<{ cluster_id: string; organization_id: number | null; organization_name: string | null }>(
+        `/organizations/clusters/${encodeURIComponent(clusterId)}/organization`,
+        { method: "PUT", body: JSON.stringify({ organization_id: organizationId }) },
+      ),
     update: (id: string, data: OrganizationUpdateRequest) =>
       fetchAPI<Organization>(`/organizations/${id}`, {
         method: "PUT",

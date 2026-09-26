@@ -31,6 +31,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { useStoragePools } from "@/hooks/use-lxd";
+import { usePermissions } from "@/hooks/use-permissions";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -125,6 +126,7 @@ const POOLS = defineTable<PoolRow>()({
 });
 
 function StoragePoolsContent() {
+  const { isPartner } = usePermissions();
   const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useStoragePools();
   const pools = (data as any)?.pools || [];
   const poolResources = (data as any)?.resources || {};
@@ -250,7 +252,9 @@ function StoragePoolsContent() {
                 {nodes.length > 0 && (
                   <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
-                <SortableTableHead label="Size (Used / Total)" field="utilisation" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {isPartner && (
+                  <SortableTableHead label="Size (Used / Total)" field="utilisation" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
                 <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -259,7 +263,7 @@ function StoragePoolsContent() {
             <TableBody>
               {paginatedPools.length === 0 ? (
                 <TableEmptyRow
-                  colSpan={nodes.length > 0 ? 7 : 6}
+                  colSpan={(nodes.length > 0 ? 7 : 6) - (isPartner ? 0 : 1)}
                   icon={Database}
                   title="No storage pools found"
                   description={
@@ -282,13 +286,15 @@ function StoragePoolsContent() {
                       {nodes.length > 0 && (
                         <TableCell><NodeLink clusterId={pool.node} /></TableCell>
                       )}
-                      <TableCell>
-                        <PoolCapacityCell
-                          capacity={pool.capacity}
-                          poolName={pool.name}
-                          onOpen={() => usedBy.openPanel(poolSubject(pool, poolResources), "capacity")}
-                        />
-                      </TableCell>
+                      {isPartner && (
+                        <TableCell>
+                          <PoolCapacityCell
+                            capacity={pool.capacity}
+                            poolName={pool.name}
+                            onOpen={() => usedBy.openPanel(poolSubject(pool, poolResources), "capacity")}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell>
                         <Badge variant={status.tone}>
                           {status.label}

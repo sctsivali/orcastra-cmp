@@ -25,6 +25,7 @@ import { linkIntentProps } from "@/components/navigation/route-intent";
 import { useLayout } from "../layout-provider";
 import { COMMUNITY_URL, buildBugReportUrl, describeEnvironment } from "./support-links";
 import type { NavRenderContext } from "./types";
+import { usePermissions } from "@/hooks/use-permissions";
 type Theme = "light" | "dark" | "system";
 interface SidebarFooterProps {
   collapsed: boolean;
@@ -96,6 +97,7 @@ export function SidebarFooter({
   setTheme,
   ctx,
 }: SidebarFooterProps) {
+  const { isPartner } = usePermissions();
   const { setSidebarOpen } = useLayout();
 
   // The href is a real one from the first byte, so middle-click and "copy link address" both
@@ -144,6 +146,7 @@ export function SidebarFooter({
     return (
       <div className="shrink-0">
         <div className="border-t p-3 flex flex-col items-center gap-2">
+          {isPartner && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -165,6 +168,7 @@ export function SidebarFooter({
             </TooltipTrigger>
             <TooltipContent side="right">Settings</TooltipContent>
           </Tooltip>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Change theme">
@@ -185,6 +189,7 @@ export function SidebarFooter({
   return (
     <div className="shrink-0">
       <div className="border-t p-3 space-y-2">
+        {isPartner && (
         <Button
           asChild
           variant={settingsActive ? "default" : "ghost"}
@@ -201,6 +206,7 @@ export function SidebarFooter({
             <NavItemSpinner />
           </Link>
         </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="w-full justify-start">

@@ -274,6 +274,78 @@ class OrganizationService:
         await self.db.commit()
         return result.rowcount > 0
 
+    async def get_cluster_bindings(self, cluster_id: str) -> list[OrganizationCluster]:
+        """Return every OrganizationCluster row for a cluster, oldest first."""
+        result = await self.db.execute(
+            select(OrganizationCluster)
+            .where(OrganizationCluster.cluster_id == cluster_id)
+            .order_by(OrganizationCluster.id)
+        )
+        return list(result.scalars().all())
+
+    async def reassign_cluster_organization(
+        self,
+        cluster_id: str,
+        organization_id: Optional[int],
+        registered_by: str,
+    ) -> OrganizationCluster:
+        """Keep exactly one OrganizationCluster row for this cluster.
+
+        Updates the oldest row (or inserts if none exist) and deletes extras.
+        organization_id=None leaves the cluster unbound.
+        Raises LookupError if organization_id is set but the org does not exist.
+        """
+        if organization_id is not None:
+            org = await self.get_organization(organization_id)
+            if not org:
+                raise LookupError("Organization not found")
+
+        bindings = await self.get_cluster_bindings(cluster_id)
+        if not bindings:
+            binding = OrganizationCluster(
+                organization_id=organization_id,
+                cluster_id=cluster_id,
+                registered_by=registered_by,
+            )
+            self.db.add(binding)
+            await self.db.commit()
+            await self.db.refresh(binding)
+            return binding
+
+        keeper = bindings[0]
+        for extra in bindings[1:]:
+            await self.db.delete(extra)
+        await self.db.flush()
+
+        keeper.organization_id = organization_id
+        keeper.registered_by = registered_by
+        await self.db.commit()
+        await self.db.refresh(keeper)
+        return keeper
+
+    async def get_cluster_org_stamps(
+        self, cluster_ids: list[str]
+    ) -> dict[str, tuple[Optional[int], Optional[str]]]:
+        """Map cluster_id -> (organization_id, organization_name). First binding wins."""
+        if not cluster_ids:
+            return {}
+        result = await self.db.execute(
+            select(
+                OrganizationCluster.cluster_id,
+                OrganizationCluster.organization_id,
+                Organization.name,
+            )
+            .outerjoin(Organization, Organization.id == OrganizationCluster.organization_id)
+            .where(OrganizationCluster.cluster_id.in_(cluster_ids))
+            .order_by(OrganizationCluster.id)
+        )
+        stamps: dict[str, tuple[Optional[int], Optional[str]]] = {}
+        for cluster_id, org_id, org_name in result.all():
+            if cluster_id in stamps:
+                continue
+            stamps[cluster_id] = (org_id, org_name)
+        return stamps
+
     # ------------------------------------------------------------------
     # Helpers for scoped access
     # ------------------------------------------------------------------

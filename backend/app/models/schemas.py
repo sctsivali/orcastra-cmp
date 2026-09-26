@@ -1321,6 +1321,8 @@ class ClusterInfo(BaseModel):
     created_at: Optional[datetime] = Field(None, description="Registration timestamp")
     last_checked: Optional[datetime] = Field(None, description="Last status check")
     error_message: Optional[str] = Field(None, description="Error details if status is ERROR")
+    organization_id: Optional[int] = Field(None, description="Native organization bound to this cluster")
+    organization_name: Optional[str] = Field(None, description="Bound organization display name")
 
 
 class ClusterLocationUpdateRequest(BaseModel):

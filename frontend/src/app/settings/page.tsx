@@ -15,10 +15,13 @@ import { PersonalizationSettings } from "@/components/personalization-settings";
 import { IntegrationsSettings } from "@/components/integrations-settings";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { api } from "@/lib/api";
 import { Role } from "@/types/rbac";
 
 export default function SettingsPage() {
+  const { allowed: isPartnerGate, isResolved } = useRequireRole(Role.PARTNER);
   const { navigate } = useNavigationProgress();
   const queryClient = useQueryClient();
   const { isAdmin, isPartner, roles } = usePermissions();
@@ -62,6 +65,9 @@ export default function SettingsPage() {
       setIsClearing(false);
     }
   };
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartnerGate) return null;
 
   return (
     <div className="space-y-6">

@@ -92,8 +92,10 @@ export function Dashboard() {
       {/* Stats Overview - shows its own loading state */}
       <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
 
-      {/* Alarm Statistics - Only shows when there are warnings (data already prefetched above) */}
-      <AlarmStatistics prefetchedWarnings={warningsData} prefetchedSystemWarnings={systemWarnings} />
+      {/* Alarm Statistics - partner-only (tenants do not see host system alerts) */}
+      {isPartner && (
+        <AlarmStatistics prefetchedWarnings={warningsData} prefetchedSystemWarnings={systemWarnings} />
+      )}
 
       {/* Nodes Status */}
       {isPartner ? (

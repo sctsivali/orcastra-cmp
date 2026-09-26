@@ -55,7 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "sessions", label: "Sessions", href: "/inventory/sessions", icon: MonitorPlay, role: "tenant" },
       { id: "terminals", label: "Terminals", icon: Terminal, role: "tenant", render: "terminal-menu", indent: true },
       { id: "consoles", label: "Consoles", icon: Monitor, role: "tenant", render: "console-menu", indent: true },
-      { id: "profiles", label: "Profiles", href: "/inventory/profiles", icon: SlidersHorizontal },
+      { id: "profiles", label: "Profiles", href: "/inventory/profiles", icon: SlidersHorizontal, role: "partner" },
       { id: "images", label: "Images", href: "/inventory/images", icon: ImageIcon },
       // Operator restore points. Partner-gated because this console manages maintenance
       // snapshots, not the metered snapshot product a tenant buys upstream.

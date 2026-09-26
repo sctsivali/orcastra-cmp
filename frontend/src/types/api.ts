@@ -1328,6 +1328,8 @@ export interface ClusterInfo {
   last_checked?: string;
   error_message?: string;
   location?: GeoLocation;
+  organization_id?: number | null;
+  organization_name?: string | null;
 }
 
 export interface ClusterRegisterResponse {
