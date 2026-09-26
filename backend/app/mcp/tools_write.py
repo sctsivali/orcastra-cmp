@@ -42,7 +42,8 @@ def register(mcp: MCPServer) -> None:
             "Create a container or virtual machine. `config` and `devices` are passed to LXD as "
             "given. Note that a raw.lxc hook or a host-path disk device counts as reaching inside "
             "the guest and additionally costs instance.exec or instance.files."
-            " Cloud-init user data or vendor data in `config` needs the instance.exec capability."
+            " Cloud-init user data or vendor data, meta-data or SSH keys in `config` needs the instance.exec"
+            " capability."
         ),
     )
     async def lxd_create_instance(
@@ -75,7 +76,8 @@ def register(mcp: MCPServer) -> None:
         annotations=_MUTATES,
         description=(
             "Change an existing instance's config, devices, profiles or description. Setting or "
-            "changing cloud-init user data or vendor data needs the instance.exec capability."
+            "changing cloud-init user data or vendor data, meta-data or SSH keys needs the instance.exec"
+            " capability."
         ),
     )
     async def lxd_update_instance(

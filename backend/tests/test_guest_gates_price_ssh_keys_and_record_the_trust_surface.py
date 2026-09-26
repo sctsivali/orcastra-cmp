@@ -244,11 +244,12 @@ def test_orcahubs_round_trip_on_a_keyed_instance_is_still_sent(door: Any, method
     assert seen.cluster.writes == [(method, body)]
 
 
-def test_user_meta_data_is_sent_unpriced(door: Any) -> None:
-    """Pinned as observed: no decision prices user.meta-data (LXD appends it to cloud-init's meta-data)."""
+def test_user_meta_data_costs_exec_like_the_other_cloud_init_keys(door: Any) -> None:
+    """LXD appends user.meta-data to cloud-init's meta-data verbatim, so a login key rides in it."""
     meta = "public-keys:\n  - ssh-ed25519 AAAA"
     body = {"name": "c1", "source": {"type": "none"}, "config": {"user.meta-data": meta}}
-    _passed(door.raw(NO_GUEST, "POST", "/1.0/instances", body=body))
+    _priced(door.raw(NO_GUEST, "POST", "/1.0/instances", body=body))
+    _passed(door.raw(EXEC, "POST", "/1.0/instances", body=body))
 
 
 # note: trust surface refusal records, each answer compared with the gate's own

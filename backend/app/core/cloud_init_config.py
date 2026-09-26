@@ -9,6 +9,9 @@ booted before. A profile carrying them reaches every instance that uses it. Writ
 command in the guest, so it costs `instance.exec` for every key, `*` included. So does
 `cloud-init.ssh-keys.<name>` (LXD's cloud_init_ssh_keys extension, 5.21 and later), whose `<user>:<key>`
 value cloud-init installs as a login for that user, root included, on instances and profiles alike.
+And so does `user.meta-data`, which LXD appends verbatim to the meta-data cloud-init reads (the config
+drive in lxd/device/disk.go and /1.0/meta-data in lxd/devlxd.go), so it can carry anything cloud-init
+takes from meta-data, a login key or a replacement instance-id included.
 
 Read wherever a key writes instance or profile config:
 
@@ -66,6 +69,7 @@ CLOUD_INIT_KEYS = frozenset({
     "cloud-init.vendor-data",
     "user.user-data",
     "user.vendor-data",
+    "user.meta-data",
 })
 CLOUD_INIT_SSH_KEYS_PREFIX = "cloud-init.ssh-keys."
 # /proxy operations whose params carry an instance's config to LXD.

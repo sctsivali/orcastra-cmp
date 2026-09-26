@@ -426,5 +426,7 @@ def test_ratchet_every_mcp_tool_that_takes_config_is_priced() -> None:
         assert proxy_cloud_init_capability_for(operation, {"config": {"user.user-data": "x"}}) == "instance.exec", name
 
 
-def test_the_four_keys_are_the_ones_lxd_hands_to_cloud_init() -> None:
-    assert CLOUD_INIT_KEYS == {"cloud-init.user-data", "cloud-init.vendor-data", "user.user-data", "user.vendor-data"}
+def test_the_priced_keys_are_the_ones_lxd_hands_to_cloud_init() -> None:
+    assert CLOUD_INIT_KEYS == {
+        "cloud-init.user-data", "cloud-init.vendor-data", "user.user-data", "user.vendor-data", "user.meta-data",
+    }
