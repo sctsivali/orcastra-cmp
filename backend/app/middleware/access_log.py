@@ -15,7 +15,7 @@ from app.core.config import get_settings
 from app.core.request_context import get_request_context
 from app.core.request_security import resolve_client_ip
 from app.core.logging_config import get_access_logger
-from app.core.error_sanitizer import sanitize_error
+from app.core.error_sanitizer import is_sensitive_param as _is_sensitive_param, sanitize_error
 
 
 # Paths to exclude from access logging (health checks, metrics, etc.)
@@ -24,19 +24,6 @@ EXCLUDED_PATHS = {
     "/metrics",
     "/favicon.ico",
 }
-
-
-# Query-parameter names that must never reach the log. Matched as substrings on the lowercased
-# name, so `access_token`, `X-Api-Key` and `client_secret` are all covered by their stem.
-_SENSITIVE_PARAM_STEMS = (
-    "token", "password", "secret", "api_key", "apikey", "api-key",
-    "authorization", "auth", "credential", "signature", "code", "key",
-)
-
-
-def _is_sensitive_param(name: str) -> bool:
-    lowered = name.lower()
-    return any(stem in lowered for stem in _SENSITIVE_PARAM_STEMS)
 
 
 

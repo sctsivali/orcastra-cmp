@@ -41,6 +41,12 @@ _BARE_TOKEN_PATTERNS = (
     re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
 )
 
+SENSITIVE_PARAM_STEMS = (
+    "token", "password", "secret", "api_key", "apikey", "api-key",
+    "authorization", "auth", "credential", "signature", "code", "key",
+)
+_QUERY_PAIR = re.compile(r"([?&;])([^=&#\s\"']+)=([^&#;\s\"']*)")
+
 GENERIC_SERVER_ERROR = "Internal server error"
 
 
@@ -77,3 +83,25 @@ def reference_for(exc: BaseException) -> Tuple[str, str]:
 
 def client_detail(reference: str) -> str:
     return f"{GENERIC_SERVER_ERROR}. Reference: {reference}"
+
+
+def is_sensitive_param(name: str) -> bool:
+    """Use the same credential-name policy for structured and Uvicorn access logs."""
+    from urllib.parse import unquote_plus
+
+    lowered = unquote_plus(name or "").lower()
+    return any(stem in lowered for stem in SENSITIVE_PARAM_STEMS)
+
+
+def redact_query_secrets(text: str) -> str:
+    """Redact credential values in free-text request and WebSocket handshake lines."""
+    if not text or "=" not in text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        separator, name = match.group(1), match.group(2)
+        if is_sensitive_param(name):
+            return f"{separator}{name}=[REDACTED]"
+        return match.group(0)
+
+    return _QUERY_PAIR.sub(replace, text)
