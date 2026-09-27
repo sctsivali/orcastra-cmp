@@ -19,6 +19,7 @@ import {
 import { getAccessToken } from "@/lib/api";
 import { personalizationAPI } from "@/lib/personalization-api";
 import { formatMemory } from "@/lib/utils";
+import { APIError } from "@/types/api";
 
 // The picker fills an empty field with the shipped default, so it has to read the same
 // object everything else does. Retyping the hexes here is how a picker ends up offering to
@@ -55,6 +56,7 @@ import {
 // Binary limits: 500 KiB for logos, 2 MiB for backgrounds.
 const MAX_LOGO_SIZE = 500 * 1024;
 const MAX_BACKGROUND_SIZE = 2 * 1024 * 1024;
+const MAX_IMAGE_URL_LENGTH = 2048;
 
 // Convert file to base64
 async function fileToBase64(file: File): Promise<string> {
@@ -122,14 +124,19 @@ function ImageUploader({
   };
 
   const handleUrlFetch = async () => {
-    if (!urlValue.trim()) {
+    const imageUrl = urlValue.trim();
+    if (!imageUrl) {
       setError("Please enter a valid URL");
+      return;
+    }
+    if (imageUrl.length > MAX_IMAGE_URL_LENGTH) {
+      setError(`URL is too long (${MAX_IMAGE_URL_LENGTH} characters at most)`);
       return;
     }
 
     // Basic URL validation
     try {
-      new URL(urlValue);
+      new URL(imageUrl);
     } catch {
       setError("Invalid URL format");
       return;
@@ -139,7 +146,7 @@ function ImageUploader({
     setIsLoadingUrl(true);
 
     try {
-      const base64 = await fetchImageAsBase64(urlValue);
+      const base64 = await fetchImageAsBase64(imageUrl);
       
       // Check approximate size (base64 is ~33% larger than binary)
       const approxSize = (base64.length * 3) / 4;
@@ -152,7 +159,16 @@ function ImageUploader({
       setUrlValue("");
       setShowUrlInput(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch image from URL");
+      const detail = err instanceof APIError ? err.detail : null;
+      setError(
+        typeof detail === "string"
+          ? detail
+          : err instanceof APIError
+            ? "Image URL was rejected. Check the URL and try again."
+            : err instanceof Error
+              ? err.message
+              : "Failed to fetch image from URL"
+      );
     } finally {
       setIsLoadingUrl(false);
     }

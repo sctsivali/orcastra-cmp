@@ -35,18 +35,12 @@ export default auth((request) => {
 });
 
 export const config = {
-  // Match all routes except static assets and API routes handled by NextAuth
+  // Match all pages; exclude only explicit public endpoints and asset locations.
   matcher: [
     /*
-     * Match all request paths except for the ones starting with:
-     * - api (API routes: NextAuth + backend proxy)
-     * - health (readiness proxy) and healthz (the Docker liveness probe): both must stay
-     *   reachable without a session, so the prefix stays here
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon (favicon files)
-     * - public assets (images, fonts, etc.)
+     * Dotted dynamic page names remain inside auth. Public files live at the root,
+     * under geo/*.json, or under spice-html5/. Health probes are exact segments.
      */
-    "/((?!api/|health|_next/static|_next/image|favicon|.*\\.ico|.*\\.png|.*\\.jpg|.*\\.svg|.*\\.webp|.*\\.json|spice-html5).*)",
+    "/((?!api(?:/|$)|health(?:z)?(?:/|$)|_next/static(?:/|$)|_next/image(?:/|$)|[^/]+\\.(?:ico|png|jpg|svg|webp|json)$|geo/[^/]+\\.json$|spice-html5/).*)",
   ],
 };

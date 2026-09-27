@@ -269,6 +269,11 @@ async function jwtCallback({ token, user, account }: JwtParams): Promise<JWT> {
   return await refreshAccessTokenDeduped(token);
 }
 
+// Only root-level public files may bypass the page authentication callback.
+// A dotted page under /inventory, /console, or /terminal still needs its role gate.
+const PUBLIC_ASSET_EXTENSION =
+  /^\/[^/]+\.(?:js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|txt|webmanifest|wasm|json)$/i;
+
 // NextAuth configuration
 export const authConfig: NextAuthConfig = {
   providers: [authentikProvider],
@@ -309,17 +314,12 @@ export const authConfig: NextAuthConfig = {
       const { nextUrl } = request;
       const host = request.headers.get("host");
       const isLoggedIn = !!auth?.user;
-      const isOnAuthPage = nextUrl.pathname.startsWith("/auth");
-      const isApiRoute = nextUrl.pathname.startsWith("/api");
-      // important: `pathname.includes(".")` treated ANY route containing a dot as a public
-      // asset, so it skipped both the sign-in redirect and the role check below. The backend
-      // enforces RBAC independently, so this leaked chrome rather than data, but a
-      // defence-in-depth layer that silently does not apply is worse than none. Matched on a
-      // real file extension at the end of the path instead.
+      const isOnAuthPage = nextUrl.pathname === "/auth" || nextUrl.pathname.startsWith("/auth/");
+      const isApiRoute = nextUrl.pathname === "/api" || nextUrl.pathname.startsWith("/api/");
+      // Only known root-level public assets and API routes bypass the page gate.
       const isPublicAsset =
-        nextUrl.pathname.startsWith("/_next") ||
-        nextUrl.pathname.startsWith("/favicon") ||
-        /\.[a-z0-9]{2,5}$/i.test(nextUrl.pathname);
+        nextUrl.pathname.startsWith("/_next/") ||
+        PUBLIC_ASSET_EXTENSION.test(nextUrl.pathname);
 
       // Allow public assets and API routes
       if (isPublicAsset || isApiRoute) {
