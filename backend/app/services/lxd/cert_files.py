@@ -214,6 +214,14 @@ def describe_usage() -> Dict[str, Any]:
     }
 
 
+PUBLIC_USAGE_FIELDS = ("available", "used_mib", "total_mib", "percent_used", "degraded")
+
+
+def public_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
+    """Allow only health fields that reveal neither the scratch path nor its error text."""
+    return {key: usage[key] for key in PUBLIC_USAGE_FIELDS if key in usage}
+
+
 def describe_disk_usage(path: str) -> str:
     """One-line human summary of free space, shared with the WebSocket path in lxd_ssl.
 

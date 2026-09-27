@@ -10,9 +10,10 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 import traceback
 
+from app.core.error_sanitizer import redact_query_secrets
 
 
 class StructuredJsonFormatter(logging.Formatter):
@@ -235,6 +236,41 @@ class LogDeduplicationFilter(logging.Filter):
             self._flushed.clear()
 
 
+class QuerySecretFilter(logging.Filter):
+    """Keep credential query values out of Uvicorn HTTP and WebSocket logs.
+
+    Uvicorn logs the WebSocket handshake before application authentication. The socket URL
+    carries a bearer token, so both the message and string arguments need redaction before
+    any handler formats the record.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_query_secrets(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_query_secrets(value) if isinstance(value, str) else value
+                for value in record.args
+            )
+        elif isinstance(record.args, Mapping):
+            record.args = {
+                key: redact_query_secrets(value) if isinstance(value, str) else value
+                for key, value in record.args.items()
+            }
+        return True
+
+
+QUERY_SECRET_LOGGERS = ("uvicorn.error", "uvicorn.access")
+
+
+def install_query_secret_filter() -> None:
+    """Attach the filter once even when logging setup runs again."""
+    for name in QUERY_SECRET_LOGGERS:
+        target = logging.getLogger(name)
+        if not any(isinstance(existing, QuerySecretFilter) for existing in target.filters):
+            target.addFilter(QuerySecretFilter())
+
+
 def setup_logging(
     service_name: str = "orcastra-backend",
     version: str = "0.0.0",
@@ -279,6 +315,7 @@ def setup_logging(
     # Set specific log levels for noisy libraries
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    install_query_secret_filter()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)

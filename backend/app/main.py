@@ -967,6 +967,12 @@ Ensure your client certificates are properly configured.
         from app.services.lxd import cert_files
 
         temp_storage = cert_files.describe_usage()
+        if temp_storage.get("available") is False:
+            logger.warning(
+                "Backend temp storage at %s is unreadable: %s",
+                temp_storage.get("path"),
+                temp_storage.get("error"),
+            )
         if temp_storage.get("degraded"):
             logger.warning(
                 "Backend temp storage at %s%% of %s MiB (%s). LXD TLS credential writes fail "
@@ -975,14 +981,8 @@ Ensure your client certificates are properly configured.
                 temp_storage.get("total_mib"),
                 temp_storage.get("path"),
             )
-        # important: unauthenticated, and excluded from access logging, so probing it leaves no
-        # trace. `describe_usage()` includes the host filesystem path backing the TLS scratch
-        # space, which tells an unauthenticated caller how this box is laid out. The health
-        # signal an orchestrator needs is the degraded flag and the percentage; the path is kept
-        # for the log line above and dropped from the response.
-        public_storage = {
-            key: value for key, value in (temp_storage or {}).items() if key != "path"
-        }
+        # This unauthenticated route publishes an allowlist. Error text can repeat the path or
+        # include other filesystem details even when the `path` field itself is omitted.
 
         # important: reported as a field, never as a status code, for the same reason as
         # temp_storage above. A sealed Vault makes the cluster registry unreadable, and the
@@ -1015,7 +1015,7 @@ Ensure your client certificates are properly configured.
             "status": "healthy",
             "service": "orcastra-dashboard-api",
             **build_identity.public(),
-            "temp_storage": public_storage,
+            "temp_storage": cert_files.public_usage(temp_storage),
             "vault": vault,
         }
     
