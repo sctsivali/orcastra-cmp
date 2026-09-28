@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Authentik groups that map to our three-tier roles
 ROLE_GROUPS = ["role_admin", "role_partner", "role_tenant"]
-# The only groups an integration key may add or remove. role_admin is never among them.
+# The only groups an integration key may add. It cannot remove any account role.
 INTEGRATION_ROLE_GROUPS = frozenset({"role_partner", "role_tenant"})
 
 
@@ -123,7 +123,7 @@ class AuthentikSyncService:
         if not self.enabled:
             return None
         try:
-            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 user_pk = await self._find_user_pk(client, user_email)
                 if not user_pk:
                     return set()
@@ -153,7 +153,9 @@ class AuthentikSyncService:
     async def sync_user_role(self, user_email: str, target_role: str) -> bool:
         """
         Set user's Authentik groups to match the target role.
-        Removes user from other role groups and adds to the target one.
+        Removes other role groups and adds the target one. A Partner promotion retains
+        role_tenant, the baseline group of an active account. An explicit admin removal
+        still uses remove_user_from_all_roles.
 
         target_role: "admin" | "partner" | "tenant"
         """
@@ -166,7 +168,7 @@ class AuthentikSyncService:
             logger.error(f"Invalid target role: {target_role}")
             return False
 
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             # ensure groups exist
             group_map = await self._ensure_role_groups_exist(client)
             if target_group not in group_map:
@@ -181,12 +183,15 @@ class AuthentikSyncService:
 
             # remove from other role groups
             for gname, gpk in group_map.items():
-                if gname != target_group:
-                    await client.post(
+                if gname != target_group and not (target_group == "role_partner" and gname == "role_tenant"):
+                    remove_resp = await client.post(
                         f"{self.api_url}/core/groups/{gpk}/remove_user/",
                         json={"pk": user_pk},
                         headers=self._headers(),
                     )
+                    if remove_resp.status_code not in (200, 204):
+                        logger.error("Failed to remove %s from %s: HTTP %s", user_email, gname, remove_resp.status_code)
+                        return False
 
             # add to target group
             resp = await client.post(
@@ -207,18 +212,21 @@ class AuthentikSyncService:
         if not self.enabled:
             return False
 
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             group_map = await self._ensure_role_groups_exist(client)
             user_pk = await self._find_user_pk(client, user_email)
             if not user_pk:
                 return False
 
             for gname, gpk in group_map.items():
-                await client.post(
+                resp = await client.post(
                     f"{self.api_url}/core/groups/{gpk}/remove_user/",
                     json={"pk": user_pk},
                     headers=self._headers(),
                 )
+                if resp.status_code not in (200, 204):
+                    logger.error("Failed to remove %s from %s: HTTP %s", user_email, gname, resp.status_code)
+                    return False
 
             logger.info(f"Removed {user_email} from all role groups in Authentik")
             return True
@@ -229,13 +237,15 @@ class AuthentikSyncService:
         add: Optional[str] = None,
         remove: Iterable[str] = frozenset(),
     ) -> bool:
-        """Add or remove only role_partner and role_tenant, for an integration key's member sync.
+        """Add an approved role for an integration key's member sync.
 
-        important: refuses role_admin, or any other group, before any request is made. Unlike
-        sync_user_role this never removes a group it was not asked to, so an integration can
-        grant a role but cannot use a grant to strip another one.
+        important: refuses all removals, role_admin, and unknown groups before any request.
+        Organization offboarding must only remove memberships; an integration cannot strip an
+        account-level group, including the baseline role_tenant.
         """
         removing = frozenset(remove)
+        if removing:
+            raise ValueError("an integration may not remove account role groups")
         named = removing | ({add} if add else frozenset())
         illegal = named - INTEGRATION_ROLE_GROUPS
         if illegal:
@@ -246,22 +256,13 @@ class AuthentikSyncService:
             logger.warning("Authentik sync skipped: not configured")
             return False
 
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             group_map = await self._ensure_role_groups_exist(client, sorted(named))
             user_pk = await self._find_user_pk(client, user_email)
             if not user_pk:
                 logger.warning(f"User {user_email} not found in Authentik, role change skipped")
                 return False
             ok = True
-            for group_name in sorted(removing):
-                if group_name not in group_map:
-                    continue
-                resp = await client.post(
-                    f"{self.api_url}/core/groups/{group_map[group_name]}/remove_user/",
-                    json={"pk": user_pk},
-                    headers=self._headers(),
-                )
-                ok = ok and resp.status_code in (200, 204)
             if add:
                 if add not in group_map:
                     return False
@@ -279,7 +280,7 @@ class AuthentikSyncService:
             return {"enabled": False, "connected": False, "groups": {}}
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 group_map = await self._ensure_role_groups_exist(client)
                 return {
                     "enabled": True,

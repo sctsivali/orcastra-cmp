@@ -110,8 +110,7 @@ async def _read(
 async def fetch_current_roles(api_url: str, headers: Mapping[str, str], email: str) -> RoleReading:
     """Read one user's roles from Authentik's Admin API. Never raises for an Authentik failure."""
     try:
-        # note: verify=False like every other call in AuthentikSyncService, changed together with them
-        async with httpx.AsyncClient(verify=False, timeout=_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
             return await _read(client, api_url, headers, email)
     except Exception as exc:  # noqa: BLE001 - a timeout or transport error is unknown, never "no role"
         logger.debug("Authentik role read failed: %s", type(exc).__name__)

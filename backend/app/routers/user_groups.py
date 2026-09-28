@@ -314,7 +314,11 @@ async def remove_user_from_all(
     # remove from Authentik (only admin should do this globally)
     if highest == Role.ADMIN:
         sync_svc = get_authentik_sync()
-        await sync_svc.remove_user_from_all_roles(user_email)
+        if not await sync_svc.remove_user_from_all_roles(user_email):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Authentik role removal was not confirmed; retry this operation",
+            )
 
     # push removal to OrcaHub (non-blocking, best-effort)
     try:
