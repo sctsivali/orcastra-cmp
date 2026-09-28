@@ -9,13 +9,17 @@ a key could purge another integration's roster.
 
 from itertools import combinations
 from typing import Any, Dict, Iterable, List, Optional
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
-from app.routers import integrations
+from app.core.auth import AuthenticatedUser
+from app.core.rbac import Role
+from app.routers import integrations, user_groups
 from app.routers.integrations import SyncMember, SyncOrganization
 from app.services import authentik_sync
 from app.services.authentik_role_reading import RoleReading, known_roles, unknown_role
@@ -23,7 +27,6 @@ from app.services.integration_roles import (
     ROLE_ADMIN,
     ROLE_PARTNER,
     ROLE_TENANT,
-    decide_orphan_revoke,
     decide_upsert,
     membership_owners,
 )
@@ -57,7 +60,7 @@ def test_a_partner_grant_needs_every_org_under_this_key(owners: List[Optional[st
 def test_a_partner_grant_where_every_org_is_owned() -> None:
     change = decide_upsert("partner", {ROLE_TENANT}, [KEY, KEY], KEY)
     assert change.add == ROLE_PARTNER
-    assert change.remove == frozenset({ROLE_TENANT})
+    assert change.remove == frozenset()
     assert change.reason == "grant_partner"
 
 
@@ -89,47 +92,12 @@ def test_unknown_groups_change_nothing(target: str) -> None:
 @pytest.mark.parametrize("current", EVERY_HOLDING, ids=lambda g: "+".join(sorted(g)) or "none")
 @pytest.mark.parametrize("owners", [[], [KEY], [OTHER], [KEY, None], [KEY, KEY]])
 def test_no_upsert_ever_demotes(target: str, current: set, owners: List[Optional[str]]) -> None:
-    """Every holding, every target, every ownership: nothing is ever taken but a superseded tenant."""
+    """Every holding, every target, every ownership: an integration never removes a role."""
     change = decide_upsert(target, set(current), owners, KEY)
     assert change.add in (None, ROLE_PARTNER, ROLE_TENANT)
-    assert ROLE_ADMIN not in change.remove and ROLE_PARTNER not in change.remove
-    if change.remove:
-        assert change.remove == frozenset({ROLE_TENANT}) and change.add == ROLE_PARTNER
+    assert not change.remove
     if ROLE_ADMIN in current:
         assert change.is_noop
-
-
-# --- decide_orphan_revoke -------------------------------------------------------------------
-
-def test_a_remaining_membership_keeps_everything() -> None:
-    assert decide_orphan_revoke({ROLE_TENANT}, 1).reason == "still_a_member"
-
-
-def test_unknown_groups_are_not_revoked() -> None:
-    assert decide_orphan_revoke(None, 0).reason == "authentik_unknown"
-
-
-@pytest.mark.parametrize("groups", [{ROLE_ADMIN}, {ROLE_PARTNER}, {ROLE_ADMIN, ROLE_TENANT}])
-def test_an_orphaned_admin_or_partner_is_not_demoted(groups: set) -> None:
-    change = decide_orphan_revoke(groups, 0)
-    assert change.is_noop and change.reason == "no_demotion"
-
-
-def test_an_orphaned_tenant_loses_only_role_tenant() -> None:
-    change = decide_orphan_revoke({ROLE_TENANT}, 0)
-    assert change.remove == frozenset({ROLE_TENANT}) and change.add is None
-
-
-def test_nothing_held_is_a_noop() -> None:
-    assert decide_orphan_revoke(set(), 0).reason == "nothing_held"
-
-
-@pytest.mark.parametrize("current", EVERY_HOLDING, ids=lambda g: "+".join(sorted(g)) or "none")
-@pytest.mark.parametrize("remaining", [0, 1])
-def test_no_orphan_revoke_ever_takes_more_than_role_tenant(current: set, remaining: int) -> None:
-    change = decide_orphan_revoke(set(current), remaining)
-    assert change.add is None
-    assert change.remove <= frozenset({ROLE_TENANT})
 
 
 # --- the Authentik service refuses role_admin before any request ----------------------------
@@ -137,9 +105,10 @@ def test_no_orphan_revoke_ever_takes_more_than_role_tenant(current: set, remaini
 class _Recorder:
     """Answers like Authentik and records every request. `held` is the user's role groups."""
 
-    def __init__(self, held: Iterable[str] = ()) -> None:
+    def __init__(self, held: Iterable[str] = (), denied_remove: Optional[str] = None) -> None:
         self.requests: List[httpx.Request] = []
         self.held = set(held)
+        self.denied_remove = denied_remove
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         real = httpx.AsyncClient
@@ -158,6 +127,8 @@ class _Recorder:
             if request.method == "POST" and "/core/groups/pk-" in path:
                 group = path.split("/core/groups/pk-")[1].split("/")[0]
                 if path.endswith("/remove_user/"):
+                    if group == self.denied_remove:
+                        return httpx.Response(403, json={"detail": "denied"})
                     self.held.discard(group)
                 elif path.endswith("/add_user/"):
                     self.held.add(group)
@@ -197,20 +168,86 @@ async def test_role_admin_is_refused_before_any_request(
     assert recorder.requests == []
 
 
-async def test_an_integration_change_never_creates_or_touches_role_admin(
+@pytest.mark.parametrize("group", [ROLE_TENANT, ROLE_PARTNER, ROLE_ADMIN])
+async def test_an_integration_cannot_remove_an_account_role(
+    monkeypatch: pytest.MonkeyPatch, group: str,
+) -> None:
+    recorder = _Recorder({group})
+    recorder.install(monkeypatch)
+    with pytest.raises(ValueError):
+        await _service().change_integration_role_groups("tenant@example.test", remove={group})
+    assert recorder.requests == []
+
+
+async def test_an_integration_partner_grant_keeps_baseline_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recorder = _Recorder()
+    recorder = _Recorder({ROLE_TENANT})
     recorder.install(monkeypatch)
     await _service().change_integration_role_groups(
-        "tenant@example.test", add="role_partner", remove={"role_tenant"}
+        "tenant@example.test", add=ROLE_PARTNER
     )
     touched = " ".join(str(r.url) + r.content.decode() for r in recorder.requests)
     assert "role_admin" not in touched
+    assert recorder.writes() == [("/api/v3/core/groups/pk-role_partner/add_user/", "POST")]
+    assert recorder.held == {ROLE_TENANT, ROLE_PARTNER}
+
+
+async def test_dashboard_partner_promotion_keeps_baseline_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _Recorder({ROLE_TENANT})
+    recorder.install(monkeypatch)
+    assert await _service().sync_user_role("tenant@example.test", "partner")
+    assert recorder.held == {ROLE_TENANT, ROLE_PARTNER}
     assert recorder.writes() == [
-        ("/api/v3/core/groups/pk-role_tenant/remove_user/", "POST"),
+        ("/api/v3/core/groups/pk-role_admin/remove_user/", "POST"),
         ("/api/v3/core/groups/pk-role_partner/add_user/", "POST"),
     ]
+
+
+async def test_explicit_admin_removal_still_revokes_all_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _Recorder({ROLE_TENANT, ROLE_PARTNER})
+    recorder.install(monkeypatch)
+    assert await _service().remove_user_from_all_roles("partner@example.test")
+    assert recorder.held == set()
+    assert {path for path, _ in recorder.writes()} >= {
+        "/api/v3/core/groups/pk-role_tenant/remove_user/",
+        "/api/v3/core/groups/pk-role_partner/remove_user/",
+    }
+
+
+async def test_explicit_admin_removal_reports_a_denied_group_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _Recorder({ROLE_TENANT}, denied_remove=ROLE_TENANT)
+    recorder.install(monkeypatch)
+    assert not await _service().remove_user_from_all_roles("tenant@example.test")
+    assert ROLE_TENANT in recorder.held
+
+
+async def test_admin_removal_route_reports_unconfirmed_authentik_revoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DeniedSync:
+        async def remove_user_from_all_roles(self, _email: str) -> bool:
+            return False
+
+    class FakeDb:
+        execute = AsyncMock()
+        commit = AsyncMock()
+
+    monkeypatch.setattr(user_groups, "resolve_roles", lambda _user: [Role.ADMIN])
+    monkeypatch.setattr(user_groups, "get_authentik_sync", lambda: DeniedSync())
+    db = FakeDb()
+    with pytest.raises(HTTPException) as error:
+        await user_groups.remove_user_from_all(
+            "tenant@example.test", AuthenticatedUser("admin", email="admin@example.test"), db,
+        )
+    assert error.value.status_code == 502
+    db.commit.assert_awaited_once()
 
 
 # --- the member sync and the reconcile ------------------------------------------------------
@@ -236,12 +273,14 @@ class FakeAuthentik:
     async def change_integration_role_groups(
         self, email: str, add: Optional[str] = None, remove: Iterable[str] = frozenset()
     ) -> bool:
-        named = frozenset(remove) | ({add} if add else frozenset())
+        removing = frozenset(remove)
+        if removing:
+            raise ValueError("an integration may not remove account role groups")
+        named = ({add} if add else frozenset())
         if named - authentik_sync.INTEGRATION_ROLE_GROUPS:
             raise ValueError(f"an integration may not change {sorted(named)}")
-        self.changes.append((email, add, frozenset(remove)))
+        self.changes.append((email, add, removing))
         if self.groups is not None:
-            self.groups -= set(remove)
             if add:
                 self.groups.add(add)
         return True
@@ -315,16 +354,29 @@ async def test_removing_an_admin_keeps_role_admin(authentik: Dict[str, Any]) -> 
     assert authentik["svc"].groups == {ROLE_ADMIN}
 
 
-async def test_an_orphaned_tenant_loses_role_tenant_only(authentik: Dict[str, Any]) -> None:
+async def test_last_org_removal_keeps_baseline_role(authentik: Dict[str, Any]) -> None:
     authentik["svc"] = FakeAuthentik({ROLE_TENANT})
     db = await _fresh_org()
     await integrations._upsert_synced_members(db, _push("tenant@example.test", "TENANT"), KEY)
     await integrations._upsert_synced_members(
         db, _push("tenant@example.test", "TENANT", action="remove"), KEY
     )
-    assert authentik["svc"].changes == [("tenant@example.test", None, frozenset({ROLE_TENANT}))]
+    _, repeated_removal = await integrations._upsert_synced_members(
+        db, _push("tenant@example.test", "TENANT", action="remove"), KEY
+    )
+    assert repeated_removal == 0
+    assert await _members(db) == []
+    assert authentik["svc"].changes == []
     assert authentik["svc"].legacy_calls == []
-    assert authentik["svc"].groups == set()
+    assert authentik["svc"].groups == {ROLE_TENANT}
+
+
+async def test_integration_partner_promotion_keeps_baseline_role(authentik: Dict[str, Any]) -> None:
+    authentik["svc"] = FakeAuthentik({ROLE_TENANT})
+    db = await _fresh_org()
+    await integrations._upsert_synced_members(db, _push("partner@example.test", "PARTNER"), KEY)
+    assert authentik["svc"].changes == [("partner@example.test", ROLE_PARTNER, frozenset())]
+    assert authentik["svc"].groups == {ROLE_TENANT, ROLE_PARTNER}
 
 
 async def test_a_partner_is_granted_only_inside_the_keys_own_orgs(authentik: Dict[str, Any]) -> None:
@@ -435,7 +487,9 @@ async def test_the_reconcile_still_prunes_the_keys_own_org(authentik: Dict[str, 
     removed = await _reconcile(db, keep="a@example.test")
     assert removed == 1
     assert await _members(db) == ["a@example.test"]
-    assert authentik["svc"].changes == [("b@example.test", None, frozenset({ROLE_TENANT}))]
+    assert await _reconcile(db, keep="a@example.test") == 0
+    assert authentik["svc"].changes == []
+    assert authentik["svc"].groups == {ROLE_TENANT}
 
 
 async def test_a_pruned_admin_keeps_role_admin(authentik: Dict[str, Any]) -> None:

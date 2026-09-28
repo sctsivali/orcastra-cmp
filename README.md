@@ -51,7 +51,10 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 ### Security & Access Control
 - OAuth2/OIDC SSO via Authentik
 - JWT token validation on backend
-- 3-tier RBAC (Admin / Partner / Tenant) integrated with Authentik user groups
+- 3-tier RBAC (Admin / Partner / Tenant) integrated with Authentik user groups. The baseline
+  `role_tenant` group is preserved during Partner promotion and organization offboarding;
+  organization membership still governs resource access. Admin removal explicitly revokes roles
+  and reports a failed Authentik write; role API calls verify the Authentik TLS certificate.
 - Fine-grained per-resource permissions (create, read, update, delete)
 - Tenant access policies (cluster/project/instance ACLs)
 - Read-only demo mode

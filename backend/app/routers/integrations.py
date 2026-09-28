@@ -126,7 +126,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
-from app.services.integration_roles import apply_upsert_role, may_reconcile, revoke_if_orphaned, stored_member_role
+from app.services.integration_roles import apply_upsert_role, may_reconcile, stored_member_role
 from app.services.integration_cluster_rebind import creator_of, rebind_creator_clusters
 from app.services.add_on_credential_edits import refuse_delete, refuse_grant_edit
 from app.services.shared_cluster_audit import (
@@ -1516,23 +1516,6 @@ async def _upsert_synced_organizations(
     return synced
 
 
-async def _revoke_role_if_orphaned(db: AsyncSession, sync_svc, email: str) -> None:
-    """
-    Strip a user's role_tenant only if they no longer belong to ANY org.
-    Orcastra roles are global system roles (one per user), so stripping them on leaving a
-    single org would wrongly de-role a user still active in another org. Best-effort: the
-    caller has already deleted the membership row (which is what actually cuts org-scope
-    access), so a failed IdP revoke leaves only an inert role group, logged for cleanup.
-
-    important: an integration never removes role_admin or role_partner here. It used to strip
-    every role group, so pushing an Admin into a fresh org and removing them demoted the Admin.
-    """
-    try:
-        await revoke_if_orphaned(db, sync_svc, email)
-    except Exception as e:
-        logger.warning(f"Authentik role revoke failed for offboarded user {email}: {e}")
-
-
 async def _upsert_synced_members(
     db: AsyncSession,
     members: List["SyncMember"],
@@ -1595,8 +1578,8 @@ async def _upsert_synced_members(
                     await db.delete(existing)
                     await db.commit()
                     removed += 1
-                    # Revoke the global role only if this was the user's LAST membership.
-                    await _revoke_role_if_orphaned(db, sync_svc, m.email)
+                    # Membership removal cuts organization access. The baseline Authentik
+                    # role belongs to the account, even after its last organization is gone.
                 continue
 
             # upsert membership. map OrcaHub role → local member role.
@@ -1690,12 +1673,10 @@ async def _reconcile_synced_members(
         the whole run and alert (delete nothing).
       - dry_run: log intended removals without deleting (observe-only rollout).
       - per-ROW isolation on the delete pass, so one bad row cannot block the rest.
-      - a user removed from their LAST org also has their global role revoked (best-effort).
+      - the account's baseline role remains after membership removal; org access does not.
     Email matching is exact, consistent with the case-sensitive UNIQUE(org, user_email) and the
     upsert write path. Returns the number of members actually removed (0 in dry-run).
     """
-    from app.services.authentik_sync import get_authentik_sync
-
     if not members:
         return 0
 
@@ -1758,7 +1739,6 @@ async def _reconcile_synced_members(
         return 0
 
     # Pass 2: delete, with PER-ROW isolation so one failure cannot block the rest.
-    sync_svc = get_authentik_sync()
     removed = 0
     for slug, mid, email in intended:
         try:
@@ -1769,7 +1749,6 @@ async def _reconcile_synced_members(
             await db.commit()
             removed += 1
             logger.info(f"Reconcile: removed member {email} from org {slug} (api_key={api_key_id})")
-            await _revoke_role_if_orphaned(db, sync_svc, email)
         except Exception as e:
             await db.rollback()
             logger.warning(f"Reconcile: failed to remove member {email} from org {slug}: {e}")
