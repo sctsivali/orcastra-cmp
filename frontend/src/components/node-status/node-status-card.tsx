@@ -37,6 +37,7 @@ import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
 import { cn, formatMemory } from "@/lib/utils";
+import { capacityReading } from "@/lib/capacity-reading";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
@@ -66,6 +67,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
   const [isSavingName, setIsSavingName] = useState(false);
 
   const handleSaveDisplayName = async () => {
+    if (!isPartner) return;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -103,6 +105,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
   };
 
   const handleTagsChange = async (newTags: string[]) => {
+    if (!isPartner) return;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -132,8 +135,8 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
   };
 
   const getUsagePercentage = (used: number, total: number) => {
-    if (total === 0) return 0;
-    return ((used / total) * 100).toFixed(0);
+    const reading = capacityReading({ used, total });
+    return reading ? `${reading.percent.toFixed(0)}% used` : "Usage unavailable";
   };
 
   const cpu = cpuAllocation(node.resources ?? { cpu_total: 0, cpu_used: 0 });
@@ -271,7 +274,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                   {formatMemory(node.resources.memory_used)} / {formatMemory(node.resources.memory_total)}
                 </div>
                 <div className="text-muted-foreground">
-                  {getUsagePercentage(node.resources.memory_used, node.resources.memory_total)}% used
+                  {getUsagePercentage(node.resources.memory_used, node.resources.memory_total)}
                 </div>
               </div>
             </div>
@@ -323,7 +326,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
           <TagManager
             tags={node.tags || []}
             onTagsChange={handleTagsChange}
-            readonly={isReadOnly}
+                  readonly={isReadOnly || !isPartner}
             maxTags={10}
             placeholder="Add cluster tag..."
           />

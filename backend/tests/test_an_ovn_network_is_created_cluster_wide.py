@@ -42,7 +42,7 @@ class _Networks:
 
     def __getitem__(self, name: str):
         return SimpleNamespace(get=lambda params=None: SimpleNamespace(
-            json=lambda: {"metadata": {"name": name, "type": "x", "managed": True, "config": {}}}
+            json=lambda: {"metadata": {"name": name, "type": self.posts[-1]["json"]["type"], "managed": True, "config": {}}}
         ))
 
 

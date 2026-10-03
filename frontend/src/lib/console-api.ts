@@ -91,9 +91,9 @@ export const consoleAPI = {
     return requireSuccess(result, "Failed to read the attached ISO");
   },
 
-  listISOs: async (host: string): Promise<ConsoleISOListResponse> => {
+  listISOs: async (host: string, project = "default"): Promise<ConsoleISOListResponse> => {
     const result = await fetchAPI<ConsoleISOListResponse>(
-      `/console/isos?${scopedQuery(host)}`,
+      `/console/isos?${scopedQuery(host, project)}`,
     );
     return requireSuccess(result, "Failed to read available ISOs");
   },

@@ -70,7 +70,12 @@ async def test_a_newly_registered_cluster_is_followed_and_its_connect_frame_seed
 
     assert seeds == ["nuc2"], "the first connected frame seeds the new cluster"
     states = [p for db in maker.sessions for sql, p in db.calls if "task_follower_clusters" in sql]
-    assert states[-1]["cluster_id"] == "nuc2" and states[-1]["state"] == "connected"
+    assert states[-1]["cluster_id"] == "nuc2" and states[-1]["state"] == "disconnected"
+    assert follower._cluster_state["nuc2"] == "connected", "the stream is connected before discovery finishes"
+    await follower._record_source_result("nuc2", "operations", True, seeded=True)
+    assert maker.sessions[-1].calls[-1][1]["state"] == "disconnected"
+    await follower._record_source_result("nuc2", "warnings", True)
+    assert maker.sessions[-1].calls[-1][1]["state"] == "connected"
     rows = [p for db in maker.sessions for sql, p in db.calls if "INSERT INTO cluster_log" in sql]
     assert len(rows) == 1 and rows[0][0]["kind"] == "task"
     assert rows[0][0]["action"] == "journal.upstream.restored"
@@ -121,6 +126,8 @@ async def test_a_disconnect_writes_one_log_row_per_state_change(registered):
     follower = _follower(hub, maker, [])
     await follower.sync_registry()
     queue = hub.queues["nuc1"]
+    # This case isolates stream transitions after both discovery sources have completed.
+    follower._source_failures["nuc1"].clear()
 
     for state, error in (("connected", None), ("disconnected", "reset"), ("disconnected", "reset"), ("connected", None)):
         queue.put_nowait({"type": "hub", "host": "nuc1", "state": state, "error": error})

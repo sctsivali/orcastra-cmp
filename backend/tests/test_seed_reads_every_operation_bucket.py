@@ -152,10 +152,9 @@ async def test_a_daemon_that_refuses_all_projects_is_walked_project_by_project()
     assert ids == {"op-d", "op-a"}
 
 
-async def test_a_partial_walk_marks_nothing_lost_and_still_writes_connected():
+async def test_a_partial_walk_marks_nothing_lost_and_records_incomplete_discovery():
     """One project refused mid-walk: the rows it holds were not seen, so nothing may be flipped
-    to lost this pass (a review finding), and the REST path answering still records the
-    cluster connected."""
+    to lost this pass. One responding project cannot prove the source is complete."""
     node = FakeInstanceNode()
     node.projects = ["default", "cust-a"]
     node.operation_buckets_by_project = {"default": {"running": [_op("op-d", "Running", 103)]}}
@@ -170,11 +169,11 @@ async def test_a_partial_walk_marks_nothing_lost_and_still_writes_connected():
 
     count = await seed.reconcile_cluster(service(FakeClient(node), hosts=(HOST,)), HOST, maker)
 
-    assert count == 1
+    assert count is None
     lost = [sql for db in maker.sessions for sql, _ in db.calls if "SET status = 'lost'" in sql]
     assert lost == []
     states = [p for db in maker.sessions for sql, p in db.calls if "INSERT INTO task_follower_clusters" in sql]
-    assert states and states[-1]["state"] == "connected"
+    assert states and states[-1]["state"] == "disconnected"
 
 
 async def test_any_other_refusal_propagates_rather_than_walking():
@@ -219,7 +218,7 @@ async def test_seed_stamps_the_cluster_seeded_after_reconciling():
 async def test_the_reconcile_sweep_skips_a_tripped_cluster(monkeypatch):
     calls = []
 
-    async def fake_reconcile(lxd_service, host, session_maker, identities=None):
+    async def fake_reconcile(lxd_service, host, session_maker, identities=None, **kwargs):
         calls.append(host)
         return 0
 
@@ -268,7 +267,6 @@ async def test_the_warnings_sweep_writes_one_row_per_warning_and_last_seen():
             "first_seen_at": "2026-09-19T09:30:00Z", "last_seen_at": "2026-09-19T09:30:00Z",
             "last_message": "kvm unavailable",
         },
-        {"uuid": "", "type": "no uuid"},
     ]
 
     def respond(sql, params):

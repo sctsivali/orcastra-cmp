@@ -4,6 +4,7 @@ import * as React from "react";
 import { Progress } from "@/components/ui/progress";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatBytes } from "@/lib/utils";
+import { capacityReading } from "@/lib/capacity-reading";
 import { Database } from "lucide-react";
 import type { UsageDict } from "../types";
 
@@ -19,10 +20,10 @@ function Meter({
   usage?: UsageDict;
   format: (value: number) => string;
 }) {
-  const total = Number(usage?.total ?? 0);
-  const used = Number(usage?.used ?? 0);
-  if (!total) return null;
-  const percent = Math.min(100, Math.round((used / total) * 100));
+  const reading = capacityReading(usage);
+  if (!reading) return null;
+  const { used, total } = reading;
+  const percent = Math.round(reading.percent);
 
   return (
     <div className="space-y-2 rounded-lg border p-4">
@@ -50,7 +51,7 @@ function Meter({
 }
 
 export function CapacityPanel({ space, inodes }: { space?: UsageDict; inodes?: UsageDict }) {
-  const hasAny = Number(space?.total ?? 0) > 0 || Number(inodes?.total ?? 0) > 0;
+  const hasAny = capacityReading(space) !== null || capacityReading(inodes) !== null;
   if (!hasAny) {
     return (
       <EmptyState

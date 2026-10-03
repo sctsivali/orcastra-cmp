@@ -29,15 +29,15 @@ import { useToast } from "@/hooks/use-toast";
 import { useCreateNetwork, useNetworks, useProjects } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import type { NetworkCreateRequest } from "@/types/api";
-import { AddressField } from "@/components/networks/address-field";
+import type { NetworkCreateRequest, NetworkListResponse, ProjectListResponse } from "@/types/api";
+import { buildNetworkConfig, defaultNetworkOptions, networkOptionsErrors } from "./network-config";
+import { NetworkAddressFields } from "./network-address-fields";
+import { NetworkServiceFields } from "./network-service-fields";
+import { useNetworkCreateOptions } from "./use-network-create-options";
 import {
   NETWORK_TYPES,
-  ipv4AddressError,
-  ipv6AddressError,
   networkNameError,
   networkNameMax,
-  type IpMode,
   type NetworkType,
 } from "@/components/networks/network-rules";
 
@@ -100,7 +100,7 @@ interface NetworkCreateBodyProps {
 
 function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBodyProps) {
   const { toast } = useToast();
-  const nodePicker = useNodePickerOptions();
+  const nodePicker = useNodePickerOptions({ disableUnreachable: true });
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
   const createNetwork = useCreateNetwork();
   const { isReadOnly } = useReadOnlyMode();
@@ -111,12 +111,10 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [uplink, setUplink] = useState("");
-  const [ipv4Mode, setIpv4Mode] = useState<IpMode>("auto");
-  const [ipv4Custom, setIpv4Custom] = useState("");
-  const [ipv6Mode, setIpv6Mode] = useState<IpMode>("auto");
-  const [ipv6Custom, setIpv6Custom] = useState("");
+  const [options, setOptions] = useState(defaultNetworkOptions);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const creation = useNetworkCreateOptions(node, project, type);
 
   // Uplink candidates for OVN.
   //
@@ -127,17 +125,17 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   // of 23. Picking one produced a create the daemon rejected, and an instance that never
   // finished coming up.
   const { data: networksResp } = useNetworks(node || undefined, "default", { enabled: !!node });
-  const uplinkOptions = ((networksResp as any)?.networks || [])
-    .filter((n: any) => (n.node ? n.node === node : true))
-    .filter((n: any) => n.managed && (n.type === "bridge" || n.type === "physical"))
-    .map((n: any) => ({ value: n.name, label: `${n.name} (${n.type})` }));
+  const uplinkOptions = ((networksResp as NetworkListResponse | undefined)?.networks || [])
+    .filter((n) => (n.node ? n.node === node : true))
+    .filter((n) => n.managed && (n.type === "bridge" || n.type === "physical"))
+    .map((n) => ({ value: n.name, label: `${n.name} (${n.type})` }));
 
   // Projects that can hold a network. LXD refuses every type except OVN outside default, so a
   // bridge create is pinned to default rather than offered a choice it cannot honour.
   const { data: projectsResp } = useProjects(node);
   const projectOptions = (() => {
     const seen = new Set<string>(["default"]);
-    for (const p of ((projectsResp as any)?.projects ?? []) as any[]) {
+    for (const p of (projectsResp as ProjectListResponse | undefined)?.projects ?? []) {
       if (p?.name) seen.add(p.name);
     }
     return Array.from(seen).sort();
@@ -146,8 +144,15 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   const nameMax = networkNameMax(type);
   const nameError = networkNameError(name, type);
   const nameValid = name !== "" && nameError === "";
-  const ipv4Error = ipv4AddressError(ipv4Mode, ipv4Custom);
-  const ipv6Error = ipv6AddressError(ipv6Mode, ipv6Custom);
+  const fieldErrors = networkOptionsErrors(options, type, creation.supportedKeys);
+  const optionsError = Object.values(fieldErrors).find(Boolean) || "";
+  const capabilityError = !node ? "" : creation.capabilities.isError
+    ? "Network capabilities could not be verified. Retry before creating."
+    : creation.capabilities.isFetching || !creation.capabilities.data ? "Checking network capabilities..."
+    : !creation.capabilities.data.types.includes(type) ? "This cluster does not advertise support for this network type." : "";
+  const aclSelectionError = options.acls.length > 0 && (!creation.aclSupported || creation.acls.isError ||
+    creation.aclIncomplete || options.acls.some((selected) => !creation.aclNames.includes(selected)))
+    ? "Selected ACLs could not be verified in this project." : "";
   const uplinkError =
     type === "ovn" && !uplink ? "Select an uplink network for the OVN network." : "";
   const projectError =
@@ -164,25 +169,22 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   const canSubmit =
     !!node &&
     nameValid &&
-    !ipv4Error &&
-    !ipv6Error &&
+    !optionsError &&
+    !capabilityError &&
+    !aclSelectionError &&
     !uplinkError &&
     !projectError &&
     !submitting &&
     !isReadOnly;
 
   const submit = async () => {
-    if (submitInFlightRef.current) return;
+    if (!canSubmit || submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     setError(null);
     setSubmitting(true);
     onBusyChange(true);
     try {
-      const config: Record<string, string> = {
-        "ipv4.address": ipv4Mode === "custom" ? ipv4Custom.trim() : ipv4Mode,
-        "ipv6.address": ipv6Mode === "custom" ? ipv6Custom.trim() : ipv6Mode,
-      };
-      if (type === "ovn") config["network"] = uplink;
+      const config = buildNetworkConfig(type, uplink, options, creation.supportedKeys);
 
       const payload: NetworkCreateRequest = {
         name,
@@ -194,7 +196,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
       // A project with features.networks unset does not hold its own networks, so the backend
       // resolves the create to the project that does. Name where it landed, not what was asked
       // for, or the toast points the operator at a project the network is not in.
-      const landed = (created as any)?.network?.project ?? project;
+      const landed = (created as { network?: { project?: string } })?.network?.project ?? project;
       toast({
         title: "Network created",
         description:
@@ -204,7 +206,12 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
       });
       onDone({ node, project: landed, name });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create network");
+      const message = e instanceof Error ? e.message : "Failed to create network";
+      const ambiguous = /timeout|timed out|failed to fetch|network error|connection/i.test(message) ||
+        (typeof e === "object" && e !== null && "status" in e && typeof e.status === "number" && e.status >= 500);
+      setError(ambiguous
+        ? `${message} Creation may still have reached the hypervisor. Refresh the network list and verify the result before submitting again.`
+        : message);
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
@@ -215,12 +222,14 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   return (
     <>
       <DialogBody className="space-y-6 pr-2">
+        <fieldset disabled={submitting} className="space-y-6">
         <section className="space-y-4">
           <h3 className="text-sm font-semibold">General</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label>Cluster *</Label>
+              <Label htmlFor="net-cluster">Cluster *</Label>
               <SearchableSelect
+                id="net-cluster"
                 value={node}
                 onValueChange={(next) => {
                   if (next === node) return;
@@ -229,12 +238,14 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                   // uplink from node A used to survive a switch to node B and pass canSubmit.
                   setUplink("");
                   setProject("default");
+                  setOptions(defaultNetworkOptions());
+                  setType("bridge");
                 }}
                 options={nodeOptions}
                 placeholder={loadingNodes ? "Loading..." : "Select cluster"}
                 searchPlaceholder="Search clusters..."
                 emptyText="No clusters found."
-                disabled={loadingNodes}
+                disabled={loadingNodes || submitting}
               />
               <NodeStatusNotice
                 meta={node ? nodePicker.statusOf(node) : undefined}
@@ -247,7 +258,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
               />
             </div>
             <div className="grid gap-2">
-              <Label>Type *</Label>
+              <Label htmlFor="net-type">Type *</Label>
               <Select
                 value={type}
                 onValueChange={(v) => {
@@ -256,14 +267,16 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                   // LXD refuses every type except OVN outside the default project, so
                   // leaving a project selected here would build a create it always rejects.
                   if (next !== "ovn") setProject("default");
+                  setOptions((previous) => ({ ...previous, acls: [] }));
                 }}
+                disabled={submitting}
               >
-                <SelectTrigger>
+                <SelectTrigger id="net-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {NETWORK_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
+                    <SelectItem key={t.value} value={t.value} disabled={!!node && !!creation.capabilities.data && !creation.capabilities.data.types.includes(t.value)}>
                       {t.label}
                     </SelectItem>
                   ))}
@@ -277,12 +290,15 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
             <SearchableSelect
               id="net-project"
               value={project}
-              onValueChange={setProject}
+              onValueChange={(next) => {
+                setProject(next);
+                setOptions((previous) => ({ ...previous, acls: [] }));
+              }}
               options={projectOptions.map((p) => ({ value: p, label: p }))}
               placeholder="default"
               searchPlaceholder="Search projects..."
               emptyText="No projects found."
-              disabled={type !== "ovn" || !node}
+              disabled={type !== "ovn" || !node || submitting}
             />
             {projectError ? (
               <p className="text-xs text-destructive">{projectError}</p>
@@ -303,6 +319,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
               onChange={(e) => setName(e.target.value)}
               placeholder="my-network"
               aria-invalid={!!nameError}
+              disabled={submitting}
             />
             {nameError ? (
               <p className="text-xs text-destructive">{nameError}</p>
@@ -321,13 +338,16 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description"
               rows={2}
+              maxLength={1024}
+              disabled={submitting}
             />
           </div>
 
           {type === "ovn" && (
             <div className="grid gap-2">
-              <Label>Uplink network *</Label>
+              <Label htmlFor="net-uplink">Uplink network *</Label>
               <SearchableSelect
+                id="net-uplink"
                 value={uplink}
                 onValueChange={setUplink}
                 options={uplinkOptions}
@@ -340,7 +360,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                 }
                 searchPlaceholder="Search networks..."
                 emptyText="No managed bridge or physical network here."
-                disabled={!node || uplinkOptions.length === 0}
+                disabled={!node || uplinkOptions.length === 0 || submitting}
               />
               {uplinkError ? (
                 <p className="text-xs text-destructive">{uplinkError}</p>
@@ -359,33 +379,32 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
           )}
         </section>
 
-        <section className="space-y-4">
-          <h3 className="text-sm font-semibold">Addresses</h3>
-          <AddressField
-            label="IPv4 address"
-            mode={ipv4Mode}
-            onModeChange={setIpv4Mode}
-            custom={ipv4Custom}
-            onCustomChange={setIpv4Custom}
-            which="IPv4"
-            error={ipv4Error}
-          />
-          <AddressField
-            label="IPv6 address"
-            mode={ipv6Mode}
-            onModeChange={setIpv6Mode}
-            custom={ipv6Custom}
-            onCustomChange={setIpv6Custom}
-            which="IPv6"
-            error={ipv6Error}
-          />
-        </section>
+        {node && capabilityError && (
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <p role={creation.capabilities.isError ? "alert" : "status"} className={creation.capabilities.isError ? "text-destructive" : "text-muted-foreground"}>{capabilityError}</p>
+            {creation.capabilities.isError && <Button variant="outline" size="sm" disabled={submitting} onClick={() => void creation.capabilities.refetch()}>Retry capabilities</Button>}
+          </div>
+        )}
+        {node && creation.capabilities.data?.known === false && (
+          <p className="text-sm text-muted-foreground">Capability metadata is unavailable. Bridge configuration remains subject to hypervisor validation.</p>
+        )}
+        <NetworkAddressFields type={type} options={options} onChange={setOptions} errors={fieldErrors}
+          supportedKeys={creation.supportedKeys} disabled={submitting || !node || !!capabilityError} />
+        <NetworkServiceFields type={type} options={options} onChange={setOptions} errors={fieldErrors}
+          disabled={submitting || !node || !!capabilityError} aclNames={creation.aclNames}
+          aclLoading={creation.acls.isLoading && creation.aclSupported} aclError={creation.acls.isError || creation.aclIncomplete}
+          aclSupported={creation.aclSupported} aclUnavailableReason={!node ? "Select a cluster to load network ACLs."
+            : capabilityError ? "Verify network capabilities before selecting ACLs."
+            : "This cluster does not advertise ACL support for this network type."}
+          onRetryAcls={() => void creation.acls.refetch()} />
+        {aclSelectionError && <p role="alert" className="text-sm text-destructive">{aclSelectionError}</p>}
 
         {error && (
-          <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
+          <div role="alert" className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
             {error}
           </div>
         )}
+        </fieldset>
       </DialogBody>
 
       <DialogFooter className="shrink-0 pt-4 sm:items-center">
@@ -398,7 +417,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                 ? "Select a cluster"
                 : name === ""
                   ? "Enter a name"
-                  : nameError || ipv4Error || ipv6Error || uplinkError || ""}
+                  : nameError || optionsError || uplinkError || projectError || capabilityError || aclSelectionError || ""}
           </span>
         )}
         <Button variant="outline" onClick={onCancel} disabled={submitting}>

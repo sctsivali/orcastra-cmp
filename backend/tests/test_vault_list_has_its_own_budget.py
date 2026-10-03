@@ -6,21 +6,20 @@ they run on the request path and a slow one is the timeout the caller wants. The
 served off the event loop after this cut, so its cost is a worker thread, not the API.
 """
 
+import json
+
 import pytest
+import requests
 
 from app.core import vault_client as vc
 
 
-class _Response:
+class _Response(requests.Response):
     def __init__(self, keys):
-        self._keys = keys
+        super().__init__()
         self.status_code = 200
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return {"data": {"keys": self._keys}}
+        self._content = json.dumps({"data": {"keys": keys}}).encode()
+        self._content_consumed = True
 
 
 class _Session:

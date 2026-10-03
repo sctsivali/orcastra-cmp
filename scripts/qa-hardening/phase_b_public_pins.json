@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "fetched_at": "2026-09-30T13:06:09.673931+00:00",
+  "status": "Public metadata only; no guest installation, OCI layers, or image load; Node20 baseline is EOL and not an approved runtime choice",
+  "images": {
+    "postgres": {
+      "registry": "docker.io",
+      "repository": "library/postgres",
+      "requested": "17-alpine",
+      "index_digest": "sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:aa90e97ee862e558111d34cfb8b2c4bec768c2b039fb791341686928560263b3",
+      "manifest_bytes": 2866,
+      "config_digest": "sha256:79bd7c99e923138f136f8009d6bffa66e21e9d4fda5c0c561b00fc9c90cfe537",
+      "config_bytes": 8728,
+      "layers": [
+        {
+          "digest": "sha256:e2de96513ba9eb53b431787ec8a65cdde380ac4772a3e4c4b714dcfde2a102b5",
+          "size": 3849738,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:4ece9a32c307dbfc879fbd2c64ff04d734f92c3cfe543fbbfcf51f559be3952f",
+          "size": 968,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:43f9814c9a3b143548b1ebbd9d05484da68959f1b2dc5cf2228343fc7134b6fb",
+          "size": 901408,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:3333950675b238bd8da3dadabf5d301377545c089e7f436d18d16c97a1b7c1c8",
+          "size": 116,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:f3b07e8a357c707bed4f36d7e89173727f890be5fbc8e1c1eb7feb6c1d9deb38",
+          "size": 112421988,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:eb805f20f0602d17dfb400aecc1cddcf941e356b9764969284c7e15d8a0710a6",
+          "size": 9999,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:7ccdb0dcae74d20ea15876b699902cff26696bbdf9e1109c97e9f7d9505444f2",
+          "size": 128,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:93a3470d5852d77008a03e87eb60177e36b5522afb5d283d96ce6e2b0a3d481d",
+          "size": 169,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:b0a0d9d2abf27214e4640bd5d31419c3788d19626acf51afcf85345d321935b7",
+          "size": 6111,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:a8a481ae6efc854716b4eb46d5f3da24edfb72ba8bfca5146c92bbef4390ed35",
+          "size": 183,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        }
+      ],
+      "compressed_layer_bytes": 117190808,
+      "public_environment": [
+        "PG_MAJOR=17",
+        "PG_VERSION=17.11"
+      ],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "uncompressed_layer_digests": [
+        "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
+        "sha256:199b85bb67b34ec56ca3679a640cad26c482694949d478875ad803bfad29f113",
+        "sha256:1b1c5f60fe610883c371803e933d0eb9d31dfe8ae9c1a5299e2516c6757eb2d9",
+        "sha256:507f0fcc5e5565bd8f7a584202000685ebfaa7ebda9b9d436289bc1004fb4ce8",
+        "sha256:34f5e4927b447367ecd2367ae94e56d654a30b9e244b9396ac628d5bcf90a5cf",
+        "sha256:d006a4a663e7362cd4ae34ed8bf9a851ac9e99c359d8b1f143b1fccc0ad3e8fe",
+        "sha256:42a506b7d4dafcf6fb679a5c2e4de60153ebca613bbfad36b833053eb92cd047",
+        "sha256:149a42a2d36a8dc846e4624af2c7c2766d1cac31300c9f8392ca050d137ed217",
+        "sha256:f81d67057ca8ee3ee1f538cdb7b128e05b4e2727e1c50686633d8b5158793fe2",
+        "sha256:b69834c94476d5cb5d6561d3529668949fa3d28bd745a937bcec2f66eadebb72"
+      ]
+    },
+    "redis": {
+      "registry": "docker.io",
+      "repository": "library/redis",
+      "requested": "8-alpine",
+      "index_digest": "sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:2d3814be5e9b06a30a0be54770b7e12052e7e79ec85271aefd34875c1f393b23",
+      "manifest_bytes": 2289,
+      "config_digest": "sha256:15f5a4aad4c3ba34b9874ddbc7f755b469dbd7b8a9e88c12690c52ef6c72465c",
+      "config_bytes": 6839,
+      "layers": [
+        {
+          "digest": "sha256:d0c1d894c237d8192cbcd37e435031ad4eddec173299568a5a05869c2e40dfa3",
+          "size": 3848507,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:d60026184d2e638c58afc4c945753a676d1691a1d7ef8adc7c0a8221b771d624",
+          "size": 948,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:618072543738a1af8f8f650cc185ca8f8cae09950f22d7374610e5eb1383990b",
+          "size": 201018,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:8c9c3a906635a6a90731156f83ab00bfbc5d625cb11a8609cb166e602de77a32",
+          "size": 35050273,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:2f10393390593ca40faa2085463ce1cd58ccda88f8f94a642c6bf9c0fe7694bc",
+          "size": 101,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+          "size": 32,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:095940d4ebca9229cd4bbc254424b0f3e05f8ce63d7fedebeb9f8c193d16acdf",
+          "size": 2104,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        }
+      ],
+      "compressed_layer_bytes": 39102983,
+      "public_environment": [],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "uncompressed_layer_digests": [
+        "sha256:e63b02c2b5c761df2cb95e657d744f27d95da4e051235a13c80b88cd68eab188",
+        "sha256:b31e91548114daad36eb6b75f33a80ad4763a366b8aebf2ee0f07f9bb96fad6a",
+        "sha256:d81ff166b338fb9986fedcfc15abe662bb2c65aadaf9301750c69c8ffb389f6b",
+        "sha256:3e6e8835c7a3f675a101d365cd4081067f637a6fc2de8feb6cb5d2b9fbe06aae",
+        "sha256:f525070cd9b67146353241832d4718f9b6551366b2a5e32f1c1dd3fe82142156",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "sha256:f5902b1d47b5117067a430aff0dc6a582401768105e93301453ff701c8409353"
+      ]
+    },
+    "vault": {
+      "registry": "docker.io",
+      "repository": "hashicorp/vault",
+      "requested": "1.21.4",
+      "index_digest": "sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:6c77f568e6b6310d5bc68befb5711b9215c574de7da489e7c24332581176888b",
+      "manifest_bytes": 1399,
+      "config_digest": "sha256:9b1d8cd2a2c4d1879b1acf3030fb266db3cb5ed54f554645f8fc577fffdf8442",
+      "config_bytes": 6065,
+      "layers": [
+        {
+          "digest": "sha256:9da841cba2d188205a2fa437c08e0f3819d6de84dae71e78e70515e282f44e6e",
+          "size": 3977692,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        },
+        {
+          "digest": "sha256:f83fda6fd30703327ff07dc041f6e0268161e63f24c7415d59e128d54cc81824",
+          "size": 2087,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        },
+        {
+          "digest": "sha256:dd05363a419b313ee12930aac7307a51c231e88fc7580664eb7b0b6e4b669c56",
+          "size": 972,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        },
+        {
+          "digest": "sha256:66498a3446f598ad150e0e843a904fb0c01bda8ac1d278c8a8ff683b748298c5",
+          "size": 260371,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        },
+        {
+          "digest": "sha256:f0ed6c3b96f8efa7891e2f4d29868ee1be429a1189f0d278c38485d7ebdd23d2",
+          "size": 176586045,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        },
+        {
+          "digest": "sha256:7e043dec77c84674c2c5fdb0a4f3979c59a80ce1a466ffc12f6e97992c987e73",
+          "size": 157,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        },
+        {
+          "digest": "sha256:35c80302d573946cbb18b212a2145a3c6825a97cbdf3edf8aa3b9c7ebe9d1252",
+          "size": 1903,
+          "media_type": "application/vnd.docker.image.rootfs.diff.tar.gzip"
+        }
+      ],
+      "compressed_layer_bytes": 180829227,
+      "public_environment": [],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "uncompressed_layer_digests": [
+        "sha256:989e799e634906e94dc9a5ee2ee26fc92ad260522990f26e707861a5f52bf64e",
+        "sha256:561ab23bf947cd518e573e4dba7fca9eb502dac3703c8031f9b7f4bca50ee969",
+        "sha256:20f6c73d9bf2b935f5c48953bf4d18c650f9e9005c44004ab4a535d0d5c8e395",
+        "sha256:43dc08d8e9878930af26b19b35b5846d17b12a39dafa714d2044db6c3595dc9e",
+        "sha256:eb366cb35ca6ce01168eab2786d5362fb930be88fc5e874c15b428f7865e858e",
+        "sha256:93862a0c9da8f25dcec67c5c3ddde35757e60bb25342538e640f0dacad1dd459",
+        "sha256:a5abed474de3f36f3a930cface524acdcb236bfbc3fbf268b5996069a99ae0d9"
+      ]
+    },
+    "backend_base": {
+      "registry": "docker.io",
+      "repository": "library/python",
+      "requested": "sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9",
+      "index_digest": "sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:44ff437bba879d4941b710a369a8f19266aea34b29002807f0c487fabc9eec9b",
+      "manifest_bytes": 1746,
+      "config_digest": "sha256:9e87977b867847e186d066f531ef783b006d582a985c341c269446088d90f2c4",
+      "config_bytes": 5652,
+      "layers": [
+        {
+          "digest": "sha256:6b37362b3da78869050b894b799ad4df04f1f3b52774087db0d81151570244c8",
+          "size": 29830418,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:3764a9a7d1e8a98213ab2201a41dbf3da9c60240ea35a5ea96ab994555070a70",
+          "size": 1294121,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:b0dc7f87bef15c2536cb182d6c48b52f90a0522884ec9eb222f833fa97ffebf0",
+          "size": 12116303,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:06ad939ed42b51caafb25b14810875d14e0ee0c441d3e2e5e46475fb8c150bca",
+          "size": 249,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        }
+      ],
+      "compressed_layer_bytes": 43241091,
+      "public_environment": [
+        "PYTHON_VERSION=3.12.14"
+      ],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "uncompressed_layer_digests": [
+        "sha256:a6dc765193a52cbaede3c93a9ff48b9540948dd0774bbe7031fcb5847606f9ac",
+        "sha256:7ca599ccfc97fa428fcf941eda7c2d643f066feb947020dcdbbf913cec34d5dc",
+        "sha256:b54011271bdbf69ae643cb5a4af6a5bc2f834ae8bc0833b736b52bbd2396e99f",
+        "sha256:c321a426ca693e386f4df5f198d7f32c2da49e29f53ff77d695ceb02dfb0a421"
+      ]
+    },
+    "frontend_baseline_eol": {
+      "registry": "docker.io",
+      "repository": "library/node",
+      "requested": "20-alpine",
+      "index_digest": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:afdf98210b07b586eb71fa22ba2e432e058e4cd1304d31ed60888755b8c865fb",
+      "manifest_bytes": 1720,
+      "config_digest": "sha256:11cedc39e663e7c5d5cb9cc77a461a0d2adc25537b94e6831a6108f09cb2001b",
+      "config_bytes": 6519,
+      "layers": [
+        {
+          "digest": "sha256:6a0ac1617861a677b045b7ff88545213ec31c0ff08763195a70a4a5adda577bb",
+          "size": 3864189,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:4feea04c154301db6f4a496efa397b3db96603b1c009c797cfdde77bea8b3287",
+          "size": 43229397,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:b2cbbfe903b0821005780971ddc5892edcc4ce74c5a48d82e1d2b382edac3122",
+          "size": 1262126,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:fff4e2c1b189bf87d63ad8bd07f7f4eb288d6f2b6a07a8bb44c60e8c075d2096",
+          "size": 445,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        }
+      ],
+      "compressed_layer_bytes": 48356157,
+      "public_environment": [
+        "NODE_VERSION=20.20.2"
+      ],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "uncompressed_layer_digests": [
+        "sha256:29df493baa13de438d6d2ece3a8333032e0b7b9b9d8cce4ee82194da255f61e1",
+        "sha256:4983b93ee7967564f02cbf6162b75010ce557404a539fba05ee19a0eae01acbc",
+        "sha256:e10358715ead9b47009dd04bcd77ac1c8e247f7249ab06517ff913c473a8e38e",
+        "sha256:afa543f85b4685a84338df3e2c429edca49bb372b0f49e0c5cc9724c820ad094"
+      ]
+    },
+    "authentik": {
+      "registry": "ghcr.io",
+      "repository": "goauthentik/server",
+      "requested": "2026.8.3",
+      "index_digest": "sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:09782fe56675bc616a0324468f1698e2d9d83c978bc5e426686fb7563517a442",
+      "manifest_bytes": 5255,
+      "config_digest": "sha256:d4d6843a3c120bb1b809048ce8429e0e617f68a3991aaa0779d6f5bd802b34d9",
+      "config_bytes": 15073,
+      "layers": [
+        {
+          "digest": "sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be",
+          "size": 29792658,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:1b92732a4d8608ca6be8a81b4b631c199c4a6b53a17a76a12ab5a93ded81ba77",
+          "size": 14440635,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:e865d45564c115eed601baa778923cd62c175b1ebbde35467ce456921e599283",
+          "size": 4185382,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:d3ff1560a55c1f56ddf08a3b25abf3aa9d0c409d9727902cc15328b3e81942a6",
+          "size": 82480,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:b011689b09a6dca48f50dc36a4f7c27913b919b4b53c66e5baf2af8d62780b56",
+          "size": 12299345,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:7185d2fdb3cfdbee813b6836f81b17d5954c47ddd8d3f2d652675ec3055a2581",
+          "size": 249,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:221eb171e6d22ee87020ecd634113ccb5577c4fc6adb8a1bd0cd4ba729ee4ac7",
+          "size": 97,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:678b64398ea05b8d746d515b4274360f08509321d498e02b5ab41ee10165609a",
+          "size": 26348455,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:4fd41c6b41c664d5981aa2f3a775fad98fbc56a81a1193c75d0d9ce2c2a21c05",
+          "size": 17043790,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:de193d6d09310ce375945b81ff53040b6aa8ae129da3b706cbf16aa2f4ab12c6",
+          "size": 7228419,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:613faeb20dd746b2bd6a7fe304d5caaf99cb5cf377ca7ea9fb42ef61252fa5de",
+          "size": 3278,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:63b46cabc34b47a01ee13dd5c326399500d5f43478dd38a1757eb0eea0f3fb4a",
+          "size": 141301,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:94bbf87a04e28b11249f30820e10044105fd41c6f8a330af88cdb733387146bb",
+          "size": 30849,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:c04d216f59aaf558c2c26876b81944037ae59d66a44d8dd92004436acf179c91",
+          "size": 1908765,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:a10e19d59c5486186eedb0822a1a2505c5ee5246b6464fb56d1ddb0e25768637",
+          "size": 61147,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:9d065d060027d174e79599d6c16df0116b5022eed52ebdd219be91c153e2efac",
+          "size": 649,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:4258f38d2e77f7844f62b638bb6c0d79527459cedb04c6f8e545d674c0636eae",
+          "size": 75071,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:55a4767139546ff7aae8a6fafb6223a5d4714abe0ae67be77be8fc1468eb4ab2",
+          "size": 21378,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:b91a3c16167f0add84bf63e650faf7d7575eaefb5cfdbf9bab908254cfca4982",
+          "size": 203,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:4d7e073a520f5679d2c4ce1508216fac18abd9fac401e7d3db5497c0a02f3053",
+          "size": 9789068,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:92df9ef54e56a2fca1bad2f6f7113f34fe20e7aa5c4e189eea7b1363210c86be",
+          "size": 23226361,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:de73ab882bd782ce6124986e7ad967a04942eea03121e21934f273a4ab7da757",
+          "size": 105,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:bdfdb6544b3f2a994064b6e8e2e47fd9ca878eb22e54a99e9476da52bc68e5c4",
+          "size": 153358795,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:a3e0dfbe046d861a30509b95ce4e6b3860d8468da23de0fbdc1c741090b9fc44",
+          "size": 43295253,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:347c1e4eb3e2bb63f8be816d7be562b8f871e2d9738ae7ff52071415f32d446a",
+          "size": 55290,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:a3d6afa6e763c8694bb3b70743c9ae05e108ee7ba954038d4cf12a88b7aad413",
+          "size": 38954379,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        }
+      ],
+      "compressed_layer_bytes": 382343402,
+      "public_environment": [],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "uncompressed_layer_digests": [
+        "sha256:411a86676185cb54d695a805b238194a64e9b77e0c723f3802fbb87d333ea0b3",
+        "sha256:1c811243f261ec8f762b45fb8e27be3cd879c570025e458e851cb30d910b79ff",
+        "sha256:55415984083af7a5260475ce4b4831a79bbc74613046d5929d495db049c962b7",
+        "sha256:c564593f10b3ad12d4638800ece60283c4d428bff05a2dee762cc117e1405b34",
+        "sha256:224b2e8b8e1637db27189ad3f15c868914200054ca8c2fc5f9ad1c9dfed3aa25",
+        "sha256:8b6e0e94396a071ddd2928fd3386c6f6a3cdf9475b83e46e9059cff57934bdbf",
+        "sha256:8ff938e5d6c5565ebbd20a2b0077ca37438b08c0764ee910fc89c64f8cfa0636",
+        "sha256:6f86690e4bd7044304cba46bffdf6210397b61dd319acbfb2aeb93406376add5",
+        "sha256:1e28ea7707860d89b6978ff646eb69e168dae004df9ba2989d1d387579efbb95",
+        "sha256:08ce792cbba72cc50d0f457877ec021a40b6c6e2a5bdfc6763cf21b3a34fc8f5",
+        "sha256:7fc3a0b7e871ee0d3861f1176251c16781731797baf6383cda97f3f7363c8d32",
+        "sha256:f1c73c637db22511dc323c4a61b915751c622f274f717ad39bdc2007738698b9",
+        "sha256:4de50d4929bf5640d0a71efd920b9a1fbf0ba21b164cf39f3a688ac7b12633ec",
+        "sha256:2746578411b9927db1b88bd5e8ba797851906af0a14045cdf9aed34c177506a2",
+        "sha256:38a2190334c04a46738c8d2bcbcdd5b08451131d2ffc797714eed0ca49a2c57d",
+        "sha256:f9d07abe3c0df8d057ad7dac4d4ea3969b2b6eaecc86d0c9978194ec9cdf0e9d",
+        "sha256:7f55808c272b969b620c9c4a15f7725e1944280f5e251d47805929e8f9e34d1b",
+        "sha256:12c1e20e2e91430ddb839da20630a8d194aa09e4fc3bb31bebc38fb648586adc",
+        "sha256:536db6669f48026516103fb9308bd602b47fe0ce2732f247edc4562b67fe06de",
+        "sha256:9bdab2031b5bada645b652b7760109765b1087ddc18811e29ac944755beba377",
+        "sha256:26995cb2587ee05b47e75a48367a42c55a25925b16434d84f331785d7de82adf",
+        "sha256:f7f37236e49ddbb7885d981de0c369b28541b59326da447c2765ad72e96e1f30",
+        "sha256:760a60bda8664581bda80108deb9d785edc1fde22199c15ebe8bb8c2c7c5bbe6",
+        "sha256:172665c5ed11c54bfce36e2ce93cdb6e5a0c33b08e46d24784ed654ba8e3d1ae",
+        "sha256:ed742a7bd7023fd9501403d09ade54f3cb565bf3d3024cbd7bdb6fdb5d016a38",
+        "sha256:6b7980da63b853bf22c6ccbd4e0a55ce0c64bac17ad312d9159da557f6ac5991"
+      ]
+    },
+    "frontend_supported_candidate": {
+      "registry": "docker.io",
+      "repository": "library/node",
+      "requested": "sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1",
+      "index_digest": "sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1",
+      "platform": "linux/amd64",
+      "manifest_digest": "sha256:83f1c388c31fb2e51f7cbd4dea949b96260798c98f206e8e4696bc93bd964e3a",
+      "manifest_bytes": 1720,
+      "config_digest": "sha256:c10884952bb8c37122fcc3fe6f97af3ab0a80e5eb02ee5df707406b4e11a7e3e",
+      "config_bytes": 6438,
+      "layers": [
+        {
+          "digest": "sha256:e2de96513ba9eb53b431787ec8a65cdde380ac4772a3e4c4b714dcfde2a102b5",
+          "size": 3849738,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:3c504d5a797be28f9de43147d49cd8ecb2eea46dfaf7beb8715db695d5f0a7f0",
+          "size": 56519242,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:02f40d53b06f6b91fec0cd6a6719656da99270bff8ee54ed8dcdf4c157763fc1",
+          "size": 1261993,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        },
+        {
+          "digest": "sha256:7ce7dcbafb7f750cf0c6be3c30e34372b06dd1182fa67f6ae30782c8150c5444",
+          "size": 444,
+          "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+        }
+      ],
+      "compressed_layer_bytes": 61631417,
+      "public_environment": [
+        "NODE_VERSION=24.21.0"
+      ],
+      "verification": "Official public OCI manifest/config hashes verified over HTTPS; no layer download or installation",
+      "selection": "Conditional Node24.21.0 candidate; owner runtime decision pending; no product source edit",
+      "uncompressed_layer_digests": [
+        "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
+        "sha256:7c732ed82ebdb575d2af70ebb84786b7421107ae929359e8e180c636040cbe88",
+        "sha256:6f3bd0caa7c25469ef663d37b3d333f7cda0b2887c78a1653af1f7bc6babef2d",
+        "sha256:a3b40bc0bbc6fc169200dd4069eac2195573e96112b64ad82c795d6ef3636719"
+      ]
+    }
+  },
+  "rootfs_metadata_verified_at": "2026-09-30T13:32:20.280176+00:00"
+}

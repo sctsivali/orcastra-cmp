@@ -18,6 +18,10 @@ from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.services.lxd_ssl import create_lxd_ssl_context
 from app.core.lxd_path import safe_segment
+from app.core.org_scope import project_is_visible
+from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
+from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT, list_in_project, resolve_owner
+from app.services.lxd.project_usage import parse_lxd_size
 
 logger = logging.getLogger(__name__)
 
@@ -539,9 +543,10 @@ class ConsoleService:
             logger.error(f"Error updating startup order: {e}")
             return False, str(e)
     
-    async def get_available_isos(
+    def get_available_isos(
         self,
         host: str,
+        project: str = "default",
     ) -> Tuple[List[ISOInfo], Optional[str]]:
         """
         Discover available ISO files from all storage pools.
@@ -553,12 +558,15 @@ class ConsoleService:
             client = self.lxd_service.get_client_with_reconnect(host)
             if not client:
                 return [], f"No connection to host: {host}"
+            owner = resolve_owner(client, "storage-volumes", project)
+            if not project_is_visible(host, owner):
+                return [], "Access denied to the ISO storage project"
             
             isos = []
             
             try:
                 # Get all storage pools
-                pools_response = client.api.storage_pools.get()
+                pools_response = client.api.storage_pools.get(timeout=ALL_PROJECTS_READ_TIMEOUT)
                 pools = pools_response.json().get("metadata", [])
                 
                 for pool_url in pools:
@@ -567,10 +575,10 @@ class ConsoleService:
                     try:
                         # Get volumes of type "custom" (where ISOs are stored)
                         # or type "iso" if available
-                        volumes_response = client.api.storage_pools[safe_segment(pool_name)].volumes.get(
-                            params={"recursion": 1}
+                        volumes = list_in_project(
+                            client, "storage-volumes", owner,
+                            path=f"storage-pools/{safe_segment(pool_name)}/volumes",
                         )
-                        volumes = volumes_response.json().get("metadata", [])
                         
                         for vol in volumes:
                             vol_name = vol.get("name", "")
@@ -588,11 +596,14 @@ class ConsoleService:
                             )
                             
                             if is_iso or vol_type == "iso":
+                                visible_usage = filter_visible_lxd_references(host, vol.get("used_by") or [])
+                                if tenant_acl_active() and not visible_usage:
+                                    continue
                                 size_str = config.get("size", "0")
                                 try:
                                     # Parse size (could be like "1GiB", "500MiB", etc)
-                                    size = self._parse_size(size_str)
-                                except:
+                                    size = parse_lxd_size(size_str) or 0
+                                except (TypeError, ValueError, OverflowError):
                                     size = 0
                                 
                                 iso_info = ISOInfo(
@@ -610,7 +621,7 @@ class ConsoleService:
                         
                     except Exception as e:
                         logger.warning(f"Error listing volumes in pool {pool_name}: {e}")
-                        continue
+                        return [], "ISO discovery was incomplete. Retry the request."
                 
             except Exception as e:
                 logger.error(f"Error listing storage pools: {e}")
@@ -621,37 +632,6 @@ class ConsoleService:
         except Exception as e:
             logger.error(f"Error getting ISOs: {e}")
             return [], str(e)
-    
-    def _parse_size(self, size_str: str) -> int:
-        """Parse size string to bytes."""
-        if not size_str:
-            return 0
-        
-        size_str = size_str.strip().upper()
-        
-        units = {
-            'B': 1,
-            'KB': 1024,
-            'KIB': 1024,
-            'MB': 1024**2,
-            'MIB': 1024**2,
-            'GB': 1024**3,
-            'GIB': 1024**3,
-            'TB': 1024**4,
-            'TIB': 1024**4,
-        }
-        
-        for unit, multiplier in units.items():
-            if size_str.endswith(unit):
-                try:
-                    return int(float(size_str[:-len(unit)]) * multiplier)
-                except:
-                    return 0
-        
-        try:
-            return int(size_str)
-        except:
-            return 0
     
     async def get_instance_iso(
         self,

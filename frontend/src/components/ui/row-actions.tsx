@@ -55,10 +55,9 @@ interface RowActionsProps {
  * get wrong and each one has already been gotten wrong somewhere in this repo.
  *
  * important: the menu is controlled and closes itself before the handler runs, and every item
- * calls preventDefault in onSelect. A row that is itself clickable (the images table opens a
- * detail dialog from its fingerprint cell) otherwise sees the click fall through, and Radix's
- * own close animation races a dialog opening in the same tick. Same recipe as
- * components/node-status/node-status-card.tsx.
+ * calls preventDefault in onSelect. A row that is itself clickable otherwise sees the click
+ * fall through. Dispatch after onCloseAutoFocus so the outgoing modal focus scope cannot
+ * redirect the dialog's return target to a menu item that is about to unmount.
  *
  * important: an unavailable item is marked with aria-disabled, never with Radix's `disabled`
  * prop. @radix-ui/react-menu passes `focusable: !disabled` to the roving-focus item and
@@ -71,11 +70,23 @@ interface RowActionsProps {
 export function RowActions({ actions, triggerLabel, className }: RowActionsProps) {
   const [open, setOpen] = React.useState(false);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const selectionRef = React.useRef<{
+    id: string;
+    trigger: HTMLButtonElement;
+    triggerLabel: string;
+  } | null>(null);
+  const latestRef = React.useRef({ actions, triggerLabel });
+  latestRef.current = { actions, triggerLabel };
+
+  React.useEffect(() => () => { selectionRef.current = null; }, []);
 
   if (actions.length === 0) return null;
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu open={open} onOpenChange={(nextOpen) => {
+      if (nextOpen) selectionRef.current = null;
+      setOpen(nextOpen);
+    }}>
       <DropdownMenuTrigger asChild>
         <Button
           ref={triggerRef}
@@ -91,7 +102,24 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
       {/* note: the shared DropdownMenuContent animates in and out with no reduced-motion
           guard. Fixing the primitive would touch every menu in the app, so the override is
           scoped here, as create-menu.tsx already does. */}
-      <DropdownMenuContent align="end" className="w-60 motion-reduce:animate-none">
+      <DropdownMenuContent
+        align="end"
+        className="w-60 motion-reduce:animate-none"
+        onCloseAutoFocus={(event) => {
+          const selection = selectionRef.current;
+          selectionRef.current = null;
+          if (!selection) return;
+          event.preventDefault();
+          const latest = latestRef.current;
+          const action = latest.actions.find((item) => item.id === selection.id);
+          if (!selection.trigger.isConnected || selection.trigger !== triggerRef.current
+            || selection.triggerLabel !== latest.triggerLabel) return;
+          triggerRef.current?.focus({ preventScroll: true });
+          // note: permissions or pending state can change during the menu's exit animation.
+          if (!action || action.unavailableReason || action.pending) return;
+          action.onSelect();
+        }}
+      >
         {actions.map((action) => {
           const Icon = action.pending ? Loader2 : action.icon;
           const unavailable = !!action.unavailableReason || !!action.pending;
@@ -107,15 +135,11 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
                   !unavailable && action.destructive && "text-destructive focus:text-destructive",
                 )}
                 onSelect={(e) => {
-                  // Radix closes on select by default, which would unmount this menu while
-                  // the handler is still opening a dialog.
                   e.preventDefault();
-                  if (unavailable) return;
+                  const trigger = triggerRef.current;
+                  if (unavailable || !trigger || selectionRef.current) return;
+                  selectionRef.current = { id: action.id, trigger, triggerLabel };
                   setOpen(false);
-                  // A dialog opened from a menu needs a connected return target. The menu item
-                  // unmounts on select, while this row trigger remains stable.
-                  triggerRef.current?.focus({ preventScroll: true });
-                  action.onSelect();
                 }}
               >
                 <Icon

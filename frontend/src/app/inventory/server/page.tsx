@@ -113,7 +113,7 @@ function ConfigMapLink({
 
 export default function ServerPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
-  const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
+  const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useServerInfo(undefined, isResolved && isPartner);
   const servers: any[] = useMemo(() => (data as any)?.servers || [], [data]);
   // Clusters that never answered: their server details are absent from the grid, so warn
   // rather than showing fewer cards with nothing to explain it.

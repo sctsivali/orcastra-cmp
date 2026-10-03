@@ -11,6 +11,7 @@ from typing import Optional, Any, Dict
 from functools import wraps
 from collections import OrderedDict
 import hashlib
+from app.core.cache_glob import compile_cache_glob
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
 # the token that tells already-running fleet reads their answer is stale.
 SNAPSHOT_FLEET_GENERATION_KEY = "snapshot_fleet_generation"
 RESOURCE_LIST_GENERATION_KEY_PREFIX = "resource_list_generation"
+CACHE_CLEAR_GENERATION_KEY = "cache_clear_generation"
 CAPACITY_GENERATION_KIND = "capacity"
 MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
 
@@ -399,20 +401,27 @@ class CacheManager:
         elif require_shared and self._redis_configured:
             raise CacheInvalidationError(f"shared cache is unavailable for {cache_key}")
     
-    def delete(self, namespace: str, key: str):
+    def delete(self, namespace: str, key: str, *, require_shared: bool = False):
         """Delete value from cache."""
         cache_key = self._make_key(namespace, key)
         
+        shared_error: Optional[CacheInvalidationError] = None
         # Delete from Redis
         if self.redis_client:
             try:
                 self.redis_client.delete(cache_key)
             except Exception as e:
                 logger.warning(f"Redis delete error: {e}")
+                if require_shared:
+                    shared_error = CacheInvalidationError("shared cache delete failed")
+        elif require_shared and self._redis_configured:
+            shared_error = CacheInvalidationError("shared cache is unavailable")
         
         # Delete from memory
         self.memory_cache.delete(cache_key)
         logger.debug(f"Deleted from cache: {cache_key}")
+        if shared_error is not None:
+            raise shared_error
     
     def delete_pattern(
         self,
@@ -420,18 +429,26 @@ class CacheManager:
         pattern: str = "*",
         *,
         require_shared: bool = False,
+        exclude_keys: tuple[str, ...] = (),
     ):
         """Delete all keys matching pattern in namespace."""
         full_pattern = self._make_key(namespace, pattern)
+        excluded = {self._make_key(namespace, key) for key in exclude_keys}
         shared_error: Optional[CacheInvalidationError] = None
         
         # Delete from Redis
         if self.redis_client:
             try:
-                keys = self.redis_client.keys(full_pattern)
-                if keys:
-                    self.redis_client.delete(*keys)
-                    logger.info(f"Deleted {len(keys)} keys matching {full_pattern}")
+                batch: list[str] = []
+                for key in self.redis_client.scan_iter(match=full_pattern, count=200):
+                    if key in excluded:
+                        continue
+                    batch.append(key)
+                    if len(batch) == 200:
+                        self.redis_client.delete(*batch)
+                        batch.clear()
+                if batch:
+                    self.redis_client.delete(*batch)
             except Exception as e:
                 logger.warning(f"Redis delete pattern error: {e}")
                 if require_shared:
@@ -444,19 +461,13 @@ class CacheManager:
             )
         
         # Clear matching keys from memory cache
-        if pattern == "*":
-            self.memory_cache.clear()
-        else:
-            # convert glob pattern to prefix match for memory cache
-            prefix = self._make_key(namespace, pattern.rstrip("*"))
-            keys_to_delete = [
-                k for k in list(self.memory_cache.cache.keys())
-                if k.startswith(prefix)
-            ]
-            for k in keys_to_delete:
-                self.memory_cache.delete(k)
-            if keys_to_delete:
-                logger.debug(f"Deleted {len(keys_to_delete)} memory cache keys matching {full_pattern}")
+        matcher = compile_cache_glob(full_pattern)
+        keys_to_delete = [
+            key for key in list(self.memory_cache.cache.keys())
+            if key not in excluded and matcher.fullmatch(key)
+        ]
+        for key in keys_to_delete:
+            self.memory_cache.delete(key)
         if shared_error is not None:
             raise shared_error
     
@@ -478,7 +489,7 @@ class CacheManager:
             # important: the ':' before the * is load-bearing too. A bare
             # '{cluster_id}*' also matched sibling ids, so invalidating nuc2
             # wiped nuc22 and nuc2-prod. The scope suffix always starts with ':'.
-            # important: trailing * is load-bearing. Redis KEYS treats a pattern
+            # important: trailing * is load-bearing. Redis SCAN treats a pattern
             # without it as an exact match, but the real key carries a
             # ":scope=..." suffix from get_scope_cache_key(), so this deleted
             # nothing from Redis while the memory branch (prefix match) passed.
@@ -581,21 +592,88 @@ class CacheManager:
 
     def instance_list_generation(self) -> Optional[str]:
         """The token the last instance invalidation left; None when none has run yet."""
-        value = self.get("api_responses", INSTANCE_LIST_GENERATION_KEY)
-        return str(value) if value is not None else None
+        return self._generation_token(INSTANCE_LIST_GENERATION_KEY)
 
     def snapshot_fleet_generation(self) -> Optional[str]:
         """The token the last fleet snapshot invalidation left."""
-        value = self.get("api_responses", SNAPSHOT_FLEET_GENERATION_KEY)
-        return str(value) if value is not None else None
+        return self._generation_token(SNAPSHOT_FLEET_GENERATION_KEY)
 
     def resource_list_generation(self, kind: str) -> Optional[str]:
         """Token changed by `invalidate_resource_cache(kind)` for read/write race fencing."""
-        value = self.get(
-            "api_responses",
-            f"{RESOURCE_LIST_GENERATION_KEY_PREFIX}:{kind}",
-        )
+        return self._generation_token(f"{RESOURCE_LIST_GENERATION_KEY_PREFIX}:{kind}")
+
+    def _generation_token(self, key: str) -> Optional[str]:
+        epoch = self.get("api_responses", CACHE_CLEAR_GENERATION_KEY)
+        value = self.get("api_responses", key)
+        if epoch is not None:
+            return f"{epoch}:{value}"
         return str(value) if value is not None else None
+
+    def clear_namespaces(self, namespaces: tuple[str, ...]) -> tuple[list[str], list[str]]:
+        """Clear selected namespaces, retaining a fence against pre-clear read results."""
+        failed: list[str] = []
+        try:
+            self.set("api_responses", CACHE_CLEAR_GENERATION_KEY, str(time.time_ns()),
+                     ttl=3600, require_shared=True)
+        except CacheInvalidationError:
+            failed.append("api_responses")
+        cleared: list[str] = []
+        for namespace in namespaces:
+            try:
+                self.delete_pattern(namespace, require_shared=True,
+                                    exclude_keys=(CACHE_CLEAR_GENERATION_KEY,) if namespace == "api_responses" else ())
+                if namespace not in failed:
+                    cleared.append(namespace)
+            except CacheInvalidationError:
+                if namespace not in failed:
+                    failed.append(namespace)
+        return cleared, failed
+
+    def invalidate_all_node_caches(self) -> None:
+        """Refresh fleet projections and report any incomplete shared clearance."""
+        failures: list[Exception] = []
+        for clear in (
+            lambda: self.invalidate_capacity_cache(require_shared=True),
+            lambda: self.delete_pattern(
+                "api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*", require_shared=True,
+            ),
+            lambda: self.invalidate_resource_cache("cluster_members", require_shared=True),
+        ):
+            try:
+                clear()
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        if failures:
+            raise CacheInvalidationError(
+                f"{len(failures)} shared fleet cache operation(s) failed"
+            ) from failures[0]
+
+    def invalidate_node_cache(self, cluster_id: str, scope_keys: tuple[str, ...]) -> None:
+        """Refresh one cluster and only the requesting scope's aggregate projections."""
+        failures: list[Exception] = []
+        for kind in (CAPACITY_GENERATION_KIND, "cluster_members"):
+            try:
+                self._advance_resource_generation(kind, require_shared=True)
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        for namespace, key in (
+            *(("api_responses", key) for key in scope_keys),
+            ("lxd_resources", f"{MICROCLOUD_RESOURCES_CACHE_PREFIX}:{cluster_id}"),
+        ):
+            try:
+                self.delete(namespace, key, require_shared=True)
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        for namespace, pattern in (
+            ("lxd_resources", f"{MEMBER_RESOURCES_CACHE_PREFIX}:{cluster_id}:*"),
+            ("api_responses", f"cluster_members:list:host={cluster_id}:*"),
+        ):
+            try:
+                self.delete_pattern(namespace, pattern, require_shared=True)
+            except CacheInvalidationError as exc:
+                failures.append(exc)
+        if failures:
+            raise CacheInvalidationError(f"{len(failures)} shared cache operations failed") from failures[0]
 
     def _advance_resource_generation(
         self,

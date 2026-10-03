@@ -63,6 +63,9 @@ class TaskRecord(BaseModel):
     updated_at: datetime
     # finished - started when finished, now - started while open, None when never started.
     duration_ms: Optional[int] = None
+    queue_position: Optional[int] = Field(
+        None, ge=1, description="Pending rank within the caller's visible cluster queue; null elsewhere"
+    )
 
 
 class TaskListResponse(BaseModel):
@@ -139,6 +142,12 @@ class QueueResponse(BaseModel):
     generated_at: datetime
     disconnected_clusters: List[str]
     follower_active: bool
+    total_open: int = Field(..., ge=0, description="Open tasks inside the caller's scope")
+    limit: int = Field(..., ge=1, le=500)
+    offset: int = Field(..., ge=0)
+    has_more: bool
+    due_schedules_total: int = Field(..., ge=0)
+    due_schedules_truncated: bool
 
 
 class CancelResponse(BaseModel):

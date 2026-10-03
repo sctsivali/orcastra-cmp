@@ -51,28 +51,7 @@ import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { cn, formatBytes } from "@/lib/utils";
 import { useConsoleStore, AttachedISO } from "@/lib/console-store";
 import { OverflowText } from "@/components/ui/overflow-text";
-
-interface ISOInfo {
-  name: string;
-  pool: string;
-  volume: string;
-  path: string;
-  size: number;
-  createdAt?: string;
-}
-
-// LXD boot.priority: "A higher value indicates a higher boot precedence for the
-// disk device." So to boot an install ISO ahead of the (empty) root disk, the
-// cdrom needs a HIGHER value than the disk. A disk with no boot.priority set
-// effectively has none, so any value above 0 wins.
-const BOOT_PRIORITY_OPTIONS = [
-  { value: 10, label: "10 - Boot first (install from ISO)" },
-  { value: 5, label: "5 - High" },
-  { value: 1, label: "1 - Above an unset disk" },
-  { value: 0, label: "0 - Lowest (boot from disk first)" },
-];
-// Default for a fresh attach: the point of attaching an install ISO is to boot it.
-const DEFAULT_BOOT_PRIORITY = 10;
+import { BOOT_PRIORITY_OPTIONS, DEFAULT_BOOT_PRIORITY, type ISOInfo } from "./iso-panel-options";
 
 interface ISOManagerPanelProps {
   consoleId: string;
@@ -104,13 +83,19 @@ export function ISOManagerPanel({
   const { setAttachedISO } = useConsoleStore();
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
+  const target = JSON.stringify([consoleId, host, project, instanceName, scopeKey]);
+  const targetRef = React.useRef(target);
+  targetRef.current = target;
+  const isCurrent = useCallback(
+    () => targetRef.current === target && isAuthActorSynchronized(scopeKey),
+    [scopeKey, target],
+  );
 
   // Fetch attached ISO
   const fetchAttachedISO = useCallback(async () => {
     try {
-      const actorScope = scopeKey;
       const data = await consoleAPI.getAttachedISO(instanceName, host, project);
-      if (!isAuthActorSynchronized(actorScope)) return;
+      if (!isCurrent()) return;
       
       if (data.success && data.attached) {
         const iso: AttachedISO = {
@@ -126,17 +111,16 @@ export function ISOManagerPanel({
         setAttachedISO(consoleId, undefined);
       }
     } catch (err) {
-      if (!isAuthActorSynchronized(scopeKey)) return;
+      if (!isCurrent()) return;
       console.error('Error fetching attached ISO:', err);
     }
-  }, [consoleId, host, instanceName, project, scopeKey, setAttachedISO]);
+  }, [consoleId, host, instanceName, project, isCurrent, setAttachedISO]);
 
   // Fetch available ISOs
   const fetchAvailableISOs = useCallback(async () => {
     try {
-      const actorScope = scopeKey;
-      const data = await consoleAPI.listISOs(host);
-      if (!isAuthActorSynchronized(actorScope)) return;
+      const data = await consoleAPI.listISOs(host, project);
+      if (!isCurrent()) return;
       
       if (data.success) {
         setAvailableISOs((data.isos || []).map((iso) => ({
@@ -145,13 +129,13 @@ export function ISOManagerPanel({
         })));
       }
     } catch (err) {
-      if (!isAuthActorSynchronized(scopeKey)) return;
+      if (!isCurrent()) return;
       // important: rethrow. Swallowing this made a failed fetch render as an
       // empty ISO library, which reads as "this pool has no ISOs".
       console.error('Error fetching ISOs:', err);
       throw err;
     }
-  }, [host, scopeKey]);
+  }, [host, project, isCurrent]);
 
   const loadPanel = useCallback(async () => {
     setLoading(true);
@@ -159,16 +143,22 @@ export function ISOManagerPanel({
     try {
       await Promise.all([fetchAttachedISO(), fetchAvailableISOs()]);
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [fetchAttachedISO, fetchAvailableISOs]);
+  }, [fetchAttachedISO, fetchAvailableISOs, isCurrent]);
 
   // Initial load
   useEffect(() => {
+    targetRef.current = target;
+    setAvailableISOs([]);
+    setSelectedISO(null);
+    setAttachedISOState(null);
     void loadPanel();
-  }, [loadPanel]);
+    return () => { if (targetRef.current === target) targetRef.current = ""; };
+  }, [loadPanel, target]);
 
   // Change the boot priority of the already-attached ISO. Re-attaching the same
   // volume patches the existing device in place (attach_iso does an add/update),

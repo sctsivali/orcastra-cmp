@@ -1,0 +1,247 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-30T14:04:57.673967+00:00",
+  "ready_for_execution": false,
+  "scope": "QA-only PostgreSQL test tooling metadata; no package downloads, installs, builds, source exports, credentials, or guest/live operations",
+  "target": {
+    "python_version": "3.12",
+    "python_full_version": "3.12.14",
+    "implementation_name": "cpython",
+    "implementation_version": "3.12.14",
+    "os_name": "posix",
+    "sys_platform": "linux",
+    "platform_machine": "x86_64",
+    "platform_python_implementation": "CPython",
+    "platform_system": "Linux",
+    "maximum_manylinux_glibc": "2.36"
+  },
+  "source_inputs": [
+    {
+      "path": "backend/constraints.txt",
+      "sha256": "d6bf6ee68194a2f46312adc270f950edeec947ad3ea1e3a2a37fb1aeb7442281",
+      "size": 1580
+    },
+    {
+      "path": "backend/requirements-dev.txt",
+      "sha256": "24997c19d613263d4a9fa9ad7e4aa37f349c60843de7e6ba466cb52607fc1317",
+      "size": 252
+    },
+    {
+      "path": "backend/requirements.txt",
+      "sha256": "366ddee27e1cd6d41f7f7d47a6f2a24b82b4cf91fa5ab2e70ae7372917e1e075",
+      "size": 2521
+    }
+  ],
+  "resolution_helper": {
+    "path": "scripts/qa-hardening/phase_b_dependencies.py",
+    "sha256": "b2b95261b004ea8ce3c751c6433c699c90e7836601ede2e064a7a3f83e44f1f9"
+  },
+  "selection_basis": "pytest 9.1.1, pytest-asyncio 1.4.0, iniconfig 2.3.0, packaging 26.0, pluggy 1.6.0, and Pygments 2.20.0 match the installed project QA virtualenv metadata; any shared dependency follows backend constraints",
+  "tool_roots": {
+    "pytest": {
+      "version": "9.1.1",
+      "required_specifier": ">=8.0"
+    },
+    "pytest-asyncio": {
+      "version": "1.4.0",
+      "required_specifier": ">=0.24"
+    }
+  },
+  "excluded_dev_tools": [
+    "ruff"
+  ],
+  "wheels": [
+    {
+      "name": "iniconfig",
+      "version": "2.3.0",
+      "metadata_url": "https://pypi.org/pypi/iniconfig/2.3.0/json",
+      "metadata_sha256": "38c06d73779f13d8e4b48d48b3c524ff23e59d7be4bdb44cb6d90b3c5eb20182",
+      "requires_dist": [],
+      "wheel": {
+        "filename": "iniconfig-2.3.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl",
+        "size": 7484,
+        "requires_python": ">=3.10",
+        "sha256": "f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12"
+      }
+    },
+    {
+      "name": "packaging",
+      "version": "26.0",
+      "metadata_url": "https://pypi.org/pypi/packaging/26.0/json",
+      "metadata_sha256": "6c0806a30eeaffae05b9dc3999be80f0e9f79c5cdd026e31a987ca77367fd514",
+      "requires_dist": [],
+      "wheel": {
+        "filename": "packaging-26.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl",
+        "size": 74366,
+        "requires_python": ">=3.8",
+        "sha256": "b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529"
+      }
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0",
+      "metadata_url": "https://pypi.org/pypi/pluggy/1.6.0/json",
+      "metadata_sha256": "db23d1227f5870da7538b1e29371d9fc9a93b0499989f8e3ef021fdccd75bc8e",
+      "requires_dist": [
+        "pre-commit; extra == \"dev\"",
+        "tox; extra == \"dev\"",
+        "pytest; extra == \"testing\"",
+        "pytest-benchmark; extra == \"testing\"",
+        "coverage; extra == \"testing\""
+      ],
+      "wheel": {
+        "filename": "pluggy-1.6.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl",
+        "size": 20538,
+        "requires_python": ">=3.9",
+        "sha256": "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746"
+      }
+    },
+    {
+      "name": "pygments",
+      "version": "2.20.0",
+      "metadata_url": "https://pypi.org/pypi/pygments/2.20.0/json",
+      "metadata_sha256": "3af5974de77ad03c694dcae44382c922da63a2b3ae83153f12f5024465c813a1",
+      "requires_dist": [
+        "colorama>=0.4.6; extra == \"windows-terminal\""
+      ],
+      "wheel": {
+        "filename": "pygments-2.20.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl",
+        "size": 1231151,
+        "requires_python": ">=3.9",
+        "sha256": "81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176"
+      }
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1",
+      "metadata_url": "https://pypi.org/pypi/pytest/9.1.1/json",
+      "metadata_sha256": "8ed48304ba7fd0ae974a041f117487b499d553b40e5ce55a9ece677e946f68dd",
+      "requires_dist": [
+        "colorama>=0.4; sys_platform == \"win32\"",
+        "exceptiongroup>=1; python_version < \"3.11\"",
+        "iniconfig>=1.0.1",
+        "packaging>=22",
+        "pluggy<2,>=1.5",
+        "pygments>=2.7.2",
+        "tomli>=1; python_version < \"3.11\"",
+        "argcomplete; extra == \"dev\"",
+        "attrs>=19.2; extra == \"dev\"",
+        "hypothesis>=3.56; extra == \"dev\"",
+        "mock; extra == \"dev\"",
+        "requests; extra == \"dev\"",
+        "setuptools; extra == \"dev\"",
+        "xmlschema; extra == \"dev\""
+      ],
+      "wheel": {
+        "filename": "pytest-9.1.1-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl",
+        "size": 386536,
+        "requires_python": ">=3.10",
+        "sha256": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c"
+      }
+    },
+    {
+      "name": "pytest-asyncio",
+      "version": "1.4.0",
+      "metadata_url": "https://pypi.org/pypi/pytest-asyncio/1.4.0/json",
+      "metadata_sha256": "7d73d89418af6bc6b73a93948bc304486249893ec37cd973c25dd3ff8038c08f",
+      "requires_dist": [
+        "backports-asyncio-runner<2,>=1.1; python_version < \"3.11\"",
+        "pytest<10,>=8.4",
+        "typing-extensions>=4.12; python_version < \"3.13\"",
+        "sphinx>=5.3; extra == \"docs\"",
+        "sphinx-rtd-theme>=1; extra == \"docs\"",
+        "sphinx-tabs>=3.5; extra == \"docs\"",
+        "coverage>=6.2; extra == \"testing\"",
+        "hypothesis>=5.7.1; extra == \"testing\""
+      ],
+      "wheel": {
+        "filename": "pytest_asyncio-1.4.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl",
+        "size": 16930,
+        "requires_python": ">=3.10",
+        "sha256": "933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1"
+      }
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "metadata_url": "https://pypi.org/pypi/typing-extensions/4.16.0/json",
+      "metadata_sha256": "2140da00d62dde967f52d0be0ae28444f1d6a3fe603f52c83c23988c32122d5a",
+      "requires_dist": [],
+      "wheel": {
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "size": 45571,
+        "requires_python": ">=3.9",
+        "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+      }
+    }
+  ],
+  "closure": {
+    "active_packages": [
+      "iniconfig",
+      "packaging",
+      "pluggy",
+      "pygments",
+      "pytest",
+      "pytest-asyncio",
+      "typing-extensions"
+    ],
+    "extras": {},
+    "edges": [
+      {
+        "from": "pytest",
+        "to": "iniconfig"
+      },
+      {
+        "from": "pytest",
+        "to": "packaging"
+      },
+      {
+        "from": "pytest",
+        "to": "pluggy"
+      },
+      {
+        "from": "pytest",
+        "to": "pygments"
+      },
+      {
+        "from": "pytest-asyncio",
+        "to": "pytest"
+      },
+      {
+        "from": "pytest-asyncio",
+        "to": "typing-extensions"
+      },
+      {
+        "from": "requirements.txt",
+        "to": "pytest"
+      },
+      {
+        "from": "requirements.txt",
+        "to": "pytest-asyncio"
+      }
+    ],
+    "issues": [],
+    "verification": "PyPI release metadata only; downloaded wheel METADATA and target pip resolver validation remain required"
+  },
+  "wheel_bytes": 1782576,
+  "shared_runtime_packages": [
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0"
+    }
+  ],
+  "pending": [
+    "Approval for exact public payload staging",
+    "Verify downloaded wheel SHA256 and wheel METADATA against this manifest",
+    "Validate target pip resolution with no index and no sdist fallback",
+    "Run the 14 PostgreSQL integration cases on the isolated scratch database after its separate approval"
+  ],
+  "offline_install_contract": "Install these QA-only tools into the isolated runner with --no-index --find-links using verified wheels. Preserve runtime constraints and reject any package version conflict. No Ruff package is required for the PostgreSQL cases."
+}

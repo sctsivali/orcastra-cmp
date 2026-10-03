@@ -1776,19 +1776,22 @@ export function useDeleteInstance() {
 }
 
 // Server Info Hooks
-export function useServerInfo(host?: string) {
+export function useServerInfo(host?: string, enabled = true) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["serverInfo", host],
+    queryKey: ["serverInfo", scopeKey, host],
     queryFn: (read) => api.server.list(host, read),
     ...STATIC_DATA_CONFIG,
+    enabled: isAuthenticated && enabled,
   });
 }
 
 export function useServerResources(host: string) {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
-    queryKey: ["serverResources", host],
+    queryKey: ["serverResources", scopeKey, host],
     queryFn: () => api.server.getResources(host),
-    enabled: !!host,
+    enabled: isAuthenticated && !!host,
     ...DYNAMIC_DATA_CONFIG,
   });
 }

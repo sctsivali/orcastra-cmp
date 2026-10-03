@@ -4,7 +4,8 @@ import { UsageBar } from "@/components/ui/usage-bar";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { cn, formatBytes } from "@/lib/utils";
-import { USAGE_ELEVATED_PERCENT, usagePercent, usageTone } from "@/lib/usage-tone";
+import { USAGE_ELEVATED_PERCENT, usageTone } from "@/lib/usage-tone";
+import { capacityReading } from "@/lib/capacity-reading";
 
 export interface PoolCapacity {
   used: number;
@@ -23,15 +24,7 @@ export interface PoolCapacity {
  * "NaN undefined / NaN undefined".
  */
 export function poolCapacity(space: unknown): PoolCapacity {
-  const dict = (space ?? {}) as { used?: unknown; total?: unknown };
-  const used = Number(dict.used ?? 0);
-  const total = Number(dict.total ?? 0);
-  const reported = Number.isFinite(used) && Number.isFinite(total) && total > 0;
-  return {
-    used: reported ? used : 0,
-    total: reported ? total : 0,
-    percent: reported ? usagePercent(used, total) : null,
-  };
+  return capacityReading(space) ?? { used: 0, total: 0, percent: null };
 }
 
 /**

@@ -1,0 +1,15 @@
+{
+  "source_url": "https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.manifest",
+  "sha256": "cfe3667617da8f136b7a1673e197d46dbb99cdc248a73f4457ad0ffcfc9796eb",
+  "source_packages": {
+    "apparmor": "4.0.1really4.0.1-0ubuntu0.24.04.8",
+    "iproute2": "6.1.0-1ubuntu6.4",
+    "iptables": "1.8.10-3ubuntu2",
+    "kmod": "31+20240202-2ubuntu7.2",
+    "procps": "2:4.0.4-4ubuntu3.3",
+    "python3": "3.12.3-0ubuntu2.1",
+    "systemd": "255.4-1ubuntu8.17",
+    "xz-utils": "5.6.1+really5.4.5-1ubuntu0.3"
+  },
+  "verification": "Public pinned Ubuntu manifest evidence only; installed guest tools/kernel/cgroup/overlayfs/AppArmor still require runtime preflight"
+}

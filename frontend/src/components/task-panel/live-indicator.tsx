@@ -8,6 +8,7 @@ import type { TaskFeedSnapshot } from "./use-task-feed";
 export type LiveState =
   | "connecting"
   | "connected"
+  | "degraded"
   | "journal-paused"
   | "reconnecting"
   | "polling"
@@ -27,6 +28,12 @@ function present(state: LiveState, nextRetry: number | null): Presentation {
   switch (state) {
     case "connected":
       return { dot: "bg-status-online", text: "Live", tooltip: "Live updates are connected." };
+    case "degraded":
+      return {
+        dot: "bg-status-pending",
+        text: "Degraded",
+        tooltip: "Some hypervisor sources are unavailable. Tasks and logs may be incomplete or stale.",
+      };
     case "journal-paused":
       return {
         dot: "bg-status-pending",
@@ -56,7 +63,7 @@ function present(state: LiveState, nextRetry: number | null): Presentation {
         tooltip: "Paused while this tab was in the background, resumes when you return.",
       };
     case "offline":
-      return { dot: "bg-status-offline", text: "Offline", tooltip: "The dashboard API is not answering." };
+      return { dot: "bg-status-offline", text: "Offline", tooltip: "Task data cannot be refreshed from the dashboard API." };
     default:
       return {
         dot: "bg-status-pending animate-pulse-gentle",
@@ -67,11 +74,12 @@ function present(state: LiveState, nextRetry: number | null): Presentation {
 }
 
 /** Folds the feed snapshot and the API's reachability into the one state the strip shows. */
-export function liveStateOf(feed: TaskFeedSnapshot, apiDown: boolean): LiveState {
+export function liveStateOf(feed: TaskFeedSnapshot, apiDown: boolean, disconnected = 0): LiveState {
   if (apiDown) return "offline";
   switch (feed.state) {
     case "connected":
-      return feed.followerActive === false ? "journal-paused" : "connected";
+      if (feed.followerActive === false) return "journal-paused";
+      return disconnected > 0 ? "degraded" : "connected";
     case "reconnecting":
       return "reconnecting";
     case "polling":
@@ -83,8 +91,12 @@ export function liveStateOf(feed: TaskFeedSnapshot, apiDown: boolean): LiveState
   }
 }
 
-export function LiveIndicator({ feed, apiDown = false }: { feed: TaskFeedSnapshot; apiDown?: boolean }) {
-  const state = liveStateOf(feed, apiDown);
+export function LiveIndicator({ feed, apiDown = false, disconnected = 0 }: {
+  feed: TaskFeedSnapshot;
+  apiDown?: boolean;
+  disconnected?: number;
+}) {
+  const state = liveStateOf(feed, apiDown, disconnected);
   const { dot, text, tooltip } = present(state, feed.nextRetryInSeconds);
   return (
     <Tooltip>

@@ -63,9 +63,13 @@ function TaskPanelInner() {
   const email = session?.user?.email ?? null;
   const isPartner = hasRole(Role.PARTNER);
 
-  const feed = useTaskFeed(true);
-  const feedConnected = feed.state === "connected";
-  const summary = useTaskSummary(feedConnected);
+  const feedSnapshot = useTaskFeed(true);
+  const summary = useTaskSummary();
+  const feed = {
+    ...feedSnapshot,
+    // REST polls carry current collector health; an earlier hello can outlive a recovery.
+    followerActive: summary.data?.follower_active ?? feedSnapshot.followerActive,
+  };
 
   const [detailTaskId, setDetailTaskId] = React.useState<string | null>(null);
   const [cancelTask, setCancelTask] = React.useState<TaskRecord | null>(null);
@@ -154,7 +158,10 @@ function TaskPanelInner() {
     tabRefresh.current = refresh;
   }, []);
   const { refreshNow: refreshSummary } = summary;
-  const refreshNow = React.useCallback(() => (tabRefresh.current ?? refreshSummary)(), [refreshSummary]);
+  const refreshNow = React.useCallback(async () => {
+    const refreshTab = tabRefresh.current;
+    await Promise.all(refreshTab ? [refreshSummary(), refreshTab()] : [refreshSummary()]);
+  }, [refreshSummary]);
 
   // A link inside the dock opens the dialog over the tab the operator is on; only the toast,
   // which arrives while the panel may be closed, brings the Tasks tab forward. Found live: the
@@ -219,9 +226,12 @@ function TaskPanelInner() {
   // The queue holds every open row in the caller's scope, which is the summary's `running`
   // count, so the badge is live on the collapsed strip without reading the queue itself.
   const queued = summary.data ? summary.data.running : null;
-  const apiDown = summary.isError && !summary.data;
+  const apiDown = summary.isError;
 
-  const tabProps = { feed, height, onOpenTask: openTask, registerRefresh };
+  const tabProps = {
+    feed, height, onOpenTask: openTask, registerRefresh,
+    collectionIncomplete: disconnected.length > 0 || feed.followerActive === false || summary.isError,
+  };
 
   return (
     <section

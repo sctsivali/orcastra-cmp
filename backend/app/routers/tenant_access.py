@@ -593,6 +593,19 @@ async def get_policy(
         raise HTTPException(status_code=404, detail="Policy not found")
 
     await _verify_org_access(user, policy.organization_id, db)
+    if get_highest_role(resolve_roles(user)) == Role.TENANT:
+        assignment_stmt = (
+            select(TenantPolicyAssignment.id)
+            .join(OrganizationMember, TenantPolicyAssignment.org_member_id == OrganizationMember.id)
+            .where(
+                TenantPolicyAssignment.policy_id == policy.id,
+                OrganizationMember.organization_id == policy.organization_id,
+                OrganizationMember.user_email == user.email,
+            )
+            .limit(1)
+        )
+        if (await db.execute(assignment_stmt)).scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Policy not found")
     return await _policy_to_response(policy)
 
 

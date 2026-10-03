@@ -1240,12 +1240,12 @@ const systemAPI = {
   getResourceUsage: async (opts: ReadOptions = {}): Promise<SystemResourceUsage> => {
     return fetchUncachedRead<SystemResourceUsage>("/system/resource-usage", opts);
   },
-  clearCache: async (namespace?: string): Promise<{ message?: string; error?: string }> => {
+  clearCache: async (namespace?: string): Promise<{ message: string; namespaces: string[] }> => {
     const params = new URLSearchParams();
     if (namespace) params.append("namespace", namespace);
 
     const queryString = params.toString();
-    return fetchAPI<{ message?: string; error?: string }>(
+    return fetchAPI<{ message: string; namespaces: string[] }>(
       queryString ? `/system/cache/clear?${queryString}` : "/system/cache/clear",
       { method: "POST" }
     );
@@ -1574,7 +1574,7 @@ export const networkAPI = {
     return fetchAPI(withQuery("/networks", { host, project }), {
       method: "POST",
       body: JSON.stringify(data),
-    });
+    }, 195_000, false, { retryAfterAuthRefresh: false });
   },
 
   update: async (name: string, host: string, data: any, project?: string) => {

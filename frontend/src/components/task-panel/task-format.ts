@@ -102,7 +102,7 @@ export function durationMs(
 ): number | null {
   if (task.status === "pending") return null;
   if (task.duration_ms !== null && task.duration_ms !== undefined && isTerminal(task.status)) {
-    return task.duration_ms;
+    return Number.isFinite(task.duration_ms) && task.duration_ms >= 0 ? task.duration_ms : null;
   }
   const started = startedMs(task);
   if (started === null) return null;
@@ -110,12 +110,12 @@ export function durationMs(
   if (finished !== null) return Math.max(0, finished - started);
   if (task.status !== "running") return null;
   const now = serverNow ?? Date.now();
-  return Math.max(0, now - started);
+  return Number.isFinite(now) ? Math.max(0, now - started) : null;
 }
 
-// formatLabel would print "Lxd Operation"; the acronym stays upper case.
+// The internal journal kind is shared by compatible hypervisors.
 const KIND_LABELS: Record<TaskRecord["kind"], string> = {
-  lxd_operation: "LXD Operation",
+  lxd_operation: "Hypervisor Operation",
   dashboard_action: "Dashboard Action",
   upload: "Upload",
   rebuild: "Rebuild",
@@ -127,6 +127,7 @@ export function kindLabel(kind: string): string {
 }
 
 export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);

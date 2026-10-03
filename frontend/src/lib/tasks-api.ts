@@ -48,6 +48,11 @@ export interface LogListParams {
   offset?: number;
 }
 
+export interface TaskQueueParams {
+  limit?: number;
+  offset?: number;
+}
+
 type ParamValue = string | number | readonly string[] | undefined;
 
 /** Lists go on the wire as csv; an empty list or an undefined value is omitted. */
@@ -92,8 +97,8 @@ export const tasksAPI = {
   get: (id: string, opts: ReadOptions = {}): Promise<TaskDetailResponse> =>
     uncachedRead<TaskDetailResponse>(`/tasks/${seg(id)}`, opts),
 
-  queue: (opts: ReadOptions = {}): Promise<TaskQueueResponse> =>
-    uncachedRead<TaskQueueResponse>("/tasks/queue", opts),
+  queue: (params: TaskQueueParams = {}, opts: ReadOptions = {}): Promise<TaskQueueResponse> =>
+    uncachedRead<TaskQueueResponse>(withQuery("/tasks/queue", { ...params }), opts),
 
   /** DELETE /tasks/{id}; a refusal is a 409 whose APIError message is the server's sentence. */
   cancel: (id: string): Promise<CancelResponse> =>

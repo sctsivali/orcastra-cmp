@@ -101,6 +101,7 @@ def task_row(row: Mapping[str, Any], *, tier: str, now: Optional[datetime] = Non
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "duration_ms": duration_ms(started_at, finished_at, now),
+        "queue_position": row.get("queue_position") if row["status"] == "pending" else None,
     }
 
 

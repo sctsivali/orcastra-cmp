@@ -4,11 +4,10 @@ Provides endpoints for managing LXD networks.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict, Literal
+from typing import Optional, List, Dict
 import logging
 import requests
 import asyncio
-import re
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
@@ -48,7 +47,21 @@ from app.core.blocking import (
     in_flight_for_key,
     run_blocking,
 )
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field
+from app.services.network_config import (
+    ALLOWED_NETWORK_CONFIG_KEYS,  # noqa: F401 - compatibility export for callers and tests
+    NetworkCreateRequest,
+    validate_network_config,
+)
+from app.services.network_capabilities import (
+    NetworkCapabilities,
+    network_capabilities,
+    validate_network_capabilities,
+)
+from app.services.network_write_verification import (
+    require_network_readback,
+    require_network_update_readback,
+)
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
 from app.core.database import get_db
@@ -133,23 +146,6 @@ class NetworkInfo(BaseModel):
         description="LXD project that holds this network",
     )
 
-
-# Orcastra only supports creating bridge and OVN networks. The API has to enforce
-# what the UI promises: `type`/`config` are handed straight to pylxd, so without a
-# server-side allow-list a Partner could create any network type or set dangerous
-# keys (raw.dnsmasq, bridge.external_interfaces, tunnel.*, ...) via the API.
-ALLOWED_NETWORK_CONFIG_KEYS = {
-    "ipv4.address",
-    "ipv4.nat",
-    "ipv6.address",
-    "ipv6.nat",
-    "network",  # OVN uplink
-    "dns.domain",
-}
-
-# LXD network names must start with a letter (rejects a leading hyphen and
-# all-digit names, both of which LXD refuses).
-_NETWORK_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
 
 # An OVN network reaches the outside world through an uplink, and LXD accepts only a managed
 # Bridge or Physical network for the job. The dashboard used to hand the daemon whatever the
@@ -272,19 +268,6 @@ def validate_uplink(
 
 
 
-def validate_network_config(config: Dict[str, str]) -> Dict[str, str]:
-    """Reject config keys outside the supported set."""
-    unsupported = sorted(k for k in config if k not in ALLOWED_NETWORK_CONFIG_KEYS)
-    if unsupported:
-        raise ValueError(
-            "Unsupported network config key(s): "
-            + ", ".join(unsupported)
-            + ". Allowed: "
-            + ", ".join(sorted(ALLOWED_NETWORK_CONFIG_KEYS))
-        )
-    return config
-
-
 # Maps a daemon error onto a status and strips URLs and filesystem paths out of the text
 # before it reaches the client.
 #
@@ -307,35 +290,6 @@ def _lxd_http_error(exc: Exception, network_name: str) -> HTTPException:
     # paths share it. This wrapper stays because five call sites below read better naming
     # the network once rather than repeating the noun at each raise.
     return lxd_http_error(exc, "Network", network_name)
-
-
-class NetworkCreateRequest(BaseModel):
-    """Request body for creating a network."""
-    name: str = Field(..., min_length=1, max_length=63, description="Network name")
-    description: str = Field("", description="Network description")
-    type: Literal["bridge", "ovn"] = Field("bridge", description="Network type (bridge or ovn)")
-    config: Dict[str, str] = Field(default_factory=dict, description="Network configuration")
-
-    @field_validator("name")
-    @classmethod
-    def _validate_name(cls, v: str) -> str:
-        if not _NETWORK_NAME_RE.match(v):
-            raise ValueError(
-                "Name must start with a letter and contain only letters, numbers and hyphens"
-            )
-        return v
-
-    @field_validator("config")
-    @classmethod
-    def _validate_config(cls, v: Dict[str, str]) -> Dict[str, str]:
-        return validate_network_config(v)
-
-    @model_validator(mode="after")
-    def _validate_name_length_for_type(self):
-        # Bridge network names become Linux interface names (IFNAMSIZ = 15).
-        if self.type == "bridge" and len(self.name) > 15:
-            raise ValueError("Bridge network names must be at most 15 characters")
-        return self
 
 
 class NetworkListResponse(BaseModel):
@@ -525,6 +479,42 @@ async def list_networks(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/creation/capabilities", response_model=NetworkCapabilities)
+async def get_network_creation_capabilities(
+    host: str = Query(..., description="Target cluster"),
+    lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Read supported create options without exposing server configuration."""
+    verify_cluster_access(host)
+
+    def _read():
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail="Could not read hypervisor network capabilities")
+        return network_capabilities(client)
+
+    try:
+        return await _run_network_blocking(_read, host=host, label="network_creation_capabilities")
+    except BlockingTimeout:
+        raise HTTPException(status_code=504, detail="Network capability read timed out") from None
+    except BlockingPoolFull:
+        raise HTTPException(status_code=503, detail="Network operations saturated; please retry shortly") from None
+    except (LXDAPIException, ClientConnectionFailed, LXDConnectionError, requests.RequestException):
+        raise HTTPException(status_code=503, detail="Could not read hypervisor network capabilities") from None
+
+
+def _validate_network_acls(client, config: Dict[str, str], owner: str) -> None:
+    selected = {name for name in config.get("security.acls", "").split(",") if name}
+    if not selected:
+        return
+    available = {row.get("name") for row in list_in_project(client, "network-acls", owner)}
+    missing = sorted(selected - available)
+    if missing:
+        raise HTTPException(status_code=400, detail="Network ACLs are not available in this project: "
+                            + ", ".join(missing))
+
+
 @router.get(
     "/{network_name}",
     response_model=NetworkInfo,
@@ -645,6 +635,8 @@ async def create_network(
                 ),
             )
 
+        validate_network_capabilities(client, request.type, request.config)
+        _validate_network_acls(client, request.config, owner)
         validate_uplink(
             request,
             _uplink_candidates(client, host),
@@ -673,6 +665,7 @@ async def create_network(
                         timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
                     ),
                     timeout=NETWORK_WRITE_WAIT_SECONDS,
+                    project=owner,
                 )
             wait_for_lxd_operation(
                 client,
@@ -687,6 +680,7 @@ async def create_network(
                     timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
                 ),
                 timeout=NETWORK_WRITE_WAIT_SECONDS,
+                project=owner,
             )
         else:
             wait_for_lxd_operation(
@@ -702,12 +696,10 @@ async def create_network(
                     timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
                 ),
                 timeout=NETWORK_WRITE_WAIT_SECONDS,
+                project=owner,
             )
-        created = client.api.networks[safe_segment(request.name)].get(params=scope).json().get(
-            "metadata"
-        ) or {}
-        created.setdefault("project", owner)
-        return created
+        created = client.api.networks[safe_segment(request.name)].get(params=scope).json().get("metadata")
+        return require_network_readback(created, request.name, request.type, owner)
 
     submission_started = False
     try:
@@ -836,7 +828,7 @@ async def update_network(
         None, description="LXD project holding the network (default project when omitted)"
     ),
     config: Optional[Dict[str, str]] = Body(None),
-    description: Optional[str] = Body(None),
+    description: Optional[str] = Body(None, max_length=1024),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -847,25 +839,73 @@ async def update_network(
     # Same allow-list as create: config is passed straight to the daemon.
     if config is not None:
         try:
-            validate_network_config(config)
+            config = validate_network_config(config, allow_unset=True)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
     requested_project = project or DEFAULT_PROJECT
     if not project_is_visible(host, requested_project):
         raise HTTPException(status_code=403, detail="Access denied to this network")
+
+    def _resolve_update_target():
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to cluster '{host}'")
+        return client, resolve_owner(client, "networks", project)
+
+    def _update_blocking(client, owner):
+        scope = project_params(owner)
+        api = client.api.networks[safe_segment(network_name)]
+        current = api.get(params=scope).json().get("metadata")
+        if not isinstance(current, dict) or not current.get("type"):
+            raise HTTPException(status_code=502, detail="Hypervisor did not return a valid network before update")
+        validated_config = None
+        if config is not None:
+            try:
+                validated_config = validate_network_config(config, current["type"], allow_unset=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            if current["type"] in {"bridge", "ovn"}:
+                validate_network_capabilities(client, current["type"], validated_config)
+            _validate_network_acls(client, validated_config, owner)
+
+        if validated_config is not None and "network" in validated_config:
+            merged = {**(current.get("config") or {}), **validated_config}
+            probe = SimpleNamespace(type=current["type"], config=merged)
+            validate_uplink(
+                probe,
+                _uplink_candidates(client, host),
+                list_project_configs(client).get(owner, {}),
+            )
+        payload = {
+            "config": current.get("config") or {},
+            "description": current.get("description") or "",
+        }
+        if validated_config is not None:
+            payload["config"] = validated_config
+        if description is not None:
+            payload["description"] = description
+        wait_for_lxd_operation(
+            client,
+            api.put(json=payload, params=scope, timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)),
+            timeout=NETWORK_WRITE_WAIT_SECONDS,
+            project=owner,
+        )
+        observed = api.get(params=scope).json().get("metadata")
+        require_network_update_readback(
+            observed, network_name, current["type"], owner, validated_config, description,
+        )
+        get_cache_manager().invalidate_resource_cache("networks")
+
+    submission_started = False
     try:
         async with serialize_cluster_configuration(db, host):
-            client = lxd_service.get_client_with_reconnect(host)
-            if client is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Could not connect to cluster '{host}'",
-                )
-            owner = resolve_owner(client, "networks", project)
-            if not project_is_visible(host, owner):
-                raise HTTPException(status_code=403, detail="Access denied to this network")
             try:
                 await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
+                client, owner = await _run_network_blocking(
+                    _resolve_update_target, host=host, label=f"resolve_network_update_owner[{host}/{network_name}]",
+                )
+                if not project_is_visible(host, owner):
+                    raise HTTPException(status_code=403, detail="Access denied to this network")
                 for fenced_project in sorted({requested_project, owner}):
                     await assert_project_not_migration_fenced(
                         cluster_id=host,
@@ -874,45 +914,23 @@ async def update_network(
                     )
             except MigrationFenceConflict as exc:
                 raise HTTPException(status_code=409, detail=exc.detail) from exc
-            scope = project_params(owner)
-            current = client.api.networks[safe_segment(network_name)].get(params=scope).json().get(
-                "metadata"
-            ) or {}
-
-            # important: the create path validates the OVN uplink and this one did not, while
-            # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect was still
-            # reachable through update. Reuse the same validator rather
-            # than growing a second copy of the rule: it reads only .type and .config.
-            if config is not None and "network" in config:
-                merged = {**(current.get("config") or {}), **config}
-                probe = SimpleNamespace(type=current.get("type") or "", config=merged)
-                validate_uplink(
-                    probe,
-                    _uplink_candidates(client, host),
-                    list_project_configs(client).get(owner, {}),
-                )
-            payload = {
-                "config": current.get("config") or {},
-                "description": current.get("description") or "",
-            }
-            if config is not None:
-                payload["config"] = config
-            if description is not None:
-                payload["description"] = description
-            wait_for_lxd_operation(
-                client,
-                client.api.networks[safe_segment(network_name)].put(
-                    json=payload, params=scope, timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
-                ),
-                timeout=NETWORK_WRITE_WAIT_SECONDS,
+            submission_started = True
+            await _run_network_blocking(
+                _update_blocking, client, owner, host=host, label=f"update_network[{host}/{network_name}]",
             )
-
-        get_cache_manager().invalidate_resource_cache("networks")
 
         return {
             "success": True,
             "message": f"Network {network_name} updated successfully"
         }
+    except BlockingTimeout:
+        detail = (
+            "Network update timed out and may be partially applied; re-check its state before retrying"
+            if submission_started else "Network target resolution timed out; no update was submitted"
+        )
+        raise HTTPException(status_code=504, detail=detail) from None
+    except BlockingPoolFull:
+        raise HTTPException(status_code=503, detail="Network operations saturated; please retry shortly") from None
     except HTTPException:
         raise
     except (LXDAPIException, ClientConnectionFailed, LXDConnectionError) as e:

@@ -41,6 +41,10 @@ class FakeRedis:
         # redis KEYS is a glob: no wildcard means exact match, which is the whole point here
         return [k for k in self.store if fnmatch.fnmatchcase(k, pattern)]
 
+    def scan_iter(self, *, match, count):
+        assert count == 200
+        yield from self.keys(match)
+
     def delete(self, *keys):
         for k in keys:
             self.store.pop(k, None)

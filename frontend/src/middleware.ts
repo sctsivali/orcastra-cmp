@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { inspectRequestTarget } from "@/lib/request-security";
 import { NextResponse } from "next/server";
+import { isSettingsTab } from "@/app/settings/settings-tabs";
 
 // note: middleware cannot tell a router prefetch from a real navigation. Next strips every
 // FLIGHT_HEADER (RSC, Next-Router-Prefetch, Next-Router-State-Tree, ...) from the request
@@ -21,6 +22,13 @@ export default auth((request) => {
         "X-Orcastra-Security-Action": decision.reason,
       },
     });
+  }
+
+  // note: App Router may stream a not-found page with HTTP 200. Reject unknown Settings
+  // paths before rendering so the URL contract also holds for clients checking status codes.
+  if (request.nextUrl.pathname.startsWith("/settings/") &&
+      !isSettingsTab(request.nextUrl.pathname.slice("/settings/".length))) {
+    return new NextResponse("Not found", { status: 404 });
   }
 
   return undefined;

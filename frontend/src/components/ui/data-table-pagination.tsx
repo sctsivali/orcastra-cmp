@@ -153,7 +153,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
             onPageChange(1); // Reset to first page when changing page size
           }}
         >
-          <SelectTrigger className="h-8 w-[60px] sm:w-[70px]">
+          <SelectTrigger aria-label="Rows per page" className="h-8 w-[60px] sm:w-[70px]">
             <SelectValue placeholder={pageSize.toString()} />
           </SelectTrigger>
           <SelectContent side="top">

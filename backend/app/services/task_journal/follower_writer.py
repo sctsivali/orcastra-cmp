@@ -191,6 +191,12 @@ class JournalWriter:
         while len(self._last_status) > _STATUS_MEMO_MAX:
             self._last_status.pop(next(iter(self._last_status)))
 
+    def _remember_progress(self, key: OpKey, now: float) -> None:
+        # A missing terminal event must not leave an unbounded progress timing memo.
+        self._progress_written_at[key] = now
+        while len(self._progress_written_at) > _STATUS_MEMO_MAX:
+            self._progress_written_at.pop(next(iter(self._progress_written_at)))
+
     def coalesce(self, batch: List[dict]) -> List[dict]:
         """Which frames to write now.
 
@@ -214,13 +220,14 @@ class JournalWriter:
                     self._pending_progress[key] = frame
                     continue
             self._pending_progress.pop(key, None)
-            self._progress_written_at[key] = now
+            if status not in TERMINAL:
+                self._remember_progress(key, now)
             self._remember_status(key, status)
             out.append(frame)
         for key in list(self._pending_progress):
             if now - self._progress_written_at.get(key, 0.0) >= PROGRESS_INTERVAL_S:
                 out.append(self._pending_progress.pop(key))
-                self._progress_written_at[key] = now
+                self._remember_progress(key, now)
         return out
 
     async def _loop(self) -> None:

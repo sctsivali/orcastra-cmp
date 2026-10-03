@@ -1,3 +1,4 @@
+import { usagePercent } from "@/lib/usage-tone";
 import {
   Tooltip as UITooltip,
   TooltipContent,
@@ -14,7 +15,8 @@ interface GaugeChartProps {
 }
 
 export function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120, statusMessage }: GaugeChartProps) {
-  const percentage = Math.min((value / max) * 100, 100);
+  const reported = Number.isFinite(value) && value >= 0 && Number.isFinite(max) && max > 0;
+  const percentage = usagePercent(value, max);
   const strokeWidth = 12;
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * Math.PI; // Half circle
@@ -59,7 +61,7 @@ export function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 
           textAnchor="middle"
           className="fill-foreground text-xl font-bold"
         >
-          {percentage.toFixed(1)}%
+          {reported ? `${percentage.toFixed(1)}%` : "Unavailable"}
         </text>
       </svg>
       <span className="text-sm font-medium text-muted-foreground mt-1">{label}</span>

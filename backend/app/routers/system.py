@@ -4,12 +4,15 @@ System settings and configuration endpoints.
 
 import asyncio
 from typing import Optional
+from typing import Literal
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core import build_identity
 from app.core.config import get_settings
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.dependencies import require_tenant, require_partner, require_admin, AuthenticatedUser
 # note: the resource-usage models moved to app.models.system_resources; they are re-exported
 # here so an importer of app.routers.system keeps working.
@@ -37,6 +40,15 @@ router = APIRouter(
     tags=["System"],
     dependencies=[Depends(require_tenant())],
 )
+
+_cache_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="system_cache")
+CacheNamespace = Literal["api_responses", "lxd_resources", "monitoring_history", "tags", "vault", "vault_list"]
+CACHE_NAMESPACES = ("api_responses", "lxd_resources", "monitoring_history", "tags", "vault", "vault_list")
+
+
+class CacheClearResponse(BaseModel):
+    message: str
+    namespaces: list[str]
 
 
 class SystemSettings(BaseModel):
@@ -154,35 +166,30 @@ async def get_cache_stats():
         }
 
 
-@router.post("/cache/clear")
+@router.post("/cache/clear", response_model=CacheClearResponse)
 async def clear_cache(
-    namespace: str = None,
+    namespace: Optional[CacheNamespace] = None,
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """
     Clear cache for a specific namespace or all caches.
     """
+    from app.core.cache import get_cache_manager
+    cache = get_cache_manager()
+    targets = (namespace,) if namespace else CACHE_NAMESPACES
     try:
-        from app.core.cache import get_cache_manager
-        cache = get_cache_manager()
-        
-        if namespace:
-            cache.delete_pattern(namespace, "*")
-            return {"message": f"Cleared cache for namespace: {namespace}"}
-        else:
-            # important: this list has to be the namespaces actually in use.
-            # It previously named "lxd_data", which no code writes to, and
-            # omitted "api_responses", which is where every cached list
-            # response lives, so the one manual cache-clear lever in the
-            # product did not clear the thing operators were clearing it for.
-            cleared = ["api_responses", "lxd_resources", "monitoring_history", "tags", "vault", "vault_list"]
-            for ns in cleared:
-                cache.delete_pattern(ns, "*")
-            return {"message": "Cleared all caches", "namespaces": cleared}
-    except Exception as e:
-        return {
-            "error": str(e)
-        }
+        cleared, failed = await run_blocking(
+            lambda: cache.clear_namespaces(targets), timeout=30.0,
+            label="system.cache.clear", executor=_cache_executor, max_in_flight=2,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        raise HTTPException(status_code=503, detail="Cache clearing is temporarily unavailable. Retry later.") from exc
+    if failed:
+        raise HTTPException(status_code=503, detail={
+            "message": "Cache clearing was incomplete. Retry the failed namespaces.",
+            "namespaces": cleared, "failed_namespaces": failed,
+        })
+    return CacheClearResponse(message="Cache cleared", namespaces=cleared)
 
 
 @router.get(

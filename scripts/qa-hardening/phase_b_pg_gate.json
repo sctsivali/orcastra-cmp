@@ -1,0 +1,1938 @@
+{
+  "schema_version": 1,
+  "phase": "B-PG",
+  "gate_id": "35c4d18f-cedf-4483-89f9-aa364038e3a2",
+  "scope": "Fresh scratch PostgreSQL journal persistence and bounded migration reversal only",
+  "target": {
+    "vm_name": "orcastra-qa-hardening",
+    "vm_run_id": "0f2a5b15-f5ec-464b-8785-0b4b88c3b358",
+    "phase_a_digest": "384bc2030c890ea26f054ece6725a0876fd95e95a6ccfdfe53368d17e3eb863e",
+    "b1_phase_id": "0366fe77-c9d2-445c-8f79-7a923410bddd",
+    "project": "default",
+    "profiles": [],
+    "outer_nic_count": 0
+  },
+  "b1_readback": {
+    "proposal_digest": "19a4e1e66b6bd90c0e9a8d508dfdf441832d29f1b4ecd0ef5f63309a449e4906",
+    "helper_sha256": "50684d551b719324ced78749631661987e3d7db7f32ca5282b790d691f1969ca"
+  },
+  "guest_root": "/srv/orcastra-qa-hardening/pg/35c4d18f-cedf-4483-89f9-aa364038e3a2",
+  "network": {
+    "name": "orcastra-qa-hardening-pg-35c4d18f",
+    "subnet": "172.31.252.0/24",
+    "internal": true,
+    "bridge_name": "oqapg-35c4d18f",
+    "published_ports": []
+  },
+  "containers": {
+    "postgres": "orcastra-qa-hardening-pg-db-35c4d18f",
+    "runner": "orcastra-qa-hardening-pg-runner-35c4d18f"
+  },
+  "labels": {
+    "orcastra.qa.lab": "orcastra-qa-hardening",
+    "orcastra.qa.vm_run": "0f2a5b15-f5ec-464b-8785-0b4b88c3b358",
+    "orcastra.qa.b1": "0366fe77-c9d2-445c-8f79-7a923410bddd",
+    "orcastra.qa.pg_gate": "35c4d18f-cedf-4483-89f9-aa364038e3a2"
+  },
+  "databases": {
+    "journal": "orcastra_journal_test",
+    "migration": "orcastra_migration_scratch"
+  },
+  "database_user": "orcastra_qa_journal",
+  "images": {
+    "postgres": {
+      "local_tag": "orcastra-qa-hardening/postgres:aa90e97ee862e558",
+      "expected_image_id": "sha256:79bd7c99e923138f136f8009d6bffa66e21e9d4fda5c0c561b00fc9c90cfe537",
+      "origin_manifest_digest": "sha256:aa90e97ee862e558111d34cfb8b2c4bec768c2b039fb791341686928560263b3",
+      "archive": null
+    },
+    "python": {
+      "local_tag": "orcastra-qa-hardening/python:44ff437bba879d49",
+      "expected_image_id": "sha256:9e87977b867847e186d066f531ef783b006d582a985c341c269446088d90f2c4",
+      "origin_manifest_digest": "sha256:44ff437bba879d4941b710a369a8f19266aea34b29002807f0c487fabc9eec9b",
+      "archive": null
+    }
+  },
+  "source": {
+    "inventory": {
+      "schema_version": 1,
+      "scope": "Backend runtime/migrations and four explicit test inputs only",
+      "entries": [
+        {
+          "path": "backend/.dockerignore",
+          "size": 893,
+          "sha256": "e78c8a555fac23b8d6e2cebdbba3e8e89ea3e8aa6435d8932e92b4301d06095c"
+        },
+        {
+          "path": "backend/Dockerfile",
+          "size": 5357,
+          "sha256": "c26840c64734273aeee8afb488002256340956672e21e76cac4c24c81d684c65"
+        },
+        {
+          "path": "backend/alembic.ini",
+          "size": 1945,
+          "sha256": "b5bc03a66fd34e5be912f1d06ed4f71d5ab031be5c87e7510f9deef414e4f492"
+        },
+        {
+          "path": "backend/alembic/env.py",
+          "size": 3740,
+          "sha256": "443986d70ecccb743f4bf4f2a20119f88b6ae4fe4b9b4ed9044340493080aee8"
+        },
+        {
+          "path": "backend/alembic/script.py.mako",
+          "size": 707,
+          "sha256": "35f0b787611555ef08538ecf45c3b721000527cf6b9d906be67619a61b364e46"
+        },
+        {
+          "path": "backend/alembic/versions/20260130_120000_001_tag_system_create_tag_system_tables.py",
+          "size": 8101,
+          "sha256": "90700473273e52867157e39383293f6403ca0b0295acffa4be9d2e2e6466b7ee"
+        },
+        {
+          "path": "backend/alembic/versions/20260224_120000_002_add_org_external_source_fields.py",
+          "size": 2871,
+          "sha256": "e2e231e840fc30ca36181228813c8687b31a8c67e26c2883b764403d1ca80f15"
+        },
+        {
+          "path": "backend/alembic/versions/20260224_120000_002_rbac_organizations.py",
+          "size": 2906,
+          "sha256": "022b1ba613ade51bec6b7d7a73d00dfc8f52585bd239e3523ede8132d33f8281"
+        },
+        {
+          "path": "backend/alembic/versions/20260224_140000_003_org_preferences.py",
+          "size": 1355,
+          "sha256": "a55c2541eab9f2c7ce9e0f0ebe1e50be628b3dc11aa14a4baad2a348aa3b1618"
+        },
+        {
+          "path": "backend/alembic/versions/20260304_120000_004_tenant_access_policies.py",
+          "size": 4928,
+          "sha256": "e5421894a104c0a448165f707a49168381c211e949779ab838409320acf9e6b2"
+        },
+        {
+          "path": "backend/alembic/versions/20260305_120000_005_session_audit_logging.py",
+          "size": 2520,
+          "sha256": "af7a552a6d5b77d1bc2bfc08a396abae8ef2b3d239e6d7800e863c150cb35633"
+        },
+        {
+          "path": "backend/alembic/versions/20260306_120000_006_session_audit_email_index.py",
+          "size": 619,
+          "sha256": "a1feb405bb9dc7904b3e5a039fbc97c44de81aae6b34089d58097a2041add44e"
+        },
+        {
+          "path": "backend/alembic/versions/20260307_120000_007_metrics_snapshots.py",
+          "size": 2761,
+          "sha256": "f1bedd69dd6ada0f5fdf2c9706a3580108f8ce3d530c691815c7326e6ee955d5"
+        },
+        {
+          "path": "backend/alembic/versions/20260619_140000_008_image_upload_sessions.py",
+          "size": 2935,
+          "sha256": "dd4c35e63dc99fa83b7a7566561e547ecde7eeed866e9159732cbd6e85f2e2b0"
+        },
+        {
+          "path": "backend/alembic/versions/20260629_120000_009_merge_org_heads.py",
+          "size": 1175,
+          "sha256": "69fc351b9ab6d42196d1ec45d2729a8bf3ae58a05f000e67f53849734caf3bd1"
+        },
+        {
+          "path": "backend/alembic/versions/20260629_120100_010_org_cluster_nullable.py",
+          "size": 1518,
+          "sha256": "7e2e26577e385a4f1839cad57253836e515afd543755642d6babd8e90b1521d0"
+        },
+        {
+          "path": "backend/alembic/versions/20260629_130000_011_break_glass.py",
+          "size": 3968,
+          "sha256": "0f5922f0f7fd4140b80b7dda921d642f0d1d24c51e16eb9e7e773f848ecb57b8"
+        },
+        {
+          "path": "backend/alembic/versions/20260717_120000_012_iso_upload_sessions.py",
+          "size": 2766,
+          "sha256": "fb6c17b3c0cd0084b4a9ebb9ab8bb966ad23fceabcd5b06128e07c11725fcb7d"
+        },
+        {
+          "path": "backend/alembic/versions/20260729_120000_013_rebuild_jobs.py",
+          "size": 2579,
+          "sha256": "aed772f9b3e8a2f315d337790d688e5734aceea87eea49ac0ce8bd1a815f28fb"
+        },
+        {
+          "path": "backend/alembic/versions/20260817_120000_014_schema_convergence.py",
+          "size": 7008,
+          "sha256": "b7c4b36c93a68e2daf39cdd0945d850436b9ef124e2b4220f2307ef3dbbb9d4c"
+        },
+        {
+          "path": "backend/alembic/versions/20260827_120000_015_session_audit_bigint.py",
+          "size": 2539,
+          "sha256": "eaa8f347895008f0f1a105fa53706a21482c6666c6b22b081dbc72a9ff8bda5c"
+        },
+        {
+          "path": "backend/alembic/versions/20260904_120000_016_personalization_defaults.py",
+          "size": 9667,
+          "sha256": "bafb6830b2272e595c4bf044151cc01b54fe8079c986e5bea00c229718d31e32"
+        },
+        {
+          "path": "backend/alembic/versions/20260904_130000_017_desktop_control_grants.py",
+          "size": 6095,
+          "sha256": "bc7d5b7555e37e89c746a09064f8bad2cffe17d2fab9ce2a2d3f6c23cb21e71b"
+        },
+        {
+          "path": "backend/alembic/versions/20260904_180000_018_session_audit_agent_actor.py",
+          "size": 1957,
+          "sha256": "013b71f47c9ce56008da41ac30b45690eb42f5fec7a603fe42384e2034f978bd"
+        },
+        {
+          "path": "backend/alembic/versions/20260905_120000_019_extension_registry.py",
+          "size": 8280,
+          "sha256": "7cb518fce62dc57f0dd6c2832f475f8bba8462118cb077d47baaeb32e5614322"
+        },
+        {
+          "path": "backend/alembic/versions/20260905_140000_020_extension_webhooks.py",
+          "size": 5897,
+          "sha256": "a23feb5feed6cd54fc7cb7f8f0048874a01ae9a2c7877816239130202c69638b"
+        },
+        {
+          "path": "backend/alembic/versions/20260906_090000_021_desktop_consent_split.py",
+          "size": 1675,
+          "sha256": "353cb4ccb8e91756941f291e50e87d0271a594b34905b2db7b5adf640a9f23d2"
+        },
+        {
+          "path": "backend/alembic/versions/20260906_100000_022_install_keeps_its_manifest.py",
+          "size": 1405,
+          "sha256": "dcb6a5aff2c58643e89aa854974952148742e2d941f13a0db929d2c2a0762b69"
+        },
+        {
+          "path": "backend/alembic/versions/20260909_120000_023_a_schedule_orcastra_owns.py",
+          "size": 6310,
+          "sha256": "fa4aca29a4db06bcbc43f64264e449c500a2275a4af64f7e1b1f8538f24387ff"
+        },
+        {
+          "path": "backend/alembic/versions/20260919_120000_024_task_journal.py",
+          "size": 11436,
+          "sha256": "16f0eaff14971d2241e74f6b7d1acf6674ccec80e3aed02e25717f26f124b2d1"
+        },
+        {
+          "path": "backend/alembic/versions/20260921_120000_025_instance_operation_jobs.py",
+          "size": 4848,
+          "sha256": "17256420e4e5508d172f7b7ec47eb278be4ec632756391e650675a8f9918577a"
+        },
+        {
+          "path": "backend/alembic/versions/20260921_121000_026_unknown_instance_jobs_are_active.py",
+          "size": 1072,
+          "sha256": "233c880e022b57c8379602467bbfd22c779f121e75cc574a86c18c677917220c"
+        },
+        {
+          "path": "backend/alembic/versions/20260921_122000_027_instance_operation_ids.py",
+          "size": 722,
+          "sha256": "ef433afb4aac282cae8dc27f36a3b96f2ca492b23b23ac920e1a5e882fcfd414"
+        },
+        {
+          "path": "backend/alembic/versions/20260921_123000_028_instance_job_organization.py",
+          "size": 1846,
+          "sha256": "9547e65375a265c7f8d84084f958f30d2d61e83b5a3555130cfbd369b80c2326"
+        },
+        {
+          "path": "backend/alembic/versions/20260921_124000_029_instance_operation_audit_outbox.py",
+          "size": 2028,
+          "sha256": "a5ade85e11ea356571f4121cce37509da207fe89ee768d26191532d31ff33d60"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_120000_030_migration_center.py",
+          "size": 20751,
+          "sha256": "289ee95c47388650d34f81eaa8c6dac94727418211583deb001744247ef987a0"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_121000_031_migration_resource_locks.py",
+          "size": 2382,
+          "sha256": "248f4cf29938912c926437f2795c09ef44637772854f16655747b665f81e7066"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_122000_032_remove_redundant_migration_indexes.py",
+          "size": 1020,
+          "sha256": "2e270b3ec6eddeb0ffab17a42492139df436c278bd36071e88da2a2d2d689575"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_123000_033_migration_actor_identity.py",
+          "size": 1267,
+          "sha256": "758fddebe404c5cd053217e7b37cf1992250989f3e175bd796e1416d9d8c5579"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_124000_034_migration_checkpoint_phase.py",
+          "size": 1633,
+          "sha256": "f54e131a69da5e1d098b1b8ac134a3d5e793f2dd11e2c958b6a7782ab68bb19b"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_125000_035_migration_checkpoint_downgrade_guard.py",
+          "size": 359,
+          "sha256": "e5ced8a1a9a7bef145f89d4a69c7d4a6ba61977e97d5691309230d8f067e92de"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_126000_036_migration_job_plan_hash.py",
+          "size": 655,
+          "sha256": "a74c0a5f6a99d3cc8f2a26f92e16e8349a58641fde7afb7d9dc28bf27e481470"
+        },
+        {
+          "path": "backend/alembic/versions/20260922_127000_037_migration_unknown_phase.py",
+          "size": 1386,
+          "sha256": "0d84a593602c71faaea9cc7d9d8f19164b638f6103c4513ae5a09771aff4e79e"
+        },
+        {
+          "path": "backend/app/__init__.py",
+          "size": 40,
+          "sha256": "9c7c19398f95df050881812135cfa63158cad3b3f02a2a5e0cdb0d29090ba083"
+        },
+        {
+          "path": "backend/app/core/__init__.py",
+          "size": 149,
+          "sha256": "36a95b5550971350bfa2484e03e1a42cbf7332ee07f2619f231a117fa14bc557"
+        },
+        {
+          "path": "backend/app/core/api_key_body.py",
+          "size": 5980,
+          "sha256": "ba8f3de6adc6af4d39fb8eb2ee107ff17b2e60b550aa11baa4e469f98a6328aa"
+        },
+        {
+          "path": "backend/app/core/api_key_capabilities.py",
+          "size": 30657,
+          "sha256": "8f4c5f17b31b309e068845af86c2dd3674aee1a7b7be5b12ac2c7982bfbc72dc"
+        },
+        {
+          "path": "backend/app/core/api_key_capability_audit.py",
+          "size": 2533,
+          "sha256": "33311dd3f780881d80c6a8af5cb22e062da3da9e355db6937ac35cf9c1fba2cc"
+        },
+        {
+          "path": "backend/app/core/api_key_expiry.py",
+          "size": 7647,
+          "sha256": "1cd015f90025437297b92674bb3dd96421f9baf9b862b7ff582ffa89ca687744"
+        },
+        {
+          "path": "backend/app/core/api_key_permissions.py",
+          "size": 3169,
+          "sha256": "614e9f25cf193b152215937b672e1e06ba1358adfac3040c7a6228424270577e"
+        },
+        {
+          "path": "backend/app/core/auth.py",
+          "size": 16955,
+          "sha256": "b059ba0fd63c801f394f1ba9fd105c394c41bc5b48e8314d143f2a28ca1713f6"
+        },
+        {
+          "path": "backend/app/core/blocking.py",
+          "size": 8441,
+          "sha256": "0153ff8c7d9fba0e4cf05a8a1c2e0b222681ec5960e9aab1b66f844e894df56b"
+        },
+        {
+          "path": "backend/app/core/build_identity.py",
+          "size": 2971,
+          "sha256": "02d52af85a2a49c0ef0fe298f6d42ee0b4dca9271bd0cf5e9aec49314dd1ed73"
+        },
+        {
+          "path": "backend/app/core/cache.py",
+          "size": 39811,
+          "sha256": "0f5f0f38d42fb6f5d82aab2d3ed8399715c16372632cae3c6f1ebbbf802bb86a"
+        },
+        {
+          "path": "backend/app/core/cache_glob.py",
+          "size": 1342,
+          "sha256": "26a4884eaaea65cd6e56032b18d5bc6a54656c09a58781f74644e527bcd80ae2"
+        },
+        {
+          "path": "backend/app/core/cloud_init_config.py",
+          "size": 8501,
+          "sha256": "1ab10cddfbee87bfa1135da7ce464f85bb3487dc2e906d8442d304396285ccac"
+        },
+        {
+          "path": "backend/app/core/config.py",
+          "size": 30857,
+          "sha256": "e628c4158a447c3fb892dd07838ef71d42989f475a5898b6844310f11b11308b"
+        },
+        {
+          "path": "backend/app/core/database.py",
+          "size": 4888,
+          "sha256": "a16022144e7bebb2413becabf54dc33cf3f08e2c1e645117b0b489ed47f044ba"
+        },
+        {
+          "path": "backend/app/core/db_bootstrap.py",
+          "size": 6993,
+          "sha256": "b740c88188ffd0ecb17609f76be080238fd065ce46c80561cb125e7c03853acb"
+        },
+        {
+          "path": "backend/app/core/dependencies.py",
+          "size": 1542,
+          "sha256": "6149d1644692507a2e70a927a2195be309ef745c63cf87f4862525377c505e3d"
+        },
+        {
+          "path": "backend/app/core/encryption.py",
+          "size": 10432,
+          "sha256": "74929b7a684d64a051ed741f6775ffd0b1885a30cf1486334c26e12e3f6d4305"
+        },
+        {
+          "path": "backend/app/core/error_sanitizer.py",
+          "size": 3374,
+          "sha256": "051110a3d5d4b5c8bc9d838955dcfcb78330f9ea370e6d7b7e18981c8d2b1add"
+        },
+        {
+          "path": "backend/app/core/extension_manifest.py",
+          "size": 7258,
+          "sha256": "8f8899965fac3538b8b2b8ff03ffcc579f12eb864b111958179eafb86daeb4d0"
+        },
+        {
+          "path": "backend/app/core/guest_data_export.py",
+          "size": 6489,
+          "sha256": "b7c12c81e766d81e33ce9ab6e1d59d84b84677af3cdc8d81c80ab2d943e54db0"
+        },
+        {
+          "path": "backend/app/core/limited_key_writes.py",
+          "size": 13602,
+          "sha256": "91c1115f39947f3ef735fd5039382191542de360a564d7b75672341f321049d0"
+        },
+        {
+          "path": "backend/app/core/logging_config.py",
+          "size": 11348,
+          "sha256": "a83b95a652228145d07c5c4aa8113238c7c373d7b5b263a781e3e32bae4a601d"
+        },
+        {
+          "path": "backend/app/core/lxd_body_names.py",
+          "size": 7191,
+          "sha256": "163e3f2fe131af689c73e214f0102eea5b02b483be770dadfffe0c67841882b4"
+        },
+        {
+          "path": "backend/app/core/lxd_errors.py",
+          "size": 5741,
+          "sha256": "2a6398b258d10222380117816a8f01ce53d35eebf661e8c4d3e54534a461bfd3"
+        },
+        {
+          "path": "backend/app/core/lxd_names.py",
+          "size": 4199,
+          "sha256": "87243277c32bfa712478030f9e8e875849c8dd59c5b9a53fd6365707cffe2900"
+        },
+        {
+          "path": "backend/app/core/lxd_path.py",
+          "size": 2707,
+          "sha256": "43861b703175d4c945ec066c724580c49469d95dbd7179de5d0ce84976b046e2"
+        },
+        {
+          "path": "backend/app/core/lxd_segment.py",
+          "size": 1636,
+          "sha256": "2eccf35b47d3f9c9e94789efe0ec1a224d218f3456a773f2d3f018429da3070d"
+        },
+        {
+          "path": "backend/app/core/node_metadata.py",
+          "size": 5785,
+          "sha256": "4b0861446480fe4de4d317986f3f7e76e2a5a7ec9a896afdec576a6281b0a292"
+        },
+        {
+          "path": "backend/app/core/org_scope.py",
+          "size": 47697,
+          "sha256": "65f87e59f2a3b62591227afc3f095025359454b6a1a4e05776fd573907f2d4b2"
+        },
+        {
+          "path": "backend/app/core/public_openapi.py",
+          "size": 13038,
+          "sha256": "ad92cdd9876ece47244729be4b95b8b8a7706ae4411f856fdb34c329db2bb98f"
+        },
+        {
+          "path": "backend/app/core/raw_proxy_path.py",
+          "size": 7437,
+          "sha256": "8d0bb45ecbc7c3518a8d768e9e38bd21d088f1559e203337a8ae5b952e8f998e"
+        },
+        {
+          "path": "backend/app/core/rbac.py",
+          "size": 12773,
+          "sha256": "efb4fb69aa77c1e8db2a559251bb0b0f158edea43e4817c64228c313ed36c041"
+        },
+        {
+          "path": "backend/app/core/rbac_cache.py",
+          "size": 3755,
+          "sha256": "d8456f76d4367b54f44cb0f469a408be7af709f858f311d5780601dfe1336c6c"
+        },
+        {
+          "path": "backend/app/core/request_context.py",
+          "size": 3038,
+          "sha256": "19acc726f8f41f26055afc5be645a31c31c61ff8c6848538c41d8a5f9e034496"
+        },
+        {
+          "path": "backend/app/core/request_security.py",
+          "size": 9618,
+          "sha256": "cb1248243d82a46cc3d7d76143efdf8c3c82dab2f45b21b86b60f70cb65ef908"
+        },
+        {
+          "path": "backend/app/core/safe_http.py",
+          "size": 8698,
+          "sha256": "297f1444f12168d573168fa7633fc1aa7aafae72a8c581de12d4a507935231b3"
+        },
+        {
+          "path": "backend/app/core/safe_paths.py",
+          "size": 507,
+          "sha256": "f289a27c936574ebfd39e3f4404f495efed3fbd3677bc93348305b508d077446"
+        },
+        {
+          "path": "backend/app/core/single_flight.py",
+          "size": 6671,
+          "sha256": "2276b221e8b383d1b06367d59934e48d70349c0303ab67767b986b2143da35a6"
+        },
+        {
+          "path": "backend/app/core/snapshot_billing_gate.py",
+          "size": 4016,
+          "sha256": "6746057892de4150d4c72706720f64c7741a2ca0efa98f015df68b718f18ddd9"
+        },
+        {
+          "path": "backend/app/core/snapshot_ownership_gate.py",
+          "size": 5665,
+          "sha256": "10e3679f02b90ba397c218802a68199c80ce49c94948b297d4dab69a1dbdca54"
+        },
+        {
+          "path": "backend/app/core/snapshot_safety_gate.py",
+          "size": 6805,
+          "sha256": "3f9a356c25c3276f10db4f8079fd16fab77b589433d3dc521185f5b684749ffc"
+        },
+        {
+          "path": "backend/app/core/storage_bucket_keys.py",
+          "size": 1972,
+          "sha256": "d31f18cc7c36fb08be31687f168ef23195ad3efc475754e7dd6eeca7c45a37e2"
+        },
+        {
+          "path": "backend/app/core/task_schedule_scope.py",
+          "size": 1645,
+          "sha256": "90dc503d7736293d3f370c978ce12ba2608fdefe23d710d220616938f0122d7b"
+        },
+        {
+          "path": "backend/app/core/task_scope.py",
+          "size": 8575,
+          "sha256": "b4b612e996c83df30d963cf5cf1c4fd73b70be4281ee3effedcde37a4a1c2e85"
+        },
+        {
+          "path": "backend/app/core/tenant_visibility.py",
+          "size": 5859,
+          "sha256": "2d8c612cb0d6adb29d9117b3b88acb18e5987613dc46bfd1afab7a962bd0a6df"
+        },
+        {
+          "path": "backend/app/core/type_utils.py",
+          "size": 12706,
+          "sha256": "9e1bfa6bc59a9152e842c0aa97c46d20a118863c602773e5b2b481fc75cfc94c"
+        },
+        {
+          "path": "backend/app/core/upload_stream.py",
+          "size": 10056,
+          "sha256": "2231fbaca0e4d57643fef0c0624af75f07cf04ee3ab6e5b988710f2d02243707"
+        },
+        {
+          "path": "backend/app/core/url_safety.py",
+          "size": 11573,
+          "sha256": "f230889ba76764951a80b9aa3d21b5cae088e5131a4ddfd2410f177e7e71c245"
+        },
+        {
+          "path": "backend/app/core/vault_client.py",
+          "size": 26789,
+          "sha256": "39e78645777015639472d5419beecc56e6f194fd1fadd5ad51210f66ef510f01"
+        },
+        {
+          "path": "backend/app/core/vault_status.py",
+          "size": 6154,
+          "sha256": "ea44ad61f49082ee400ee6741145a2f92ba092b2f485b76bb995b67cbbb7f063"
+        },
+        {
+          "path": "backend/app/main.py",
+          "size": 57262,
+          "sha256": "df3bb6f7593de910c2875f65f03b59708c0f641369cb30da5a3495169db00907"
+        },
+        {
+          "path": "backend/app/mcp/__init__.py",
+          "size": 491,
+          "sha256": "5aa1e61f3d5eba5c258d1374923fb4444c2ad7324c24d407ad09878ce56b5bf1"
+        },
+        {
+          "path": "backend/app/mcp/auth.py",
+          "size": 12232,
+          "sha256": "1fd6e386047162735a6be27afe23c357a1e8038f722f0087982457580f41bfee"
+        },
+        {
+          "path": "backend/app/mcp/contract.py",
+          "size": 7162,
+          "sha256": "e9ff45340135b425f585ba7ee60646db42e7313fa0241f41877e0cd6f584f885"
+        },
+        {
+          "path": "backend/app/mcp/dispatch.py",
+          "size": 5704,
+          "sha256": "168319db3b22a36bc1135777b1b16335f199e8872ddb383895b2fecae0bf9b5f"
+        },
+        {
+          "path": "backend/app/mcp/errors.py",
+          "size": 5785,
+          "sha256": "1e298c23e500ecc112e858011f860d308e2e14b03b9a8aaf64b1a82774d0b59c"
+        },
+        {
+          "path": "backend/app/mcp/mount.py",
+          "size": 9595,
+          "sha256": "1ec91285ec101ee02c47d860b1bf23d163cc57f775b9a505099a4593a5590fb6"
+        },
+        {
+          "path": "backend/app/mcp/scope.py",
+          "size": 499,
+          "sha256": "c90b97cf934c37238e7b4ca90ef0079bb5108aea7c9b1cf5e22fda698aad551c"
+        },
+        {
+          "path": "backend/app/mcp/server.py",
+          "size": 2360,
+          "sha256": "303856c0b9a471f042e698d37ac78a2fa0d9f13057a80c88df864bc45c24c5ce"
+        },
+        {
+          "path": "backend/app/mcp/tools_admin.py",
+          "size": 6475,
+          "sha256": "b1f567a0d24f212f00690b82f56617e9361ba6a5ae6bb29c67114918ac5e65a2"
+        },
+        {
+          "path": "backend/app/mcp/tools_desktop.py",
+          "size": 9098,
+          "sha256": "62f9e138c6486e0e88c1ace1e8c8c782fd85c31672fe7c23ec7bfa73bb14c827"
+        },
+        {
+          "path": "backend/app/mcp/tools_guest.py",
+          "size": 5678,
+          "sha256": "f787280ed68357a10601b30e8781b1b34a2a2af990d67e3d11d68dd7bee9f11b"
+        },
+        {
+          "path": "backend/app/mcp/tools_inventory.py",
+          "size": 4927,
+          "sha256": "06eee54bee9aa0415a842e2192771c039464cd6dfea2eb7190a834e547436d91"
+        },
+        {
+          "path": "backend/app/mcp/tools_read.py",
+          "size": 3871,
+          "sha256": "8ab6e00c2320693d8684d72e8e9febcbaa6a602382d334e0c1e917a641801794"
+        },
+        {
+          "path": "backend/app/mcp/tools_write.py",
+          "size": 7390,
+          "sha256": "ffc4b0016a01fca0f602d01ae95fb79b4d8f16a2b12556a53cec4dc52e00dbfd"
+        },
+        {
+          "path": "backend/app/middleware/__init__.py",
+          "size": 438,
+          "sha256": "d2fffec11933fd3ac672ef5dd1365793d23ec02d708d054d70500201b1595036"
+        },
+        {
+          "path": "backend/app/middleware/access_log.py",
+          "size": 8662,
+          "sha256": "a14772be6bb7b7373a1e6c2969d6a5af44a0144ee6f8b03520e4948069f236c3"
+        },
+        {
+          "path": "backend/app/middleware/request_id.py",
+          "size": 6024,
+          "sha256": "d27a0b062c171837e84ae4e6124885e31266504ac7d1bc80b2ae19270614d804"
+        },
+        {
+          "path": "backend/app/middleware/security.py",
+          "size": 19956,
+          "sha256": "88784976b59d06aa0855950fe470215f4f1cda61e8f733a44b673cbbcd920a03"
+        },
+        {
+          "path": "backend/app/models/__init__.py",
+          "size": 614,
+          "sha256": "9f6c1a058812ace7d633e0d33db713602448564475e8dbb1a0be2e2de4d56613"
+        },
+        {
+          "path": "backend/app/models/cluster_status.py",
+          "size": 3785,
+          "sha256": "ee33219afa69bd39b4bf47eafb359cbc54e1a490380ea464d3d84d2f7c6ea4ec"
+        },
+        {
+          "path": "backend/app/models/db_models.py",
+          "size": 47015,
+          "sha256": "47cbe504d9be047ba122ce6a059b5207579e28c32a8eabd2a4cb261f18415260"
+        },
+        {
+          "path": "backend/app/models/extension_models.py",
+          "size": 18167,
+          "sha256": "bd34aec6a4dbc4d2fa345c76fe08858cf9b9d3601b3fe02d654de019680c977e"
+        },
+        {
+          "path": "backend/app/models/extension_schemas.py",
+          "size": 17269,
+          "sha256": "a5ba53be13df80e38d04945e9d96ccdd798d5e788ff6ae1574d25bb5afc61cc7"
+        },
+        {
+          "path": "backend/app/models/migration_models.py",
+          "size": 18741,
+          "sha256": "e45728cf7c39f97ed0c08e269f71d75ad536ebaa307446c9795d38319b723db6"
+        },
+        {
+          "path": "backend/app/models/migration_schemas.py",
+          "size": 14148,
+          "sha256": "1ad701598607f837a823f4dfb71762eb2ecfed1f7b09861941b4fa4fbeae48ec"
+        },
+        {
+          "path": "backend/app/models/schemas.py",
+          "size": 104402,
+          "sha256": "8dc4d56863569cf12bf6cfed4c6fc7e1e841ca982515a02481a91f81623ef405"
+        },
+        {
+          "path": "backend/app/models/snapshot_schedule_models.py",
+          "size": 7537,
+          "sha256": "2cb2aa58c3e40dbd1893ac23751994accae0ea2db5e40cf1c37b67a5a71a1164"
+        },
+        {
+          "path": "backend/app/models/snapshot_schedule_schemas.py",
+          "size": 6087,
+          "sha256": "03f9f0d67ef59e7e2eb9c5614157ff2c2ae70486ad705afad682031aec7a17cd"
+        },
+        {
+          "path": "backend/app/models/system_resources.py",
+          "size": 4941,
+          "sha256": "1f4e4c2050174bfde622ea1eddc1fc2fcb93cd1d0aeb28f0d22eaf17272b019a"
+        },
+        {
+          "path": "backend/app/models/task_journal_models.py",
+          "size": 8402,
+          "sha256": "524277afb392c64f5917b13857d84f34ac39f25662907a2768d8516da6745831"
+        },
+        {
+          "path": "backend/app/models/task_schemas.py",
+          "size": 5457,
+          "sha256": "cf35d984007648bef71a014b52368e8ddb24a27f71f6b8c8fc72d7a2e4fb9566"
+        },
+        {
+          "path": "backend/app/routers/__init__.py",
+          "size": 1487,
+          "sha256": "d02f0fd8b7aedee3dab086070c712ea9ea57b38d92cd3be3813869216f31d362"
+        },
+        {
+          "path": "backend/app/routers/archive.py",
+          "size": 11217,
+          "sha256": "78d0c386d9e027700ea2e920af4bfbc40ae3965d616515ecb1b7fdf9757e92e8"
+        },
+        {
+          "path": "backend/app/routers/break_glass.py",
+          "size": 7427,
+          "sha256": "a4af37db4bf9c72221d4f073ba657eff82385d888842a0c3c521c1acda88c5e1"
+        },
+        {
+          "path": "backend/app/routers/cert_manager.py",
+          "size": 33796,
+          "sha256": "f56d6f2964820a9613dca9a921e5160362d007fe6f7d720e7dbed4613957f86c"
+        },
+        {
+          "path": "backend/app/routers/cluster_log.py",
+          "size": 3842,
+          "sha256": "3020699cf09f0511f417cd391d91c5260f032d5aaf47b6228658bf9fac1154a9"
+        },
+        {
+          "path": "backend/app/routers/cluster_members.py",
+          "size": 26057,
+          "sha256": "1ce3271efeca9ad2aec52f2e5f79e1a554cb52b6ee0f5679e663305ac992a03c"
+        },
+        {
+          "path": "backend/app/routers/cluster_registration.py",
+          "size": 69746,
+          "sha256": "4ad1b0a6df95c3c1de9abe188fd5446d1a55b2de4cf754427b3447ac3c264fe7"
+        },
+        {
+          "path": "backend/app/routers/console.py",
+          "size": 70682,
+          "sha256": "6381eea4f527e9a2aeaeac34f389924e00bcc91788eba1cd0a0f46aa4f689bf5"
+        },
+        {
+          "path": "backend/app/routers/desktop_policy.py",
+          "size": 6734,
+          "sha256": "d038016d8227d821ce9af238e89d5109e9cd0cf76d5a8533226f6ec73228e636"
+        },
+        {
+          "path": "backend/app/routers/events.py",
+          "size": 8102,
+          "sha256": "ed058aea0187b09dad64a22dd34fecf84a92aeb553d41a6db276938304bcadaa"
+        },
+        {
+          "path": "backend/app/routers/extension_installs.py",
+          "size": 17734,
+          "sha256": "b87ac94aa68e37d592acadc98f44988178759f3c60847d2a81703add2f8c2f35"
+        },
+        {
+          "path": "backend/app/routers/extension_webhooks.py",
+          "size": 19885,
+          "sha256": "e4731de6934f3bd42f7806bb5dca7343f8c1fff51406cd91ea717042f113d943"
+        },
+        {
+          "path": "backend/app/routers/extensions.py",
+          "size": 8660,
+          "sha256": "13595511c0374631c8cd57be6810f273d5a46335e6a7b92778ee2f2dce5c58fc"
+        },
+        {
+          "path": "backend/app/routers/extensions_external.py",
+          "size": 4659,
+          "sha256": "d38c9a7c83a6e2a97d3d39d76957df2c489f541e6f045eb7abd677d38157f65c"
+        },
+        {
+          "path": "backend/app/routers/file_transfer.py",
+          "size": 8048,
+          "sha256": "d0fe7d84af49b1a5413f0ba032ec8078e18831cc0a4d4f3a7ec690644dea18b7"
+        },
+        {
+          "path": "backend/app/routers/image_uploads.py",
+          "size": 43225,
+          "sha256": "9296c257b659cace29d36d08665f0cf5df8571158a25090e10f0210b619dd713"
+        },
+        {
+          "path": "backend/app/routers/image_uploads_dashboard.py",
+          "size": 16186,
+          "sha256": "5bda9a190aab00d3a5cc127dc9e27ae6c286c8d96465db0bf1480fa8b19cad6e"
+        },
+        {
+          "path": "backend/app/routers/images.py",
+          "size": 30808,
+          "sha256": "39661d64f613ae8929c0072b55cfd9dfd34b89a143d5765b3900a0e87bc80f7b"
+        },
+        {
+          "path": "backend/app/routers/instance_mobility.py",
+          "size": 19194,
+          "sha256": "f03d9ede4bdce346f6eb273795e0f3e9859469ceac3b9f275936b76759d5a4f0"
+        },
+        {
+          "path": "backend/app/routers/instance_rebuild.py",
+          "size": 20053,
+          "sha256": "7fbaa78fc00c09f1dc7ae229c1b5494ea9c53c9324308255108b0a75eadf0f71"
+        },
+        {
+          "path": "backend/app/routers/instance_snapshots.py",
+          "size": 36733,
+          "sha256": "51f5098b7ab88ba4e1a855beaf5b369d50f16cb87ca3ffe946819bfefc086f74"
+        },
+        {
+          "path": "backend/app/routers/instance_specifications.py",
+          "size": 15261,
+          "sha256": "b8b63ce64c9d3af05337b55f0023d677a8b221dfb511e2b576730d14e75bc99e"
+        },
+        {
+          "path": "backend/app/routers/instances.py",
+          "size": 66961,
+          "sha256": "3131591acb43746d0c6687ab379cb31c27f14850a801127e2ca62fe8b580e2db"
+        },
+        {
+          "path": "backend/app/routers/integrations.py",
+          "size": 267653,
+          "sha256": "1b84d6b1592a9effc8f8b3d04edb4b81e2fcd76ffa62032c27251e283dfa5274"
+        },
+        {
+          "path": "backend/app/routers/ipam.py",
+          "size": 17306,
+          "sha256": "c3cc7c222026ec5d077e0bd5e29ce36c471c2991923572e5976e2825b6b98068"
+        },
+        {
+          "path": "backend/app/routers/iso_uploads.py",
+          "size": 37853,
+          "sha256": "f450ed4e41c82d5cfa52d5a74c302b25aa49b74def1203fb57df50c44cfcaa6d"
+        },
+        {
+          "path": "backend/app/routers/iso_uploads_dashboard.py",
+          "size": 14731,
+          "sha256": "28e4bd00235a55b9c08d56dc617eec53e04f10c3a1d95873ede5f75a724ea44f"
+        },
+        {
+          "path": "backend/app/routers/lxd_operations.py",
+          "size": 28757,
+          "sha256": "48d825545756c3b118d9946ac3aed2c9b6ada6c2bc84ecae56a25e70368c79e9"
+        },
+        {
+          "path": "backend/app/routers/lxd_server.py",
+          "size": 13959,
+          "sha256": "de57c34b121a29b0a09e0b4cb0e577b4095b1d87fe3bdd3acdbdf8c2445dceaf"
+        },
+        {
+          "path": "backend/app/routers/lxd_warnings.py",
+          "size": 20493,
+          "sha256": "d7a540d491326567040cb4f0fd7eb32606f0e749cd8fb0840b37c0826b73c2b8"
+        },
+        {
+          "path": "backend/app/routers/migrations.py",
+          "size": 19115,
+          "sha256": "7611c6c368b65cbc793d0eee582aced97c94f500c9d692f2120aa981f26b5195"
+        },
+        {
+          "path": "backend/app/routers/monitoring.py",
+          "size": 55355,
+          "sha256": "c8cc9539bbb21041dec317de3f6572184468e9e95f32e16568fc6868d8067c49"
+        },
+        {
+          "path": "backend/app/routers/my_keys.py",
+          "size": 42405,
+          "sha256": "e98033f88cd4ad211e8aa2e54809ba6ddd53736f14beccbce1c66b382b10fff2"
+        },
+        {
+          "path": "backend/app/routers/network_acls.py",
+          "size": 26839,
+          "sha256": "d105d49845a5ada79e942147ced9a5fcda523f742d5b9823ccd9f002e3742077"
+        },
+        {
+          "path": "backend/app/routers/networks.py",
+          "size": 48087,
+          "sha256": "162546bb91868a23605ce13e26a208d6fed2c6fcbe25ce92c6d430a15fedfee9"
+        },
+        {
+          "path": "backend/app/routers/nodes.py",
+          "size": 22541,
+          "sha256": "5bfb0221b2977283ead10f3e9ad4f1e84c819c31a8426588ce487fab75ee6bf8"
+        },
+        {
+          "path": "backend/app/routers/organizations.py",
+          "size": 22521,
+          "sha256": "2a1aa8c93a4891accbe2bcec59336af2c84285348f0715d280cb5688b4348baa"
+        },
+        {
+          "path": "backend/app/routers/permissions.py",
+          "size": 40311,
+          "sha256": "564ae2f4d93f81da9492b84c4fc6ac05e18d75c636337165a06992fc0dbf1e71"
+        },
+        {
+          "path": "backend/app/routers/profiles.py",
+          "size": 37885,
+          "sha256": "d1cd5199952c337f3d3e53c58ba9e44f35ac4c83dbeaee398d4036fde7e1884b"
+        },
+        {
+          "path": "backend/app/routers/projects.py",
+          "size": 39659,
+          "sha256": "894b242a2bb3d2ac2903b3fcb1ab6c276dce298296a95aee8e02cd76477f948f"
+        },
+        {
+          "path": "backend/app/routers/public_docs.py",
+          "size": 2559,
+          "sha256": "e7cbdecae103fddccb15bd3cd57c2eac5c9909286b18bba70d75ba03444c1be4"
+        },
+        {
+          "path": "backend/app/routers/regions.py",
+          "size": 31163,
+          "sha256": "19f846cfd571949b0e7360d785cd2a670649e51e740b9dde3b19f43b19ce9ada"
+        },
+        {
+          "path": "backend/app/routers/snapshot_schedules.py",
+          "size": 17033,
+          "sha256": "e2f7ee6ae74622458cd0064643f9edea92baf7c8ba16f2babd886cea4322e691"
+        },
+        {
+          "path": "backend/app/routers/snapshots_fleet.py",
+          "size": 16206,
+          "sha256": "1bc1a7ec20aab58ddeba9cd62e57041ddda0953afb2a59843e60bd7098446411"
+        },
+        {
+          "path": "backend/app/routers/storage_pools.py",
+          "size": 32291,
+          "sha256": "060a83727abe8f55b483874c2eefbf859a3232d317d6259b9581d10fa5317fb1"
+        },
+        {
+          "path": "backend/app/routers/storage_volumes.py",
+          "size": 32099,
+          "sha256": "dc210732d06fced624700ea492633e849e99c10bae39a72733e43942a7efac45"
+        },
+        {
+          "path": "backend/app/routers/system.py",
+          "size": 8258,
+          "sha256": "0aba2ec221086a9f1f4d0653ade6c34a9f8bd161542dc53939e1a904aa6e703d"
+        },
+        {
+          "path": "backend/app/routers/tags.py",
+          "size": 28449,
+          "sha256": "1c09a2bd835f36066be37fbe785ce02473a0c8a34ac209f4ac206abb82e1174b"
+        },
+        {
+          "path": "backend/app/routers/tasks.py",
+          "size": 14997,
+          "sha256": "7985a8291a1b126e5aabcea2d839f9f76301be6895cb0c427d35f675055250bc"
+        },
+        {
+          "path": "backend/app/routers/tasks_ws.py",
+          "size": 6492,
+          "sha256": "0cc04f6514eeba36b5ee24a6cedbba774ec56dc80d8f578fbb9600e2b07157b8"
+        },
+        {
+          "path": "backend/app/routers/tenant_access.py",
+          "size": 36529,
+          "sha256": "40bbd8df8631627db9188a6e400cbc725a8de7f6b1be94e160794e2c78b88293"
+        },
+        {
+          "path": "backend/app/routers/terminal.py",
+          "size": 23897,
+          "sha256": "966286859e55688400eec23228bcef47021c4feb2417ee56414ef42bab71562d"
+        },
+        {
+          "path": "backend/app/routers/user_groups.py",
+          "size": 12700,
+          "sha256": "b8a0f1b6859ab1af350ffab40bfa7bb8fba7a0e57d3aa61c369149a866deb4b4"
+        },
+        {
+          "path": "backend/app/routers/user_preferences.py",
+          "size": 15503,
+          "sha256": "153dc82b8a75549c24338e60b96259ed6b4878a3ffb8ea7dbca73f04be274e0d"
+        },
+        {
+          "path": "backend/app/routers/vms.py",
+          "size": 44017,
+          "sha256": "9515f9af2b712ea035c9448bcc4d4114938b32ac225560a6a604025a1a87aab9"
+        },
+        {
+          "path": "backend/app/services/__init__.py",
+          "size": 263,
+          "sha256": "b3337c9ad0b45c298d6d6b544ddf75eed4cbe6959f7c8ea8419b61bb209c3529"
+        },
+        {
+          "path": "backend/app/services/activity_catalogue.py",
+          "size": 12583,
+          "sha256": "ef4f8a11737a2d7ef7d4763143ac0d93646d15c4712d930b71b8b6974d501b35"
+        },
+        {
+          "path": "backend/app/services/activity_logger.py",
+          "size": 10029,
+          "sha256": "c1ba180cf28c796d2ab4357b702b9b85ff79968c5792d589d06ba953bbe1fecf"
+        },
+        {
+          "path": "backend/app/services/add_on_credential_edits.py",
+          "size": 4899,
+          "sha256": "68444bec2cdb8a7e6ab36ffb0350bb9020b935caee46b0e7fd4953fe56888830"
+        },
+        {
+          "path": "backend/app/services/archive_service.py",
+          "size": 11778,
+          "sha256": "35dd075a791002d1dbc710d50c5d1230cf7dc12c689f2e47f5add9a5ed7541c3"
+        },
+        {
+          "path": "backend/app/services/authentik_role_reading.py",
+          "size": 5000,
+          "sha256": "6008fc22f64052e8133c095ed4fafff5ebce8ffecbb47a252eab176f36153210"
+        },
+        {
+          "path": "backend/app/services/authentik_sync.py",
+          "size": 12291,
+          "sha256": "2a85fad9231692ca3b470f1473578ab37cbe4fada037154dee46945f61a3443c"
+        },
+        {
+          "path": "backend/app/services/break_glass_service.py",
+          "size": 14463,
+          "sha256": "fba2a4e00e49a8f098eb92a0c30133a91c65d23da67f4b37eebbe6a2f09dbedd"
+        },
+        {
+          "path": "backend/app/services/cgroup.py",
+          "size": 14612,
+          "sha256": "a7e363054080a4052ddc80609eb0005f3d8cff7dbcd6cfbd90da3cc61cdac476"
+        },
+        {
+          "path": "backend/app/services/console_service.py",
+          "size": 34120,
+          "sha256": "6a640deadbd656510e173cce8d14026c795ee8eac71901131ec1b69d28d2141f"
+        },
+        {
+          "path": "backend/app/services/desktop/__init__.py",
+          "size": 852,
+          "sha256": "66a5cda4b71fb79a972d4507247dbe1fb82703b0263352dcc05a6d04227e9bf0"
+        },
+        {
+          "path": "backend/app/services/desktop/actions.py",
+          "size": 9215,
+          "sha256": "b34a67cc6b9929b55a1f8e356d4d3b9a31401ad90eb013f9ec70ee9942e356c5"
+        },
+        {
+          "path": "backend/app/services/desktop/budget.py",
+          "size": 2819,
+          "sha256": "a5ce453168c0f6c33bb63c77c529d1669a9783fe9672d032139ab6f81e60655b"
+        },
+        {
+          "path": "backend/app/services/desktop/entry.py",
+          "size": 8829,
+          "sha256": "de4a8608d550cb3b5824a273deca87d0882c458672423f7247328585d230e57e"
+        },
+        {
+          "path": "backend/app/services/desktop/guest/__init__.py",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "backend/app/services/desktop/guest/chains.py",
+          "size": 14782,
+          "sha256": "a2a91c81f9ccf0f89fcf892774573d18e7f29054e938f19b290a2c517e19f544"
+        },
+        {
+          "path": "backend/app/services/desktop/guest/keys.py",
+          "size": 3645,
+          "sha256": "78fe856ae8d128f418c1836289d1af12b2a122cc9701ab03f8edfa7cbb45352c"
+        },
+        {
+          "path": "backend/app/services/desktop/guest/probe.py",
+          "size": 12744,
+          "sha256": "7222ef4e93886c3c2969f162f432aef3da45c211eb04030b3ca415b401770023"
+        },
+        {
+          "path": "backend/app/services/desktop/guest/provider.py",
+          "size": 17173,
+          "sha256": "264c6810eb5f5f3dc3fe9a09b065d8da4ce1bee225f17a85b103e7159fb33fbe"
+        },
+        {
+          "path": "backend/app/services/desktop/image_header.py",
+          "size": 5832,
+          "sha256": "21068e5a2113fdc0eb03024a8614eb8b4cdf85ae4ab0c6b3ea4ebfc75b222236"
+        },
+        {
+          "path": "backend/app/services/desktop/protocol.py",
+          "size": 4884,
+          "sha256": "97de748ef6387083a8e15f90309497ab624f9dd24aa259376506e079de145964"
+        },
+        {
+          "path": "backend/app/services/desktop/runtime.py",
+          "size": 8161,
+          "sha256": "d18c03dd0148663c641c3a5797e65977927eb0acba782d5e96c08352f55d6df6"
+        },
+        {
+          "path": "backend/app/services/desktop/session_store.py",
+          "size": 5606,
+          "sha256": "a1a95272d8c80fbeafdf31ad4ff6eec1e3dbb2e461b4377eb74a97dc58522dae"
+        },
+        {
+          "path": "backend/app/services/desktop_policy.py",
+          "size": 7982,
+          "sha256": "08146c3b265618d21a80f2815812fb8d6e9513eaf9bb02e92e32d5fdc4fa95d7"
+        },
+        {
+          "path": "backend/app/services/extension_credentials.py",
+          "size": 14288,
+          "sha256": "25e61f690c8d25528a521e507be543903220e037628a2910c2ccba3b73ddff76"
+        },
+        {
+          "path": "backend/app/services/extension_install.py",
+          "size": 22640,
+          "sha256": "e5fc7d6f880e7f595fc2fdc64943e1e478f2f109925bbdc1022c9bf8500ce04c"
+        },
+        {
+          "path": "backend/app/services/extension_reconcile.py",
+          "size": 12545,
+          "sha256": "a7e34d5867282b6394027f1c568e2337bb2c34ae10558e69030d91d05015e665"
+        },
+        {
+          "path": "backend/app/services/extension_scope.py",
+          "size": 15440,
+          "sha256": "46aaf936103edc896bbfc30e2bc50442f941a0dfe50159b61a881d12b8dc14df"
+        },
+        {
+          "path": "backend/app/services/extension_service.py",
+          "size": 10720,
+          "sha256": "48b45cedf763fc94419a9e6ceb54a7e320f4a8dd98b75cbf77c09354e9d04308"
+        },
+        {
+          "path": "backend/app/services/extension_settings.py",
+          "size": 8292,
+          "sha256": "194e7263a39f05165b7815865b7c0d53b282fad199da07f2c02a0db8de497413"
+        },
+        {
+          "path": "backend/app/services/extension_teardown.py",
+          "size": 8906,
+          "sha256": "211e0a959c56534264b0a78a4bfa3574a767751a4016030aec5b56f6911bff04"
+        },
+        {
+          "path": "backend/app/services/instance_job_identity.py",
+          "size": 3785,
+          "sha256": "b80880ad01c9030c9696b593db2ec2689166188185ff657b9889b8ae528fef0d"
+        },
+        {
+          "path": "backend/app/services/instance_operation_audit.py",
+          "size": 7244,
+          "sha256": "cbebf6a62d0c0780cbc8c3153a57f6181fb0cac8cd7761ce42ca33014848ad7d"
+        },
+        {
+          "path": "backend/app/services/instance_security_policy.py",
+          "size": 16285,
+          "sha256": "30ac6540c41a4a85985da0697f72ba9592042d6e563241540de9449ba7f6bcd0"
+        },
+        {
+          "path": "backend/app/services/instance_specifications.py",
+          "size": 87040,
+          "sha256": "1fcca8c686be00d02d52ba73319747101261f5980d427bb3d97a0bca51fac379"
+        },
+        {
+          "path": "backend/app/services/integration_cluster_rebind.py",
+          "size": 12228,
+          "sha256": "d56eb5ed8a69f54acecdf94401ff9c8534c42b1e0f179d57916e70a709ec75d5"
+        },
+        {
+          "path": "backend/app/services/integration_roles.py",
+          "size": 7963,
+          "sha256": "62b61a504936693f73ac41431f3680ab411bef7c6f3ea0aca4c9720987231036"
+        },
+        {
+          "path": "backend/app/services/lxd/__init__.py",
+          "size": 654,
+          "sha256": "f307040bd12da6dfb699888dbe4140333651da6b1cd91bbe5637deb6319410dd"
+        },
+        {
+          "path": "backend/app/services/lxd/acl_rules.py",
+          "size": 2802,
+          "sha256": "93aea5687a19eb58e6afae8f1dbfd8de27bbb46d43fe0a5f8136a05b644a6669"
+        },
+        {
+          "path": "backend/app/services/lxd/audit.py",
+          "size": 7285,
+          "sha256": "680e3a23fde57b19dd277b554161e4acb14c54fafa72cf39553988106dc7fbd7"
+        },
+        {
+          "path": "backend/app/services/lxd/availability.py",
+          "size": 2538,
+          "sha256": "011917ba08409db709430621942082017b2d578923449ef5c822dbc3298e2b15"
+        },
+        {
+          "path": "backend/app/services/lxd/cert_files.py",
+          "size": 10519,
+          "sha256": "87b542b07dd3ccec0952238639185043c5ccedabc365120f350837bd3f25d29e"
+        },
+        {
+          "path": "backend/app/services/lxd/cloud_init_reach.py",
+          "size": 5384,
+          "sha256": "9e5a0e860168674fb30df28c48702649a85bf49f659eb113f4cb3dc8eb0285f2"
+        },
+        {
+          "path": "backend/app/services/lxd/cluster_topology.py",
+          "size": 1280,
+          "sha256": "be15e79231c31367ccc924eebda2d56944b88dece0b5c201365ee1e3ce8f2ad0"
+        },
+        {
+          "path": "backend/app/services/lxd/connection.py",
+          "size": 51334,
+          "sha256": "b6dc65bb3ca4d29fb50a7b7c467f573b699af4464c41bf1cbcf7e3316f6370cc"
+        },
+        {
+          "path": "backend/app/services/lxd/cpu_allocation.py",
+          "size": 4159,
+          "sha256": "9fe360bf73e9af77e49e0bcfac35fbab1aab8053d98ce350ad6f55cdb634a64c"
+        },
+        {
+          "path": "backend/app/services/lxd/create_preflight.py",
+          "size": 21549,
+          "sha256": "a2c066f410cd02f7a1cbe5ed2961cb8558857fc207d94a6c7fc80f234e60bed1"
+        },
+        {
+          "path": "backend/app/services/lxd/events_hub.py",
+          "size": 20037,
+          "sha256": "a75ab714c4d763e5f33073cb4858fe50c66b43f08599e466fa20b327f2175b88"
+        },
+        {
+          "path": "backend/app/services/lxd/exceptions.py",
+          "size": 4788,
+          "sha256": "b1c625e459c03ecbdabe2cf36fccb9fb1b9a7c2b332f1532c0c59927e0de681a"
+        },
+        {
+          "path": "backend/app/services/lxd/fanout.py",
+          "size": 9698,
+          "sha256": "ffb3a44cb72061537f873e36cb3ce0d843a8b08630e0eba78b654be7ad5af037"
+        },
+        {
+          "path": "backend/app/services/lxd/freshness.py",
+          "size": 2606,
+          "sha256": "d505392daee26d77ef51f790953fb9bc56899512d317aa5da72b9002f01db9ca"
+        },
+        {
+          "path": "backend/app/services/lxd/gpu.py",
+          "size": 10172,
+          "sha256": "3bbdb815be788957c79934e1bf98d8e2a2efda827c225ad81c704931e541455e"
+        },
+        {
+          "path": "backend/app/services/lxd/gpu_model.py",
+          "size": 13497,
+          "sha256": "a9c6755648cdb0cddca59e824d4f60beb813ced021849b0155dbf282b5e79c86"
+        },
+        {
+          "path": "backend/app/services/lxd/guest_exec.py",
+          "size": 10243,
+          "sha256": "2d80b27db4b3983ad4619c35631333fd4654e759d7a1f56857a74b11511a94aa"
+        },
+        {
+          "path": "backend/app/services/lxd/guest_files.py",
+          "size": 10434,
+          "sha256": "c1b6dd46ab1fa151076c8eec72c71813a4d8c573c52754f84b436800f35bf836"
+        },
+        {
+          "path": "backend/app/services/lxd/guest_output.py",
+          "size": 6206,
+          "sha256": "97984619bdf6f7e842c9c749e9589060e413b75e018ab74b5116c845201376b0"
+        },
+        {
+          "path": "backend/app/services/lxd/hardware.py",
+          "size": 18302,
+          "sha256": "78f551db883a9eb1a8aea6f2f32446ce947036e3b92d46b601a5ae4db73d84bd"
+        },
+        {
+          "path": "backend/app/services/lxd/health.py",
+          "size": 2553,
+          "sha256": "b959cda267c34a4ccea5d13439a5a658a1532eb1eb2fef728eb6e08b9c9d25ff"
+        },
+        {
+          "path": "backend/app/services/lxd/images.py",
+          "size": 9148,
+          "sha256": "15a1b4078c904463099f82b29e8219b2bcd0d4a19d578567dd43ff6e05c6d121"
+        },
+        {
+          "path": "backend/app/services/lxd/instance.py",
+          "size": 133036,
+          "sha256": "7d6639f00b66b57153b66f096025e0bd9da7b8c59745305aa6b3ee8bd325eeee"
+        },
+        {
+          "path": "backend/app/services/lxd/instance_devices.py",
+          "size": 6176,
+          "sha256": "94f7d0df37fa0a6d2277cc9b238886a2d733fe0d29812760656bc20b94bbec83"
+        },
+        {
+          "path": "backend/app/services/lxd/instance_view.py",
+          "size": 4543,
+          "sha256": "e25b24f9defba2087549991fefc446f470b3290bd946aeb366efefd472d98091"
+        },
+        {
+          "path": "backend/app/services/lxd/ipam_join.py",
+          "size": 4244,
+          "sha256": "cd2530ab762111a775c032bb358401feecdfbf453b02035de8598a7c5f4c3939"
+        },
+        {
+          "path": "backend/app/services/lxd/lazy_client.py",
+          "size": 5336,
+          "sha256": "2b867d4266edf22bd249f14abca42e7f32f34d5e2d90ec70bb9de8e8cd8af547"
+        },
+        {
+          "path": "backend/app/services/lxd/limited_write_reach.py",
+          "size": 12027,
+          "sha256": "f26d1483a2abbb883269d0f2bf8dce111d1bf8d7a29391016cceac3d0f656c63"
+        },
+        {
+          "path": "backend/app/services/lxd/lxd_service.py",
+          "size": 32336,
+          "sha256": "b7335ac4a8c471bf1678ad5972867a7abb15dcb50d8f3d6f9b55e5a070909b92"
+        },
+        {
+          "path": "backend/app/services/lxd/member_resources.py",
+          "size": 13970,
+          "sha256": "859cbec56ab91cef6f90f30b2ef355e5efec7b3c24f80651ededf83001b45f2f"
+        },
+        {
+          "path": "backend/app/services/lxd/mobility.py",
+          "size": 22515,
+          "sha256": "07117d5790f4b74954e9bb9edbbf2e9cbe83713eb22dcff00917e85be0a3b2cd"
+        },
+        {
+          "path": "backend/app/services/lxd/nic_preflight.py",
+          "size": 12369,
+          "sha256": "44e39f26c9ed730a6771330b4c76f28ab8b455d1b912b64518af36e7a0481ed1"
+        },
+        {
+          "path": "backend/app/services/lxd/node_resources.py",
+          "size": 23407,
+          "sha256": "e44f822eefd0b5c86b720c55e4258435a28b45048bf5e02a31dcbf23be3a1001"
+        },
+        {
+          "path": "backend/app/services/lxd/operation_metadata.py",
+          "size": 6105,
+          "sha256": "629bfb16a1dd491fa8025808bfcdf0f30b68b0b4bfb8246ea1c62bb53d3ca2ac"
+        },
+        {
+          "path": "backend/app/services/lxd/profile_writes.py",
+          "size": 5702,
+          "sha256": "ba9c8a190bc5bbe78cf773ff71ca4f924b805d4bbe9ccf3f5ae60b8d23d601c6"
+        },
+        {
+          "path": "backend/app/services/lxd/project_limits.py",
+          "size": 1930,
+          "sha256": "9c36ea19e059e25ceb4b6a17076c1f195f5ce55e160a7664696b9091cf8ab5d7"
+        },
+        {
+          "path": "backend/app/services/lxd/project_scope.py",
+          "size": 17577,
+          "sha256": "780bbaa0278d163b447c2c619a0beb5852570c761baa8ea1238a003d6eaee996"
+        },
+        {
+          "path": "backend/app/services/lxd/project_usage.py",
+          "size": 7657,
+          "sha256": "ecb9cdabf3aa71283f833ec159161ba80ea7c3a96ab6f6b4303ad7cfca051cf3"
+        },
+        {
+          "path": "backend/app/services/lxd/projects.py",
+          "size": 28024,
+          "sha256": "d03cd121f03f429af4a49413ad14eb0f547028ecde4253547fd62d03c39bc4c7"
+        },
+        {
+          "path": "backend/app/services/lxd/proxy.py",
+          "size": 9442,
+          "sha256": "b0761d45297220c8dce0b32ad1a4b7fcf96ecbd401af519a1b078ae0892c63fb"
+        },
+        {
+          "path": "backend/app/services/lxd/proxy_operations.py",
+          "size": 32121,
+          "sha256": "c917681ef59e1d795448ce4d4a956dae5c750dc8d90f2e757731c3cf2fe2049a"
+        },
+        {
+          "path": "backend/app/services/lxd/proxy_path_params.py",
+          "size": 2599,
+          "sha256": "1bb0b4f677565c5359c033261dce83f5541e3b3259d1b316a9388d5e101a229e"
+        },
+        {
+          "path": "backend/app/services/lxd/registry.py",
+          "size": 1616,
+          "sha256": "c43d3a256a422d66107369a307dafb2ffb8d13ff5ec2670305679ae761a21bd0"
+        },
+        {
+          "path": "backend/app/services/lxd/resources.py",
+          "size": 36299,
+          "sha256": "4d681cf23c20e9d086a4e5ad9e1aaa84c33cff5b6a9bb304f539d0fb7764af1a"
+        },
+        {
+          "path": "backend/app/services/lxd/snapshot_fleet.py",
+          "size": 11677,
+          "sha256": "3951ff2a3d7b636638a21d2d83cd9c22ece4e84ba672b8f630a12e1af133b8b8"
+        },
+        {
+          "path": "backend/app/services/lxd/snapshot_volumes.py",
+          "size": 3890,
+          "sha256": "15899c7fe5026b753820d5c930d1b6f28927c137d9a7d5c1297a27ebff7c7858"
+        },
+        {
+          "path": "backend/app/services/lxd/snapshots.py",
+          "size": 25417,
+          "sha256": "81f26a852de3f5b188bd6730456ab7ccf39aed9728f870e6e1a57605938caf42"
+        },
+        {
+          "path": "backend/app/services/lxd/status.py",
+          "size": 18185,
+          "sha256": "b463bba2b1d4b1c554ac88d9127c740cb055987dced5926d74819720e79cfbb3"
+        },
+        {
+          "path": "backend/app/services/lxd/storage_model.py",
+          "size": 7256,
+          "sha256": "40dd5eda38e2f68e3df74a81908bf5ceafa795b710c9210012986d7f85c27293"
+        },
+        {
+          "path": "backend/app/services/lxd/utils.py",
+          "size": 19631,
+          "sha256": "0b6745084cd319db9e8631ecb93f24f770df72577cfb0f2ae5a3639ab2df5c08"
+        },
+        {
+          "path": "backend/app/services/lxd_cert_manager.py",
+          "size": 1326,
+          "sha256": "20d65da076fdc977f279426354710bcbedb8eeb9a59d8cd28cafa82c83fc81e9"
+        },
+        {
+          "path": "backend/app/services/lxd_certs/__init__.py",
+          "size": 732,
+          "sha256": "4f49243c1e062818e9766927ad64e8b58a67adf774d18205376736f8ee702a1e"
+        },
+        {
+          "path": "backend/app/services/lxd_certs/connectivity.py",
+          "size": 13565,
+          "sha256": "ab7183bda45a13b116a7d0410f92c25b4b70d695ba9f04d513c42e653dc88dd5"
+        },
+        {
+          "path": "backend/app/services/lxd_certs/pinning.py",
+          "size": 5054,
+          "sha256": "92621a8a702e4538fdb40b1650bf5c661a8a1da02a8c399d98b0e9373e3811d4"
+        },
+        {
+          "path": "backend/app/services/lxd_certs/storage.py",
+          "size": 15475,
+          "sha256": "4ad0290e5678b993117e53ae78cf56ae2323ba9e79b252cee79af7bb0e3e55b1"
+        },
+        {
+          "path": "backend/app/services/lxd_certs/trust.py",
+          "size": 8727,
+          "sha256": "3d99363026ccec25cd2b9c2dff0f2223d358ba2f4c4e8b425a588dc7e1da9e01"
+        },
+        {
+          "path": "backend/app/services/lxd_certs/types.py",
+          "size": 1183,
+          "sha256": "0ea10ab3cb91da1f843848a8a6427d552b4e68d978e22a6006250f1a0633bfa3"
+        },
+        {
+          "path": "backend/app/services/lxd_service.py",
+          "size": 590,
+          "sha256": "0c7354e75a86110dda6ebf66c1193986051c976a8586bdf51163ee16cfe7cee5"
+        },
+        {
+          "path": "backend/app/services/lxd_ssl.py",
+          "size": 3401,
+          "sha256": "db87d5833683c8d1528ea87f659893061bba39d9bc793c7a466d2332b8510310"
+        },
+        {
+          "path": "backend/app/services/metrics_collector.py",
+          "size": 25083,
+          "sha256": "e626dfc760edae087cb9696291abe3a135be33014e0a6b76e3ae1ca4e59687ba"
+        },
+        {
+          "path": "backend/app/services/metrics_history_service.py",
+          "size": 7597,
+          "sha256": "e7926ad430dffd8e7b2f4799c52c9fcd20e54d94e135d45e432ba2903988656c"
+        },
+        {
+          "path": "backend/app/services/migration_fence.py",
+          "size": 20146,
+          "sha256": "707482fff3e28f3779dd60dc1f42e1fe63eb49328ec38631b2db8bd75fec6d54"
+        },
+        {
+          "path": "backend/app/services/migrations/__init__.py",
+          "size": 308,
+          "sha256": "5ecd7624f56bbcd40f2e87d067b58fd270436792aadf678077cd10f9e3f673ae"
+        },
+        {
+          "path": "backend/app/services/migrations/actions.py",
+          "size": 12120,
+          "sha256": "d39f4004b75d24521d4cf87da9a458bcf433563180103ccccd496cb9c4459b25"
+        },
+        {
+          "path": "backend/app/services/migrations/authority.py",
+          "size": 23413,
+          "sha256": "bb9a3fd9a6ba953ab1f838c22ff5a7ef39afe95131b88657921636cfe72e2c86"
+        },
+        {
+          "path": "backend/app/services/migrations/billing.py",
+          "size": 3783,
+          "sha256": "24f826f8d4dff34e90e34e113e6a17d9d0e51ee8f875b72bc42cfecab527c57c"
+        },
+        {
+          "path": "backend/app/services/migrations/completion.py",
+          "size": 4333,
+          "sha256": "34072cc1f42d38e1cd16fc7322feb2c56298ce41cff89d337d13a9de46843024"
+        },
+        {
+          "path": "backend/app/services/migrations/context.py",
+          "size": 10215,
+          "sha256": "26068f52790f03c6dd061378c03e5745e6bf358f9eaaef41aa5f7d1cba1fb779"
+        },
+        {
+          "path": "backend/app/services/migrations/contracts.py",
+          "size": 3358,
+          "sha256": "a545aefa65556c57fe7cdd35f82a4d5e24ae8e5e55b8475936218f0ef44b2e0c"
+        },
+        {
+          "path": "backend/app/services/migrations/executor.py",
+          "size": 17285,
+          "sha256": "66e919f331548df135a2ba43854eb4c9c6524184ca12bd5f9f2aa33503c2be6a"
+        },
+        {
+          "path": "backend/app/services/migrations/metrics.py",
+          "size": 11203,
+          "sha256": "badb20b0e8330dcb07d1cb76cccf35b11311fe6c6dc553d8629075b280202020"
+        },
+        {
+          "path": "backend/app/services/migrations/orchestrator.py",
+          "size": 2082,
+          "sha256": "4755a0529d8d863871fda2fd5970e9ac76d186d7c4c2f1bba156503c24bb30ab"
+        },
+        {
+          "path": "backend/app/services/migrations/plan_contracts.py",
+          "size": 11524,
+          "sha256": "c916ae3261fea7b7b3124a2631fd701aeeef0e51c0c93f2a764a568463e1ccda"
+        },
+        {
+          "path": "backend/app/services/migrations/planning.py",
+          "size": 34488,
+          "sha256": "0a6803655ee3f4b98e6acebc3f74e908f4ad994c697af30573a9a3c19c29f47d"
+        },
+        {
+          "path": "backend/app/services/migrations/preflight.py",
+          "size": 70548,
+          "sha256": "8adda9a594473371a566b6b5bdbf720af1f7cb4fdd46c92498014f296bb48cb7"
+        },
+        {
+          "path": "backend/app/services/migrations/preparation.py",
+          "size": 18493,
+          "sha256": "68eb0161af939cfde57f4e6a38b9f445554467d08be9534e316eca22a32cf017"
+        },
+        {
+          "path": "backend/app/services/migrations/presenters.py",
+          "size": 6414,
+          "sha256": "b39885dfe54e07d4810c2e4eb81c764653fb5d6cb27910efabdb3a8397ed9936"
+        },
+        {
+          "path": "backend/app/services/migrations/reconciliation.py",
+          "size": 60269,
+          "sha256": "4fdd23e913453c8988fdf246e35461e614bbf82c9561d3edd1be12118e53fa50"
+        },
+        {
+          "path": "backend/app/services/migrations/recovery_actions.py",
+          "size": 33641,
+          "sha256": "da106b51b9afb706ea011c282ff040cde8796e30ae92a9dc74e8ebe846491234"
+        },
+        {
+          "path": "backend/app/services/migrations/repository.py",
+          "size": 33405,
+          "sha256": "f8e5a12b138d2270b1dc2769cfcc4ba2dff1ce3abfc4439c32d65bbc6f0ae071"
+        },
+        {
+          "path": "backend/app/services/migrations/security.py",
+          "size": 9037,
+          "sha256": "e7cfb8e012a9e4d3db9362ff99b4cfd57614345b5dd6e32edd2abdb6443fca4d"
+        },
+        {
+          "path": "backend/app/services/migrations/service.py",
+          "size": 293,
+          "sha256": "ae00d48f1cef04e31ff64bbea3b76aea40c1be636151c25b8920416711b4b0bc"
+        },
+        {
+          "path": "backend/app/services/migrations/transfer.py",
+          "size": 34677,
+          "sha256": "a26c95d5f58568a4e50bfb10264b0b4fcdb0a450205ee2ca031b68cab06964d2"
+        },
+        {
+          "path": "backend/app/services/migrations/worker.py",
+          "size": 18663,
+          "sha256": "dddd5f89f788351bdc330f2d25ce9bb442e638b4cbbf5cabbb7e99a8179a3ed1"
+        },
+        {
+          "path": "backend/app/services/network_capabilities.py",
+          "size": 2635,
+          "sha256": "bb5274f25286a279386d9c2bc603a8a1475b5bb34c5f6bbdcb840e7be6ff7258"
+        },
+        {
+          "path": "backend/app/services/network_config.py",
+          "size": 8097,
+          "sha256": "69f32545942748f71f5bf004997f9a80007477335044b81ffd2ec6693b6a79ad"
+        },
+        {
+          "path": "backend/app/services/network_write_verification.py",
+          "size": 2705,
+          "sha256": "c666c952adfb2876ec5845a49d9f2b06cf8e4ddc4381fc8bd9b002ead8c2d7a2"
+        },
+        {
+          "path": "backend/app/services/orcahub_sync.py",
+          "size": 4902,
+          "sha256": "2222b1da3b2facb71006b89313cbc49855791b7a1671d07ff7b4179c33835356"
+        },
+        {
+          "path": "backend/app/services/orcahub_webhook.py",
+          "size": 6074,
+          "sha256": "931063ac5bf968b041a13ecde01f9ff2fed49f49d171afa223b350e9ed9ec1b5"
+        },
+        {
+          "path": "backend/app/services/organization_preferences.py",
+          "size": 5280,
+          "sha256": "e1e0eefac0ebb8fa175a8ab5d1893fc27fc84ea7019aa9d6b1f6dfd43168ba3c"
+        },
+        {
+          "path": "backend/app/services/organization_service.py",
+          "size": 12793,
+          "sha256": "34e8b13172ef7f5f88f30a3f5153aadf946ff6cbdf1c1f1ef4cb3d998fd02938"
+        },
+        {
+          "path": "backend/app/services/project_grants.py",
+          "size": 10873,
+          "sha256": "483cca8ff9fac091b5607f4a8a1502fb5d43294daad31f58bcf96a34857c5e26"
+        },
+        {
+          "path": "backend/app/services/remote_image_catalog.py",
+          "size": 4995,
+          "sha256": "18a2ea8db97246ac9b58645bde8443fd7afe5ddb1213019777de4b1441fb62a1"
+        },
+        {
+          "path": "backend/app/services/session_audit.py",
+          "size": 4832,
+          "sha256": "52515ac2539bc114635fe71f94c99e540c58a279d01c334197fb88855923b39d"
+        },
+        {
+          "path": "backend/app/services/session_models.py",
+          "size": 10677,
+          "sha256": "90e6894e6f184ba4e8cd4872567231cca978267dfb803115471a2a04a6a7f548"
+        },
+        {
+          "path": "backend/app/services/session_registry.py",
+          "size": 9693,
+          "sha256": "19f32108d1966de7149f8a546eb54fd0e5569e687c89248272f921a6e5aaf202"
+        },
+        {
+          "path": "backend/app/services/session_tracker.py",
+          "size": 18974,
+          "sha256": "7a1c51cd7c7faf42d1a5849bf279671f83ba64a3c5778f7fdcac0dc209aa7e20"
+        },
+        {
+          "path": "backend/app/services/shared_cluster_audit.py",
+          "size": 17783,
+          "sha256": "b5a69ee1004e65465a970482fc7abbbf9922c6811c8f42c9199dafd0634fe14c"
+        },
+        {
+          "path": "backend/app/services/snapshots/__init__.py",
+          "size": 833,
+          "sha256": "2f199a7932de61501c6b39fdfe06b5390f5720bf9d29fedd6acb1850de2c43b4"
+        },
+        {
+          "path": "backend/app/services/snapshots/fleet_sizes.py",
+          "size": 10359,
+          "sha256": "6285311ec343ce3db8b1b169564424ca5f4a245c4b9d2b83e6d2fae1250c256e"
+        },
+        {
+          "path": "backend/app/services/snapshots/limits.py",
+          "size": 1533,
+          "sha256": "3c3bdca7a79f81cc46d02f1432839aa91f1e827d9db83e1e26896df8821cb0b0"
+        },
+        {
+          "path": "backend/app/services/snapshots/naming.py",
+          "size": 2143,
+          "sha256": "a28e1461aa9fb8d4ccfbf1ccae15d734fdea1f12a91804f7ea960c700c3b559f"
+        },
+        {
+          "path": "backend/app/services/snapshots/recurrence.py",
+          "size": 7713,
+          "sha256": "54ef44f851797317526979f93f957e59d6ea87c3585f24a0ca08e595b88a840d"
+        },
+        {
+          "path": "backend/app/services/snapshots/schedule_authority.py",
+          "size": 15872,
+          "sha256": "7f55ad9feb9bd4b4aeb6acf1784aa96ca75376a31f013e23b02f9e1dac62e6f4"
+        },
+        {
+          "path": "backend/app/services/snapshots/schedule_runner.py",
+          "size": 17602,
+          "sha256": "49f08dd4436a5c6382629176a9ad79a55d00f22ea83602b1753cce0e247d935d"
+        },
+        {
+          "path": "backend/app/services/snapshots/schedule_scheduler.py",
+          "size": 11197,
+          "sha256": "05d7b7bb8e4c45a3df5c51e82b9e96e48c94aa1bcf3a46dfddd12275be33c288"
+        },
+        {
+          "path": "backend/app/services/snapshots/schedule_service.py",
+          "size": 12580,
+          "sha256": "1da91d1d1ce151ebcb1eb8866c73d852a571f1a5871e46a7119a503ceea2b10a"
+        },
+        {
+          "path": "backend/app/services/system_resources.py",
+          "size": 18724,
+          "sha256": "bea01d0e01fdac135f86b55106e0ffc165518a00c742939451f7f3ff6264b9f9"
+        },
+        {
+          "path": "backend/app/services/tag_service.py",
+          "size": 46108,
+          "sha256": "abe226f30030c406cd1320a5af67f9c6e42669a89d8c00a31aa00819781d978a"
+        },
+        {
+          "path": "backend/app/services/task_journal/__init__.py",
+          "size": 464,
+          "sha256": "36e93affdf3c8e9d34ebb09cff9441af0963e809045cc2a6daae114cc8e7ad8d"
+        },
+        {
+          "path": "backend/app/services/task_journal/follower.py",
+          "size": 21225,
+          "sha256": "4edaab6485a324e9bc7db7ff64fb8ebc56911b0b86c2ec7412a49a06fbc48e66"
+        },
+        {
+          "path": "backend/app/services/task_journal/follower_frames.py",
+          "size": 8722,
+          "sha256": "7b0ac70cc903644da8d37352f52a5a1bf72b198ac4c38cb29839eec2fe1f832e"
+        },
+        {
+          "path": "backend/app/services/task_journal/follower_writer.py",
+          "size": 12714,
+          "sha256": "93d347c14a044a05a837f9089230366b917923d5f517e5a4cb82139cfacec8a7"
+        },
+        {
+          "path": "backend/app/services/task_journal/present.py",
+          "size": 6066,
+          "sha256": "b5046620ec6f52d0afd8a375073a6f7c0daaab979405960acebd9dd759e51827"
+        },
+        {
+          "path": "backend/app/services/task_journal/prune.py",
+          "size": 3796,
+          "sha256": "25ee72dcc6c0a0071aa4587778707fe032a19d77c16d05b98ceffc8330fd7da9"
+        },
+        {
+          "path": "backend/app/services/task_journal/reads.py",
+          "size": 6921,
+          "sha256": "2503127801dacef1ec31a74d278fb51188ed35dfbcb26d338b30bd00ca347c02"
+        },
+        {
+          "path": "backend/app/services/task_journal/repository.py",
+          "size": 19854,
+          "sha256": "c719b526fda132a2f2568f828781067ea5101967154ebe5bf1fc724e84eec6c9"
+        },
+        {
+          "path": "backend/app/services/task_journal/repository_log.py",
+          "size": 3532,
+          "sha256": "bfdbdb59aa81cf809fa79ab98f8fa10ad98b1df696151e2bed751cd4026d6dbd"
+        },
+        {
+          "path": "backend/app/services/task_journal/repository_sql.py",
+          "size": 10571,
+          "sha256": "cf099c97fe696104b029a0bc7912a5c801fad8791676b58543f904bc0bbf9646"
+        },
+        {
+          "path": "backend/app/services/task_journal/repository_sweeps.py",
+          "size": 12382,
+          "sha256": "fad435b5dc21a33b93d5c44b7020fe5c3f6e6756aa9caedf1a6c2285263615ca"
+        },
+        {
+          "path": "backend/app/services/task_journal/repository_types.py",
+          "size": 3418,
+          "sha256": "44360e5b2e27be46ba1427b142efd308ae6fdcf8f2e0018b67551433b5e3431e"
+        },
+        {
+          "path": "backend/app/services/task_journal/seed.py",
+          "size": 13080,
+          "sha256": "f5358ea881b28621b8f0c58e9d1105879fe9551e048186b678c5dd0ca4c9e5df"
+        },
+        {
+          "path": "backend/app/services/task_journal/sink.py",
+          "size": 10951,
+          "sha256": "ad2c1640a5a7565e6fe01ceef33a6d20dd115b724039ee847bb4092365e242b4"
+        },
+        {
+          "path": "backend/app/services/task_journal/sink_mapping.py",
+          "size": 10686,
+          "sha256": "3628cc83c3bcbec4f0ff3ada30d1428d7cd85a07e27fad1bca55b13b5807a02f"
+        },
+        {
+          "path": "backend/app/services/task_journal/tailer.py",
+          "size": 8565,
+          "sha256": "655f8dab2d5608304e2e7a87f57a2d5e4f92fe10ced00408d5e2cc5f21ed08dc"
+        },
+        {
+          "path": "backend/app/services/task_journal/vocabulary.py",
+          "size": 16742,
+          "sha256": "c239282f3dafc7dd82170e663ee5aa86c0637c977a1ec397253bbf5a9acbfc98"
+        },
+        {
+          "path": "backend/app/services/terminal_service.py",
+          "size": 10446,
+          "sha256": "73a301d0774e97e6f98c4484835179d2d53a77a32bb02549c0de26680cb99c70"
+        },
+        {
+          "path": "backend/app/services/webhooks/__init__.py",
+          "size": 43,
+          "sha256": "4c6928b3720ee1101ad4f4628b24bf2a1220d812302b83e20b157777b1eca3d7"
+        },
+        {
+          "path": "backend/app/services/webhooks/dispatcher.py",
+          "size": 14728,
+          "sha256": "df3ba1d1597f1cc704ab0862336d25d59debee9030fe6a9abd9aec3e0301ecb3"
+        },
+        {
+          "path": "backend/app/services/webhooks/emitter.py",
+          "size": 10571,
+          "sha256": "370e66b6d0d511f70406139ed29e1e793d8c7550a0f8cce4733923de9661e547"
+        },
+        {
+          "path": "backend/app/services/webhooks/envelope.py",
+          "size": 4636,
+          "sha256": "1de43367d97ab43441747d99c57259f2fb94a0c9d8d6f83d2526b233e234a9ed"
+        },
+        {
+          "path": "backend/app/services/webhooks/signing.py",
+          "size": 3615,
+          "sha256": "9d924813e3fc96eb79fcee12fc3319cdafdb82f180169d6231d11bb0d57c8b27"
+        },
+        {
+          "path": "backend/app/services/ws_broadcast.py",
+          "size": 1969,
+          "sha256": "37a80fd962d5653adc4f49f11b352cb7892a40c2b06391dd3d009d4dbef62696"
+        },
+        {
+          "path": "backend/constraints.txt",
+          "size": 1580,
+          "sha256": "d6bf6ee68194a2f46312adc270f950edeec947ad3ea1e3a2a37fb1aeb7442281"
+        },
+        {
+          "path": "backend/docker-entrypoint.sh",
+          "size": 995,
+          "sha256": "abe89bafff5854af5c111eacd44aa2d781812e9e0ff83ff21fdf7fdf6b3a44ff"
+        },
+        {
+          "path": "backend/pytest.ini",
+          "size": 559,
+          "sha256": "0f77d4d533ab280e08c5c1eba395ef3d740c42154e5fa8752080c764ab7d7722"
+        },
+        {
+          "path": "backend/requirements-dev.txt",
+          "size": 252,
+          "sha256": "24997c19d613263d4a9fa9ad7e4aa37f349c60843de7e6ba466cb52607fc1317"
+        },
+        {
+          "path": "backend/requirements.txt",
+          "size": 2521,
+          "sha256": "366ddee27e1cd6d41f7f7d47a6f2a24b82b4cf91fa5ab2e70ae7372917e1e075"
+        },
+        {
+          "path": "backend/tests/conftest.py",
+          "size": 2810,
+          "sha256": "6e85e0a5c79d67137c9a433d2c866d98173ee4e5a4619c82e087ca5a235a9af3"
+        },
+        {
+          "path": "backend/tests/test_the_journal_sql_round_trips_on_postgres.py",
+          "size": 34059,
+          "sha256": "9d04ad82587063a99c44c09bf3eb7d832f15eb5fcd360e0098baec3261c907cd"
+        }
+      ],
+      "tests": [
+        "test_the_sink_writes_an_audit_record_and_the_stream_lands_on_the_same_row",
+        "test_the_stream_first_then_the_audit_with_the_operation_id",
+        "test_an_operation_the_daemon_did_not_name_takes_its_key_from_the_audit",
+        "test_a_lifecycle_line_ahead_of_its_operation_is_linked_by_the_sweep",
+        "test_an_over_long_client_string_does_not_poison_the_batch",
+        "test_a_rebuild_job_takes_the_audit_verdict_over_its_one_operation",
+        "test_a_stream_frame_never_attaches_to_an_earlier_failed_attempt",
+        "test_an_unnamed_frame_after_its_audit_joins_the_audit_row",
+        "test_a_lost_action_is_closed_by_its_own_terminal_audit_and_a_revived_row_drops_the_sweep_text",
+        "test_uploads_open_and_close_on_their_session",
+        "test_a_websocket_operation_is_stored_without_its_command_line",
+        "test_every_sweep_and_the_cluster_state_helpers",
+        "test_every_read_returns_rows_the_presenter_and_models_accept",
+        "test_the_prune_deletes_old_rows_under_its_lock_and_the_downgrade_is_clean"
+      ],
+      "total_bytes": 4903595,
+      "source_tree_sha256": "d18b53696c34071effe838d065d988c0f25dd9fafdbb28accc3fd86f0b1c1724"
+    },
+    "archive": null
+  },
+  "wheels": null,
+  "wheel_inventory": [],
+  "wheel_requirements_sha256": null,
+  "runner_sha256": "f050b6c43863dd9e46763729975ec31d35e5eb36e50a2ce2001573d3b875ac7f",
+  "executor_sha256": null,
+  "resource_budget": {
+    "postgres_memory_mib": 512,
+    "runner_memory_mib": 1024,
+    "postgres_cpus": 0.5,
+    "runner_cpus": 2,
+    "postgres_pids": 256,
+    "runner_pids": 256,
+    "minimum_guest_free_gib": 70
+  },
+  "timeouts": {
+    "http_seconds": 30,
+    "image_load_seconds": 300,
+    "postgres_ready_seconds": 120,
+    "runner_seconds": 1500,
+    "total_seconds": 2400
+  },
+  "steps": [
+    "Recheck outer VM identity, markers and B1 runtime; refuse existing IDs/paths or overlapping route",
+    "Verify every transferred payload hash before unpacking reviewed regular source/wheel files",
+    "Load two reviewed public image archives; verify exact config IDs without pull or build",
+    "Create the owned internal bridge and fresh private PG state/password file",
+    "Start only the owned PostgreSQL container; initialize the two exact scratch databases",
+    "Run the pinned Python QA container with read-only source/wheels and fresh tooling installed offline",
+    "Upgrade journal-test DB to head and execute exactly fourteen cases; require no skip/failure",
+    "Upgrade separate empty migration DB to head, downgrade to 023, then upgrade again",
+    "Verify versions/schema objects and journal fixture cleanup independently through asyncpg"
+  ],
+  "migration": {
+    "head": "037_migration_unknown_phase",
+    "downgrade": "023_a_schedule_orcastra_owns",
+    "journal_objects": [
+      "task_journal",
+      "cluster_log",
+      "task_follower_clusters",
+      "task_journal_seq"
+    ],
+    "destructive_scope": "Only the separate newly created empty migration-scratch database"
+  },
+  "test_mutation": "The fourteen-case fixture TRUNCATEs three journal tables before and after tests in the fresh journal-test DB",
+  "secrets": "Generate a fresh guest-only password; never use existing env/credentials or print URL/password/output bodies",
+  "evidence": "Retain private command/JUnit output in guest; export only allowlisted counts, test names, object checks and digests",
+  "failure": "Stop, retain owned resources and private artifacts; no implicit retry, removal or broad cleanup",
+  "cleanup": "Separate exact approval using created container/network IDs and owned guest paths",
+  "excluded": [
+    "Host Docker or database",
+    "SSO/Vault/app startup",
+    "Organization/role changes",
+    "Hypervisor mutation",
+    "Production database or credentials",
+    "Outer network or published port",
+    "Node runtime decision"
+  ],
+  "ready_for_execution": false,
+  "pending": [
+    "Verified source/wheel/image archives",
+    "Guest provisioning executor and private target wrapper review",
+    "Successful B1 readback",
+    "New exact owner approval"
+  ],
+  "proposal_digest": "4b4e2807bb7587e22054d38ee681c78a356d5aabff1d1d36a2e3a9036d50ec4f"
+}

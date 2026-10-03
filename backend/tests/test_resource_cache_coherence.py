@@ -298,6 +298,10 @@ def test_upload_ready_uses_strict_shared_cache_invalidation(
             prefix = pattern.rstrip("*")
             return [key for key in self.values if key.startswith(prefix)]
 
+        def scan_iter(self, *, match: str, count: int):
+            assert count == 200
+            yield from self.keys(match)
+
         def delete(self, *_keys: str) -> None:
             raise RuntimeError("Redis delete failed")
 

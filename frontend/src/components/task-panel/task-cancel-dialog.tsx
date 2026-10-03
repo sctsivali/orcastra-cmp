@@ -109,10 +109,11 @@ export function TaskCancelDialog({ task, open, onOpenChange }: TaskCancelDialogP
       onConfirm={() => void confirmCancel()}
       description={
         <>
-          This stops &quot;{target.description}&quot; on {target.cluster_id}.
+          Request cancellation of &quot;{target.description}&quot; on {target.cluster_id}.
+          {" "}The task may continue until the hypervisor confirms it.
           {target.resource_name
-            ? ` LXD may leave ${target.resource_name} in a partial state.`
-            : " LXD may leave the resource in a partial state."}
+            ? ` The hypervisor may leave ${target.resource_name} in a partial state.`
+            : " The hypervisor may leave the resource in a partial state."}
         </>
       }
     />

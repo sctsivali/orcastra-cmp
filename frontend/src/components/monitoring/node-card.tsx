@@ -23,6 +23,7 @@ import {
   summarizeGpus,
 } from "@/lib/gpu";
 import { cn, formatBytes, formatHypervisorType, formatMemory } from "@/lib/utils";
+import { capacityReading } from "@/lib/capacity-reading";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
 // Node Card Component
@@ -35,6 +36,8 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
   const gpu = summarizeGpus(node);
   const cpu = cpuAllocation(node);
   const rawStatus = clusterStatusMeta(node);
+  const memory = capacityReading({ used: node.memory_used_bytes, total: node.memory_total_bytes });
+  const storage = capacityReading({ used: node.storage_used_bytes, total: node.storage_total_bytes });
   // important: "Pending Trust" and "Error" are certificate-handshake and platform vocabulary a
   // tenant cannot act on, and the operator-surface gate pins that neither reaches one. The body
   // copy below already drew that line; the badge did not, and rendered the raw label. Every
@@ -103,8 +106,8 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
                 <span className="text-muted-foreground">Memory</span>
                 <span className="font-medium">{formatMemory(node.memory_used_bytes)} / {formatMemory(node.memory_total_bytes)}</span>
               </div>
-              <Progress value={node.memory_usage_percent} className="h-2" />
-              <p className="text-xs text-muted-foreground text-right">{node.memory_usage_percent.toFixed(1)}%</p>
+              {memory && <Progress value={memory.percent} className="h-2" />}
+              <p className="text-xs text-muted-foreground text-right">{memory ? `${memory.percent.toFixed(1)}%` : "Usage unavailable"}</p>
             </div>
             
             {/* Storage */}
@@ -113,8 +116,8 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
                 <span className="text-muted-foreground">Storage</span>
                 <span className="font-medium">{formatBytes(node.storage_used_bytes)} / {formatBytes(node.storage_total_bytes)}</span>
               </div>
-              <Progress value={node.storage_usage_percent} className="h-2" />
-              <p className="text-xs text-muted-foreground text-right">{node.storage_usage_percent.toFixed(1)}%</p>
+              {storage && <Progress value={storage.percent} className="h-2" />}
+              <p className="text-xs text-muted-foreground text-right">{storage ? `${storage.percent.toFixed(1)}%` : "Usage unavailable"}</p>
             </div>
             
             {/* GPU. Allocation only: LXD reports no GPU telemetry. The cards count sits on

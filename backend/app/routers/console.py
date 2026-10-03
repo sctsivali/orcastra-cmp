@@ -49,6 +49,7 @@ from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
 from app.core.lxd_path import safe_segment
+from app.core.lxd_names import LXD_NAME_PATTERN
 from app.services.migration_fence import (
     MigrationFenceConflict,
     assert_instance_not_migration_fenced,
@@ -814,14 +815,21 @@ async def update_startup_order(
     dependencies=[Depends(org_scope_dependency)],
 )
 async def list_isos(
-    host: str = Query(..., description="Target cluster"),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target cluster"),
+    project: str = Query("default", pattern=LXD_NAME_PATTERN, description="Hypervisor project name"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """List available ISO files."""
-    verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
-    isos, error = await console_service.get_available_isos(host=host)
+    try:
+        isos, error = await _console_io(
+            partial(console_service.get_available_isos, host=host, project=project),
+            label="console.iso.discovery",
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        raise HTTPException(status_code=503, detail="ISO discovery is temporarily unavailable. Retry later.") from exc
     
     if error:
         return ISOListResponse(success=False, error=error)

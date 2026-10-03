@@ -75,6 +75,7 @@ tasks/
 # that make test-frontend and CI run, so that directory is tracked.
 scripts/*
 !scripts/checks/
+!scripts/qa-hardening/
 # note: the operator tooling (scripts/orcastra-ops.sh) is deliberately NOT tracked. It is
 # handed to an operator as text and kept on the deployment VM, so the published runbook
 # documents the procedure rather than telling readers to fetch a script.

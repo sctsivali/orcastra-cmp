@@ -104,6 +104,15 @@ class VaultClientError(Exception):
     pass
 
 
+def _unique_vault_json_pairs(pairs):
+    document = {}
+    for key, value in pairs:
+        if key in document:
+            raise requests.exceptions.InvalidJSONError("Vault returned duplicate JSON keys")
+        document[key] = value
+    return document
+
+
 def _safe_vault_url(vault_addr: str, path: str) -> str:
     """Build a Vault URL whose path cannot escape the segment the caller asked for.
 
@@ -473,12 +482,24 @@ class VaultClient:
                 return cached_data
         
         url = _safe_vault_url(self.vault_addr, path)
+        response = None
         
         try:
-            response = self.session.request('LIST', url, headers=self.headers, timeout=VAULT_LIST_TIMEOUT)
-            response.raise_for_status()
-            result = response.json()
-            keys = result.get("data", {}).get("keys", [])
+            response = self.session.request(
+                'LIST', url, headers=self.headers, timeout=VAULT_LIST_TIMEOUT,
+                allow_redirects=False,
+            )
+            if self._verified_empty_registry(path, response):
+                keys = []
+            else:
+                if response.status_code != 200:
+                    raise requests.exceptions.HTTPError(f"Vault LIST returned HTTP {response.status_code}")
+                response.raise_for_status()
+                result = response.json(object_pairs_hook=_unique_vault_json_pairs)
+                data = result.get("data") if isinstance(result, dict) else None
+                keys = data.get("keys") if isinstance(data, dict) else None
+                if not isinstance(keys, list) or any(not isinstance(key, str) or not key for key in keys):
+                    raise VaultClientError("Vault LIST returned an invalid key list")
             
             # Cache the result with longer TTL for list operations. Written on a fresh read
             # too: use_cache only decides whether the cache is READ, and a bypass that left a
@@ -501,7 +522,7 @@ class VaultClient:
 
             return keys
             
-        except requests.exceptions.RequestException as e:
+        except (requests.exceptions.RequestException, VaultClientError) as e:
             duration = round((time.perf_counter() - start) * 1000, 2)
             _audit_vault_operation(
                 "vault.kv.list", path,
@@ -512,6 +533,44 @@ class VaultClient:
             )
             logger.error(f"Failed to list Vault path {path}: {e}")
             raise VaultClientError(f"Vault list failed: {str(e)}")
+        finally:
+            if response is not None:
+                response.close()
+
+    def _verified_empty_registry(self, path: str, response: requests.Response) -> bool:
+        """A missing registry is empty only after the same token proves its KV-v2 mount."""
+        if response.status_code != 404:
+            return False
+        from app.core.config import get_settings
+
+        registry = get_settings().vault_clusters_path.replace("/data/", "/metadata/")
+        if path != registry or path != path.strip("/") or "/metadata/" not in path:
+            return False
+
+        try:
+            if response.json(object_pairs_hook=_unique_vault_json_pairs) != {"errors": []}:
+                return False
+            # important: an empty LIST on KV-v1 looks identical. Mount detail uses the
+            # existing target-path capability; never add sys/* to the service policy.
+            proof = self.session.request(
+                "GET", _safe_vault_url(self.vault_addr, "sys/internal/ui/mounts/" + path),
+                headers=self.headers, timeout=(2, 3), allow_redirects=False,
+            )
+            try:
+                if proof.status_code != 200:
+                    return False
+                data = proof.json(object_pairs_hook=_unique_vault_json_pairs).get("data")
+                return (
+                    isinstance(data, dict)
+                    and data.get("path") == path.split("/metadata/", 1)[0] + "/"
+                    and data.get("type") == "kv"
+                    and isinstance(data.get("options"), dict)
+                    and data["options"].get("version") == "2"
+                )
+            finally:
+                proof.close()
+        except (requests.exceptions.RequestException, ValueError, TypeError, AttributeError):
+            return False
 
     def last_known_list(self, path: str) -> Optional[List[str]]:
         """The keys the last successful LIST of ``path`` returned, from the shared memo."""

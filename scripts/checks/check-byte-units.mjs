@@ -213,6 +213,46 @@ for (const rel of backendByteFiles) {
 
 const requireFromFrontend = createRequire(resolve(root, "frontend/package.json"));
 const ts = requireFromFrontend("typescript");
+function loadNumericModule(path, imports) {
+  const output = ts.transpileModule(readFileSync(path, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+    fileName: path,
+  }).outputText;
+  const loaded = { exports: {} };
+  new Function("require", "module", "exports", output)(imports, loaded, loaded.exports);
+  return loaded.exports;
+}
+const numeric = loadNumericModule(utilsPath, requireFromFrontend);
+for (const format of [numeric.formatBytes, numeric.formatMemory, numeric.formatLxdLimit, numeric.formatNetworkRate]) {
+  for (const value of [NaN, Infinity, -Infinity, -1, null, undefined]) assert.equal(format(value), "\u2014");
+  for (const value of [0, 0.5, 1, Number.MIN_VALUE, Number.MAX_VALUE]) {
+    assert.doesNotMatch(format(value), /NaN|undefined|Infinity/);
+  }
+}
+assert.equal(numeric.formatBytes(0.5), "0.5 B");
+assert.equal(numeric.formatNetworkRate(0.5), "0.5 B/s");
+assert.equal(numeric.formatBytes(1000), "1 KB");
+assert.equal(numeric.formatMemory(1024), "1 KiB");
+assert.equal(numeric.formatBytes(0), "0 B");
+assert.equal(numeric.formatBytes(0, { zeroDisplay: "empty" }), "\u2014");
+assert.equal(numeric.formatBytes(NaN, { split: true }).unit, "");
+for (const decimals of [NaN, Infinity, -1, 300, 1.5]) assert.doesNotThrow(() => numeric.formatBytes(0.5, { decimals }));
+for (const format of [numeric.formatFrequency, numeric.formatLinkSpeed, numeric.formatCpuTime]) {
+  for (const value of [NaN, Infinity, -Infinity, -1, null, undefined]) assert.equal(format(value), "\u2014");
+}
+assert.equal(numeric.formatCpuTime(0), "0s");
+assert.deepEqual(numeric.formatByteQuota(NaN, NaN), { value: "\u2014", unit: "" });
+const tones = loadNumericModule(join(src, "lib", "usage-tone.ts"), requireFromFrontend);
+const { capacityReading } = loadNumericModule(join(src, "lib", "capacity-reading.ts"), (name) => {
+  if (name === "@/lib/usage-tone") return tones;
+  throw new Error(`Unexpected capacity import: ${name}`);
+});
+for (const input of [null, {}, { total: 100 }, { used: "", total: 100 }, { used: false, total: 100 }, { used: -1, total: 100 }, { used: NaN, total: 100 }, { used: 1, total: Infinity }, { used: 1, total: 0 }]) {
+  assert.equal(capacityReading(input), null);
+}
+assert.deepEqual(capacityReading({ used: 0, total: 0 }), { used: 0, total: 0, percent: 0 });
+assert.deepEqual(capacityReading({ used: "25", total: "100" }), { used: 25, total: 100, percent: 25 });
+assert.equal(capacityReading({ used: 120, total: 100 }).percent, 100);
 const limitsPath = join(src, "lib", "lxd-limits.ts");
 const limitsOutput = ts.transpileModule(readFileSync(limitsPath, "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },

@@ -1,0 +1,20 @@
+{
+  "source_url": "https://raw.githubusercontent.com/canonical/lxd/lxd-5.21.8/lxd/instance/drivers/driver_qemu.go",
+  "source_sha256": "dfc5aa304bde7bb428a81d65bb5813b544477d7025f44015bb7d30f3e4839259",
+  "matched_source_lines": {
+    "lxdvsock.HTTPClient(vsockID": [
+      377
+    ],
+    "cloud-init": [
+      3043,
+      5711,
+      6080
+    ],
+    "generateConfigShare": [
+      1261,
+      2938,
+      2942
+    ]
+  },
+  "scope": "Public source read only; runtime guest agent, cloud-init, and no-NIC behavior remain unverified"
+}

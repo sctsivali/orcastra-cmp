@@ -453,10 +453,6 @@ const CUSTOM_RECONCILIATION_SITES = {
     impact: "key.write",
     markers: ['queryKey: ["my-keys"]'],
   },
-  "frontend/src/app/settings/page.tsx:api.system.clearCache": {
-    impact: "node.cache",
-    markers: ["await queryClient.invalidateQueries();", "queryClient.clear();"],
-  },
   "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.install": {
     impact: "extension.write",
     markers: ['queryKey: ["extensions", "installs"]'],
@@ -829,7 +825,7 @@ for (const contract of [
     ],
   },
   {
-    path: "frontend/src/components/personalization-provider.tsx",
+    path: "frontend/src/components/personalization/use-personalization-mutations.ts",
     markers: [
       "personalizationAPI.update",
       "personalizationAPI.delete",
@@ -870,7 +866,7 @@ for (const contract of [
 }
 
 const personalizationProvider = readFileSync(
-  join(root, "frontend/src/components/personalization-provider.tsx"),
+  join(root, "frontend/src/components/personalization/use-personalization-mutations.ts"),
   "utf8",
 );
 const personalizationSaveStart = personalizationProvider.indexOf("const saveToAPI");

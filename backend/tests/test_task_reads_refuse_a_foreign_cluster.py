@@ -203,6 +203,9 @@ def test_a_bad_status_or_kind_is_422() -> None:
     assert client.get("/tasks", params={"kind": "sideways"}).status_code == 422
     assert client.get("/cluster-log", params={"severity": "loud"}).status_code == 422
     assert client.get("/tasks", params={"limit": 501}).status_code == 422
+    assert client.get("/tasks/queue", params={"limit": 501}).status_code == 422
+    assert client.get("/tasks/queue", params={"limit": 0}).status_code == 422
+    assert client.get("/tasks/queue", params={"offset": -1}).status_code == 422
     assert recorder.statements == []
     assert client.get("/tasks", params={"status": "running, failure"}).status_code == 200
 

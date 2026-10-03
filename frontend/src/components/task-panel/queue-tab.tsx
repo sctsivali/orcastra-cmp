@@ -2,27 +2,35 @@
 
 import * as React from "react";
 import { CalendarClock, Inbox } from "lucide-react";
+import { IntentLink } from "@/components/navigation/route-intent";
 import { Badge } from "@/components/ui/badge";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NodeLink } from "@/components/ui/node-link";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TableLink } from "@/components/ui/table-link";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { usePermissions } from "@/hooks/use-permissions";
 import { toMillis } from "@/lib/utils";
+import { Role } from "@/types/rbac";
 import type { DueSchedule, QueueCluster, TaskRecord } from "@/types/tasks";
+import { CollectionNotice } from "./collection-notice";
 import { useTaskQueue } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
 import { durationMs, formatDuration, startedMs, taskStatusDisplay } from "./task-format";
 import type { TaskFeedSnapshot } from "./use-task-feed";
 
 const TICK_MS = 1_000;
+const QUEUE_PAGE_SIZE = 100;
 
 export interface QueueTabProps {
   feed: TaskFeedSnapshot;
   height: number;
   onOpenTask: (id: string) => void;
   registerRefresh: (refresh: (() => Promise<unknown>) | null) => void;
+  collectionIncomplete: boolean;
 }
 
 // A grid row, not a table row. The queue is a grouped list ordered by acceptance, and a
@@ -56,7 +64,9 @@ function QueueRow({
         : `waiting ${formatDuration(waited)}`;
   return (
     <li className={ROW_CLASS} data-task-id={task.id}>
-      <span className="tabular-nums text-muted-foreground">{position === null ? "Running" : position}</span>
+      <span className="tabular-nums text-muted-foreground">
+        {task.status === "running" ? "Running" : position ?? "Pending"}
+      </span>
       <OverflowText value={task.description} label={`description of task ${task.id}`} lines={1}>
         {(expanded) => (
           <TableLink wrap={expanded} onClick={() => onOpenTask(task.id)} aria-label={`Show details for task ${task.id}`}>
@@ -108,7 +118,7 @@ function ClusterGroup({
       <header className="flex h-8 items-center gap-2 bg-muted/40 px-3 text-xs">
         <NodeLink clusterId={cluster.cluster_id} />
         <span className="text-muted-foreground">
-          {running} running, {pending} waiting
+          On this page: {running} running, {pending} waiting
         </span>
         {stale ? (
           <Badge variant="caution" asChild>
@@ -120,8 +130,8 @@ function ClusterGroup({
         {cluster.running.map((task) => (
           <QueueRow key={task.id} task={task} position={null} serverNow={serverNow} onOpenTask={onOpenTask} />
         ))}
-        {cluster.pending.map((task, index) => (
-          <QueueRow key={task.id} task={task} position={index + 1} serverNow={serverNow} onOpenTask={onOpenTask} />
+        {cluster.pending.map((task) => (
+          <QueueRow key={task.id} task={task} position={task.queue_position} serverNow={serverNow} onOpenTask={onOpenTask} />
         ))}
         {cluster.due_schedules.map((schedule) => (
           <DueRow key={schedule.schedule_id} schedule={schedule} serverNow={serverNow} />
@@ -131,8 +141,23 @@ function ClusterGroup({
   );
 }
 
-export function QueueTab({ feed, height, onOpenTask, registerRefresh }: QueueTabProps) {
-  const query = useTaskQueue(true);
+export function QueueTab({ feed, height, onOpenTask, registerRefresh, collectionIncomplete }: QueueTabProps) {
+  const { scopeKey } = useActorQueryScope();
+  const { hasRole } = usePermissions();
+  const [pagination, setPagination] = React.useState({ scopeKey, page: 1 });
+  const page = pagination.scopeKey === scopeKey ? pagination.page : 1;
+  const query = useTaskQueue(true, QUEUE_PAGE_SIZE, (page - 1) * QUEUE_PAGE_SIZE);
+  const totalOpen = query.data?.total_open ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalOpen / QUEUE_PAGE_SIZE));
+  React.useEffect(() => {
+    if (!query.data) return;
+    setPagination((previous) => {
+      const nextPage = previous.scopeKey === scopeKey ? Math.min(previous.page, totalPages) : 1;
+      return previous.scopeKey === scopeKey && previous.page === nextPage
+        ? previous
+        : { scopeKey, page: nextPage };
+    });
+  }, [query.data, scopeKey, totalPages]);
   const { refreshNow } = query;
   React.useEffect(() => {
     registerRefresh(refreshNow);
@@ -158,15 +183,24 @@ export function QueueTab({ feed, height, onOpenTask, registerRefresh }: QueueTab
     .filter((c) => c.running.length + c.pending.length + c.due_schedules.length > 0)
     .sort((a, b) => a.cluster_id.localeCompare(b.cluster_id));
   const disconnected = new Set(data?.disconnected_clusters ?? []);
+  const incomplete = collectionIncomplete || disconnected.size > 0 || data?.follower_active === false;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <CollectionNotice incomplete={incomplete} />
+      {query.isError && data && (
+        <p role="status" className="shrink-0 border-b px-3 py-1.5 text-xs text-muted-foreground">
+          Queue refresh failed. Showing the last successful read.
+        </p>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         {clusters.length === 0 ? (
           <EmptyState
             icon={Inbox}
-            title="Nothing is waiting"
-            description="No task is running or waiting on any cluster in your scope."
+            title={incomplete ? "No open tasks recorded" : "Nothing is waiting"}
+            description={incomplete
+              ? "Unavailable hypervisor sources may have tasks that are not recorded here yet."
+              : "No task is running or waiting on any cluster in your scope."}
           />
         ) : (
           clusters.map((cluster) => (
@@ -180,8 +214,34 @@ export function QueueTab({ feed, height, onOpenTask, registerRefresh }: QueueTab
           ))
         )}
       </ScrollArea>
+      {data && totalOpen > QUEUE_PAGE_SIZE && (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-3 py-1">
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {Math.min(data.offset + 1, totalOpen)} to {Math.min(data.offset + data.limit, totalOpen)} of {totalOpen} open tasks
+          </span>
+          <DataTablePagination
+            variant="compact"
+            label="task queue"
+            currentPage={Math.min(page, totalPages)}
+            totalPages={totalPages}
+            onPageChange={(nextPage) => setPagination({ scopeKey, page: nextPage })}
+          />
+        </div>
+      )}
+      {data && data.due_schedules_total > 0 && (
+        <p className="shrink-0 border-t px-3 py-1.5 text-xs text-muted-foreground">
+          {page === 1
+            ? data.due_schedules_truncated
+              ? `Showing the first 100 of ${data.due_schedules_total} due schedules. `
+              : `${data.due_schedules_total} schedules due within an hour. `
+            : "Due schedules appear on the first queue page. "}
+          {hasRole(Role.PARTNER) && (
+            <IntentLink href="/inventory/snapshots" className="underline underline-offset-4">View schedules</IntentLink>
+          )}
+        </p>
+      )}
       <p className="shrink-0 border-t px-3 py-1.5 text-xs text-muted-foreground">
-        LXD starts tasks as they arrive. This is the order they were accepted, not a line that waits its turn.
+        Positions show the journal acceptance order of visible pending tasks. The hypervisor schedules execution independently.
       </p>
     </div>
   );

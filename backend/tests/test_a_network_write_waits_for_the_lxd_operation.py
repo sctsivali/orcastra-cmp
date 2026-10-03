@@ -13,6 +13,7 @@ synchronously and the wait is a no-op.
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
+import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -192,6 +193,69 @@ def test_a_failed_operation_is_an_lxd_error_not_a_success(monkeypatch) -> None:
     r = client.post("/networks?host=nuc1", json=BRIDGE)
     assert r.status_code != 200
     assert nets.gets_before_settled == 0
+
+
+def test_rich_overrides_wait_for_completion_and_use_the_resolved_acl_store(monkeypatch) -> None:
+    client, nets, ops = _networks_app(monkeypatch, async_writes=True)
+    acl_reads = []
+
+    def scoped_acls(_client, collection, project):
+        acl_reads.append((collection, project))
+        return [{"name": "qa-allow"}]
+
+    monkeypatch.setattr(networks_module, "list_in_project", scoped_acls)
+    payload = {"name": "qanet1", "type": "bridge", "config": {
+        "ipv4.address": "10.42.0.1/24", "ipv6.address": "none", "bridge.mtu": "1500",
+        "ipv4.nat": "true", "ipv4.dhcp.ranges": "10.42.0.10-10.42.0.20",
+        "dns.mode": "managed", "security.acls": "qa-allow",
+    }}
+    result = client.post("/networks?host=nuc1", json=payload)
+    assert result.status_code == 200, result.text
+    assert nets.posts[0]["json"]["config"] == payload["config"]
+    assert acl_reads == [("network-acls", "default")]
+    assert [wait["op"] for wait in ops.waits] == ["op-create"]
+    assert nets.gets_before_settled == 0
+
+
+def test_a_successful_operation_without_readback_is_not_a_created_network(monkeypatch) -> None:
+    client, nets, _ = _networks_app(monkeypatch, async_writes=True)
+    original_getitem = _Networks.__getitem__
+
+    def missing_readback(self, name):
+        api = original_getitem(self, name)
+
+        def missing(params=None):
+            raise pylxd_exceptions.NotFound(_Response({"type": "error", "error": "Network not found"}, 404))
+
+        api.get = missing
+        return api
+
+    monkeypatch.setattr(_Networks, "__getitem__", missing_readback)
+    result = client.post("/networks?host=nuc1", json=BRIDGE)
+    assert result.status_code == 404, result.text
+    assert "success" not in result.json()
+    assert len(nets.posts) == 1
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"name": "qanet1", "type": "bridge", "managed": False},
+    {"name": "qanet1", "type": "bridge", "managed": True, "status": "Pending"},
+    {"name": "qanet1", "type": "ovn", "managed": True},
+    {"name": "qanet1", "type": "bridge", "managed": True, "project": "neighbor-only"}])
+def test_incomplete_or_wrong_readback_does_not_report_success(monkeypatch, metadata) -> None:
+    client, nets, ops = _networks_app(monkeypatch, async_writes=True)
+    original_getitem = _Networks.__getitem__
+
+    def incomplete_readback(self, name):
+        api = original_getitem(self, name)
+        api.get = lambda params=None: _Response({"metadata": metadata})
+        return api
+
+    monkeypatch.setattr(_Networks, "__getitem__", incomplete_readback)
+    result = client.post("/networks?host=nuc1", json=BRIDGE)
+    assert result.status_code == 502, result.text
+    assert "success" not in result.json()
+    assert len(nets.posts) == 1
+    assert [wait["op"] for wait in ops.waits] == ["op-create"]
 
 
 def test_the_wait_is_taken_in_slices_shorter_than_the_pooled_read_timeout() -> None:

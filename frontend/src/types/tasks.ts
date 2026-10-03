@@ -53,6 +53,8 @@ export interface TaskRecord {
   created_at: string;
   updated_at: string;
   duration_ms: number | null;
+  /** Pending rank within the caller's visible cluster queue; null outside the queue. */
+  queue_position: number | null;
 }
 
 export interface TaskListResponse {
@@ -126,6 +128,12 @@ export interface TaskQueueResponse {
   generated_at: string;
   disconnected_clusters: string[];
   follower_active: boolean;
+  total_open: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  due_schedules_total: number;
+  due_schedules_truncated: boolean;
 }
 
 export interface CancelResponse {

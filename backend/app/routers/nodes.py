@@ -45,6 +45,7 @@ from app.core.cache import (
     get_resource_list_generation,
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
+    REGIONS_OVERVIEW_CACHE_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -504,9 +505,14 @@ async def invalidate_node_cache(
         
         # These projections share generation tokens. Clear them through the helpers so an
         # in-flight read cannot write its pre-invalidation result back afterwards.
-        cache.invalidate_capacity_cache()
-        cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
-        cache.invalidate_resource_cache("cluster_members")
+        scope_keys = tuple(get_scope_cache_key(key) for key in (
+            NODES_STATUS_CACHE_KEY, NODES_AVAILABILITY_CACHE_KEY, REGIONS_OVERVIEW_CACHE_KEY,
+        ))
+        await run_blocking(
+            lambda: cache.invalidate_node_cache(node_name, scope_keys),
+            timeout=20.0, label="nodes.cache.invalidate", executor=_availability_executor,
+            max_in_flight=4,
+        )
         
         logger.info(f"Invalidated all cache entries for Cluster: {node_name}")
         
@@ -517,7 +523,7 @@ async def invalidate_node_cache(
         }
     except Exception as e:
         logger.error(f"Error invalidating cache for {node_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail="Cluster cache refresh was incomplete. Retry the refresh.") from e
 
 
 @router.post(
@@ -538,15 +544,11 @@ async def invalidate_all_nodes_cache(
     try:
         cache = get_cache_manager()
         
-        # Advance the capacity generation before clearing its projections so an in-flight
-        # status/resource read cannot repopulate the cache after this explicit refresh.
-        cache.invalidate_capacity_cache()
-
-        # Availability uses a separate reachability-only cache.
-        cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
-
-        # Cluster-member reads carry their own mutation generation.
-        cache.invalidate_resource_cache("cluster_members")
+        await run_blocking(
+            lambda: cache.invalidate_all_node_caches(),
+            timeout=20.0, label="nodes.cache.invalidate_all", executor=_availability_executor,
+            max_in_flight=4,
+        )
         
         logger.info("Invalidated all Cluster cache entries")
         
@@ -556,4 +558,6 @@ async def invalidate_all_nodes_cache(
         }
     except Exception as e:
         logger.error(f"Error invalidating all caches: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=503, detail="Fleet cache refresh was incomplete. Retry the refresh.",
+        ) from e

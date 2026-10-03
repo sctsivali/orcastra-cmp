@@ -57,6 +57,7 @@ STATE_STEPPING_DOWN = "stepping_down"
 
 ACTION_ELECTED = "task.journal.follower.elected"
 ACTION_LOST = "task.journal.follower.lost"
+_CURRENT_REGISTRATION = object()
 
 
 async def _sleep(seconds: float) -> None:
@@ -119,6 +120,9 @@ class JournalFollower:
         self._consumers: Dict[str, asyncio.Task] = {}
         self._seeds: Dict[str, asyncio.Task] = {}
         self._cluster_state: Dict[str, str] = {}
+        self._source_failures: Dict[str, Set[str]] = {}
+        self._registration_generations: Dict[str, object] = {}
+        self._state_locks: Dict[str, asyncio.Lock] = {}
         self._registry_task: Optional[asyncio.Task] = None
         self._sweep_task: Optional[asyncio.Task] = None
         self.elections = 0
@@ -193,6 +197,9 @@ class JournalFollower:
         if conn is not None:
             await self._close(conn, engine, unlock=graceful)
         self._cluster_state.clear()
+        self._source_failures.clear()
+        self._registration_generations.clear()
+        self._state_locks.clear()
         if was_leader and not graceful:
             logger.warning("Task journal follower on %s lost its lock; standing by", WORKER_ID)
             _audit(ACTION_LOST)
@@ -251,7 +258,17 @@ class JournalFollower:
             await self._unfollow(host, record_state=True)
 
     async def _follow(self, host: str) -> None:
-        queue = await self._hub.subscribe(host, firehose=True, maxsize=HUB_QUEUE_MAXSIZE)
+        generation = object()
+        async with self._state_lock(host):
+            self._registration_generations[host] = generation
+            self._source_failures[host] = {"operations", "warnings"}
+        try:
+            queue = await self._hub.subscribe(host, firehose=True, maxsize=HUB_QUEUE_MAXSIZE)
+        except (asyncio.CancelledError, Exception):
+            async with self._state_lock(host):
+                if self._registration_generations.get(host) is generation:
+                    self._registration_generations.pop(host)
+            raise
         self._queues[host] = queue
         self._consumers[host] = asyncio.create_task(
             self._consume(host, queue), name=f"task-journal-consume-{host}"
@@ -261,16 +278,25 @@ class JournalFollower:
     async def _unfollow(self, host: str, *, record_state: bool) -> None:
         await _cancel(self._consumers.pop(host, None))
         await _cancel(self._seeds.pop(host, None))
-        queue = self._queues.pop(host, None)
+        async with self._state_lock(host):
+            queue = self._queues.pop(host, None)
+            self._registration_generations.pop(host, None)
+            self._cluster_state.pop(host, None)
+            self._source_failures.pop(host, None)
+            self._identities.forget(host)
+            if record_state:
+                async with self._session_maker() as db:
+                    await repository.set_cluster_state(db, host, "unregistered")
+                    await db.commit()
         if queue is not None:
             await self._hub.unsubscribe(host, queue)
-        self._cluster_state.pop(host, None)
-        self._identities.forget(host)
         if record_state:
-            async with self._session_maker() as db:
-                await repository.set_cluster_state(db, host, "unregistered")
-                await db.commit()
             logger.info("Task journal stopped following %s (unregistered); its rows are kept", host)
+
+    def _state_lock(self, host: str) -> asyncio.Lock:
+        # Retain a host's lock until step-down. Dropping it on unregister would let queued
+        # publishers and a later registration acquire different locks for the same host.
+        return self._state_locks.setdefault(host, asyncio.Lock())
 
     async def _consume(self, host: str, queue: asyncio.Queue) -> None:
         last_touch = 0.0
@@ -296,15 +322,25 @@ class JournalFollower:
     async def on_hub_state(self, host: str, frame: dict) -> None:
         state = "connected" if frame.get("state") == "connected" else "disconnected"
         error = frame.get("error") if state == "disconnected" else None
-        changed = self._cluster_state.get(host) != state
-        self._cluster_state[host] = state
-        async with self._session_maker() as db:
-            await repository.set_cluster_state(db, host, state, error=error)
-            if changed:
-                await repository.insert_log_rows(db, [upstream_row(host, state, error)])
-            await db.commit()
-        if state == "connected":
-            self.schedule_seed(host)
+        async with self._state_lock(host):
+            if host not in self._cluster_state and host not in self._queues:
+                return
+            changed = self._cluster_state.get(host) != state
+            self._cluster_state[host] = state
+            async with self._session_maker() as db:
+                effective_state = (
+                    "connected" if state == "connected" and not self._source_failures.get(host)
+                    else "disconnected"
+                )
+                await repository.set_cluster_state(
+                    db, host, effective_state,
+                    error=error or ("Hypervisor discovery is incomplete" if effective_state != state else None),
+                )
+                if changed:
+                    await repository.insert_log_rows(db, [upstream_row(host, state, error)])
+                await db.commit()
+            if state == "connected":
+                self.schedule_seed(host)
 
     def schedule_seed(self, host: str) -> None:
         previous = self._seeds.get(host)
@@ -313,14 +349,49 @@ class JournalFollower:
         self._seeds[host] = asyncio.create_task(self._seed(host), name=f"task-journal-seed-{host}")
 
     async def _seed(self, host: str) -> None:
+        generation = self._registration_generations.get(host)
         try:
-            await seed.seed_cluster(
-                self._get_lxd_service(), host, self._session_maker, self._identities
+            count = await seed.seed_cluster(
+                self._get_lxd_service(), host, self._session_maker, self._identities,
+                record_state=False,
+            )
+            await self._record_source_result(
+                host, "operations", count is not None, seeded=count is not None, generation=generation,
             )
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - the next connect or reconcile tries again
+            await self._record_source_result(host, "operations", False, generation=generation)
             logger.warning("Seeding %s failed", host, exc_info=True)
+
+    async def _record_source_result(
+        self, host: str, source: str, complete: bool, *, seeded: bool = False,
+        generation: object = _CURRENT_REGISTRATION,
+    ) -> None:
+        # REST callers capture before their read; direct publications capture before the lock.
+        if generation is _CURRENT_REGISTRATION:
+            generation = self._registration_generations.get(host)
+        async with self._state_lock(host):
+            if (host not in self._cluster_state
+                    or self._registration_generations.get(host) is not generation):
+                return
+            failures = self._source_failures.setdefault(host, set())
+            if complete:
+                failures.discard(source)
+            else:
+                failures.add(source)
+            # Hold publication order through session acquisition and commit. A stream
+            # disconnect or unregister must never be overwritten by an older REST result.
+            async with self._session_maker() as db:
+                if host not in self._cluster_state:
+                    return
+                connected = self._cluster_state.get(host) == "connected" and not failures
+                await repository.set_cluster_state(
+                    db, host, "connected" if connected else "disconnected",
+                    error="Hypervisor discovery is incomplete" if failures else None,
+                    seeded=seeded,
+                )
+                await db.commit()
 
     async def _reseed_connected(self) -> None:
         for host in self.connected_hosts():
@@ -369,7 +440,8 @@ class JournalFollower:
             await self._per_host(
                 name,
                 lambda host: seed.reconcile_cluster(
-                    self._get_lxd_service(), host, self._session_maker, self._identities
+                    self._get_lxd_service(), host, self._session_maker, self._identities,
+                    record_state=False,
                 ),
             )
         elif name == "warnings":
@@ -381,13 +453,18 @@ class JournalFollower:
     async def _per_host(self, name: str, fn: Callable[[str], Awaitable[Any]]) -> None:
         # One host that raises must not starve the hosts sorted after it.
         for host in self.connected_hosts():
+            generation = self._registration_generations.get(host)
+            source = "operations" if name == "reconcile" else name
             if health.is_tripped(host):
+                await self._record_source_result(host, source, False, generation=generation)
                 continue
             try:
-                await fn(host)
+                result = await fn(host)
+                await self._record_source_result(host, source, result is not None, generation=generation)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
+                await self._record_source_result(host, source, False, generation=generation)
                 logger.warning("Task journal sweep %s failed on %s", name, host, exc_info=True)
 
     async def _db_sweep(self, fn: Callable[[Any], Awaitable[int]]) -> int:

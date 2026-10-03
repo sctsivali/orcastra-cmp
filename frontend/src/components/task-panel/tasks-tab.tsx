@@ -14,6 +14,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { TaskRecord } from "@/types/tasks";
+import { CollectionNotice } from "./collection-notice";
 import { useTaskList } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
 import {
@@ -87,9 +88,10 @@ export interface TasksTabProps {
   onCancel: (task: TaskRecord) => void;
   /** Hands the strip's refresh control this tab's refetch while it is mounted. */
   registerRefresh: (refresh: (() => Promise<unknown>) | null) => void;
+  collectionIncomplete: boolean;
 }
 
-function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel, registerRefresh }: TasksTabProps) {
+function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel, registerRefresh, collectionIncomplete }: TasksTabProps) {
   const [visibleLimit, setVisibleLimit] = React.useState(FIRST_PAGE);
   const query = useTaskList(feed.state === "connected", visibleLimit);
   const rows = React.useMemo(() => query.data?.tasks ?? [], [query.data]);
@@ -120,6 +122,7 @@ function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <CollectionNotice incomplete={collectionIncomplete} />
       <TableToolbar filters={filters} noun="tasks" className="px-3 py-2" />
       <Table density="compact" stickyHeader containerClassName="min-h-0 flex-1 border-t" scrollLabel="tasks">
         <TableHeader>
@@ -154,8 +157,10 @@ function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel
               description={
                 filters.activeFilterCount > 0
                   ? undefined
+                  : collectionIncomplete
+                    ? "Unavailable hypervisor sources may have tasks that are not recorded here yet."
                   : isPartner
-                    ? "Tasks appear here as soon as something starts on a cluster in your scope, including work started from the lxc command line."
+                    ? "Tasks on clusters in your scope appear here, including work started outside the dashboard."
                     : "Tasks for your instances appear here as soon as one starts."
               }
             />

@@ -18,7 +18,7 @@ export type FormattedByteQuota = { value: string; unit: string };
 export interface ByteFormatOptions {
   /** Digits after the decimal point before insignificant trailing zeroes are removed. */
   decimals?: number;
-  /** Whether a zero or invalid reading is explicit or rendered as the shared empty value. */
+  /** Whether a valid zero is explicit or rendered as the shared empty value. */
   zeroDisplay?: "zero" | "empty";
   /** Return value and unit separately for dense cards that style them independently. */
   split?: boolean;
@@ -33,21 +33,26 @@ function scaleBytes(
   options: number | ByteFormatOptions = {},
 ): FormattedByteValue {
   const normalized = typeof options === "number" ? { decimals: options } : options;
-  const decimals = Math.max(0, normalized.decimals ?? 2);
-  if (!Number.isFinite(bytes) || bytes <= 0) {
+  const decimals = byteDecimals(normalized.decimals ?? 2);
+  if (!Number.isFinite(bytes) || bytes < 0) return { value: EMPTY_VALUE, unit: "" };
+  if (bytes === 0) {
     return normalized.zeroDisplay === "empty"
       ? { value: EMPTY_VALUE, unit: "" }
       : { value: "0", unit: units[0] };
   }
 
   const index = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(base)),
+    Math.max(0, Math.floor(Math.log(bytes) / Math.log(base))),
     units.length - 1,
   );
   return {
     value: String(parseFloat((bytes / Math.pow(base, index)).toFixed(decimals))),
     unit: units[index],
   };
+}
+
+function byteDecimals(decimals: number): number {
+  return Number.isFinite(decimals) ? Math.min(20, Math.max(0, Math.floor(decimals))) : 2;
 }
 
 function scaleByteQuota(
@@ -58,11 +63,12 @@ function scaleByteQuota(
   decimals = 1,
 ): FormattedByteQuota {
   const limit = scaleBytes(limitBytes, base, units, { decimals, split: true });
+  if (!limit.unit) return { value: EMPTY_VALUE, unit: "" };
   const index = Math.max(0, units.indexOf(limit.unit));
   const divisor = Math.pow(base, index);
-  const usedValue = Number.isFinite(usedBytes) && usedBytes > 0
-    ? String(parseFloat((usedBytes / divisor).toFixed(Math.max(0, decimals))))
-    : "0";
+  const usedValue = Number.isFinite(usedBytes) && usedBytes >= 0
+    ? String(parseFloat((usedBytes / divisor).toFixed(byteDecimals(decimals))))
+    : EMPTY_VALUE;
 
   return {
     value: `${usedValue} of ${limit.value}`,
@@ -147,7 +153,7 @@ export function formatMemoryQuota(
 /** Network throughput in bytes per second, scaled with decimal SI units. */
 export function formatNetworkRate(bytesPerSecond: number, decimals = 2): string {
   const formatted = scaleBytes(bytesPerSecond, 1000, SI_BYTE_UNITS, { decimals });
-  return `${formatted.value} ${formatted.unit}/s`;
+  return formatted.unit ? `${formatted.value} ${formatted.unit}/s` : formatted.value;
 }
 
 /**
@@ -182,14 +188,14 @@ export function formatCpuTime(nanoseconds: number | null | undefined): string {
  * as "8 GB" or "8.0 GB".
  */
 export function formatFrequency(mhz: number | null | undefined): string {
-  if (mhz === null || mhz === undefined || mhz <= 0) return EMPTY_VALUE;
+  if (mhz === null || mhz === undefined || !Number.isFinite(mhz) || mhz <= 0) return EMPTY_VALUE;
   if (mhz < 1000) return `${Math.round(mhz)} MHz`;
   return `${parseFloat((mhz / 1000).toFixed(2))} GHz`;
 }
 
 /** Link speed, given in Mbit/s. Same reasoning as formatFrequency. */
 export function formatLinkSpeed(mbit: number | null | undefined): string {
-  if (mbit === null || mbit === undefined || mbit <= 0) return EMPTY_VALUE;
+  if (mbit === null || mbit === undefined || !Number.isFinite(mbit) || mbit <= 0) return EMPTY_VALUE;
   if (mbit < 1000) return `${mbit} Mb/s`;
   return `${parseFloat((mbit / 1000).toFixed(1))} Gb/s`;
 }

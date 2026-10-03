@@ -6,10 +6,11 @@
  * Every key nests under one of two prefixes, `["tasks"]` and `["cluster-log"]`, so a single
  * invalidateQueries per prefix reaches everything (the feed does that on a late `hello` and on
  * `resync`). Polling is a fallback: each list polls at its POLL_MS tier only while the feed is
- * not connected, and never in a background tab.
+ * not connected, and never in a background tab. The summary and queue also poll source
+ * health while connected, because per-cluster collector health is not a WebSocket frame.
  */
 
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   useMutation,
   useQuery,
@@ -37,7 +38,9 @@ export const taskKeys = {
   summary: (scopeKey: string) => ["tasks", scopeKey, "summary"] as const,
   list: (scopeKey: string, limit: number) => ["tasks", scopeKey, "list", { limit }] as const,
   window: (scopeKey: string, since: string) => ["tasks", scopeKey, "window", { since }] as const,
-  queue: (scopeKey: string) => ["tasks", scopeKey, "queue"] as const,
+  queue: (scopeKey: string, limit: number, offset: number) =>
+    ["tasks", scopeKey, "queue", { limit, offset }] as const,
+  queueRoot: (scopeKey: string) => ["tasks", scopeKey, "queue"] as const,
   detail: (scopeKey: string, id: string) => ["tasks", scopeKey, "detail", id] as const,
 };
 
@@ -88,9 +91,9 @@ function usePollInterval(base: number, live: boolean): number | false {
   return live ? false : interval;
 }
 
-export function useTaskSummary(feedConnected: boolean) {
+export function useTaskSummary() {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
-  const refetchInterval = usePollInterval(POLL_MS.active, feedConnected);
+  const [refetchInterval] = useState(() => jitter(POLL_MS.watched));
   return useRefreshableQuery<TaskListResponse>({
     queryKey: taskKeys.summary(scopeKey),
     queryFn: ({ fresh, signal }) => tasksAPI.summary({ fresh, signal }),
@@ -132,17 +135,28 @@ export function useTaskWindow(since: string, feedConnected: boolean) {
 }
 
 /** A grouped view derived server side, so it polls at the watched tier whatever the feed does. */
-export function useTaskQueue(enabled: boolean) {
+export function useTaskQueue(enabled: boolean, limit = 100, offset = 0) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const queryClient = useQueryClient();
   const [refetchInterval] = useState(() => jitter(POLL_MS.watched));
-  return useRefreshableQuery({
-    queryKey: taskKeys.queue(scopeKey),
-    queryFn: ({ fresh, signal }) => tasksAPI.queue({ fresh, signal }),
+  const query = useRefreshableQuery({
+    queryKey: taskKeys.queue(scopeKey, limit, offset),
+    queryFn: ({ fresh, signal }) => tasksAPI.queue({ limit, offset }, { fresh, signal }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && enabled,
     refetchInterval,
     refetchIntervalInBackground: false,
   });
+  const { refreshNow: refreshPage } = query;
+  const refreshNow = useCallback(async () => {
+    // A smaller result can move the observer to an earlier cached page. Retire that page
+    // before reading the current one so clamping cannot restore a pre-refresh queue.
+    await queryClient.invalidateQueries({
+      queryKey: taskKeys.queueRoot(scopeKey), refetchType: "none",
+    });
+    await refreshPage();
+  }, [queryClient, scopeKey, refreshPage]);
+  return { ...query, refreshNow };
 }
 
 /** Patched by `task` and `log` frames for its id, so it tracks status without a poll. */
@@ -453,8 +467,8 @@ export function upsertTaskInCaches(
     invalidateDebounced(queryClient, summaryKey);
   }
 
-  const queueKey = taskKeys.queue(scopeKey);
-  if (queryClient.getQueryData(queueKey) !== undefined) {
+  const queueKey = taskKeys.queueRoot(scopeKey);
+  if (queryClient.getQueriesData({ queryKey: queueKey }).some(([, data]) => data !== undefined)) {
     invalidateDebounced(queryClient, queueKey);
   }
 }

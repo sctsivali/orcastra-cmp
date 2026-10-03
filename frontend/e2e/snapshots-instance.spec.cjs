@@ -95,6 +95,10 @@ test("Per-instance unknown check failure retains its draft and guard until retry
   test.skip(testInfo.project.name !== "desktop-light", "Unknown recovery needs one profile");
 
   await authenticate(page.context(), "partner");
+  let releaseVerificationResponse;
+  const verificationResponseGate = new Promise((resolve) => {
+    releaseVerificationResponse = resolve;
+  });
   const api = await installApiFixtures(page, "partner", {
     snapshotInstancePage: true,
     snapshotCreate: {
@@ -110,7 +114,7 @@ test("Per-instance unknown check failure retains its draft and guard until retry
         {
           status: 403,
           body: { detail: "Fixture verification read failed" },
-          delayMs: 350,
+          responseGate: verificationResponseGate,
         },
         null,
       ],
@@ -128,19 +132,23 @@ test("Per-instance unknown check failure retains its draft and guard until retry
     .filter({ hasText: "Snapshot result unknown" });
   await expect(unknown).toContainText(UNKNOWN_RESULT_MESSAGE);
   const targetReadsBefore = api.requests.filter((entry) => isTargetSnapshotRead(entry)).length;
-  await unknown.getByRole("button", { name: "Check snapshots" }).click();
+  try {
+    await unknown.getByRole("button", { name: "Check snapshots" }).click();
 
-  await expect(unknown.getByRole("button", { name: "Checking snapshots" })).toHaveAttribute(
-    "aria-busy",
-    "true",
-  );
-  await expect
-    .poll(() => api.requests.filter((entry) => isTargetSnapshotRead(entry)).length)
-    .toBeGreaterThan(targetReadsBefore);
-  await expect(label).toHaveValue(BASE_CREATE_BODY.label);
-  await expect(label).toBeDisabled();
-  await expect(unknown).toBeVisible();
-  await expect(createDialog).toBeVisible();
+    await expect(unknown.getByRole("button", { name: "Checking snapshots" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    await expect
+      .poll(() => api.requests.filter((entry) => isTargetSnapshotRead(entry)).length)
+      .toBeGreaterThan(targetReadsBefore);
+    await expect(label).toHaveValue(BASE_CREATE_BODY.label);
+    await expect(label).toBeDisabled();
+    await expect(unknown).toBeVisible();
+    await expect(createDialog).toBeVisible();
+  } finally {
+    releaseVerificationResponse();
+  }
 
   await expect(
     createDialog.getByText(

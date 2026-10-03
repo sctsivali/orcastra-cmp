@@ -103,7 +103,7 @@ export function DockStrip({
 
       <div className="flex-1" />
 
-      {showOperator && disconnected.length > 0 && (
+      {disconnected.length > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -118,13 +118,15 @@ export function DockStrip({
             </Button>
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
-            Live updates are interrupted on {disconnected.join(", ")}. Their tasks may be stale until the
-            follower reconnects.
+            {showOperator
+              ? `Hypervisor sources are unavailable on ${disconnected.join(", ")}.`
+              : `${disconnected.length} ${disconnected.length === 1 ? "hypervisor source is" : "hypervisor sources are"} unavailable in your scope.`}
+            {" "}Tasks and logs may be incomplete or stale until collection recovers.
           </TooltipContent>
         </Tooltip>
       )}
 
-      <LiveIndicator feed={feed} apiDown={apiDown} />
+      <LiveIndicator feed={feed} apiDown={apiDown} disconnected={disconnected.length} />
 
       <RefreshButton
         label={tab === "log" && open ? "Refresh log" : tab === "queue" && open ? "Refresh queue" : "Refresh tasks"}

@@ -364,6 +364,7 @@ function nextRead(options, state, kind, body) {
     headers: override.headers,
     body: Object.hasOwn(override, "body") ? override.body : body,
     delayMs: override.delayMs,
+    responseGate: override.responseGate,
     abort: override.abort,
   };
 }
@@ -533,6 +534,9 @@ async function fulfillSnapshotRead(route, descriptor) {
   if (descriptor.abort) {
     await route.abort(descriptor.abort === true ? "timedout" : descriptor.abort);
     return;
+  }
+  if (descriptor.responseGate) {
+    await descriptor.responseGate;
   }
   if (descriptor.delayMs) {
     await new Promise((resolve) => setTimeout(resolve, descriptor.delayMs));

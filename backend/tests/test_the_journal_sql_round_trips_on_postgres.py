@@ -581,11 +581,13 @@ def test_every_read_returns_rows_the_presenter_and_models_accept(loop, db):
             lines = await reads.task_log(s, str(first["id"]))
             for line in lines:
                 ClusterLogEntry.model_validate(present.log_row(line, tier="tenant"))
-            queue = await reads.queue_rows(s, [])
+            queue, queue_total = await reads.queue_rows(s, [])
+            assert queue_total == len(queue)
             for q in queue:
                 assert q["status"] in ("pending", "running")
-            due = await reads.due_schedules(s, None)
+            due, due_total = await reads.due_schedules(s, None)
             assert isinstance(due, list)
+            assert due_total >= len(due)
             logs, ltotal = await reads.list_log(s, [], [], 50, 0)
             assert ltotal >= 3
             for line in logs:

@@ -1,5 +1,7 @@
 "use client";
 
+import { CollectionNotice } from "./collection-notice";
+
 import * as React from "react";
 import { Copy, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -69,6 +71,7 @@ export interface LogTabProps {
   height: number;
   onOpenTask: (id: string) => void;
   registerRefresh: (refresh: (() => Promise<unknown>) | null) => void;
+  collectionIncomplete: boolean;
 }
 
 function logLine(entry: ClusterLogEntry): string {
@@ -138,7 +141,7 @@ function LogRow({
   );
 }
 
-function LogTabInner({ feed, height, onOpenTask, registerRefresh }: LogTabProps) {
+function LogTabInner({ feed, height, onOpenTask, registerRefresh, collectionIncomplete }: LogTabProps) {
   const [visibleLimit, setVisibleLimit] = React.useState(FIRST_PAGE);
   const query = useClusterLog(true, feed.state === "connected", visibleLimit);
   const rows = React.useMemo(() => query.data?.entries ?? [], [query.data]);
@@ -193,6 +196,7 @@ function LogTabInner({ feed, height, onOpenTask, registerRefresh }: LogTabProps)
 
   return (
     <div ref={wrapperRef} className="relative flex min-h-0 flex-1 flex-col">
+      <CollectionNotice incomplete={collectionIncomplete} />
       <TableToolbar filters={filters} noun="entries" className="px-3 py-2" />
       {newCount > 0 ? (
         <div className="pointer-events-none absolute inset-x-0 top-24 z-20 flex justify-center">
@@ -228,7 +232,9 @@ function LogTabInner({ feed, height, onOpenTask, registerRefresh }: LogTabProps)
               colSpan={COLUMN_COUNT}
               icon={ScrollText}
               title={filters.activeFilterCount > 0 ? "No log entry matches the current filters." : "No log entries yet"}
-              description={filters.activeFilterCount > 0 ? undefined : "Activity on your clusters is recorded here as it happens."}
+              description={filters.activeFilterCount > 0 ? undefined : collectionIncomplete
+                ? "Unavailable hypervisor sources may have activity that is not recorded here yet."
+                : "Recorded activity on clusters in your scope appears here."}
             />
           ) : (
             sorted.map((entry) => {

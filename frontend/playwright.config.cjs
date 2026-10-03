@@ -24,6 +24,7 @@ module.exports = defineConfig({
   },
   reporter: [
     ["list"],
+    ["json", { outputFile: path.join(artifactRoot, "results.json") }],
     ["html", { outputFolder: reportDir, open: "never" }],
   ],
   use: {
@@ -51,12 +52,27 @@ module.exports = defineConfig({
         colorScheme: "dark",
       },
     },
+    {
+      name: "desktop-dark",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 1000 },
+        colorScheme: "dark",
+      },
+    },
+    {
+      name: "mobile-light",
+      use: {
+        ...devices["Pixel 7"],
+        colorScheme: "light",
+      },
+    },
   ],
   webServer: {
-    command: `npx next start -p ${e2ePort}`,
+    command: `npx next start --hostname 127.0.0.1 -p ${e2ePort}`,
     url: baseURL,
     timeout: 120_000,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     env: {
       AUTH_SECRET:
         process.env.AUTH_SECRET ||
@@ -70,6 +86,7 @@ module.exports = defineConfig({
       AUTHENTIK_ISSUER: "https://idp.invalid/application/o/orcastra/",
       AUTHENTIK_CLIENT_ID: "orcastra-e2e-client",
       AUTHENTIK_CLIENT_SECRET: "unused-e2e-client-secret",
+      INTERNAL_BACKEND_URL: "http://127.0.0.1:1",
       NEXT_PUBLIC_API_URL: "",
       NEXT_TELEMETRY_DISABLED: "1",
     },

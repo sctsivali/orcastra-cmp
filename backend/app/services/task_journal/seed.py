@@ -75,16 +75,22 @@ async def _read(host: str, node: Any, params: Dict[str, str], label: str) -> Any
 async def _project_names(client: Any, host: str) -> Tuple[List[str], bool]:
     """(names, complete): complete is False when the walk was cut at MAX_PROJECTS."""
     response = await _read(host, client.api.projects, {"recursion": "0"}, "projects")
+    metadata = _metadata(response)
+    if not isinstance(metadata, list):
+        return [], False
     names: List[str] = []
-    for entry in _metadata(response) or []:
+    complete = True
+    for entry in metadata:
         if isinstance(entry, str):
             names.append(entry.rsplit("/", 1)[-1])
         elif isinstance(entry, dict) and entry.get("name"):
             names.append(str(entry["name"]))
+        else:
+            complete = False
     if len(names) > MAX_PROJECTS:
         logger.warning("%s carries %d projects; reading the first %d", host, len(names), MAX_PROJECTS)
         return names[:MAX_PROJECTS], False
-    return names, True
+    return names, complete and bool(names)
 
 
 async def read_operations(client: Any, host: str) -> Tuple[Dict[str, List[Dict[str, Any]]], bool]:
@@ -105,7 +111,8 @@ async def read_operations(client: Any, host: str) -> Tuple[Dict[str, List[Dict[s
             raise
         logger.info("%s refused all-projects on /1.0/operations; walking projects", host)
         return await _read_operations_per_project(client, host)
-    return _buckets(_metadata(response)), True
+    metadata = _metadata(response)
+    return _buckets(metadata), _buckets_complete(metadata)
 
 
 async def _read_operations_per_project(
@@ -123,7 +130,9 @@ async def _read_operations_per_project(
             logger.info("Skipping project %s on %s while reading operations: %s", name, host, exc)
             complete = False
             continue
-        for bucket, ops in _buckets(_metadata(response)).items():
+        metadata = _metadata(response)
+        complete = complete and _buckets_complete(metadata)
+        for bucket, ops in _buckets(metadata).items():
             merged.setdefault(bucket, []).extend(ops)
     return merged, complete
 
@@ -136,6 +145,16 @@ def _buckets(metadata: Any) -> Dict[str, List[Dict[str, Any]]]:
         for bucket, ops in metadata.items()
         if isinstance(ops, list)
     }
+
+
+def _buckets_complete(metadata: Any) -> bool:
+    """An ignored recursion flag or unknown bucket cannot prove an operation has vanished."""
+    return isinstance(metadata, dict) and all(
+        isinstance(ops, list)
+        and (bucket in BUCKETS or not ops)
+        and all(isinstance(op, dict) and bool(op.get("id")) for op in ops)
+        for bucket, ops in metadata.items()
+    )
 
 
 def frames_from_buckets(
@@ -160,19 +179,22 @@ async def reconcile_cluster(
     host: str,
     session_maker: Callable[[], Any],
     identities: Optional[Any] = None,
+    *,
+    record_state: bool = True,
 ) -> Optional[int]:
     """Upsert every operation the daemon holds and mark vanished open rows lost.
 
-    Returns how many operations were read, or None when the cluster did not answer (its state
-    row is set to disconnected with the breaker's reason).
+    Returns how many operations were read, or None when discovery did not cover the cluster.
+    Partial rows are still upserted, but never justify marking unseen operations lost.
     """
     client = await client_for(lxd_service, host, label="task_journal.seed")
     if client is None:
-        async with session_maker() as db:
-            await repository.set_cluster_state(
-                db, host, "disconnected", error=unreachable_detail(host)
-            )
-            await db.commit()
+        if record_state:
+            async with session_maker() as db:
+                await repository.set_cluster_state(
+                    db, host, "disconnected", error=unreachable_detail(host)
+                )
+                await db.commit()
         return None
     buckets, complete = await read_operations(client, host)
     known = await identities.for_host(host) if identities is not None else frozenset()
@@ -185,18 +207,25 @@ async def reconcile_cluster(
             lost = await repository.mark_lost(
                 db,
                 cluster_id=host,
-                seen_ids=[frame.operation_id for frame in frames],
+                seen_ids=[
+                    str(op["id"]) for bucket in BUCKETS for op in buckets.get(bucket, [])
+                    if op.get("id")
+                ],
                 older_than_s=LOST_AFTER_S,
             )
         else:
             logger.info("%s: partial operations read, nothing marked lost this pass", host)
-        # The REST path answered: the state row says so, whatever an earlier timed-out read
-        # wrote, so the panel does not call a cluster stale while its stream is flowing.
-        await repository.set_cluster_state(db, host, "connected")
+        if record_state:
+            await repository.set_cluster_state(
+                db,
+                host,
+                "connected" if complete else "disconnected",
+                error=None if complete else "Hypervisor operation discovery was incomplete",
+            )
         await db.commit()
     if lost:
         logger.info("%s: %d operations the daemon no longer reports marked lost", host, lost)
-    return len(frames)
+    return len(frames) if complete else None
 
 
 async def seed_cluster(
@@ -204,11 +233,15 @@ async def seed_cluster(
     host: str,
     session_maker: Callable[[], Any],
     identities: Optional[Any] = None,
+    *,
+    record_state: bool = True,
 ) -> Optional[int]:
     """`reconcile_cluster` plus the seeded stamp on the cluster's state row."""
-    count = await reconcile_cluster(lxd_service, host, session_maker, identities)
-    if count is None:
-        return None
+    count = await reconcile_cluster(
+        lxd_service, host, session_maker, identities, record_state=record_state
+    )
+    if count is None or not record_state:
+        return count
     async with session_maker() as db:
         await repository.set_cluster_state(db, host, "connected", seeded=True)
         await db.commit()
@@ -275,11 +308,11 @@ def warning_row(host: str, warning: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 async def sweep_warnings(
     lxd_service: Any, host: str, session_maker: Callable[[], Any]
-) -> int:
+) -> Optional[int]:
     """One cluster log row per (warning, last seen); repeats are no-ops on the event id."""
     client = await client_for(lxd_service, host, label="task_journal.warnings")
     if client is None:
-        return 0
+        return None
     try:
         response = await _read(
             host, client.api.warnings,
@@ -289,9 +322,14 @@ async def sweep_warnings(
         if not _is_http_400(exc):
             raise
         response = await _read(host, client.api.warnings, {"recursion": "1"}, "warnings")
+    metadata = _metadata(response)
+    if not isinstance(metadata, list) or any(
+        not isinstance(warning, dict) or not warning.get("uuid") for warning in metadata
+    ):
+        raise ValueError("Hypervisor warning response was incomplete")
     rows = [
         row
-        for row in (warning_row(host, w) for w in _metadata(response) or [] if isinstance(w, dict))
+        for row in (warning_row(host, warning) for warning in metadata)
         if row is not None
     ]
     if not rows:

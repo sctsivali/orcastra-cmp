@@ -41,6 +41,8 @@ from app.core.task_scope import (
     task_conditions,
     task_is_visible,
 )
+from app.core.task_schedule_scope import schedule_conditions
+from app.models.snapshot_schedule_models import SnapshotSchedule
 from app.models.task_journal_models import TASK_KINDS, TASK_STATUSES, TaskJournal
 from app.models.task_schemas import (
     CancelResponse,
@@ -189,14 +191,21 @@ async def list_tasks(
 
 @router.get("/queue", response_model=QueueResponse, summary="Open tasks per cluster")
 async def get_queue(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ) -> QueueResponse:
     scope = task_conditions(TaskJournal)
-    rows = await reads.queue_rows(db, scope)
+    rows, total = await reads.queue_rows(db, scope, limit, offset)
     states = await reads.follower_snapshot(db)
     active = await reads.follower_active(db)
-    due = await reads.due_schedules(db, get_current_allowed_clusters())
+    due, due_total = await reads.due_schedules(
+        db,
+        get_current_allowed_clusters(),
+        conditions=schedule_conditions(SnapshotSchedule),
+        limit=100 if offset == 0 else 0,
+    )
 
     tier = caller_tier()
     state_by_cluster = {str(state["cluster_id"]): str(state["state"]) for state in states}
@@ -248,6 +257,12 @@ async def get_queue(
         generated_at=datetime.now(timezone.utc),
         disconnected_clusters=disconnected_for_caller(states),
         follower_active=active,
+        total_open=total,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(rows) < total,
+        due_schedules_total=due_total,
+        due_schedules_truncated=len(due) < due_total,
     )
 
 
@@ -282,7 +297,7 @@ def _lxd_says_gone(exc: Exception) -> bool:
 @router.delete(
     "/{task_id}",
     response_model=CancelResponse,
-    summary="Cancel a running LXD operation",
+    summary="Cancel a running hypervisor operation",
     dependencies=[Depends(check_read_only_mode)],
 )
 async def cancel_task(
@@ -294,7 +309,7 @@ async def cancel_task(
     row = await _load_visible_task(db, task_id)
     operation_id = row.get("operation_id")
     if not operation_id:
-        raise _refuse("NO_OPERATION", "This task is not a cancellable LXD operation")
+        raise _refuse("NO_OPERATION", "This task is not a cancellable hypervisor operation")
     if row.get("operation_class") == "websocket":
         # D16: console and exec sessions are ended from the Sessions page, never by an
         # operation DELETE that would drop the socket under the operator.

@@ -12,6 +12,7 @@ partner's dropdown had too.
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.routers.networks import NetworkCreateRequest, validate_uplink
 
@@ -134,12 +135,8 @@ def test_every_candidate_nuc1_offers_today_is_judged_the_way_lxd_would():
 
 
 def test_a_bridge_create_may_not_carry_an_ovn_uplink_key():
-    request = NetworkCreateRequest(
-        name="br0", type="bridge", config={"network": "br-uplink"}
-    )
-    with pytest.raises(HTTPException) as exc:
-        validate_uplink(request, FIELD_NETWORKS)
-    assert "only applies to an OVN network" in exc.value.detail
+    with pytest.raises(ValidationError, match="Unsupported network config"):
+        NetworkCreateRequest(name="br0", type="bridge", config={"network": "br-uplink"})
 
 
 def test_a_plain_bridge_create_is_untouched():

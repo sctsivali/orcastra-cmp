@@ -40,9 +40,10 @@ const ROLE_GROUPS = {
 };
 
 
-async function authenticate(context, role) {
-  const groups = ROLE_GROUPS[role];
-  if (!groups) throw new Error(`Unknown E2E role: ${role}`);
+async function authenticate(context, role, { sessionRole = role } = {}) {
+  // A refreshed synthetic session can lose privileges without changing its principal or bearer.
+  const groups = ROLE_GROUPS[sessionRole];
+  if (!ROLE_GROUPS[role] || !groups) throw new Error(`Unknown E2E role: ${sessionRole}`);
   const { encode } = await import("next-auth/jwt");
   const now = Math.floor(Date.now() / 1000);
   const email = `${role}@e2e.invalid`;
@@ -129,7 +130,7 @@ async function installApiFixtures(page, role, options = {}) {
       url.port === "4050" &&
       url.protocol === (baseUrl.protocol === "https:" ? "wss:" : "ws:");
     const isExpectedInstanceSocket =
-      options.snapshotInstancePage === true &&
+      (options.snapshotInstancePage === true || options.instanceListPage === true) &&
       ["admin", "partner", "tenant"].includes(role) &&
       url.pathname === "/api/v1/events/ws" &&
       url.searchParams.get("host") === configuredSnapshotTarget.host &&
@@ -150,6 +151,7 @@ async function installApiFixtures(page, role, options = {}) {
     }
 
     (isExpectedMonitoringSocket ? state.monitoringSockets : state.instanceSockets).push(entry);
+    if (isExpectedInstanceSocket) options.onInstanceSocket?.(webSocket);
     webSocket.onClose(async (code) => {
       entry.closedAt = Date.now();
       entry.closeCode = code ?? null;
@@ -253,9 +255,9 @@ async function installApiFixtures(page, role, options = {}) {
     if (path === "/user-preferences") {
       body = {};
     } else if (path === "/organizations/my-preferences") {
-      body = { settings: {}, updated_at: null };
+      body = { organization_id: 0, settings: {}, updated_at: null };
     } else if (path === "/organizations/my-preferences/version") {
-      body = { updated_at: null };
+      body = { organization_id: 0, updated_at: null };
     } else if (path === "/system/settings") {
       body = {
         read_only_mode: options.readOnly === true,

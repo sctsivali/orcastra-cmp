@@ -21,6 +21,8 @@ async function choose(page, label, option) {
   await expect(trigger).toBeEnabled();
   await trigger.click();
   await page.getByRole("option", { name: new RegExp(option, "i") }).click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).toBeFocused();
 }
 
 async function closeDialog(page) {

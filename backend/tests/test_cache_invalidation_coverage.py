@@ -49,6 +49,8 @@ INVALIDATORS = {
     "invalidate_instance_cache",
     "invalidate_resource_cache",
     "invalidate_cluster_cache",
+    "invalidate_node_cache",
+    "invalidate_all_node_caches",
     "delete_pattern",
     "delete",
 }

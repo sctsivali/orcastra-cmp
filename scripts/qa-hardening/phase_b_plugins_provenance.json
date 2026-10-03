@@ -1,0 +1,27 @@
+{
+  "fetched_at": "2026-09-30T13:13:43.821073+00:00",
+  "plugins": {
+    "compose": {
+      "version": "v5.5.1",
+      "source_url": "https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-x86_64",
+      "sha256": "db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576",
+      "size": 32333754,
+      "metadata_url": "https://api.github.com/repos/docker/compose/releases/tags/v5.5.1",
+      "published_at": "2026-09-03T15:53:28Z",
+      "checksum_url": "https://github.com/docker/compose/releases/download/v5.5.1/checksums.txt",
+      "checksum_file_sha256": "fec854bf0723e40aaeaced8f90c56796a4b9c836568c0b5a2c65b0387650dc65",
+      "verification": "GitHub release-asset digest independently matches official published checksum file; no binary installation"
+    },
+    "buildx": {
+      "version": "v0.37.1",
+      "source_url": "https://github.com/docker/buildx/releases/download/v0.37.1/buildx-v0.37.1.linux-amd64",
+      "sha256": "9447199cdb435f25880548343c128a4b6650e8891ee598905d8d29d39a8e359b",
+      "size": 65798306,
+      "metadata_url": "https://api.github.com/repos/docker/buildx/releases/tags/v0.37.1",
+      "published_at": "2026-09-11T15:35:46Z",
+      "checksum_url": "https://github.com/docker/buildx/releases/download/v0.37.1/checksums.txt",
+      "checksum_file_sha256": "30ef0e1fee3a623dd6d2a0e223d37fc5fd6be9173cf7f04af24ba94e2637d91c",
+      "verification": "GitHub release-asset digest independently matches official published checksum file; no binary installation"
+    }
+  }
+}

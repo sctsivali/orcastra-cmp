@@ -30,6 +30,86 @@ function editableSpecification(overrides = {}) {
   };
 }
 
+async function selectDuringHeldMenuExit(page, actionName) {
+  // Pause only the exit animation so a real backend read/event can update the row before
+  // Radix releases its focus scope. Release below exercises the actual close-autofocus path.
+  await page.addStyleTag({ content: `
+    @keyframes qa-row-action-exit { from { opacity: 1; } to { opacity: 0; } }
+    [role="menu"][data-state="closed"] {
+      animation: qa-row-action-exit 650ms linear paused !important;
+    }
+  ` });
+  const opener = page.getByRole("button", {
+    name: "Actions for instance tenant-owned-vm in tenant-a on cluster-a",
+  });
+  const previousOpener = await opener.elementHandle();
+  await opener.press("Enter");
+  const action = page.getByRole("menuitem", { name: actionName });
+  await expect(action).not.toHaveAttribute("aria-disabled", "true");
+  await action.focus();
+  await action.press("Enter");
+  const closing = page.locator('[role="menu"][data-state="closed"]');
+  await expect(closing).toHaveCount(1);
+  return { opener, closing, previousOpener };
+}
+
+for (const role of ["admin", "partner"]) {
+  for (const change of ["write availability", "action removal", "opener unmount"]) {
+    test(`${role} row handoff cancels obsolete selection after ${change}`, async ({ page }, testInfo) => {
+      await authenticate(page.context(), role);
+      const streams = [];
+      const options = { snapshotInstancePage: true, onInstanceSocket: (socket) => streams.push(socket) };
+      if (change === "write availability") await page.clock.install();
+      const api = await installApiFixtures(page, role, options);
+      await page.goto("/inventory/instances");
+      await expect.poll(() => streams.length).toBe(1);
+      await expect.poll(() => api.requests.filter(({ path }) => path === "/system/settings").length).toBe(1);
+      const { opener, closing, previousOpener } = await selectDuringHeldMenuExit(page,
+        change === "action removal" ? /Stop Instance/ : /Edit Specifications/);
+      expect(await previousOpener.evaluate((element) => element.isConnected)).toBe(true);
+
+      if (change === "write availability") {
+        options.readOnly = true;
+        await page.clock.fastForward(60_001);
+        await expect.poll(() => api.requests.filter(({ path }) => path === "/system/settings").length).toBe(2);
+        await expect(closing.locator('[data-action="edit-specification"]')).toContainText("Disabled in read-only mode");
+      } else {
+        options.instanceStatus = "Stopped";
+        streams[0].send(JSON.stringify({ type: "lifecycle", action: change === "action removal"
+          ? "instance-stopped" : "instance-deleted", instance: "tenant-owned-vm", project: "tenant-a" }));
+        if (change === "action removal") {
+          await expect(closing.locator('[data-action="stop"]')).toHaveCount(0);
+          await expect(closing.locator('[data-action="start"]')).toHaveCount(1);
+        } else {
+          await expect(opener).toHaveCount(0);
+          await expect.poll(() => previousOpener.evaluate((element) => element.isConnected)).toBe(false);
+        }
+      }
+      if (change !== "opener unmount") {
+        await closing.evaluate((element) => element.style.setProperty("animation-play-state", "running", "important"));
+        await expect(closing).toHaveCount(0);
+        await expect(opener).toBeFocused();
+      } else {
+        await expect(closing).toHaveCount(0);
+        await page.keyboard.press("Tab");
+        await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.isConnected
+          && document.activeElement !== document.body && !document.activeElement.closest('[role="menu"], [role="dialog"], [role="alertdialog"]')))).toBe(true);
+      }
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("alertdialog")).toHaveCount(0);
+      const specificationReads = api.requests.filter(({ path }) => path.includes("/specification"));
+      expect(specificationReads).toEqual([]);
+      expect(api.mutations).toEqual([]);
+      await testInfo.attach("obsolete-row-selection", {
+        body: JSON.stringify({ role, change, specificationReads, mutations: api.mutations,
+          openerConnected: await previousOpener.evaluate((element) => element.isConnected) }),
+        contentType: "application/json",
+      });
+      await expectCleanHarness(api);
+    });
+  }
+}
+
 function job(status, phase, overrides = {}) {
   const base = {
     job_id: "spec-job-1",
@@ -177,7 +257,10 @@ for (const role of ["admin", "partner"]) {
     await expect(dialog.getByText("6", { exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "Done" }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByText("Specifications updated")).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Notifications (F8)" })
+        .getByText("Specifications updated", { exact: true }),
+    ).toBeVisible();
 
     const preflight = calls.find((call) => call.method === "POST");
     expect(preflight.body).toEqual({ host: "cluster-a", project: "tenant-a", cpu_count: 6 });
@@ -291,9 +374,10 @@ test("tenant API denial remains enforced when the hidden edit route is called di
   await expectCleanHarness(api);
 });
 
-test("detail and row action handoffs restore keyboard focus to a connected opener", async ({ page }) => {
-  await authenticate(page.context(), "admin");
-  const api = await installApiFixtures(page, "admin", { snapshotInstancePage: true });
+for (const role of ["admin", "partner"]) {
+test(`${role} detail and row action handoffs restore keyboard focus to a connected opener`, async ({ page }) => {
+  await authenticate(page.context(), role);
+  const api = await installApiFixtures(page, role, { snapshotInstancePage: true });
   await page.route("**/api/v1/instances/tenant-owned-vm/specification**", async (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() === "GET" && url.pathname.endsWith("/specification")) {
@@ -334,11 +418,25 @@ test("detail and row action handoffs restore keyboard focus to a connected opene
   const actions = page.getByRole("button", {
     name: "Actions for instance tenant-owned-vm in tenant-a on cluster-a",
   });
-  await actions.click();
-  await page.getByRole("menuitem", { name: /Edit Specifications/ }).click();
-  await expect(specification).toBeVisible();
+  // Exercise a slow menu exit as well as keyboard selection; the dialog must inherit the
+  // connected row trigger after the menu releases its focus scope.
+  await page.addStyleTag({ content: '[role="menu"][data-state="closed"] { animation-duration: 650ms !important; }' });
+  for (const input of ["pointer", "keyboard"]) {
+    if (input === "pointer") await actions.click();
+    else await actions.press("Enter");
+    const item = page.getByRole("menuitem", { name: /Edit Specifications/ });
+    if (input === "pointer") await item.click();
+    else { await item.focus(); await item.press("Enter"); }
+    await expect(specification).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(specification).toBeHidden();
+    await expect(actions).toBeFocused();
+  }
+  await actions.press("Enter");
+  await expect(page.getByRole("menu")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(specification).toBeHidden();
+  await expect(page.getByRole("menu")).toBeHidden();
   await expect(actions).toBeFocused();
   await expectCleanHarness(api);
 });
+}

@@ -1,7 +1,7 @@
 # Makefile for Orcastra CMP
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: export-openapi release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: export-openapi release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend test-qa-artifacts lint-qa-artifacts install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
@@ -13,7 +13,7 @@ endif
 # Test and lint gates are hermetic and must not need deployment secrets just to let
 # GNU make parse their recipes. Load the local deployment environment only when at
 # least one requested goal can actually consume it.
-ENV_INDEPENDENT_GOALS := test-backend test-frontend lint-backend lint-frontend
+ENV_INDEPENDENT_GOALS := test-backend test-frontend lint-backend lint-frontend test-qa-artifacts lint-qa-artifacts
 LOAD_LOCAL_ENV := 1
 ifneq ($(strip $(MAKECMDGOALS)),)
 ifeq ($(strip $(filter-out $(ENV_INDEPENDENT_GOALS),$(MAKECMDGOALS))),)
@@ -255,6 +255,14 @@ test-backend: ## Run backend tests (host, in a scrubbed environment)
 	@echo "$(COLOR_GREEN)Running backend tests...$(COLOR_RESET)"
 	@cd backend && $(ENV_SCRUB) $(PYTEST)
 
+QA_PYTHON ?= python3
+
+test-qa-artifacts: ## Run offline isolated-lab contracts without provisioning
+	@$(ENV_SCRUB) $(QA_PYTHON) -B -m unittest discover -s scripts/qa-hardening -p '*test*.py' -v
+
+lint-qa-artifacts: ## Lint isolated-lab helpers and their offline contracts
+	@$(ENV_SCRUB) ruff check --no-cache scripts/qa-hardening
+
 # The deployed image, which is what this target is meant to exercise. Falls back to the
 # APP_VERSION tag when nothing is running.
 BACKEND_IMAGE = $(shell docker inspect --format '{{.Config.Image}}' $(CONTAINER_PREFIX)-backend 2>/dev/null || echo $(CONTAINER_PREFIX)-backend:$(APP_VERSION))
@@ -348,6 +356,10 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-personalization-defaults.mjs
 	@echo "$(COLOR_GREEN)Checking the org branding target...$(COLOR_RESET)"
 	@node scripts/checks/check-org-branding-target.mjs
+	@echo "$(COLOR_GREEN)Checking Settings routes, cache and branding synchronization...$(COLOR_RESET)"
+	@node scripts/checks/check-settings-hardening.mjs
+	@echo "$(COLOR_GREEN)Checking task journal pagination and duration behavior...$(COLOR_RESET)"
+	@node scripts/checks/check-task-journal-behavior.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal theme...$(COLOR_RESET)"
 	@node scripts/checks/check-terminal-theme.mjs
 	@echo "$(COLOR_GREEN)Checking prose typography...$(COLOR_RESET)"

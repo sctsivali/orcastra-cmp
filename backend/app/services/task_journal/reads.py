@@ -8,7 +8,7 @@ judges every row again after the load.
 
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import case, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -92,27 +92,61 @@ async def task_log(db: AsyncSession, task_id: str, limit: int = 500) -> List[Map
     return list((await db.execute(stmt)).mappings().all())
 
 
-async def queue_rows(db: AsyncSession, conditions: Sequence[Any]) -> List[Mapping[str, Any]]:
-    """Every open row in scope, oldest first per cluster, which is the queue position."""
+async def queue_rows(
+    db: AsyncSession, conditions: Sequence[Any], limit: int = 100, offset: int = 0
+) -> Tuple[List[Mapping[str, Any]], int]:
+    """One bounded page in acceptance order, with pending ranks over the scoped queue.
+
+    Window evaluation precedes LIMIT, so a later page keeps each pending row's rank. Running
+    rows have their own partition and never consume a pending position.
+    """
+    where = [*conditions, TaskJournal.status.in_(OPEN_STATUSES)]
+    total = await _count(db, TaskJournal.__table__, where)
+    if limit <= 0 or offset >= total:
+        return [], total
+    position = case(
+        (
+            TaskJournal.status == "pending",
+            func.row_number().over(
+                partition_by=(TaskJournal.cluster_id, TaskJournal.status),
+                order_by=(TaskJournal.created_at.asc(), TaskJournal.seq.asc()),
+            ),
+        ),
+        else_=None,
+    ).label("queue_position")
     stmt = (
-        _task_select()
-        .where(*conditions, TaskJournal.status.in_(OPEN_STATUSES))
+        _task_select().add_columns(position)
+        .where(*where)
         .order_by(TaskJournal.cluster_id.asc(), TaskJournal.created_at.asc(), TaskJournal.seq.asc())
+        .limit(limit)
+        .offset(offset)
     )
-    return list((await db.execute(stmt)).mappings().all())
+    return list((await db.execute(stmt)).mappings().all()), total
 
 
 async def due_schedules(
-    db: AsyncSession, allowed: Optional[Sequence[str]], hours: int = 1
-) -> List[Mapping[str, Any]]:
+    db: AsyncSession,
+    allowed: Optional[Sequence[str]],
+    hours: int = 1,
+    *,
+    conditions: Sequence[Any] = (),
+    limit: int = 100,
+) -> Tuple[List[Mapping[str, Any]], int]:
     """Active snapshot schedules due within `hours`, bounded to `allowed` clusters (None = all).
 
     Empty when the schedule surface is switched off, so the queue never names a feature the
-    console does not expose. The caller applies the per-row project and permission checks.
+    console does not expose. The caller supplies the project and snapshot ACL predicates;
+    they apply to both the count and the bounded page before any rows are loaded.
     """
     if not get_settings().snapshot_schedules_enabled:
-        return []
+        return [], 0
     horizon = literal_column(f"now() + interval '{int(hours)} hours'")
+    where = [*conditions, SnapshotSchedule.state == "active", SnapshotSchedule.next_run_at <= horizon]
+    if allowed is not None:
+        where.append(SnapshotSchedule.cluster_id.in_(list(allowed) or ["__none__"]))
+    total = await _count(db, SnapshotSchedule.__table__, where)
+    if limit <= 0 or total == 0:
+        return [], total
     stmt = (
         select(
             SnapshotSchedule.id.label("schedule_id"),
@@ -123,12 +157,11 @@ async def due_schedules(
             SnapshotSchedule.next_run_at,
             SnapshotSchedule.run_state,
         )
-        .where(SnapshotSchedule.state == "active", SnapshotSchedule.next_run_at <= horizon)
+        .where(*where)
         .order_by(SnapshotSchedule.next_run_at.asc(), SnapshotSchedule.id.asc())
+        .limit(limit)
     )
-    if allowed is not None:
-        stmt = stmt.where(SnapshotSchedule.cluster_id.in_(list(allowed) or ["__none__"]))
-    return list((await db.execute(stmt)).mappings().all())
+    return list((await db.execute(stmt)).mappings().all()), total
 
 
 async def list_log(

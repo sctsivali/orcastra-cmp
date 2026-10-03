@@ -403,7 +403,7 @@ const breakGlassStoreSource = readFileSync(
   "utf8",
 );
 const personalizationProvider = readFileSync(
-  join(root, "frontend/src/components/personalization-provider.tsx"),
+  join(root, "frontend/src/components/personalization/use-personalization-mutations.ts"),
   "utf8",
 );
 
