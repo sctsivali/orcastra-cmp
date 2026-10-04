@@ -58,3 +58,11 @@ writer_logging_prod:
   index_permissions:
     - index_patterns: ["containers-logging-prod-*"]
       allowed_actions: ["create_index", "write"]
+
+writer_orcastra_prod:
+  reserved: false
+  description: "Log shipper on the Orcastra dashboard host (prod-orcastra-dashboard)"
+  cluster_permissions: ["indices:data/write/bulk"]
+  index_permissions:
+    - index_patterns: ["containers-orcastra-prod-*"]
+      allowed_actions: ["create_index", "write"]

@@ -40,3 +40,6 @@ writer_orcahub_dev:
 writer_logging_prod:
   reserved: false
   backend_roles: ["writer_logging_prod"]
+writer_orcastra_prod:
+  reserved: false
+  backend_roles: ["writer_orcastra_prod"]

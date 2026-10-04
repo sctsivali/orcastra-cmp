@@ -48,6 +48,29 @@ print(int((t.datetime.now(t.timezone.utc).timestamp()*1000-v)/60000) if v else 9
   (( lag <= max_lag )) && ok "$p latest ${lag}m ago" || bad "$p latest ${lag}m ago"
 done
 
+# Every stack that shipped container logs in the last 7 days must still be shipping: a silent
+# stack usually means its shipper stopped (containers always log something within 30 minutes).
+# Fails closed: a query or parse error is a failure, never an empty pass.
+lagmax="${VERIFY_SHIPPER_LAG_MIN:-30}"
+echo "== container log shippers (max ${lagmax}m)"
+shippers="$(os GET '/containers-*/_search?size=0' -H 'content-type: application/json' -d '{"query":{"range":{"@timestamp":{"gte":"now-7d"}}},
+  "aggs":{"s":{"composite":{"size":100,"sources":[{"stack":{"terms":{"field":"stack"}}},{"env":{"terms":{"field":"env"}}},{"host":{"terms":{"field":"host"}}}]},
+  "aggs":{"m":{"max":{"field":"@timestamp"}}}}}}' | pyj '
+import datetime as t
+now = t.datetime.now(t.timezone.utc).timestamp() * 1000
+for b in d["aggregations"]["s"]["buckets"]:
+    stack, env, host = b["key"]["stack"], b["key"]["env"], b["key"]["host"]
+    print(int((now - b["m"]["value"]) / 60000), stack + "/" + env, "on", host)')" || shippers="ERROR"
+if [[ "$shippers" == ERROR ]]; then
+  bad "could not read container shipper status"
+elif [[ -z "$shippers" ]]; then
+  ok "no container log stacks onboarded yet"
+else
+  while read -r lag rest; do
+    if (( lag <= lagmax )); then ok "$rest latest ${lag}m ago"; else bad "$rest latest ${lag}m ago (shipper stopped?)"; fi
+  done <<<"$shippers"
+fi
+
 echo "== security config"
 cfg="$(os GET /_plugins/_security/api/securityconfig)"
 pyj 'a=d["config"]["dynamic"]["authc"]; assert a["openid_auth_domain"]["http_enabled"] and a["basic_internal_auth_domain"]["http_enabled"]' <<<"$cfg" 2>/dev/null \
