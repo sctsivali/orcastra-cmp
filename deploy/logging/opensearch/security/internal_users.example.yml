@@ -1,0 +1,12 @@
+# Reference only. Internal users are managed through the REST API (scripts/provision-stack.sh,
+# runbook) so password hashes never live in git. apply-security.sh never applies this type.
+---
+_meta:
+  type: "internalusers"
+  config_version: 2
+admin:            # break-glass, backend_roles: [admin]
+kibanaserver:     # Dashboards server user
+fluentbit:        # Orcastra + Vault shippers, backend_roles: [log_writer]
+audit_viewer:     # backend_roles: [audit_reader]
+fluentbit-orcahub-prod:   # backend_roles: [writer_orcahub_prod]
+fluentbit-orcahub-dev:    # backend_roles: [writer_orcahub_dev]

@@ -1,0 +1,106 @@
+# Orcastra logging host: OpenSearch + OpenSearch Dashboards (single node).
+# Deployed at /opt/orcastra-logging on prod-orcastra-logging. See docs/runbook.md.
+name: orcastra-logging
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  opensearch:
+    # Pinned by digest to the build that was running before this repo existed (3.5.0). Upgrades are
+    # a deliberate change: bump tag + digest together after reading the release notes.
+    image: opensearchproject/opensearch:3.5.0@sha256:919ff4e7d0d57dbc4bd0999ddf0e43e961bba844ec2a5b6734fc979eb4e32399
+    container_name: opensearch
+    restart: always
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g"
+      - bootstrap.memory_lock=true
+      # important: without this the image entrypoint re-installs the demo certificates and demo users.
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - opensearch-snapshots:/usr/share/opensearch/snapshots
+      - ../opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+      - ../certs/node.pem:/usr/share/opensearch/config/certs/node.pem:ro
+      - ../certs/node-key.pem:/usr/share/opensearch/config/certs/node-key.pem:ro
+      - ../certs/root-ca.pem:/usr/share/opensearch/config/certs/root-ca.pem:ro
+    ports:
+      # Private LAN (Orcastra and Vault shippers) and Tailscale (other stacks) both arrive here.
+      # 9300 (transport) is not published: single node, nothing outside the host joins the cluster.
+      - "9200:9200"
+    networks: [opensearch-net]
+    healthcheck:
+      # 200 or 401 proves the TLS HTTP layer is serving without putting a password in the
+      # container config. Cluster health is checked by scripts/verify.sh.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' --cacert config/certs/root-ca.pem https://localhost:9200/); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    logging: *logging
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.5.0@sha256:4c556b690142d0de436ef91359ea235df1c6448464a3b4e925314817dbcb99a9
+    container_name: opensearch-dashboards
+    restart: always
+    volumes:
+      - ../dashboards/opensearch_dashboards.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml:ro
+      # Secrets (kibanaserver password, OIDC client secret, cookie password) live in the keystore,
+      # built by scripts/dashboards-keystore.sh. Never in the yml or the environment.
+      - ../secrets/opensearch_dashboards.keystore:/usr/share/opensearch-dashboards/config/opensearch_dashboards.keystore:ro
+      - ../certs/root-ca.pem:/usr/share/opensearch-dashboards/config/certs/root-ca.pem:ro
+    ports:
+      # Only the Cloudflare tunnel (cloudflared on 10.1.1.50) and the host itself reach Dashboards.
+      - "10.1.1.40:5601:5601"
+      - "127.0.0.1:5601:5601"
+    networks: [opensearch-net]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:5601/api/status | grep -qE '^(200|401)$'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    logging: *logging
+
+  # Emergency access when Authentik is down. Dashboards with OIDC refuses to start if it cannot
+  # fetch the IdP discovery document, which would also take the basic-auth login with it.
+  # Not started by default: docker compose --profile breakglass up -d opensearch-dashboards-breakglass
+  # then: ssh -L 5602:127.0.0.1:5602 root@<host>  and open http://localhost:5602 (docs/runbook.md).
+  opensearch-dashboards-breakglass:
+    profiles: [breakglass]
+    image: opensearchproject/opensearch-dashboards:3.5.0@sha256:4c556b690142d0de436ef91359ea235df1c6448464a3b4e925314817dbcb99a9
+    container_name: opensearch-dashboards-breakglass
+    restart: "no"
+    volumes:
+      - ../dashboards/opensearch_dashboards.breakglass.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml:ro
+      - ../secrets/opensearch_dashboards.keystore:/usr/share/opensearch-dashboards/config/opensearch_dashboards.keystore:ro
+      - ../certs/root-ca.pem:/usr/share/opensearch-dashboards/config/certs/root-ca.pem:ro
+    ports:
+      - "127.0.0.1:5602:5601"
+    networks: [opensearch-net]
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    logging: *logging
+
+networks:
+  opensearch-net:
+    driver: bridge
+
+volumes:
+  # Explicit names keep the data written by the original /root compose project ("root").
+  opensearch-data:
+    name: root_opensearch-data
+    external: true
+  opensearch-snapshots:
+    name: root_opensearch-snapshots
+    external: true

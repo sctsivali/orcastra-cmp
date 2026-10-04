@@ -1,0 +1,61 @@
+{
+  "description": "Container logs from any stack: keep a fixed set of top-level fields and move everything else (parsed app JSON) into the flat_object 'fields'. Prevents mapping explosion and type conflicts that would make the shipper retry a chunk forever.",
+  "processors": [
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "stack-env-from-index",
+        "description": "containers-<stack>-<env>-<date>: fill stack/env when the shipper did not send them",
+        "source": "String i = ctx._index; if (i.startsWith('containers-')) { String[] p = i.substring(11).splitOnToken('-'); if (p.length >= 3) { if (ctx.stack == null) { ctx.stack = p[0]; } if (ctx.env == null) { ctx.env = p[1]; } } }"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "strip-container-slash",
+        "description": "Docker's fluentd driver sends container_name as '/name'",
+        "if": "ctx.container_name instanceof String && ctx.container_name.startsWith('/')",
+        "source": "ctx.container_name = ctx.container_name.substring(1);"
+      }
+    },
+    {
+      "rename": {
+        "field": "requestId",
+        "target_field": "request_id",
+        "ignore_missing": true,
+        "if": "ctx.request_id == null"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "containers-normalize",
+        "params": {
+          "core": [
+            "@timestamp",
+            "stack",
+            "env",
+            "host",
+            "container_name",
+            "container_id",
+            "source",
+            "level",
+            "message",
+            "request_id",
+            "log",
+            "fields"
+          ]
+        },
+        "source": "Map extra = ctx.containsKey('fields') && ctx.fields instanceof Map ? ctx.fields : new HashMap(); List move = new ArrayList(); for (String k : ctx.keySet()) { if (!k.startsWith('_') && !params.core.contains(k)) { move.add(k); } } for (String k : move) { extra.put(k, ctx.remove(k)); } if (!extra.isEmpty()) { ctx.fields = extra; } if (ctx.level != null && !(ctx.level instanceof String)) { ctx.level = String.valueOf(ctx.level); } if (ctx.message != null && !(ctx.message instanceof String)) { ctx.message = String.valueOf(ctx.message); } if (ctx.message == null && ctx.log instanceof String) { ctx.message = ctx.log; } if (ctx.log != null && ctx.message != null && ctx.log == ctx.message) { ctx.remove('log'); }"
+      }
+    }
+  ],
+  "on_failure": [
+    {
+      "set": {
+        "field": "ingest_error",
+        "value": "{{ _ingest.on_failure_message }}"
+      }
+    }
+  ]
+}

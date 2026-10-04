@@ -1,0 +1,70 @@
+{
+  "index_patterns": [
+    "containers-*"
+  ],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": "1",
+        "number_of_replicas": "0",
+        "default_pipeline": "containers-ingest",
+        "refresh_interval": "5s"
+      }
+    },
+    "mappings": {
+      "dynamic": "false",
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "stack": {
+          "type": "keyword"
+        },
+        "env": {
+          "type": "keyword"
+        },
+        "host": {
+          "type": "keyword"
+        },
+        "container_name": {
+          "type": "keyword"
+        },
+        "container_id": {
+          "type": "keyword"
+        },
+        "source": {
+          "type": "keyword"
+        },
+        "level": {
+          "type": "keyword"
+        },
+        "request_id": {
+          "type": "keyword"
+        },
+        "message": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "log": {
+          "type": "text"
+        },
+        "fields": {
+          "type": "flat_object"
+        },
+        "ingest_error": {
+          "type": "text"
+        }
+      }
+    }
+  },
+  "_meta": {
+    "managed_by": "orcastra-logging",
+    "description": "containers-<stack>-<env>: container stdout/stderr from any stack, monthly"
+  }
+}

@@ -51,6 +51,8 @@ htmlcov/
 
 # Certificates (keep structure but not actual certs)
 certs/
+# Logging host: deploy/logging/.gitignore keeps everything but the public CA out
+!deploy/logging/certs/
 certs/node1/*.crt
 certs/node1/*.key
 certs/node2/*.crt
