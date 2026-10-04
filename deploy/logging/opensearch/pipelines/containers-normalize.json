@@ -33,7 +33,7 @@
         "tag": "lift-json-log",
         "if": "ctx._parsed instanceof Map",
         "description": "Generic shippers send the raw line; lift common keys from app JSON, keep the rest for fields.*",
-        "source": "Map p = ctx._parsed; ctx.remove('_parsed'); for (String k : ['message','msg']) { if (ctx.message == null && p.containsKey(k)) { ctx.message = p.remove(k); } } for (String k : ['level','severity','lvl']) { if (ctx.level == null && p.containsKey(k)) { ctx.level = p.remove(k); } } for (String k : ['request_id','requestId','req_id']) { if (ctx.request_id == null && p.containsKey(k)) { ctx.request_id = p.remove(k); } } for (def e : p.entrySet()) { if (!ctx.containsKey(e.getKey())) { ctx[e.getKey()] = e.getValue(); } } ctx.remove('log');"
+        "source": "Map p = ctx._parsed; ctx.remove('_parsed'); for (String k : ['message','msg']) { if (ctx.message == null && p.containsKey(k)) { ctx.message = p.remove(k); } } for (String k : ['level','lvl','loglevel']) { if (ctx.level == null && p.containsKey(k)) { ctx.level = p.remove(k); } } if (ctx.level == null && p.get('severity') instanceof String && ['trace','debug','info','notice','warn','warning','error','err','critical','crit','fatal','emerg','alert','panic'].contains(((String) p.get('severity')).toLowerCase())) { ctx.level = p.remove('severity'); } for (String k : ['request_id','requestId','req_id']) { if (ctx.request_id == null && p.containsKey(k)) { ctx.request_id = p.remove(k); } } for (def e : p.entrySet()) { if (!ctx.containsKey(e.getKey())) { ctx[e.getKey()] = e.getValue(); } } ctx.remove('log');"
       }
     },
     {
@@ -77,6 +77,15 @@
         "description": "Plain-text lines (OpenSearch, postgres, nginx, ...) carry their level in the text; detect the common markers so level filters work for every container",
         "if": "ctx.level == null && ctx.message instanceof String",
         "source": "String m = ctx.message.length() > 200 ? ctx.message.substring(0, 200) : ctx.message; String u = m.toUpperCase(); List marks = [['fatal','[FATAL',' FATAL:','LEVEL=FATAL','PANIC:'], ['error','[ERROR',' ERROR:','LEVEL=ERROR','[ERR]'], ['warn','[WARN',' WARNING:','LEVEL=WARN'], ['info','[INFO',' LOG:','LEVEL=INFO',' INFO:'], ['debug','[DEBUG','LEVEL=DEBUG',' DEBUG:','[TRACE']]; for (def mk : marks) { for (int i = 1; i < mk.size(); i++) { if (u.contains(mk.get(i))) { ctx.level = mk.get(0); return; } } }"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "level-canonical",
+        "description": "One vocabulary for the level filter: trace, debug, info, warn, error, fatal (numeric pino/bunyan levels too); anything else is kept lower-cased",
+        "if": "ctx.level != null",
+        "source": "String l = String.valueOf(ctx.level).trim().toLowerCase(); Map m = ['warning':'warn','err':'error','critical':'fatal','crit':'fatal','emerg':'fatal','emergency':'fatal','alert':'fatal','panic':'fatal','notice':'info','information':'info','informational':'info','10':'trace','20':'debug','30':'info','40':'warn','50':'error','60':'fatal']; ctx.level = m.containsKey(l) ? m.get(l) : l;"
       }
     }
   ],
