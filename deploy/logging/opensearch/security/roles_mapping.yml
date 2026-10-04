@@ -37,3 +37,6 @@ writer_orcahub_prod:
 writer_orcahub_dev:
   reserved: false
   backend_roles: ["writer_orcahub_dev"]
+writer_logging_prod:
+  reserved: false
+  backend_roles: ["writer_logging_prod"]
