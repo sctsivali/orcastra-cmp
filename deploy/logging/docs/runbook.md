@@ -14,6 +14,7 @@ log store behind `https://logs.orcastra.io`.
 | Versions | OpenSearch and Dashboards 3.5.0, pinned by digest |
 | Public URL | `https://logs.orcastra.io`: Cloudflare Tunnel (`cloudflared` on `10.1.1.50`) to `http://10.1.1.40:5601` |
 | Ingest | `https://<LAN or Tailscale IP>:9200`, TLS from our own CA (`certs/root-ca.pem`) |
+| Own container logs | `/opt/log-shipper` (the generic shipper, stack `logging`, env `prod`) |
 
 Files that never go to git (see `.gitignore`):
 
@@ -112,8 +113,10 @@ docker compose -f compose/docker-compose.yml up -d --force-recreate opensearch o
 scripts/verify.sh
 ```
 
-Node SANs: `opensearch`, `localhost`, `prod-orcastra-logging`, `127.0.0.1`, `10.1.1.40`,
-`100.90.90.69`. A new client address needs a SAN added in `gen-certs.sh` and a renewal.
+Node SANs: `opensearch`, `localhost`, `prod-orcastra-logging`, `logs.orcastra.io`, `127.0.0.1`,
+`10.1.1.40`, `100.90.90.69`. `logs.orcastra.io` is needed because the Dashboards security plugin
+forwards the browser's Host header on its read-only tenant check, so that call verifies the node
+certificate against the public name. A new client address needs a SAN added in `gen-certs.sh` and a renewal.
 Clients that verify TLS get `certs/root-ca.pem` (public).
 
 ## Snapshots and restore

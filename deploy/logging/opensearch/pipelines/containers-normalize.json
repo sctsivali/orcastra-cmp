@@ -19,6 +19,24 @@
       }
     },
     {
+      "json": {
+        "tag": "parse-json-log",
+        "field": "log",
+        "target_field": "_parsed",
+        "ignore_failure": true,
+        "if": "ctx.log instanceof String && ctx.log.startsWith('{') && ctx.message == null"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "lift-json-log",
+        "if": "ctx._parsed instanceof Map",
+        "description": "Generic shippers send the raw line; lift common keys from app JSON, keep the rest for fields.*",
+        "source": "Map p = ctx._parsed; ctx.remove('_parsed'); for (String k : ['message','msg']) { if (ctx.message == null && p.containsKey(k)) { ctx.message = p.remove(k); } } for (String k : ['level','severity','lvl']) { if (ctx.level == null && p.containsKey(k)) { ctx.level = p.remove(k); } } for (String k : ['request_id','requestId','req_id']) { if (ctx.request_id == null && p.containsKey(k)) { ctx.request_id = p.remove(k); } } for (def e : p.entrySet()) { if (!ctx.containsKey(e.getKey())) { ctx[e.getKey()] = e.getValue(); } } ctx.remove('log');"
+      }
+    },
+    {
       "rename": {
         "field": "requestId",
         "target_field": "request_id",
@@ -43,10 +61,22 @@
             "message",
             "request_id",
             "log",
-            "fields"
+            "fields",
+            "compose_project",
+            "compose_service",
+            "image"
           ]
         },
         "source": "Map extra = ctx.containsKey('fields') && ctx.fields instanceof Map ? ctx.fields : new HashMap(); List move = new ArrayList(); for (String k : ctx.keySet()) { if (!k.startsWith('_') && !params.core.contains(k)) { move.add(k); } } for (String k : move) { extra.put(k, ctx.remove(k)); } if (!extra.isEmpty()) { ctx.fields = extra; } if (ctx.level != null && !(ctx.level instanceof String)) { ctx.level = String.valueOf(ctx.level); } if (ctx.message != null && !(ctx.message instanceof String)) { ctx.message = String.valueOf(ctx.message); } if (ctx.message == null && ctx.log instanceof String) { ctx.message = ctx.log; } if (ctx.log != null && ctx.message != null && ctx.log == ctx.message) { ctx.remove('log'); }"
+      }
+    },
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "level-from-text",
+        "description": "Plain-text lines (OpenSearch, postgres, nginx, ...) carry their level in the text; detect the common markers so level filters work for every container",
+        "if": "ctx.level == null && ctx.message instanceof String",
+        "source": "String m = ctx.message.length() > 200 ? ctx.message.substring(0, 200) : ctx.message; String u = m.toUpperCase(); List marks = [['fatal','[FATAL',' FATAL:','LEVEL=FATAL','PANIC:'], ['error','[ERROR',' ERROR:','LEVEL=ERROR','[ERR]'], ['warn','[WARN',' WARNING:','LEVEL=WARN'], ['info','[INFO',' LOG:','LEVEL=INFO',' INFO:'], ['debug','[DEBUG','LEVEL=DEBUG',' DEBUG:','[TRACE']]; for (def mk : marks) { for (int i = 1; i < mk.size(); i++) { if (u.contains(mk.get(i))) { ctx.level = mk.get(0); return; } } }"
       }
     }
   ],

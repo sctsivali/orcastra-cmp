@@ -59,6 +59,15 @@
         },
         "ingest_error": {
           "type": "text"
+        },
+        "compose_project": {
+          "type": "keyword"
+        },
+        "compose_service": {
+          "type": "keyword"
+        },
+        "image": {
+          "type": "keyword"
         }
       }
     }

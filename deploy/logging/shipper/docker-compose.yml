@@ -1,0 +1,31 @@
+# Docker log shipper for any host. Deploy to /opt/log-shipper, fill .env, `docker compose up -d`.
+# Guide: ../docs/onboarding-a-stack.md
+name: log-shipper
+
+services:
+  log-shipper:
+    image: fluent/fluent-bit:5.0.7
+    container_name: log-shipper
+    restart: unless-stopped
+    command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
+    env_file: .env
+    environment:
+      - SHIPPER_CONTAINER_NAME=log-shipper
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      - ./docker-metadata.lua:/fluent-bit/etc/docker-metadata.lua:ro
+      - ./ca.pem:/fluent-bit/etc/ca.pem:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - shipper-buffer:/buffer
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+volumes:
+  shipper-buffer:
