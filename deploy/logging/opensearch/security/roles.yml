@@ -1,0 +1,52 @@
+---
+_meta:
+  type: "roles"
+  config_version: 2
+
+# ---- Orcastra (unchanged from the live cluster, 2026-10-04) ----
+audit_reader:
+  reserved: false
+  cluster_permissions: ["cluster_monitor"]
+  index_permissions:
+    - index_patterns: ["orcastra-access-*", "orcastra-audit-*", "vault-audit-*"]
+      allowed_actions: ["read", "search"]
+
+# note: "manage" lets the writer delete its indices; kept as-is to avoid breaking the
+# Orcastra/Vault shippers. Tighten to write + create_index after confirming they need nothing more.
+log_writer:
+  reserved: false
+  cluster_permissions: ["cluster_monitor", "cluster_composite_ops"]
+  index_permissions:
+    - index_patterns: ["orcastra-access-*", "orcastra-audit-*", "orcastra-app-*", "vault-audit-*"]
+      allowed_actions: ["crud", "create_index", "manage"]
+
+audit_admin:
+  reserved: false
+  cluster_permissions: ["cluster_all"]
+  index_permissions:
+    - index_patterns: ["orcastra-*", "vault-*"]
+      allowed_actions: ["all"]
+
+# ---- Human access (SSO groups) ----
+# Marker role for Dashboards read-only mode (opensearch_security.readonly_mode.roles); grants nothing itself.
+logs_readonly_ui:
+  reserved: false
+  description: "Dashboards read-only UI marker"
+
+# ---- Container log writers, one per stack/env (see docs/onboarding-a-stack.md) ----
+# Write-only: no read, no delete, no other stack's indices.
+writer_orcahub_prod:
+  reserved: false
+  description: "Fluent Bit on the OrcaHub prod host"
+  cluster_permissions: ["indices:data/write/bulk"]
+  index_permissions:
+    - index_patterns: ["containers-orcahub-prod-*"]
+      allowed_actions: ["create_index", "write"]
+
+writer_orcahub_dev:
+  reserved: false
+  description: "Fluent Bit on the OrcaHub dev host"
+  cluster_permissions: ["indices:data/write/bulk"]
+  index_permissions:
+    - index_patterns: ["containers-orcahub-dev-*"]
+      allowed_actions: ["create_index", "write"]

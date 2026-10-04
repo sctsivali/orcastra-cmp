@@ -1,0 +1,39 @@
+---
+_meta:
+  type: "rolesmapping"
+  config_version: 2
+
+# backend_roles come from internal users, or from the Authentik "groups" claim for SSO users.
+all_access:
+  reserved: false
+  backend_roles: ["admin", "opensearch-admins"]
+  description: "Break-glass admin and the Authentik opensearch-admins group"
+audit_admin:
+  reserved: false
+  backend_roles: ["admin"]
+log_writer:
+  reserved: false
+  backend_roles: ["log_writer"]
+audit_reader:
+  reserved: false
+  backend_roles: ["audit_reader"]
+kibana_server:
+  reserved: true
+  users: ["kibanaserver"]
+
+readall:
+  reserved: false
+  backend_roles: ["opensearch-viewers"]
+kibana_user:
+  reserved: false
+  backend_roles: ["opensearch-viewers"]
+logs_readonly_ui:
+  reserved: false
+  backend_roles: ["opensearch-viewers"]
+
+writer_orcahub_prod:
+  reserved: false
+  backend_roles: ["writer_orcahub_prod"]
+writer_orcahub_dev:
+  reserved: false
+  backend_roles: ["writer_orcahub_dev"]

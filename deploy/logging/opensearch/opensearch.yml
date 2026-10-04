@@ -1,0 +1,39 @@
+# OpenSearch node config for the Orcastra logging host (single node).
+cluster.name: orcastra-logging
+node.name: opensearch-node1
+network.host: 0.0.0.0
+http.port: 9200
+discovery.type: single-node
+
+# ---- TLS (own CA, scripts/gen-certs.sh) ----
+plugins.security.ssl.transport.pemcert_filepath: certs/node.pem
+plugins.security.ssl.transport.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/node.pem
+plugins.security.ssl.http.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+plugins.security.allow_unsafe_democertificates: false
+plugins.security.nodes_dn:
+  - "CN=opensearch-node1,OU=logging,O=Orcastra"
+plugins.security.authcz.admin_dn:
+  - "CN=orcastra-logging-admin,OU=logging,O=Orcastra"
+# The security index is applied explicitly with scripts/apply-security.sh. If it is ever lost the
+# node stays locked (503) instead of silently initialising from files baked into the image.
+plugins.security.allow_default_init_securityindex: false
+
+# ---- Security plugin ----
+plugins.security.audit.type: internal_opensearch
+# Monthly audit indices keep the single node far below cluster.max_shards_per_node.
+plugins.security.audit.config.index: "'security-auditlog-'YYYY.MM"
+plugins.security.enable_snapshot_restore_privilege: true
+plugins.security.check_snapshot_restore_write_privileges: true
+plugins.security.restapi.roles_enabled: ["all_access", "security_rest_api_access"]
+plugins.security.system_indices.enabled: true
+plugins.security.system_indices.indices: [".opendistro-alerting-config", ".opendistro-alerting-alert*", ".opendistro-anomaly-results*", ".opendistro-anomaly-detector*", ".opendistro-anomaly-checkpoints", ".opendistro-anomaly-detection-state", ".opendistro-reports-*", ".opendistro-notifications-*", ".opendistro-notebooks", ".opendistro-asynchronous-search-response*"]
+
+# ---- Snapshots (scripts/snapshot.sh, orcastra-cmp archive service) ----
+path.repo: ["/usr/share/opensearch/snapshots"]
+
+action.auto_create_index: true
