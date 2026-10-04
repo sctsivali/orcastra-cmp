@@ -1,0 +1,12 @@
+{
+  "description": "Route daily Logstash-style index names (<prefix>-YYYY.MM.DD) to monthly indices (<prefix>-YYYY.MM). Keeps shard count bounded on a single node without changing any shipper. Names that are not daily pass through unchanged.",
+  "processors": [
+    {
+      "script": {
+        "lang": "painless",
+        "tag": "monthly-reroute",
+        "source": "String i = ctx._index; int n = i.length(); if (n > 11 && i.charAt(n-3) == (char)46 && i.charAt(n-6) == (char)46 && Character.isDigit(i.charAt(n-1)) && Character.isDigit(i.charAt(n-2)) && Character.isDigit(i.charAt(n-4)) && Character.isDigit(i.charAt(n-5))) { ctx._index = i.substring(0, n-3); }"
+      }
+    }
+  ]
+}

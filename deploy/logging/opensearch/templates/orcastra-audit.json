@@ -1,0 +1,132 @@
+{
+  "index_patterns": [
+    "orcastra-audit-*"
+  ],
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": "1",
+        "number_of_replicas": "0",
+        "default_pipeline": "monthly-reroute"
+      }
+    },
+    "mappings": {
+      "properties": {
+        "severity": {
+          "type": "keyword"
+        },
+        "error_message": {
+          "type": "text"
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "duration_ms": {
+              "type": "float"
+            },
+            "before": {
+              "type": "object",
+              "enabled": false
+            },
+            "after": {
+              "type": "object",
+              "enabled": false
+            }
+          }
+        },
+        "version": {
+          "type": "keyword"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "keyword"
+            },
+            "project": {
+              "type": "keyword"
+            },
+            "id": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "keyword"
+            }
+          }
+        },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "user_type": {
+              "type": "keyword"
+            },
+            "role": {
+              "type": "keyword"
+            },
+            "user_id": {
+              "type": "keyword"
+            },
+            "organizations": {
+              "type": "keyword"
+            },
+            "session_id": {
+              "type": "keyword"
+            },
+            "groups": {
+              "type": "keyword"
+            }
+          }
+        },
+        "result": {
+          "type": "keyword"
+        },
+        "log_type": {
+          "type": "keyword"
+        },
+        "@timestamp": {
+          "type": "date"
+        },
+        "event_id": {
+          "type": "keyword"
+        },
+        "service": {
+          "type": "keyword"
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "keyword"
+            },
+            "container_id": {
+              "type": "keyword"
+            }
+          }
+        },
+        "action": {
+          "type": "keyword"
+        },
+        "error_code": {
+          "type": "keyword"
+        },
+        "details": {
+          "type": "object",
+          "enabled": false
+        },
+        "category": {
+          "type": "keyword"
+        },
+        "request_id": {
+          "type": "keyword"
+        }
+      }
+    }
+  },
+  "composed_of": [],
+  "priority": 100,
+  "version": 1,
+  "_meta": {
+    "managed_by": "orca-logging",
+    "description": "orcastra-audit: single shard, no replica (single node), monthly routing"
+  }
+}

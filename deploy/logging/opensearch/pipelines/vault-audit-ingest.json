@@ -1,0 +1,15 @@
+{
+  "description": "Vault audit: parse then route to the monthly index",
+  "processors": [
+    {
+      "pipeline": {
+        "name": "vault-audit-parse"
+      }
+    },
+    {
+      "pipeline": {
+        "name": "monthly-reroute"
+      }
+    }
+  ]
+}

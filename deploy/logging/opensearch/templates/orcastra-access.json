@@ -1,0 +1,110 @@
+{
+  "index_patterns": [
+    "orcastra-access-*"
+  ],
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": "1",
+        "number_of_replicas": "0",
+        "default_pipeline": "monthly-reroute"
+      }
+    },
+    "mappings": {
+      "properties": {
+        "status_code": {
+          "type": "integer"
+        },
+        "method": {
+          "type": "keyword"
+        },
+        "error": {
+          "type": "text"
+        },
+        "version": {
+          "type": "keyword"
+        },
+        "response_size": {
+          "type": "long"
+        },
+        "latency_ms": {
+          "type": "float"
+        },
+        "path": {
+          "type": "keyword"
+        },
+        "log_type": {
+          "type": "keyword"
+        },
+        "@timestamp": {
+          "type": "date"
+        },
+        "service": {
+          "type": "keyword"
+        },
+        "query_params": {
+          "type": "object",
+          "enabled": false
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "keyword"
+            },
+            "container_id": {
+              "type": "keyword"
+            }
+          }
+        },
+        "client": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "origin": {
+              "type": "keyword"
+            },
+            "user_agent": {
+              "type": "text"
+            }
+          }
+        },
+        "request_size": {
+          "type": "long"
+        },
+        "request_id": {
+          "type": "keyword"
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "keyword"
+            },
+            "organizations": {
+              "type": "keyword"
+            },
+            "groups": {
+              "type": "keyword"
+            },
+            "id": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "composed_of": [],
+  "priority": 100,
+  "version": 1,
+  "_meta": {
+    "managed_by": "orca-logging",
+    "description": "orcastra-access: single shard, no replica (single node), monthly routing"
+  }
+}
