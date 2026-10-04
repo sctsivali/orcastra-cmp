@@ -17,7 +17,9 @@ CA_DAYS=3650
 LEAF_DAYS=825
 # SANs: compose service name (Dashboards, in-network clients), loopback, host names and both host
 # addresses that clients use (private LAN for Orcastra/Vault shippers, Tailscale for other stacks).
-NODE_SAN="DNS:opensearch,DNS:localhost,DNS:prod-orcastra-logging,IP:127.0.0.1,IP:10.1.1.40,IP:100.90.90.69"
+# logs.orcastra.io: the Dashboards security plugin forwards the browser's Host header on some calls
+# to OpenSearch (readonly-tenant check), so Node verifies the node cert against the public name.
+NODE_SAN="DNS:opensearch,DNS:localhost,DNS:prod-orcastra-logging,DNS:logs.orcastra.io,IP:127.0.0.1,IP:10.1.1.40,IP:100.90.90.69"
 
 renew=0; [[ "${1:-}" == "--renew" ]] && renew=1
 mkdir -p "$DIR"; chmod 750 "$DIR"; cd "$DIR"

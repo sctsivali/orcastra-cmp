@@ -50,3 +50,11 @@ writer_orcahub_dev:
   index_permissions:
     - index_patterns: ["containers-orcahub-dev-*"]
       allowed_actions: ["create_index", "write"]
+
+writer_logging_prod:
+  reserved: false
+  description: "Log shipper on the logging host itself (its own containers)"
+  cluster_permissions: ["indices:data/write/bulk"]
+  index_permissions:
+    - index_patterns: ["containers-logging-prod-*"]
+      allowed_actions: ["create_index", "write"]

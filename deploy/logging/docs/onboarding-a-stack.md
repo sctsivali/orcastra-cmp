@@ -30,12 +30,33 @@ scripts/provision-stack.sh orcahub prod      # creates fluentbit-orcahub-prod, p
 The account can create and write `containers-orcahub-prod-*` only. It cannot read, delete, or
 touch another stack's or environment's indices (verified: every such request is 403).
 
-## 2. Stack host: Fluent Bit output
+## 2. Stack host: ship the logs
 
-Any Fluent Bit (>= 2.x) that receives the containers' logs works. Docker's `fluentd` log driver
-pointing at a local Fluent Bit `forward` input is the reference setup (OrcaHub's
-`docker-compose.observability.yml`); tailing `/var/lib/docker/containers` also works but loses the
-container name unless you add it yourself.
+### Option A (recommended): the generic shipper
+
+`shipper/` is a self-contained Fluent Bit that tails every `json-file` container log on the host
+and adds the container name, compose project/service and image from Docker's own metadata. The
+application containers are not touched or restarted. Lines Docker split at 16 KB are joined again,
+and read offsets survive restarts.
+
+```bash
+# on the stack host, as root
+install -d -m 700 /opt/log-shipper
+# copy shipper/{docker-compose.yml,fluent-bit.conf,parsers.conf,docker-metadata.lua} there,
+# and certs/root-ca.pem as /opt/log-shipper/ca.pem
+cp .env.example .env && chmod 600 .env     # fill in host, user, password, stack, env, host name
+docker compose -f /opt/log-shipper/docker-compose.yml up -d
+```
+
+Existing history is not re-shipped: the shipper starts at the end of each log file. Containers
+using another log driver (for example `fluentd`) have no `json-file` log and are not picked up;
+ship those with option B.
+
+### Option B: your own Fluent Bit
+
+Any Fluent Bit (>= 2.x) that already receives the containers' logs can add an output. OrcaHub does
+this: its overlay gives every service the `fluentd` driver and its Fluent Bit adds
+`outputs.d/opensearch.conf`. The output section looks like this:
 
 ```ini
 [OUTPUT]
@@ -64,9 +85,13 @@ ssh root@100.90.90.69 cat /opt/orcastra-logging/secrets/fluentbit-orcahub-prod.p
   | ssh <stack-host> 'umask 077; cat > /tmp/pw'   # then place it into the output config, chmod 600
 ```
 
-Docker's `fluentd` driver (and `json-file`) split lines longer than 16 KB into several records,
-and multi-line output (stack traces) arrives one line per record; the aggregator stores them as
-separate documents. Log single-line JSON from applications where possible.
+With option B, Docker splits lines longer than 16 KB into several records (option A joins them).
+With either option, multi-line output (stack traces) arrives one line per record. Log single-line
+JSON from applications where possible.
+
+The aggregator parses JSON log lines itself (`message`/`msg`, `level`/`severity`, `request_id`
+are lifted; everything else lands in `fields.*`) and recognises the level markers of common
+plain-text formats (`[ERROR`, ` FATAL:`, `level=warn`, ...).
 
 Optional record fields the aggregator understands: `container_name`, `container_id`, `source`,
 `level`, `message`, `request_id`/`requestId`, `host`, `log`. `stack` and `env` are derived from
@@ -82,5 +107,6 @@ os GET '/containers-orcahub-prod-*/_search?size=0' -H 'content-type: application
 VERIFY_EXTRA_PREFIXES=containers-orcahub-prod scripts/verify.sh
 ```
 
-In Dashboards create (or import) an index pattern `containers-*` with time field `@timestamp`;
-filter with `stack`, `env`, `container_name`, `level`.
+Open the **Container Logs** dashboard (Global tenant) and pick the stack in its filters. After the
+first stack ships, run `scripts/dashboards-objects.sh` once so the `containers-*` index pattern
+picks up the field list.
