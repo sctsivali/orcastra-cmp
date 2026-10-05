@@ -28,6 +28,16 @@ Files that never go to git (see `.gitignore`):
 | `secrets/opensearch_dashboards.keystore` | built by `scripts/dashboards-keystore.sh` |
 | `secrets/fluentbit-<stack>-<env>.password` | writer passwords from `scripts/provision-stack.sh` |
 
+## Hosts shipping container logs
+
+| Stack/env | Host | How | Notes |
+|---|---|---|---|
+| `logging/prod` | prod-orcastra-logging (this host) | generic shipper `/opt/log-shipper` | OpenSearch and Dashboards' own logs |
+| `orcastra/prod` | prod-orcastra-dashboard (`10.1.1.50`, `100.126.140.57`) | generic shipper `/opt/log-shipper` | all Orcastra containers (json-file) |
+| `orcahub/prod` | c2-prod-orcahub (`100.104.230.76`, central2) | generic shipper `/opt/log-shipper` | json-file containers today (postgres, redis, pg-backup, monitoring). backend/frontend use the fluentd driver and arrive through OrcaHub's own fluent-bit once a release containing its `outputs.d/opensearch.conf` support is deployed; that file is already in place on the host |
+
+`scripts/verify.sh` fails when any of them stops shipping for more than 30 minutes.
+
 ## Index layout
 
 All log indices are **monthly** (`<prefix>-YYYY.MM`). Shippers keep sending Logstash-style daily
