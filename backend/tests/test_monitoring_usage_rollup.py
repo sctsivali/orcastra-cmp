@@ -108,6 +108,30 @@ def test_an_idle_cluster_reads_zero_ready():
     assert fleet.busy_percent == 0.0
 
 
+def test_an_idle_cluster_never_vouches_for_a_fleet_still_calculating():
+    """Seen live on the first sweep after a restart: every busy Cluster calculating, one idle."""
+    usages = _usage([row("a", cpu_ns=0, read_at=1000.0)])
+    nodes = [node("c1", threads=8, running=1), node("idle", threads=16, running=0)]
+
+    fleet = rollup(nodes, usages)
+
+    assert nodes[0].cpu_status == "calculating"
+    assert nodes[1].cpu_busy_percent == 0.0, "the idle Cluster itself is a true zero"
+    assert fleet.status == "calculating"
+    assert fleet.busy_percent is None, "0.0% here would be drawn as the fleet idling"
+
+
+def test_an_idle_cluster_counts_once_a_busy_one_reports():
+    _usage([row("a", cpu_ns=0, read_at=1000.0)])
+    usages = _usage([row("a", cpu_ns=60_000_000_000, read_at=1030.0)])
+    nodes = [node("c1", threads=8, running=1), node("idle", threads=8, running=0)]
+
+    fleet = rollup(nodes, usages)
+
+    assert fleet.status == "ready"
+    assert fleet.busy_percent == round(2 / 16 * 100, 2)
+
+
 def test_an_offline_cluster_is_never_rolled_up():
     nodes = [node("c1", threads=8, running=2, online=False)]
 
