@@ -18,7 +18,12 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 _LINE = re.compile(r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>.*)\})?\s+(?P<value>\S+)(?:\s+\S+)?\s*$")
-_LABEL = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\]|\\.)*)"')
+# important: anchored on the start or a comma. Unanchored, a long run of name characters with
+# no `="` after it made findall rescan the run from every offset: quadratic, and 40 KB of text
+# from a hostile endpoint held a worker's GIL for over ten seconds.
+_LABEL = re.compile(r'(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\]|\\.)*)"')
+# A real LXD line is under 300 characters; anything far longer is not one worth parsing.
+_MAX_LINE = 4096
 _PREFIXES = ("lxd_", "incus_")
 
 # note: whole disks only. A partition repeats its disk's bytes (sda1 is part of sda), a loop
@@ -32,6 +37,7 @@ _FAMILIES = {
     "memory_MemAvailable_bytes": "mem_available",
     "memory_MemFree_bytes": "mem_free",
     "memory_Cached_bytes": "mem_cached",
+    "memory_Shmem_bytes": "mem_shmem",
     "disk_read_bytes_total": "disk_read",
     "disk_written_bytes_total": "disk_written",
 }
@@ -45,6 +51,7 @@ class InstanceSeries:
     mem_available: Optional[float] = None
     mem_free: Optional[float] = None
     mem_cached: Optional[float] = None
+    mem_shmem: Optional[float] = None
     disk_read: Optional[float] = None
     disk_written: Optional[float] = None
     disk_devices: tuple = field(default_factory=tuple)
@@ -57,6 +64,7 @@ class InstanceSeries:
             "mem_available": self.mem_available,
             "mem_free": self.mem_free,
             "mem_cached": self.mem_cached,
+            "mem_shmem": self.mem_shmem,
             "disk_read": self.disk_read,
             "disk_written": self.disk_written,
             "disk_devices": list(self.disk_devices),
@@ -76,6 +84,7 @@ class InstanceSeries:
             mem_available=number("mem_available"),
             mem_free=number("mem_free"),
             mem_cached=number("mem_cached"),
+            mem_shmem=number("mem_shmem"),
             disk_read=number("disk_read"),
             disk_written=number("disk_written"),
             disk_devices=tuple(str(d) for d in data.get("disk_devices") or ()),
@@ -93,6 +102,9 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if len(line) > _MAX_LINE:
+            malformed += 1
             continue
         prefix = next((p for p in _PREFIXES if line.startswith(p)), None)
         if prefix is None:
@@ -145,21 +157,31 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
 def honest_memory(series: InstanceSeries) -> Optional[Dict[str, Optional[int]]]:
     """Used memory without the page cache the guest can reclaim.
 
-    `MemTotal - MemAvailable` is what `free` and the kernel call memory a workload is holding.
-    Older container formulas report MemAvailable no larger than MemFree, so those fall back to
-    subtracting the cache explicitly.
+    A virtual machine's figures are its own kernel's meminfo, read by lxd-agent, so
+    `MemTotal - MemAvailable` is what `free` inside it calls in use.
+
+    important: a container's are derived by LXD from its cgroup, and LXD 5.21 sets
+    MemAvailable = MemFree + Cached, where Cached is every file page, shared memory and tmpfs
+    included. Those cannot be reclaimed, so a container holding 200 MiB in /dev/shm read as
+    2 MiB used. Only Cached - Shmem is reclaimable: used = (MemTotal - MemFree) - (Cached - Shmem).
     """
     total, available, free = series.mem_total, series.mem_available, series.mem_free
-    if not total or total <= 0 or available is None or available < 0:
+    cached, shmem = series.mem_cached, series.mem_shmem or 0.0
+    if not total or total <= 0:
         return None
-    if free is not None and available <= free and series.mem_cached is not None:
-        used = total - free - series.mem_cached
+    reclaimable = max(0.0, cached - shmem) if cached is not None else None
+    if series.instance_type == "container":
+        if free is None or reclaimable is None:
+            return None
+        used = (total - free) - reclaimable
     else:
+        if available is None or available < 0:
+            return None
         used = total - available
     used = max(0.0, min(used, total))
     return {
         "used": int(used),
         "total": int(total),
-        "available": int(min(available, total)),
-        "cache": int(series.mem_cached) if series.mem_cached is not None else None,
+        "available": int(total - used),
+        "cache": int(reclaimable) if reclaimable is not None else None,
     }

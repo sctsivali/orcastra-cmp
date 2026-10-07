@@ -10,9 +10,13 @@ that disagreed on any of those would re-seed each other's baseline on every poll
 surfaces stuck on "calculating".
 """
 
+import hashlib
 import logging
+import math
+import re
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Tuple
 from urllib.parse import quote
@@ -49,19 +53,33 @@ IO_SAMPLER = RateSampler(
 )
 
 _HOST_THREADS_TTL_SECONDS = 1800.0
-_host_threads_cache: Dict[str, Tuple[float, int]] = {}
+_HOST_THREADS_MAX_ENTRIES = 512
+_host_threads_cache: "OrderedDict[str, Tuple[float, int]]" = OrderedDict()
 _host_threads_lock = threading.Lock()
+_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+# note: bounds on what an LXD response can put into a Redis key or a stored sample.
+_IDENTITY_PART_MAX = 200
+_MAX_INTERFACES = 64
 
 
 def _now() -> float:
     return time.time()
 
 
+def _identity_part(part: Optional[str]) -> str:
+    text = str(part or "")
+    if len(text) > _IDENTITY_PART_MAX:
+        # important: a real name never gets here; an endpoint inventing megabyte names must not
+        # turn them into megabyte Redis keys. The digest keeps distinct values distinct.
+        return "sha256-" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    return quote(text, safe="")
+
+
 def instance_rate_identity(
     cluster: str, project: str, name: str, uuid: Optional[str]
 ) -> str:
     """Sampler identity. The uuid makes a deleted and re-created same-name instance start fresh."""
-    return ":".join(quote(part or "", safe="") for part in (cluster, project, name, uuid))
+    return ":".join(_identity_part(part) for part in (cluster, project, name, uuid))
 
 
 def _start_marker(last_used_at: Any) -> str:
@@ -74,7 +92,7 @@ def _start_marker(last_used_at: Any) -> str:
     """
     moment = last_used_at
     if isinstance(moment, str):
-        text = moment.strip()
+        text = moment.strip()[:64]
         try:
             moment = datetime.fromisoformat(text)
         except ValueError:
@@ -106,17 +124,21 @@ def build_state_sample(
         counters["cpu_ns"] = cpu
     network = state.get("network")
     if isinstance(network, Mapping):
-        for iface, data in network.items():
-            if iface == "lo":
+        for iface in sorted(str(name) for name in network)[:_MAX_INTERFACES]:
+            data = network.get(iface)
+            if iface == "lo" or len(iface) > 64 or not isinstance(data, Mapping):
                 continue
-            values = (data or {}).get("counters") or {}
+            values = data.get("counters")
+            if not isinstance(values, Mapping):
+                continue
             for key, field in (("net_rx", "bytes_received"), ("net_tx", "bytes_sent")):
                 value = values.get(field)
-                if isinstance(value, (int, float)) and value >= 0:
+                if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
                     counters[f"{key}:{iface}"] = float(value)
     # A restart or a move gives the instance a new init or QEMU pid and a new start time, and
     # every counter starts again from zero, so either one ends the baseline.
-    epoch = f"{state.get('pid') or 0}:{_start_marker(last_used_at)}"
+    pid = state.get("pid")
+    epoch = f"{pid if isinstance(pid, int) else 0}:{_start_marker(last_used_at)}"
     identity = instance_rate_identity(
         cluster, project, name, (config or {}).get("volatile.uuid")
     )
@@ -125,13 +147,16 @@ def build_state_sample(
 
 def host_threads(client: Any, cluster: str, member: Optional[str]) -> Optional[int]:
     """Hardware threads of the host an unlimited container runs on, cached for 30 minutes."""
+    standalone = (member or "") in STANDALONE_LOCATIONS
+    if not standalone and not _MEMBER.match(member or ""):
+        return None
     key = f"{cluster}\x00{member or ''}"
     now = time.monotonic()
     with _host_threads_lock:
         hit = _host_threads_cache.get(key)
         if hit is not None and hit[0] > now:
             return hit[1]
-    params = {} if (member or "") in STANDALONE_LOCATIONS else {"target": member}
+    params = {} if standalone else {"target": member}
     try:
         body = client.api.resources.get(params=params).json().get("metadata") or {}
         threads = int((body.get("cpu") or {}).get("total") or 0)
@@ -141,7 +166,10 @@ def host_threads(client: Any, cluster: str, member: Optional[str]) -> Optional[i
     if threads <= 0:
         return None
     with _host_threads_lock:
+        _host_threads_cache.pop(key, None)
         _host_threads_cache[key] = (now + _HOST_THREADS_TTL_SECONDS, threads)
+        while len(_host_threads_cache) > _HOST_THREADS_MAX_ENTRIES:
+            _host_threads_cache.popitem(last=False)
     return threads
 
 
@@ -223,8 +251,15 @@ def apply_disk_io(
     identity: str,
     epoch: str,
 ) -> None:
-    """Disk I/O rates over whole physical disks, from two scrapes at least 10 s apart."""
-    if scrape is None or series is None:
+    """Disk I/O rates over a VM's whole disks, from two scrapes at least 10 s apart.
+
+    important: virtual machines only, from their guest's own block devices. A container's disk
+    counters come from its cgroup, which misses writes the storage driver does from kernel
+    threads: on a ZFS pool a container writing 40 MB a second read 0 here. Showing that as a
+    measured zero would be worse than saying nothing, so a container's disk I/O stays
+    unavailable.
+    """
+    if scrape is None or series is None or series.instance_type != "virtual-machine":
         return
     counters: Dict[str, float] = {}
     if series.disk_read is not None:
@@ -337,7 +372,8 @@ def read_instance_metrics(
             cpu_counted=cpu_counted,
             vcpus=vcpus,
         )
-        apply_disk_io(metrics, scrape, series, identity, sample.epoch)
+        if agent == "connected":
+            apply_disk_io(metrics, scrape, series, identity, sample.epoch)
         return metrics
     except LXDOperationError:
         raise

@@ -15,6 +15,7 @@ the allocation line beside it is measured against, so the two read together.
 """
 
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
@@ -62,19 +63,30 @@ class InstanceUsage:
         return (self.rx_bps or 0.0) + (self.tx_bps or 0.0)
 
 
+def _count(value: Any) -> int:
+    """A non-negative finite counter, or 0 for anything else an endpoint sends."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+        return int(value)
+    return 0
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _state_totals(state: Mapping[str, Any]) -> Tuple[int, int, int, int, int]:
     """Memory used and limit, disk used, and lifetime network totals from one state block."""
-    memory = state.get("memory") or {}
-    used = int(memory.get("usage") or 0)
-    limit = int(memory.get("total") or 0)
-    disk = sum(int((data or {}).get("usage") or 0) for data in (state.get("disk") or {}).values())
+    memory = _mapping(state.get("memory"))
+    used = _count(memory.get("usage"))
+    limit = _count(memory.get("total"))
+    disk = sum(_count(_mapping(data).get("usage")) for data in _mapping(state.get("disk")).values())
     rx = tx = 0
-    for iface, data in (state.get("network") or {}).items():
+    for iface, data in _mapping(state.get("network")).items():
         if iface == "lo":
             continue
-        counters = (data or {}).get("counters") or {}
-        rx += int(counters.get("bytes_received") or 0)
-        tx += int(counters.get("bytes_sent") or 0)
+        counters = _mapping(_mapping(data).get("counters"))
+        rx += _count(counters.get("bytes_received"))
+        tx += _count(counters.get("bytes_sent"))
     return used, limit, disk, rx, tx
 
 
@@ -146,18 +158,23 @@ async def read_instance_usage(
         if not isinstance(raw, dict) or read_at is None:
             prepared.append((vm, None, None, None))
             continue
-        state = state_mapping(raw)
-        identity, sample, _agent = build_state_sample(
-            cluster=vm.host,
-            project=vm.project or "default",
-            name=vm.name,
-            instance_type=vm.type,
-            config=vm.config or {},
-            expanded_config=vm.config or {},
-            last_used_at=vm.last_used_at,
-            state=state,
-            taken_at=read_at,
-        )
+        try:
+            state = state_mapping(raw)
+            identity, sample, _agent = build_state_sample(
+                cluster=vm.host,
+                project=vm.project or "default",
+                name=vm.name,
+                instance_type=vm.type,
+                config=vm.config or {},
+                expanded_config=vm.config or {},
+                last_used_at=vm.last_used_at,
+                state=state,
+                taken_at=read_at,
+            )
+        except Exception as exc:  # noqa: BLE001 - one malformed row must not fail the dashboard
+            logger.warning("Skipping usage for %s/%s: %s", vm.host, vm.name, str(exc)[:200])
+            prepared.append((vm, None, None, None))
+            continue
         samples[identity] = sample
         prepared.append((vm, identity, sample, state))
 
@@ -176,10 +193,16 @@ async def read_instance_usage(
             logger.warning("Monitoring rate sampling failed for %d instances: %s", len(samples), exc)
             readings = {}
 
-    return [
-        _usage(vm, state, sample, readings.get(identity) if identity else None, host_threads)
-        for vm, identity, sample, state in prepared
-    ]
+    usages: List[InstanceUsage] = []
+    for vm, identity, sample, state in prepared:
+        try:
+            usages.append(
+                _usage(vm, state, sample, readings.get(identity) if identity else None, host_threads)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Skipping usage for %s/%s: %s", vm.host, vm.name, str(exc)[:200])
+            usages.append(_usage(vm, None, None, None, host_threads))
+    return usages
 
 
 @dataclass(frozen=True)
