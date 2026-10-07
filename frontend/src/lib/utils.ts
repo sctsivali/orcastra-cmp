@@ -299,7 +299,7 @@ export function formatHypervisorType(type: string | null | undefined): string {
 }
 
 // The seven continent codes the region catalogue uses. Also the single source of truth for
-// lib/regions-data.ts, which used to carry its own copy of the same table.
+// the region catalogue (lib/regions/catalog.json), whose entries carry these codes.
 export const CONTINENT_NAMES: Record<string, string> = {
   AF: "Africa",
   AN: "Antarctica",

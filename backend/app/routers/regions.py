@@ -487,6 +487,7 @@ async def get_regions_overview(
                             latitude=region_data.get("latitude", 0),
                             longitude=region_data.get("longitude", 0),
                             continent=region_data.get("continent", "XX"),
+                            province=region_data.get("province"),
                             facility_name=region_data.get("facility_name"),
                             facility_provider=region_data.get("facility_provider"),
                             node_count=0, instance_count=0, instance_running=0,

@@ -38,6 +38,8 @@ export interface SearchableSelectOption {
   // "object" and contribute nothing else to search. Anything richer belongs in `status`.
   badge?: string;
   disabled?: boolean;
+  // Extra terms matched while searching but never shown, ex; a regency's seat town.
+  keywords?: string[];
   // Reachability of the thing this option names.
   status?: SearchableSelectStatus;
   // Why it is in that state, ex; "connection refused". Rendered inline, never as a tooltip:
@@ -219,7 +221,7 @@ export function SearchableSelect({
                   // label. The status label is in here on purpose: typing "offline" narrows the
                   // list to the broken clusters, which is how an operator finds them rather
                   // than only avoids them.
-                  value={`${opt.value} ${opt.label} ${opt.sublabel ?? ""} ${opt.badge ?? ""} ${opt.status?.label ?? ""}`}
+                  value={`${opt.value} ${opt.label} ${opt.sublabel ?? ""} ${opt.badge ?? ""} ${opt.status?.label ?? ""} ${opt.keywords?.join(" ") ?? ""}`}
                   disabled={opt.disabled}
                   onSelect={() => {
                     onValueChange(opt.value);
