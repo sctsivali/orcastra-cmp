@@ -130,3 +130,26 @@ def test_dialog_and_fleet_build_the_same_sample_from_one_state():
 
     assert from_row == from_dialog
     assert from_row[0] == "c:p:n:u"
+
+
+def test_the_start_time_matches_whether_it_arrives_as_text_or_a_datetime():
+    """The fleet's VMInfo parses last_used_at; the dialog's wrapper keeps LXD's string."""
+    from datetime import datetime, timezone
+
+    common = dict(
+        cluster="c",
+        project="p",
+        name="n",
+        instance_type="container",
+        config={"volatile.uuid": "u"},
+        expanded_config={},
+        state={"cpu": {"usage": 5}, "pid": 7},
+        taken_at=5.0,
+    )
+
+    as_text = build_state_sample(last_used_at="2026-10-07T01:02:03.123456789Z", **common)
+    as_datetime = build_state_sample(
+        last_used_at=datetime(2026, 10, 7, 1, 2, 3, 123456, tzinfo=timezone.utc), **common
+    )
+
+    assert as_text[1].epoch == as_datetime[1].epoch

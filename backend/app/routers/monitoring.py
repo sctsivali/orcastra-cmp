@@ -5,23 +5,34 @@ Based on LXD metrics API specification: CPU, memory, disk, network, processes.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Annotated, Optional, List, Dict, Any, Tuple
 import logging
 import time
 import asyncio
 from datetime import datetime, timezone
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
     ClusterMonitoringMetrics,
-    InstanceMonitoringSummary,
     StoragePoolMetrics,
-    NetworkMetrics,
     MonitoringDashboardResponse,
     MetricsHistoryPoint,
     WarningsSummary,
 )
+from app.services.monitoring_history import (
+    append_point,
+    build_point,
+    history_key as _monitoring_history_key,
+    read_window,
+)
+from app.services.monitoring_usage import (
+    legacy_top_lists,
+    read_instance_usage,
+    rollup,
+    select_consumers,
+    summary as usage_summary,
+)
+from app.services.lxd.cpu_allocation import allocation_ratio
 from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
@@ -61,25 +72,11 @@ ws_router = APIRouter(
     tags=["Monitoring"],
 )
 
-# Thread pool for parallel instance state fetching
+# Thread pool for the per-cluster warnings fan-out
 _executor = ThreadPoolExecutor(max_workers=10)
 
-# In-memory storage for previous CPU samples (for delta calculation)
-#
-# important: bounded. CPU percent is a rate, so it needs the previous sample, but the entry for
-# a deleted instance was never removed and this grew with lifetime instance churn rather than
-# fleet size. Insertion-ordered, re-inserted on every sample, so the coldest key falls out.
-_CPU_SAMPLES_MAX = 5000
-_previous_cpu_samples: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-_previous_sample_time: float = 0
 _last_history_store_times: Dict[str, float] = {}  # Track history writes per scope
 _history_min_interval: float = 4.0  # Minimum seconds between history stores
-
-# Lock for thread-safe CPU sample access
-import threading
-from app.core.lxd_path import safe_segment
-from app.services.lxd.cpu_allocation import allocation_ratio
-_cpu_samples_lock = threading.Lock()
 
 
 # note: node status is NOT collected here. This module used to carry its own copy of the
@@ -88,276 +85,11 @@ _cpu_samples_lock = threading.Lock()
 # never answered. That is what forced the status ladder below to guess from the error text.
 # LXDService.check_nodes_status_async is the same fan-out /nodes uses, so the dashboard and the
 # node pickers now answer from one implementation.
-
-def _fetch_instance_state(client, instance_name: str, project: str, host: str) -> Optional[Dict[str, Any]]:
-    """Fetch instance state from LXD - runs in thread pool."""
-    try:
-        state_resp = client.api.instances[safe_segment(instance_name)].state.get(params={'project': project})
-        state_data = state_resp.json().get('metadata', {})
-        
-        # Extract CPU usage in nanoseconds (cumulative)
-        cpu_usage_ns = 0
-        if state_data.get('cpu'):
-            cpu_usage_ns = state_data['cpu'].get('usage', 0)
-        
-        memory_usage = state_data.get('memory', {}).get('usage', 0)
-        # important: `total`, not `usage_peak`. usage_peak is a high-water mark every VM
-        # reports as 0, so memory_limit_bytes below was 0 for the whole fleet. `total` is
-        # the memory the instance can reach, matching services/lxd/resources.py.
-        memory_total = state_data.get('memory', {}).get('total', 0)
-        
-        disk_usage = {}
-        if state_data.get('disk'):
-            disk_usage = {k: v.get('usage', 0) for k, v in state_data['disk'].items()}
-        
-        network_rx = 0
-        network_tx = 0
-        if state_data.get('network'):
-            for iface, data in state_data['network'].items():
-                if iface != 'lo':
-                    counters = data.get('counters', {})
-                    network_rx += counters.get('bytes_received', 0)
-                    network_tx += counters.get('bytes_sent', 0)
-        
-        processes = state_data.get('processes', 0)
-        
-        return {
-            'name': instance_name,
-            'host': host,
-            'project': project,
-            'cpu_usage_ns': cpu_usage_ns,  # Cumulative nanoseconds
-            'memory_usage': memory_usage,
-            'memory_total': memory_total,
-            'disk_usage': sum(disk_usage.values()),
-            'network_rx': network_rx,
-            'network_tx': network_tx,
-            'processes': processes,
-        }
-    except Exception as e:
-        logger.debug(f"Could not fetch state for {instance_name}: {e}")
-        return None
-
-
-def _calculate_cpu_percentage(
-    instance_key: str,
-    current_cpu_ns: int,
-    current_time: float,
-    num_cpus: int = 1
-) -> float:
-    """
-    Calculate CPU usage percentage based on delta from previous sample.
-    
-    CPU % = (delta_cpu_ns / (delta_time_ns * num_cpus)) * 100
-    
-    Returns percentage (0-100) normalized across all CPUs.
-    Thread-safe with lock protection.
-    """
-    global _previous_cpu_samples, _previous_sample_time
-    
-    with _cpu_samples_lock:
-        if instance_key not in _previous_cpu_samples:
-            # No previous sample, store current and return 0
-            _previous_cpu_samples[instance_key] = {
-                'cpu_ns': current_cpu_ns,
-                'time': current_time
-            }
-            while len(_previous_cpu_samples) > _CPU_SAMPLES_MAX:
-                _previous_cpu_samples.popitem(last=False)
-            return 0.0
-        
-        prev = _previous_cpu_samples[instance_key]
-        prev_cpu_ns = prev['cpu_ns']
-        prev_time = prev['time']
-        
-        # Calculate deltas
-        delta_cpu_ns = current_cpu_ns - prev_cpu_ns
-        delta_time_s = current_time - prev_time
-        
-        # Update stored sample
-        _previous_cpu_samples.pop(instance_key, None)
-        _previous_cpu_samples[instance_key] = {
-            'cpu_ns': current_cpu_ns,
-            'time': current_time
-        }
-        while len(_previous_cpu_samples) > _CPU_SAMPLES_MAX:
-            _previous_cpu_samples.popitem(last=False)
-    
-    # Calculate outside lock for better concurrency
-    if delta_time_s <= 0 or delta_cpu_ns < 0:
-        return 0.0
-    
-    # Ensure num_cpus is at least 1
-    num_cpus = max(1, num_cpus)
-    
-    # Convert time delta to nanoseconds
-    delta_time_ns = delta_time_s * 1e9
-    
-    # Calculate percentage normalized by number of CPUs
-    # This gives us 0-100% where 100% means all CPUs are fully utilized
-    cpu_percent = (delta_cpu_ns / (delta_time_ns * num_cpus)) * 100.0
-    
-    # Clamp to 0-100%
-    return min(max(cpu_percent, 0.0), 100.0)
-
-
-def _monitoring_history_key(scope_key: str) -> str:
-    """Map a dashboard scope key to its matching history cache key."""
-    if scope_key.startswith("dashboard:"):
-        return f"monitoring:history:{scope_key.split(':', 1)[1]}"
-    return f"monitoring:history:{scope_key}"
-
-
-def _build_history_point(
-    nodes_metrics: List[ClusterMonitoringMetrics],
-    instance_metrics: List[Dict[str, Any]],
-    total_memory: int,
-    storage_usage_percent: float,
-    running_instances: int,
-) -> Dict[str, Any]:
-    """Build a history point from already scoped dashboard metrics."""
-    total_instance_cpu_percent = sum(m.get('cpu_percent', 0) for m in instance_metrics)
-    avg_instance_cpu_percent = total_instance_cpu_percent / len(instance_metrics) if instance_metrics else 0
-    total_instance_memory = sum(m.get('memory_usage', 0) for m in instance_metrics)
-    instance_memory_percent = (total_instance_memory / total_memory * 100) if total_memory > 0 else 0
-
-    per_node_metrics = {}
-    for node_metric in nodes_metrics:
-        node_name = node_metric.node_name
-        node_instances = [m for m in instance_metrics if m.get('host') == node_name]
-        node_cpu_total = sum(m.get('cpu_percent', 0) for m in node_instances)
-        node_cpu_avg = node_cpu_total / len(node_instances) if node_instances else 0
-        node_memory_total = sum(m.get('memory_usage', 0) for m in node_instances)
-        node_memory_percent = (
-            (node_memory_total / node_metric.memory_total_bytes * 100)
-            if node_metric.memory_total_bytes > 0 else 0
-        )
-        per_node_metrics[node_name] = {
-            "cpu_usage_percent": round(node_cpu_avg, 2),
-            "memory_usage_percent": round(node_memory_percent, 2),
-            "storage_usage_percent": node_metric.storage_usage_percent,
-            "network_rx_bytes": sum(m.get('network_rx', 0) for m in node_instances),
-            "network_tx_bytes": sum(m.get('network_tx', 0) for m in node_instances),
-            "running_instances": len(node_instances),
-            # note: readers must use .get(), points written before this change lack the keys.
-            "gpu_total": node_metric.gpu_total,
-            "gpu_used": node_metric.gpu_used,
-        }
-
-    return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "cpu_usage_percent": round(avg_instance_cpu_percent, 2),
-        "memory_usage_percent": round(instance_memory_percent, 2),
-        "storage_usage_percent": storage_usage_percent,
-        "network_rx_bytes": sum(m.get('network_rx', 0) for m in instance_metrics),
-        "network_tx_bytes": sum(m.get('network_tx', 0) for m in instance_metrics),
-        "disk_io_bytes": 0,
-        "running_instances": running_instances,
-        "nodes": per_node_metrics,
-    }
-
-
-async def _get_running_instance_metrics(
-    lxd_service: LXDService, 
-    running_vms: List[Any],
-    max_instances: int = 100
-) -> Tuple[List[Dict[str, Any]], float]:
-    """
-    Fetch real-time metrics for running instances in parallel.
-    Returns tuple of (metrics_list, current_timestamp).
-    Uses balanced sampling across nodes to ensure each node gets representation.
-    """
-    current_time = time.time()
-    instance_metrics = []
-    
-    # Group instances by host for balanced sampling
-    instances_by_host: Dict[str, List[Tuple[str, Any]]] = {}
-    for vm in running_vms:
-        host = vm.host
-        if host not in instances_by_host:
-            instances_by_host[host] = []
-        instances_by_host[host].append((vm.name, vm))
-    
-    # Calculate instances per host for balanced sampling
-    num_hosts = len(instances_by_host)
-    if num_hosts == 0:
-        return [], current_time
-    
-    instances_per_host = max_instances // num_hosts if num_hosts > 0 else max_instances
-    remaining = max_instances % num_hosts
-    
-    # Select instances from each host proportionally
-    selected_vms = []
-    for idx, (host, host_instances) in enumerate(instances_by_host.items()):
-        # Give extra instance to first N hosts to use up remainder
-        host_quota = instances_per_host + (1 if idx < remaining else 0)
-        selected_vms.extend([vm for _, vm in host_instances[:host_quota]])
-    
-    logger.debug(f"Balanced sampling: {len(selected_vms)} instances from {num_hosts} hosts (limit={max_instances})")
-    
-    # Now group selected instances by host for efficient client reuse
-    instances_by_host_final: Dict[str, List[Tuple[str, str, int]]] = {}
-    for vm in selected_vms:
-        host = vm.host
-        if host not in instances_by_host_final:
-            instances_by_host_final[host] = []
-        project = vm.project or (vm.config.get('project', 'default') if vm.config else 'default')
-        # Get CPU count from config if available
-        cpu_count = 1
-        if vm.config:
-            cpu_limit = vm.config.get('limits.cpu', '1')
-            try:
-                cpu_count = int(cpu_limit)
-            except (ValueError, TypeError):
-                cpu_count = 1
-        instances_by_host_final[host].append((vm.name, project, cpu_count))
-    
-    loop = asyncio.get_event_loop()
-    tasks = []
-    instance_info = []  # Track (name, host, cpu_count) for each task
-    
-    for host, instance_list in instances_by_host_final.items():
-        # Use get_client_with_reconnect to ensure we have valid connections
-        client = lxd_service.get_client_with_reconnect(host)
-        if not client:
-            logger.warning(f"No client available for host {host}, skipping metrics")
-            continue
-        
-        for instance_name, project, cpu_count in instance_list:
-            task = loop.run_in_executor(
-                _executor,
-                _fetch_instance_state,
-                client,
-                instance_name,
-                project,
-                host
-            )
-            tasks.append(task)
-            instance_info.append((instance_name, host, cpu_count))
-    
-    if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, dict):
-                # Calculate real-time CPU percentage
-                instance_key = f"{result['host']}:{result.get('project', 'default')}:{result['name']}"
-                cpu_count = instance_info[i][2] if i < len(instance_info) else 1
-                cpu_percent = _calculate_cpu_percentage(
-                    instance_key,
-                    result['cpu_usage_ns'],
-                    current_time,
-                    cpu_count
-                )
-                result['cpu_percent'] = cpu_percent
-                result['cpu_count'] = cpu_count
-                instance_metrics.append(result)
-    
-    # Log summary (debug only)
-    if instance_metrics and logger.isEnabledFor(logging.DEBUG):
-        top3 = sorted(instance_metrics, key=lambda x: x.get('cpu_percent', 0), reverse=True)[:3]
-        for m in top3:
-            logger.debug(f"CPU: {m['name']} -> {m['cpu_percent']:.2f}% (cpus={m['cpu_count']})")
-    
-    return instance_metrics, current_time
+#
+# note: nor is per-instance CPU. A second sampler lived here with its own per-worker baselines,
+# its own `int(limits.cpu)` divisor and a first sample of 0.0, so Top Consumers and the instance
+# dialog disagreed about the same instance. Usage now comes from services/monitoring_usage.py,
+# which reads the state the fleet list already carries through the dialog's own sampler.
 
 
 # Cache key for the dashboard response, scoped so partner users never read admin-cached data.
@@ -372,7 +104,9 @@ async def _get_running_instance_metrics(
 # note: Redis here runs allkeys-lru at 256mb, so an entry can be evicted before its TTL under
 # memory pressure. That is survivable precisely because these keys are few (one per scope) and
 # hot; do not split this into one key per cluster.
-MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard"
+# note: v2 since the body gained nullable CPU fields. During a rolling deploy an older worker
+# must never parse a body it cannot validate, and the v1 entries simply expire.
+MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard:v2"
 _DASHBOARD_CACHE_TTL = 35  # background collector runs every 30s
 
 # note: no herd lock here any more. single_flight("monitoring:dashboard") serialises arrivals
@@ -467,6 +201,11 @@ async def get_monitoring_dashboard(
             name: meta.get("type")
             for name, meta in get_node_metadata_store().get_all_node_metadata().items()
         }
+        type_counts: Dict[str, Dict[str, int]] = {}
+        for vm in all_vms:
+            counts = type_counts.setdefault(vm.host, {"container": 0, "virtual-machine": 0})
+            if vm.type in counts:
+                counts[vm.type] += 1
 
         for node in node_statuses_list:
             if node.connected:
@@ -536,6 +275,8 @@ async def get_monitoring_dashboard(
                         gpu_utilization_supported=resources.gpu_utilization_supported,
                         instance_count=len([vm for vm in all_vms if vm.host == node.name]),
                         running_instances=len([vm for vm in all_vms if vm.host == node.name and vm.status.value == "Running"]),
+                        container_count=type_counts.get(node.name, {}).get("container", 0),
+                        vm_count=type_counts.get(node.name, {}).get("virtual-machine", 0),
                     ))
             else:
                 inactive_nodes += 1
@@ -603,76 +344,19 @@ async def get_monitoring_dashboard(
         memory_usage_percent = round((used_memory / total_memory * 100) if total_memory > 0 else 0, 2)
         storage_usage_percent = round((used_storage / total_storage * 100) if total_storage > 0 else 0, 2)
         
-        # Get REAL-TIME metrics for running instances (top consumers)
+        # Live usage for every running instance, from the state the fleet list already carried.
         running_vms = [vm for vm in all_vms if vm.status.value == "Running"]
-        logger.debug(f"Fetching real-time metrics for {len(running_vms)} running instances")
-        
-        # Increase limit to ensure we get metrics from all nodes proportionally
-        # This prevents issue where selecting a specific node shows no data
-        # because its instances weren't in the first 30
-        max_instances_to_fetch = min(len(running_vms), 100)  # Fetch up to 100 instances
-        
-        instance_metrics, sample_time = await _get_running_instance_metrics(
-            lxd_service, 
-            running_vms, 
-            max_instances=max_instances_to_fetch
-        )
-        
-        logger.debug(f"Got metrics for {len(instance_metrics)} instances")
-        
-        # Build instance summaries from real-time metrics
-        instance_summaries: List[InstanceMonitoringSummary] = []
-        for metrics in instance_metrics:
-            # Find the VM info for type
-            vm_info = next(
-                (
-                    vm for vm in running_vms
-                    if vm.name == metrics['name']
-                    and vm.host == metrics['host']
-                    and (vm.project or "default") == metrics.get('project', 'default')
-                ),
-                None,
-            )
-            vm_type = vm_info.type if vm_info else "container"
-            
-            instance_summaries.append(InstanceMonitoringSummary(
-                name=metrics['name'],
-                host=metrics['host'],
-                project=metrics.get('project', 'default'),
-                type=vm_type,
-                status="Running",
-                cpu_usage=metrics.get('cpu_percent', 0),  # Now using calculated percentage
-                memory_usage_bytes=metrics.get('memory_usage', 0),
-                memory_limit_bytes=metrics.get('memory_total', 0),
-                disk_usage_bytes=metrics.get('disk_usage', 0),
-                network_rx_bytes=metrics.get('network_rx', 0),
-                network_tx_bytes=metrics.get('network_tx', 0),
-            ))
-        
-        # Sort by CPU percentage for top consumers (now real-time percentage)
-        # Return up to 20 consumers - frontend handles topN slicing
-        cpu_sorted = sorted(instance_summaries, key=lambda x: x.cpu_usage or 0, reverse=True)
-        top_cpu_consumers = cpu_sorted[:20]
-        
-        # Sort by memory for top memory consumers  
-        # Return up to 20 consumers - frontend handles topN slicing
-        mem_sorted = sorted(instance_summaries, key=lambda x: x.memory_usage_bytes or 0, reverse=True)
-        top_memory_consumers = mem_sorted[:20]
-        
-        # Calculate real-time aggregate metrics from instance data
-        realtime_cpu_percent = 0.0
-        realtime_memory_bytes = 0
-        
-        if instance_metrics:
-            # Average CPU usage across all monitored instances
-            cpu_values = [m.get('cpu_percent', 0) for m in instance_metrics]
-            if cpu_values:
-                realtime_cpu_percent = round(sum(cpu_values) / len(cpu_values), 2)
-            
-            # Sum of memory usage from all instances
-            realtime_memory_bytes = sum(m.get('memory_usage', 0) for m in instance_metrics)
-        
-        # Calculate real-time memory percentage
+        host_threads = {
+            node.name: node.resources.cpu_total
+            for node in node_statuses_list
+            if node.connected and node.resources and node.resources.cpu_total > 0
+        }
+        usages = await read_instance_usage(running_vms, host_threads)
+        fleet_cpu = rollup(nodes_metrics, usages)
+        consumers = [usage_summary(usage) for usage in select_consumers(usages)]
+        top_cpu_consumers, top_memory_consumers = legacy_top_lists(usages)
+
+        realtime_memory_bytes = sum(usage.memory_bytes for usage in usages)
         realtime_memory_percent = round(
             (realtime_memory_bytes / total_memory * 100) if total_memory > 0 else 0, 2
         )
@@ -744,8 +428,13 @@ async def get_monitoring_dashboard(
             used_cpu=used_cpu,
             cpu_usage_percent=cpu_usage_percent,
             
-            # Real-time CPU usage
-            realtime_cpu_percent=realtime_cpu_percent,
+            # CPU utilisation, as busy hardware threads
+            realtime_cpu_percent=fleet_cpu.busy_percent or 0.0,
+            cpu_busy_threads=fleet_cpu.busy_threads,
+            cpu_busy_percent=fleet_cpu.busy_percent,
+            cpu_status=fleet_cpu.status,
+            cpu_reporting_instances=fleet_cpu.reporting_instances,
+            cpu_reporting_threads=fleet_cpu.reporting_threads,
             
             total_memory_bytes=total_memory,
             used_memory_bytes=used_memory,
@@ -766,8 +455,9 @@ async def get_monitoring_dashboard(
             # Detailed Metrics
             nodes=nodes_metrics,
             storage_pools=storage_pools_list,
-            top_cpu_consumers=top_cpu_consumers[:20],
-            top_memory_consumers=top_memory_consumers[:20],
+            consumers=consumers,
+            top_cpu_consumers=top_cpu_consumers,
+            top_memory_consumers=top_memory_consumers,
             
             # Warnings
             warnings=warnings_summary,
@@ -793,22 +483,18 @@ async def get_monitoring_dashboard(
                 _last_history_store_times[history_key] = current_time
 
                 history = cache.get("monitoring_history", history_key) or []
-                new_point = _build_history_point(
+                new_point = build_point(
                     nodes_metrics,
-                    instance_metrics,
-                    total_memory,
-                    storage_usage_percent,
-                    running_instances,
+                    usages,
+                    fleet_cpu_percent=fleet_cpu.busy_percent,
+                    total_memory=total_memory,
+                    storage_usage_percent=storage_usage_percent,
+                    running_instances=running_instances,
                 )
-                history.append(new_point)
-                
-                # Keep last 8640 points (24 hours at 10s interval, or 72 hours at 30s)
-                if len(history) > 8640:
-                    history = history[-8640:]
-                
+                history = append_point(history, new_point)
                 cache.set("monitoring_history", history_key, history, ttl=86400)  # 24 hour TTL
                 
-                if scope_key == "dashboard:scope=all":
+                if scope_key == "dashboard:scope=all" and new_point["cpu_usage_percent"] is not None:
                     asyncio.create_task(_persist_snapshot(new_point))
                 
             except Exception as hist_err:
@@ -1012,17 +698,27 @@ def _history_version(history: List[Dict[str, Any]]) -> str:
     "/history",
     response_model=List[MetricsHistoryPoint],
     summary="Get metrics history",
-    description="Get historical metrics data for graphing. Returns last N data points.",
+    description=(
+        "Historical metrics for graphing. `window` selects the points collected in the last N "
+        "seconds (default 300); the older `points` parameter returns the last N points."
+    ),
 )
 async def get_metrics_history(
-    points: int = Query(default=60, ge=1, le=8640, description="Number of historical points to return (max 8640 for 24h)"),
+    window: Annotated[
+        Optional[int],
+        Query(ge=60, le=86400, description="Seconds of history to return, up to 24 hours"),
+    ] = None,
+    points: Annotated[
+        Optional[int],
+        Query(ge=1, le=8640, description="Legacy: the last N points, whatever span they cover"),
+    ] = None,
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """
     Get historical metrics for graphing.
 
     Data flow (hot -> cold):
-      1. In-memory cache (instant, populated by background collector)
+      1. Redis, appended by every dashboard collection and trimmed to 24 hours
       2. PostgreSQL (survives restarts, 7-day retention)
       3. Empty list (first startup, dashboard will populate on next cycle)
 
@@ -1038,7 +734,8 @@ async def get_metrics_history(
         # Cache empty (backend just restarted?) - hydrate from PostgreSQL
         try:
             from app.services.metrics_history_service import load_metrics_history
-            history = await load_metrics_history(points=points, scope="all")
+            # note: 2880 rows is 24 hours at the collector's 30 s cadence, the longest window.
+            history = await load_metrics_history(points=2880, scope="all")
             if history:
                 # Re-populate the in-memory cache so subsequent requests are instant
                 cache.set("monitoring_history", history_key, history, ttl=86400)
@@ -1058,16 +755,17 @@ async def get_metrics_history(
     if not history:
         return []
     
+    selection = read_window(history, window_seconds=window, points=points)
     try:
-        # Check response cache: avoid re-creating Pydantic models if history hasn't changed
-        cache_key = f"{history_key}:{points}"
-        version = _history_version(history)
+        # Check response cache: avoid re-creating Pydantic models if the selection hasn't changed
+        cache_key = f"{history_key}:{'p' if window is None and points is not None else 'w'}:{window or points}"
+        version = _history_version(selection)
         cached_entry = _history_response_cache.get(cache_key)
         if cached_entry and cached_entry[0] == version:
             return cached_entry[1]
 
         # Create Pydantic models and cache the result
-        result = [MetricsHistoryPoint(**p) for p in history[-points:]]
+        result = [MetricsHistoryPoint(**p) for p in selection]
         # Evict oldest entries if cache exceeds max size
         if len(_history_response_cache) >= _HISTORY_CACHE_MAX_SIZE:
             oldest_key = next(iter(_history_response_cache))
@@ -1076,99 +774,7 @@ async def get_metrics_history(
         return result
     except Exception as e:
         logger.error(f"Error parsing metrics history: {e}")
-        if history:
-            try:
-                return [MetricsHistoryPoint(**p) for p in history[-points:]]
-            except Exception:
-                pass
         return []
-
-
-@router.get(
-    "/network",
-    response_model=NetworkMetrics,
-    summary="Get network metrics",
-    description="Get aggregated network I/O metrics across all instances.",
-)
-@single_flight("monitoring:network")
-async def get_network_metrics(
-    lxd_service: LXDService = Depends(get_lxd_service),
-    fresh: bool = False,
-):
-    """Get aggregated network metrics. Cached for 30 seconds."""
-    # check cache first
-    cache = get_cache_manager()
-    cache_key = get_scope_cache_key("monitoring:network")
-    cached = None if fresh else cache.get("api_responses", cache_key)
-    if cached is not None:
-        return NetworkMetrics(**cached)
-    monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
-
-    try:
-        all_vms, connected_nodes = await lxd_service.list_all_vms()
-        
-        total_rx = 0
-        total_tx = 0
-        total_rx_packets = 0
-        total_tx_packets = 0
-        
-        interface_stats: Dict[str, Dict[str, int]] = {}
-        
-        for vm in all_vms:
-            if not check_tenant_permission(vm.host, vm.project or "default", vm.name, "view"):
-                continue
-            if vm.status.value == "Running" and vm.resources and vm.resources.network_counters:
-                for iface, counters in vm.resources.network_counters.items():
-                    rx = counters.get("bytes_received", 0)
-                    tx = counters.get("bytes_sent", 0)
-                    rx_packets = counters.get("packets_received", 0)
-                    tx_packets = counters.get("packets_sent", 0)
-                    
-                    total_rx += rx
-                    total_tx += tx
-                    total_rx_packets += rx_packets
-                    total_tx_packets += tx_packets
-                    
-                    if iface not in interface_stats:
-                        interface_stats[iface] = {
-                            "rx_bytes": 0,
-                            "tx_bytes": 0,
-                            "rx_packets": 0,
-                            "tx_packets": 0,
-                        }
-                    interface_stats[iface]["rx_bytes"] += rx
-                    interface_stats[iface]["tx_bytes"] += tx
-                    interface_stats[iface]["rx_packets"] += rx_packets
-                    interface_stats[iface]["tx_packets"] += tx_packets
-        
-        response = NetworkMetrics(
-            total_rx_bytes=total_rx,
-            total_tx_bytes=total_tx,
-            total_rx_packets=total_rx_packets,
-            total_tx_packets=total_tx_packets,
-            interfaces=interface_stats,
-            timestamp=datetime.now(timezone.utc),
-        )
-        
-        # important: zeros from an unreachable fleet are worse than an empty list.
-        # An empty inventory looks broken, but "0 traffic, 0 packets" on a
-        # monitoring surface reads as a healthy idle cluster. Do not cache a
-        # total nobody reported.
-        if connected_nodes:
-            if (
-                _resource_generation(cache, _MONITORING_CACHE_KIND)
-                == monitoring_generation
-            ):
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
-            else:
-                logger.info("Not caching network metrics: monitoring data changed during the read")
-        else:
-            logger.warning("Not caching network metrics: no cluster answered")
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error getting network metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @ws_router.websocket("/ws")

@@ -170,35 +170,6 @@ def test_node_metrics_only_cache_the_generation_they_read(monkeypatch, advance: 
     assert (expected_key in _api_keys(cache)) is (not advance)
 
 
-class _NetworkService:
-    def __init__(self, cache: _GenerationCache, advance: bool) -> None:
-        self.cache = cache
-        self.advance = advance
-
-    async def list_all_vms(self) -> tuple[list[Any], list[str]]:
-        if self.advance:
-            self.cache.advance("monitoring")
-        return [], [CLUSTER]
-
-
-@pytest.mark.parametrize("advance", [False, True], ids=["stable", "invalidated"])
-def test_network_metrics_only_cache_the_generation_they_read(monkeypatch, advance: bool) -> None:
-    cache = _GenerationCache()
-    monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)
-    monkeypatch.setattr(monitoring, "get_scope_cache_key", _scoped)
-
-    result = asyncio.run(
-        monitoring.get_network_metrics(
-            lxd_service=_NetworkService(cache, advance),
-            fresh=True,
-        )
-    )
-
-    assert result.total_rx_bytes == 0
-    expected_key = _scoped("monitoring:network")
-    assert (expected_key in _api_keys(cache)) is (not advance)
-
-
 class _MembersResponse:
     def __init__(self, cache: _GenerationCache, advance: bool) -> None:
         self.cache = cache

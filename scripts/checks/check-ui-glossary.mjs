@@ -137,6 +137,8 @@ const backendGlossaryFiles = [
   "backend/app/services/lxd/instance_metrics_sections.py",
   "backend/app/routers/cluster_members.py",
   "backend/app/routers/monitoring.py",
+  "backend/app/services/monitoring_history.py",
+  "backend/app/services/monitoring_usage.py",
   "backend/app/routers/nodes.py",
   "backend/app/services/lxd/node_resources.py",
   "backend/app/services/lxd/resources.py",

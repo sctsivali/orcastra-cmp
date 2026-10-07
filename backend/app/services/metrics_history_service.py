@@ -44,6 +44,10 @@ async def persist_metrics_snapshot(
     the collector loop.  Values are stored as basis points
     (percent * 100) for compact integer storage.
     """
+    # important: skip, never zero. The column is NOT NULL, and a point taken before any
+    # instance had a second CPU sample would otherwise persist as an idle fleet.
+    if point.get("cpu_usage_percent") is None:
+        return
     entry_kwargs = {
         "cpu_usage_percent": _to_basis_points(point.get("cpu_usage_percent", 0)),
         "memory_usage_percent": _to_basis_points(point.get("memory_usage_percent", 0)),
@@ -110,20 +114,29 @@ async def load_metrics_history(
         # reverse so oldest-first (chart x-axis)
         rows.reverse()
 
-        return [
-            {
-                "timestamp": row.collected_at.isoformat(),
-                "cpu_usage_percent": round(row.cpu_usage_percent / 100, 2),
-                "memory_usage_percent": round(row.memory_usage_percent / 100, 2),
-                "storage_usage_percent": round(row.storage_usage_percent / 100, 2),
-                "network_rx_bytes": row.network_rx_bytes,
-                "network_tx_bytes": row.network_tx_bytes,
-                "disk_io_bytes": row.disk_io_bytes,
-                "running_instances": row.running_instances,
-                "nodes": row.nodes,
-            }
-            for row in rows
-        ]
+        from app.services.monitoring_history import node_rates
+
+        points_out: List[Dict[str, Any]] = []
+        for row in rows:
+            # note: rows written since network became a rate keep it in their per-Cluster
+            # entries and 0 in the legacy counter columns; older rows carry the counters.
+            rx_rate, tx_rate = node_rates(row.nodes)
+            points_out.append(
+                {
+                    "timestamp": row.collected_at.isoformat(),
+                    "cpu_usage_percent": round(row.cpu_usage_percent / 100, 2),
+                    "memory_usage_percent": round(row.memory_usage_percent / 100, 2),
+                    "storage_usage_percent": round(row.storage_usage_percent / 100, 2),
+                    "network_rx_bytes": row.network_rx_bytes,
+                    "network_tx_bytes": row.network_tx_bytes,
+                    "network_rx_bytes_per_sec": rx_rate,
+                    "network_tx_bytes_per_sec": tx_rate,
+                    "disk_io_bytes": row.disk_io_bytes,
+                    "running_instances": row.running_instances,
+                    "nodes": row.nodes,
+                }
+            )
+        return points_out
     except Exception as e:
         logger.error("Failed to load metrics history from DB: %s", e, exc_info=True)
         return []

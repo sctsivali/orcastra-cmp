@@ -196,8 +196,10 @@ class MetricsCollector:
                 from app.services.ws_broadcast import get_monitoring_broadcaster
                 broadcaster = get_monitoring_broadcaster()
                 if broadcaster.client_count > 0:
-                    # result is a Pydantic model or dict
-                    data = result.model_dump() if hasattr(result, 'model_dump') else result
+                    # note: mode="json" so datetimes go out as ISO 8601. The broadcaster's
+                    # json.dumps(default=str) wrote "2026-10-07 12:00:00+00:00" with a space,
+                    # which not every browser's Date.parse accepts, and the page now reads it.
+                    data = result.model_dump(mode="json") if hasattr(result, 'model_dump') else result
                     await broadcaster.broadcast(data)
                     logger.debug(f"Pushed monitoring data to {broadcaster.client_count} WS clients")
             except Exception as ws_err:
@@ -235,13 +237,9 @@ class MetricsCollector:
             # intends, so a prewarm both wrote a key the endpoint owns and changed how long
             # it lived. Each of these matches its handler's own cache.set.
 
-            # Pre-warm instances cache (most critical for dashboard)
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key("instances:list:host=None:status=None:type=None:o=0:l=0"),
-                self._fetch_instances,
-                ttl=30,
-            )
+            # note: no instances prewarm. It wrote "instances:list:host=None:...", a key GET
+            # /instances never reads (its key is "instances:list:v2:...:project=..."), so every
+            # worker paid a full recursion=2 fleet list each cycle for a value nobody used.
 
             # Pre-warm VMs cache (VM-only view) - key: vms:list:host=None:status=None
             await self._prewarm_single_cache(
@@ -319,22 +317,6 @@ class MetricsCollector:
         while fourteen clusters were down. The same shape mismatch took out GET /nodes.
         """
         return sorted(set(self._lxd_service.get_node_names()) - set(connected_nodes))
-
-    async def _fetch_instances(self):
-        """Fetch instances data for cache warming."""
-        from app.models.schemas import VMListResponse
-        all_vms, connected_nodes = await self._lxd_service.list_all_vms()
-        if not connected_nodes:
-            # mirrors the guard in routers/instances.py: an unanswered fan-out is not a
-            # result worth remembering.
-            return None
-        response = VMListResponse(
-            total=len(all_vms),
-            vms=all_vms,
-            nodes=connected_nodes,
-            unreachable_nodes=self._unreachable(connected_nodes),
-        )
-        return response.model_dump()
 
     async def _fetch_vms(self):
         """Fetch VMs data for cache warming."""

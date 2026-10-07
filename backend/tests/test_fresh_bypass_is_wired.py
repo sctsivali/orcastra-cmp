@@ -257,7 +257,9 @@ class DegradedFanOutTests(unittest.TestCase):
                 if id(call) not in guarded:
                     offenders.append(f"{path.name}:{call.lineno} {fn.name} caches unguarded")
 
-        self.assertGreaterEqual(checked, 3, "the scan stopped finding fan-out handlers")
+        # note: 2 since GET /monitoring/network was removed; it summed counters the list path
+        # never fills and always answered zero.
+        self.assertGreaterEqual(checked, 2, "the scan stopped finding fan-out handlers")
         self.assertEqual(
             offenders,
             [],
@@ -1239,7 +1241,8 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             "reports a healthy fleet and the banner never appears on an unforced read",
         )
         # a scan over nothing passes for the wrong reason
-        self.assertGreaterEqual(constructed, 2)
+        # note: 1 since the instances prewarm went; its key was never read by GET /instances.
+        self.assertGreaterEqual(constructed, 1)
 
     def test_a_prewarm_refuses_to_write_a_fan_out_nobody_answered(self):
         """The endpoint guard is worthless if the collector reinstates the outage.
@@ -1279,7 +1282,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             "these prewarm fetchers always return a payload, so an outage is written into "
             "the same key the endpoint deliberately left cold",
         )
-        self.assertGreaterEqual(checked, 2)
+        self.assertGreaterEqual(checked, 1)
 
     def test_every_prewarm_states_the_ttl_its_endpoint_uses(self):
         """A single hardcoded TTL in the helper is a second, invisible cache policy.
@@ -1316,11 +1319,10 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                 )
 
         # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
-        # routers/instances.py list_instances, routers/vms.py list_vms,
-        # routers/regions.py get_regions_overview, routers/storage_pools.py resources-all,
-        # services/lxd/status.py _build_response.
+        # routers/vms.py list_vms, routers/regions.py get_regions_overview,
+        # routers/storage_pools.py resources-all, services/lxd/status.py _build_response.
+        # note: no instances:list. That prewarm wrote a key GET /instances never reads.
         expected = {
-            "instances:list": 30,
             "vms:list": 180,
             "regions:overview": 120,
             "storage_pool_resources:all": 60,
