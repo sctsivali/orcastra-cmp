@@ -103,3 +103,40 @@ def allocation_ratio(allocated: int, threads: int) -> float:
 def clamp_available(threads: int, allocated: int) -> int:
     """Threads not yet allocated; zero, never negative, once the member is over-committed."""
     return max(0, threads - allocated)
+
+
+def effective_vcpus(
+    instance: Any,
+    *,
+    reported: Optional[float] = None,
+    host_threads: Optional[int] = None,
+) -> Optional[int]:
+    """vCPUs a live CPU percentage is measured against, or None when nothing says.
+
+    important: not instance_cpu_allocation. That one is allocation accounting and counts an unset
+    limit as one core, which for a container without `limits.cpu` would read a busy
+    eight-thread container as 800 percent of "1 vCPU". Order: LXD's own effective count (it
+    reports 0 for virtual machines, so 0 falls through), then `limits.cpu`, then LXD's defaults:
+    one vCPU for a virtual machine, every host thread for an unlimited container.
+    """
+    if reported is not None and reported > 0:
+        return max(1, int(round(reported)))
+    expanded = _field(instance, "expanded_config") or {}
+    config = _field(instance, "config") or {}
+    value = expanded.get("limits.cpu") if isinstance(expanded, dict) else None
+    if value is None and isinstance(config, dict):
+        value = config.get("limits.cpu")
+    count = parse_cpu_limit(value, default=0)
+    if count > 0:
+        return count
+    if _field(instance, "type") == "virtual-machine":
+        return 1
+    if host_threads is not None and host_threads > 0:
+        return host_threads
+    return None
+
+
+def _field(instance: Any, name: str) -> Any:
+    if isinstance(instance, dict):
+        return instance.get(name)
+    return getattr(instance, name, None)

@@ -19,7 +19,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.lxd import resources as resources_module
+from app.services.lxd import instance_metrics as metrics_module
+from app.services.lxd.instance_metrics import (
+    STATE_SAMPLER,
+    instance_rate_identity,
+    read_instance_metrics,
+)
 from app.services.lxd.resources import ResourceManager
 
 
@@ -122,7 +127,12 @@ def test_a_state_block_missing_its_keys_does_not_invent_them(manager):
     assert usage.cpu_time_ns is None
 
 
-def test_an_idle_instance_still_records_a_cpu_baseline(manager, monkeypatch):
+def _stored(identity):
+    key = STATE_SAMPLER.key(identity)
+    return STATE_SAMPLER._local.get_many([key])[0]
+
+
+def test_an_idle_instance_still_records_a_cpu_baseline(monkeypatch):
     """A cumulative zero is a reading, and the metrics path used to drop it as falsy.
 
     `if state.cpu and state.cpu.get("usage")` skipped the whole block on a cumulative 0, so no
@@ -130,19 +140,18 @@ def test_an_idle_instance_still_records_a_cpu_baseline(manager, monkeypatch):
     through its first poll never began accumulating history and read 0 percent forever after.
     """
     idle = _instance(SILENT)
-    monkeypatch.setattr(resources_module, "find_instance_in_projects", lambda *a, **k: (idle, "default"))
+    monkeypatch.setattr(metrics_module, "find_instance_in_projects", lambda *a, **k: (idle, "default"))
 
-    metrics = manager.get_instance_metrics(object(), "nuc2", "fixture")
+    metrics = read_instance_metrics(object(), "nuc2", "fixture")
 
-    # note: the key carries the project. A name is unique per project, not per host.
-    assert "nuc2:default:fixture" in manager._cpu_history, "a zero reading must still seed the history"
-    assert manager._cpu_history["nuc2:default:fixture"]["usage_ns"] == 0
+    # note: the identity carries the project. A name is unique per project, not per host.
+    stored = _stored(instance_rate_identity("nuc2", "default", "fixture", None))
+    assert stored is not None, "a zero reading must still seed the baseline"
+    assert stored.counters["cpu_ns"] == 0
     assert metrics.cpu_usage_percent == 0.0
 
 
-def test_two_instances_of_one_name_in_different_projects_keep_separate_baselines(
-    manager, monkeypatch
-):
+def test_two_instances_of_one_name_in_different_projects_keep_separate_baselines(monkeypatch):
     """The baseline is cumulative CPU nanoseconds, so a shared key subtracts the wrong reading.
 
     Keyed on host and name alone, `default/web-01` and `acme/web-01` on one host wrote into the
@@ -152,16 +161,16 @@ def test_two_instances_of_one_name_in_different_projects_keep_separate_baselines
     busy = _instance(ATLAS)
 
     monkeypatch.setattr(
-        resources_module, "find_instance_in_projects", lambda *a, **k: (busy, "default")
+        metrics_module, "find_instance_in_projects", lambda *a, **k: (busy, "default")
     )
-    manager.get_instance_metrics(object(), "nuc2", "web-01", "default")
+    read_instance_metrics(object(), "nuc2", "web-01", "default")
 
     monkeypatch.setattr(
-        resources_module, "find_instance_in_projects", lambda *a, **k: (busy, "acme")
+        metrics_module, "find_instance_in_projects", lambda *a, **k: (busy, "acme")
     )
-    manager.get_instance_metrics(object(), "nuc2", "web-01", "acme")
+    read_instance_metrics(object(), "nuc2", "web-01", "acme")
 
-    assert "nuc2:default:web-01" in manager._cpu_history
-    assert "nuc2:acme:web-01" in manager._cpu_history, (
+    assert _stored(instance_rate_identity("nuc2", "default", "web-01", None)) is not None
+    assert _stored(instance_rate_identity("nuc2", "acme", "web-01", None)) is not None, (
         "the second project must not have written into the first one's slot"
     )

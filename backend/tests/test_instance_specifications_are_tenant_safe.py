@@ -2,7 +2,6 @@
 
 import asyncio
 import ast
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timezone
 from pathlib import Path
@@ -29,7 +28,8 @@ from app.models.schemas import (
 )
 from app.routers import instances, nodes, vms
 from app.services.lxd import lxd_service as lxd_service_module
-from app.services.lxd import resources as resources_module
+from app.core.rate_sampler import LocalSampleStore
+from app.services.lxd import instance_metrics as metrics_module
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.instance import InstanceManager
 from app.services.lxd.utils import find_instance_in_projects
@@ -662,12 +662,16 @@ def test_metrics_are_offloaded_from_the_event_loop(monkeypatch):
     assert call["worker_args"] == (HOST, "mine", "default")
     assert call["options"]["timeout"] == 12.0
     assert call["options"]["max_in_flight"] == 10
-    assert call["options"]["executor"] is lxd_service_module._blocking_executor
+    # Its own pool, capped per cluster: the node-status sweep cannot starve it and one slow
+    # cluster cannot hold every thread.
+    assert call["options"]["executor"] is lxd_service_module._instance_metrics_executor
+    assert call["options"]["executor"] is not lxd_service_module._blocking_executor
+    assert call["options"]["concurrency_key"] == HOST
+    assert call["options"]["max_in_flight_per_key"] == 3
 
 
 @pytest.mark.parametrize("phase", ["lookup", "state"])
 def test_a_metrics_socket_timeout_becomes_a_connection_failure(monkeypatch, phase):
-    manager = resources_module.ResourceManager()
     if phase == "lookup":
         lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(  # noqa: E731
             requests_exceptions.ReadTimeout("lookup timed out")
@@ -684,48 +688,14 @@ def test_a_metrics_socket_timeout_becomes_a_connection_failure(monkeypatch, phas
             timed_out_instance,
             "default",
         )
-    monkeypatch.setattr(resources_module, "find_instance_in_projects", lookup)
+    monkeypatch.setattr(metrics_module, "find_instance_in_projects", lookup)
 
     with pytest.raises(LXDConnectionError):
-        manager.get_instance_metrics(object(), HOST, "mine", "default")
+        metrics_module.read_instance_metrics(object(), HOST, "mine", "default")
 
 
-def test_cpu_history_updates_are_serialized_across_metrics_workers(monkeypatch):
-    class _GuardedHistory(OrderedDict):
-        def __init__(self):
-            super().__init__()
-            self._activity_lock = threading.Lock()
-            self._active = False
-
-        def _guard(self, operation):
-            with self._activity_lock:
-                if self._active:
-                    raise AssertionError("CPU history was accessed concurrently")
-                self._active = True
-            try:
-                time.sleep(0.001)
-                return operation()
-            finally:
-                with self._activity_lock:
-                    self._active = False
-
-        def __contains__(self, key):
-            return self._guard(lambda: OrderedDict.__contains__(self, key))
-
-        def __getitem__(self, key):
-            return self._guard(lambda: OrderedDict.__getitem__(self, key))
-
-        def __setitem__(self, key, value):
-            return self._guard(lambda: OrderedDict.__setitem__(self, key, value))
-
-        def __len__(self):
-            return self._guard(lambda: OrderedDict.__len__(self))
-
-        def pop(self, key, default=None):
-            return self._guard(lambda: OrderedDict.pop(self, key, default))
-
-        def popitem(self, last=True):
-            return self._guard(lambda: OrderedDict.popitem(self, last=last))
+def test_concurrent_metrics_reads_share_one_bounded_baseline_store(monkeypatch):
+    """Eight threads sampling at once must neither corrupt the store nor grow it unbounded."""
 
     class _State:
         cpu = {"usage": 1_000_000}
@@ -739,17 +709,19 @@ def test_cpu_history_updates_are_serialized_across_metrics_workers(monkeypatch):
     class _Instance:
         status = "Running"
         status_code = 103
+        type = "virtual-machine"
         config = {}
+        expanded_config = None
         last_used_at = None
+        location = "none"
 
         def state(self):
             return _State()
 
-    manager = resources_module.ResourceManager()
-    manager._CPU_HISTORY_MAX = 4
-    manager._cpu_history = _GuardedHistory()
+    bounded = LocalSampleStore(max_entries=4)
+    monkeypatch.setattr(metrics_module.STATE_SAMPLER, "_local", bounded)
     monkeypatch.setattr(
-        resources_module,
+        metrics_module,
         "find_instance_in_projects",
         lambda *_args, **_kwargs: (_Instance(), "default"),
     )
@@ -757,7 +729,7 @@ def test_cpu_history_updates_are_serialized_across_metrics_workers(monkeypatch):
 
     def _sample(index):
         barrier.wait()
-        return manager.get_instance_metrics(
+        return metrics_module.read_instance_metrics(
             object(),
             HOST,
             f"instance-{index}",
@@ -767,8 +739,8 @@ def test_cpu_history_updates_are_serialized_across_metrics_workers(monkeypatch):
     with ThreadPoolExecutor(max_workers=8) as executor:
         samples = list(executor.map(_sample, range(8)))
 
-    assert len(samples) == 8
-    assert OrderedDict.__len__(manager._cpu_history) == 4
+    assert [sample.cpu_sample_status for sample in samples] == ["calculating"] * 8
+    assert len(bounded._entries) == 4
 
 
 @pytest.mark.parametrize(

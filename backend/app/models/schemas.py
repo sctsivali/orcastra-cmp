@@ -19,15 +19,8 @@ from app.models.cluster_status import (  # noqa: F401
     ClusterStatus,
     derive_status,
 )
-
-
-class VMStatus(str, Enum):
-    """Possible VM statuses."""
-    RUNNING = "Running"
-    STOPPED = "Stopped"
-    FROZEN = "Frozen"
-    ERROR = "Error"
-    UNKNOWN = "Unknown"
+from app.models.vm_status import VMStatus  # noqa: F401
+from app.models.instance_metrics import InstanceMetrics  # noqa: F401
 
 
 class ResourceUsage(BaseModel):
@@ -48,48 +41,6 @@ class ResourceUsage(BaseModel):
     network_counters: Optional[Dict[str, Dict[str, int]]] = Field(
         None, 
         description="Network I/O counters by interface"
-    )
-
-
-class InstanceMetrics(BaseModel):
-    """Real-time instance metrics for monitoring."""
-    instance_name: str = Field(..., description="Instance name")
-    host: str = Field(..., description="Registered Cluster identifier")
-    status: VMStatus = Field(..., description="Current instance status")
-    cpu_usage_percent: float = Field(0.0, description="CPU usage percentage")
-    memory_used_bytes: int = Field(0, description="Memory currently used in bytes")
-    memory_total_bytes: int = Field(0, description="Total memory available in bytes")
-    memory_usage_percent: float = Field(0.0, description="Memory usage percentage")
-    disk_usage_bytes: Dict[str, int] = Field(default_factory=dict, description="Disk usage by device in bytes")
-    network_rx_bytes: Dict[str, int] = Field(default_factory=dict, description="Network received bytes by interface")
-    network_tx_bytes: Dict[str, int] = Field(default_factory=dict, description="Network transmitted bytes by interface")
-    processes: int = Field(0, description="Number of running processes")
-    uptime_seconds: int = Field(0, description="Instance uptime in seconds")
-    base_image: Optional[str] = Field(None, description="Base image used to create instance")
-    ipv4_addresses: List[str] = Field(default_factory=list, description="IPv4 addresses")
-    ipv6_addresses: List[str] = Field(default_factory=list, description="IPv6 addresses")
-    pid: Optional[int] = Field(None, description="Process ID of the instance")
-    cpu_sample_status: Literal[
-        "ready", "calculating", "unavailable", "not_applicable"
-    ] = Field(
-        "unavailable",
-        description=(
-            "Whether CPU percentage has two usable samples, is waiting for its second sample, "
-            "was not reported, or does not apply while the instance is stopped"
-        ),
-    )
-    unavailable_sections: List[
-        Literal["cpu", "memory", "disk", "network", "processes"]
-    ] = Field(
-        default_factory=list,
-        description=(
-            "Metric sections omitted or incomplete in the LXD state response. An empty section "
-            "or an explicit numeric zero is still an available reading"
-        ),
-    )
-    timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        description="UTC metrics collection timestamp",
     )
 
 

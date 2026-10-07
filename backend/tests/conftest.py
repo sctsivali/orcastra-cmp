@@ -68,3 +68,19 @@ def _default_to_no_active_migration_fence(monkeypatch):
     monkeypatch.setattr(migration_fence, "_organization_cluster_ids", _no_organization_clusters)
     monkeypatch.setattr(migration_fence, "_migration_owns_operation", _ordinary_operation)
     monkeypatch.setattr(migration_fence, "async_session_maker", _FenceSession)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rate_sampler(monkeypatch):
+    """Keep rate baselines in-process and empty for every test.
+
+    important: inside the backend container the `redis` hostname resolves, so without this a
+    test would read and write real baselines shared with the running app, and its result would
+    depend on what the live dashboard had sampled a second earlier.
+    """
+    from app.core import rate_sampler
+
+    monkeypatch.setattr(rate_sampler, "_redis_client", lambda: None)
+    rate_sampler.reset_all_samplers()
+    yield
+    rate_sampler.reset_all_samplers()
