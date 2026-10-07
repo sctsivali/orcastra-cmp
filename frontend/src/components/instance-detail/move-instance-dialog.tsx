@@ -100,8 +100,8 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
       label: d.host,
       disabled: Boolean(unusableReason),
       status: unusableReason
-        ? { label: "Unavailable", dotClassName: "bg-status-offline", tone: "negative" as const }
-        : { label: "Available", dotClassName: "bg-status-online", tone: "positive" as const },
+        ? { label: "Unavailable", tone: "negative" as const }
+        : { label: "Available", tone: "positive" as const },
       statusReason: unusableReason,
     };
   });

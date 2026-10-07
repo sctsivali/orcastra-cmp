@@ -2,10 +2,10 @@ import { Badge } from "@/components/ui/badge";
 import { GPU_CLASS_LABEL, gpuClassOf } from "@/lib/gpu";
 import type { GPUCardInfo } from "@/types/api";
 
-// Taxonomy, not status: filled for capacity, outline for attachable-but-not-capacity, muted
-// for a card that cannot compute.
+// Taxonomy, not status, so no state tone: filled for capacity, outline for
+// attachable-but-not-capacity, muted for a card that cannot compute.
 const VARIANT = {
-  compute: "info",
+  compute: "secondary",
   integrated: "outline",
   display: "muted",
   unknown: "muted",

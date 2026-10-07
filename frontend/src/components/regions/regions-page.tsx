@@ -32,7 +32,6 @@ import {
   Activity,
   Box,
   Building2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useRegionsOverview } from "@/hooks/use-lxd";
 import { HardwareSummary } from "./regions-hardware-summary";
 import { BasemapConfig } from "@/lib/map-basemap";
@@ -140,20 +139,10 @@ function RegionCard({
                     className="flex items-center justify-between p-2 rounded-md bg-muted/50 text-sm"
                   >
                     <div className="flex items-center gap-2">
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "h-2 w-2 rounded-full",
-                          clusterStatusMeta(node.status).dotClassName
-                        )}
-                      />
-                      {/* The dot used to be the only signal here, unlabelled and with no
-                          dark: variants, so in dark mode a grey cluster was invisible and no
-                          screen reader ever heard the state. */}
-                      <span className="sr-only">
-                        {clusterStatusMeta(node.status).srLabel}
-                      </span>
                       <span className="font-medium">{node.display_name}</span>
+                      <Badge variant={clusterStatusMeta(node.status).tone}>
+                        {clusterStatusMeta(node.status).label}
+                      </Badge>
                       {node.node_type && (
                         <Badge variant="secondary" className="text-xs">
                           {node.node_type}

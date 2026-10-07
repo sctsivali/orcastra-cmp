@@ -52,15 +52,6 @@ import {
 // filter out snapshot (not ready yet)
 const VISIBLE_PERMISSIONS = ALL_TENANT_PERMISSIONS.filter((p) => p !== "snapshot");
 
-// ── Permission color mapping ──
-const PERM_COLORS: Record<TenantPermission, string> = {
-  view: "bg-blue-500/10 text-blue-600 border-blue-500/20",
-  operate: "bg-orange-500/10 text-orange-600 border-orange-500/20",
-  console: "bg-purple-500/10 text-purple-600 border-purple-500/20",
-  snapshot: "bg-cyan-500/10 text-cyan-600 border-cyan-500/20",
-  file_transfer: "bg-green-500/10 text-green-600 border-green-500/20",
-};
-
 // ============================================
 // Sub-components
 // ============================================
@@ -72,11 +63,7 @@ function PermissionBadges({ permissions }: { permissions: string[] }) {
       {(permissions as TenantPermission[])
         .filter((p) => p !== "snapshot")
         .map((p) => (
-          <Badge
-            key={p}
-            variant="outline"
-            className={`text-[10px] py-0 px-1.5 ${PERM_COLORS[p]}`}
-          >
+          <Badge key={p} variant="secondary" className="px-2 py-0">
             {TENANT_PERMISSION_LABELS[p].split(" ")[0]}
           </Badge>
         ))}
@@ -227,7 +214,6 @@ function RuleEditor({
                       sublabel: clusterSublabel(c.cluster_id, c.display_name, c.endpoint),
                       status: {
                         label: meta.label,
-                        dotClassName: meta.dotClassName,
                         tone: meta.tone,
                       },
                     };
@@ -827,11 +813,11 @@ export function TenantAccessDialog({
                               <div className="flex items-center gap-2">
                                 <OverflowText value={policy.name} label={`policy name ${policy.id}`} className="text-sm font-medium" />
                                 {policy.is_default && (
-                                  <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-600 border-blue-500/20">
+                                  <Badge variant="outline" className="px-2 py-0">
                                     Default
                                   </Badge>
                                 )}
-                                <Badge variant="secondary" className="text-[10px]">
+                                <Badge variant="secondary" className="px-2 py-0">
                                   {policy.rules?.length || 0} {(policy.rules?.length || 0) === 1 ? "rule" : "rules"}
                                 </Badge>
                               </div>
@@ -991,12 +977,14 @@ function AssignedPolicyCard({
           {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
           <span className="truncate">{assignment.policy_name}</span>
           {policy?.is_default && (
-            <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-600 border-blue-500/20 shrink-0">
-              Default
+            <Badge asChild variant="outline" className="shrink-0 px-2 py-0">
+              <span>Default</span>
             </Badge>
           )}
-          <Badge variant="secondary" className="text-[10px] shrink-0">
-            {rules.length} {rules.length === 1 ? "rule" : "rules"}
+          <Badge asChild variant="secondary" className="shrink-0 px-2 py-0">
+            <span>
+              {rules.length} {rules.length === 1 ? "rule" : "rules"}
+            </span>
           </Badge>
         </button>
         <div className="flex items-center gap-1 ml-2 shrink-0">

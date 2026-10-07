@@ -8,7 +8,6 @@
 import * as React from "react";
 import { X, Maximize2, Monitor, Terminal, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
   TooltipContent,
@@ -17,6 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ConsoleInstance } from "@/lib/console-store";
+import { SessionStatusBadge } from "@/components/terminal/session-status";
 
 interface ConsoleTrayProps {
   consoles: ConsoleInstance[];
@@ -63,21 +63,7 @@ export function ConsoleTray({
               {console.instanceName}
             </span>
 
-            {/* Status indicator.
-                note: this is SESSION state, not cluster reachability, so it keeps its own
-                vocabulary and is deliberately not routed through lib/cluster-status.ts. Only
-                the shades are shared, because green-500 here against emerald-500 elsewhere
-                was two steps of one semantic in two files. The pulse stays: "connecting" is a
-                value that is genuinely changing, which is what motivates the motion. */}
-            <div
-              className={cn(
-                "h-2 w-2 rounded-full",
-                console.connectionStatus === "connected" && "bg-status-online",
-                console.connectionStatus === "connecting" && "bg-status-pending animate-pulse",
-                console.connectionStatus === "disconnected" && "bg-status-unknown",
-                console.connectionStatus === "error" && "bg-status-offline"
-              )}
-            />
+            <SessionStatusBadge status={console.connectionStatus} chrome={false} className="shrink-0" />
 
             {/* Restore button - larger touch target */}
             <Tooltip>

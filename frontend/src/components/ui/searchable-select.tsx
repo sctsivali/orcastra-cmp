@@ -18,10 +18,9 @@ import {
 // imports a domain type stops being reusable. ClusterStatusMeta from lib/cluster-status.ts is
 // assignable to this with no adapter, so there is still exactly one mapping in the codebase.
 export interface SearchableSelectStatus {
-  // Always rendered next to the dot. Colour is never the only carrier of the state.
+  // Rendered as plain text beside the option. A chip per row reads louder than the option's
+  // own name in a py-1.5 row, and order by tone already leads with reachable clusters.
   label: string;
-  // Background utility from the --status-* tokens, ex; "bg-status-offline".
-  dotClassName: string;
   // Ordering weight owned by the caller's vocabulary, not by this primitive.
   tone: "positive" | "caution" | "neutral" | "negative";
 }
@@ -116,7 +115,6 @@ export function SearchableSelect({
   const rendered = open && freezeOptionsWhileOpen ? frozen.current : options;
 
   const showSearch = rendered.length > searchThreshold;
-  const anyStatus = rendered.some((o) => o.status);
   // A combobox must name the listbox it controls, otherwise a screen reader announces the
   // trigger with no relationship to the options. Radix renders the list in a portal, so the two
   // are not adjacent in the DOM and only an explicit id ties them together.
@@ -157,15 +155,6 @@ export function SearchableSelect({
           <span className="flex min-w-0 items-center gap-2">
             {Icon && (
               <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            )}
-            {selected?.status && (
-              <span
-                aria-hidden
-                className={cn(
-                  "h-1.5 w-1.5 shrink-0 rounded-full",
-                  selected.status.dotClassName
-                )}
-              />
             )}
             <span
               className={cn(
@@ -234,18 +223,6 @@ export function SearchableSelect({
                       value === opt.value ? "opacity-100" : "opacity-0"
                     )}
                   />
-                  {/* Reserved even when this row has no status, so labels keep one
-                      x-position and nothing shifts sideways when reachability lands
-                      after the names. */}
-                  {anyStatus && (
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "mr-2 h-1.5 w-1.5 shrink-0 rounded-full",
-                        opt.status ? opt.status.dotClassName : "invisible"
-                      )}
-                    />
-                  )}
                   <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate">{opt.label}</p>

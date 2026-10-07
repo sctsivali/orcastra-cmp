@@ -46,9 +46,9 @@ export function PendingCreateRows({ pending, onViewInstance }: PendingCreateRows
             <Badge
               variant={
                 p.status === "Error" || p.jobStatus === "failure"
-                  ? "destructive"
+                  ? "negative"
                   : isStalePending(p) || p.jobStatus === "partial" || p.jobStatus === "unknown"
-                    ? "warning"
+                    ? "caution"
                     : "outline"
               }
               className="gap-1"

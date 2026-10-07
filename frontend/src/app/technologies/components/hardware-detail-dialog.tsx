@@ -45,7 +45,7 @@ function NodePanel({
     <section className="space-y-4 rounded-lg border p-4" aria-label={`${label} hardware`}>
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="min-w-0 break-words text-sm font-semibold">{label}</h3>
-        <Badge variant={node.connected ? "success" : "muted"}>
+        <Badge variant={node.connected ? "positive" : "negative"}>
           {node.connected ? "Reporting" : "Not answering"}
         </Badge>
         {memberCount && memberCount > 1 ? (

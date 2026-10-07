@@ -378,22 +378,13 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             )}
           </div>
           {instanceCount > 0 && (
-            <div className="flex items-center gap-2 text-xs">
-              <div className="flex items-center gap-1">
-                <div className="h-2 w-2 rounded-full bg-status-online" />
-                <span className="text-muted-foreground">{stats.running} running</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="h-2 w-2 rounded-full bg-status-unknown" />
-                <span className="text-muted-foreground">{stats.stopped} stopped</span>
-              </div>
-              {stats.other > 0 && (
-                <div className="flex items-center gap-1">
-                  <div className="h-2 w-2 rounded-full bg-status-pending" />
-                  <span className="text-muted-foreground">{stats.other} other</span>
-                </div>
-              )}
-            </div>
+            <p className="text-xs text-muted-foreground">
+              {[
+                `${stats.running} running`,
+                `${stats.stopped} stopped`,
+                ...(stats.other > 0 ? [`${stats.other} other`] : []),
+              ].join(" · ")}
+            </p>
           )}
         </div>
 

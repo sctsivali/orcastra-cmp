@@ -33,35 +33,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useTerminalStore, TerminalInstance } from "@/lib/terminal-store";
 import { Badge } from "@/components/ui/badge";
-
-// Status indicator for tray items.
-//
-// note: deliberately NOT on the shared --status-* tokens, unlike every other status dot in
-// the product. This tray renders on fixed dark chrome (bg-terminal-raised) that does not follow the
-// theme, and those tokens do. Measured, the light-theme --status-online lands at 3.30:1 on
-// that chrome against 7.51:1 for the dark value, so a blind swap would trade a legible dot in
-// one theme for a barely-legible one in the other. The right fix is theme-independent chrome,
-// which is a larger change than this one.
-function TrayStatusDot({ status }: { status: TerminalInstance["status"] }) {
-  switch (status) {
-    case "connecting":
-      return (
-        <div className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-yellow-400 animate-pulse-gentle" />
-      );
-    case "connected":
-      return (
-        <div className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-green-400" />
-      );
-    case "error":
-      return (
-        <div className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-red-400" />
-      );
-    default:
-      return (
-        <div className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-gray-400" />
-      );
-  }
-}
+import { SessionStatusIcon } from "./session-status";
 
 interface TrayItemProps {
   terminal: TerminalInstance;
@@ -123,11 +95,8 @@ function TrayItem({
         </div>
       )}
 
-      {/* Icon with status */}
-      <div className="relative">
-        <TerminalIcon className="h-4 w-4 text-blue-400" />
-        <TrayStatusDot status={terminal.status} />
-      </div>
+      <TerminalIcon className="h-4 w-4 shrink-0 text-blue-400" />
+      <SessionStatusIcon status={terminal.status} />
 
       {/* Name */}
       <div className="flex flex-col min-w-0">
@@ -303,7 +272,7 @@ export function TerminalTray() {
       <div className="flex items-center gap-2">
         {/* Active count badge */}
         {activeTerminals.length > 0 && (
-          <Badge variant="secondary" className="bg-blue-500/20 text-blue-400 border-blue-500/30 min-h-[32px] flex items-center">
+          <Badge variant="outline" className="min-h-[32px] border-terminal-border bg-terminal text-gray-200">
             {activeTerminals.length} active
           </Badge>
         )}

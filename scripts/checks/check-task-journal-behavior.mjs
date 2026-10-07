@@ -58,6 +58,8 @@ assert.equal(format.startedMs({ created_at: "invalid", started_at: "invalid" }),
 
 const live = load("components/task-panel/live-indicator.tsx", {
   react: {}, "react/jsx-runtime": {}, "@/components/ui/tooltip": {}, "@/lib/utils": utils,
+  "@/components/ui/badge": { badgeVariants: () => "" },
+  "lucide-react": { Activity: () => null },
 });
 const feed = { state: "connected", followerActive: true };
 assert.equal(live.liveStateOf(feed, false, 0), "connected");

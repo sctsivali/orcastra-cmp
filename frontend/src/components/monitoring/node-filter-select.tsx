@@ -50,7 +50,6 @@ export function NodeFilterSelect({
         label: node.node_name,
         status: {
           label: meta.label,
-          dotClassName: meta.dotClassName,
           tone: meta.tone,
         },
         _rank: meta.toneRank,

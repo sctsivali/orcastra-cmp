@@ -195,6 +195,23 @@
        render light under .dark, which is how a dark page ends up with a white date picker. */
     color-scheme: dark;
   }
+
+  /* Console and terminal chrome paints a fixed dark ground (--terminal-*) in both themes, so a
+     state chip there has to use the dark-theme status pair whatever the page theme is. The light
+     pair measures 3.30:1 for --status-online on that chrome. Scoped on the chip itself rather
+     than on the chrome root, so nothing else inside the chrome changes.
+     important: these must equal the .dark values above; scripts/checks/check-semantic-colour.mjs
+     fails the build if they drift. */
+  .terminal-status {
+    --status-online: 142 64% 47%;
+    --status-online-foreground: 256.4 24.4% 8.8%;
+    --status-offline: 0 84% 62%;
+    --status-offline-foreground: 256.4 24.4% 8.8%;
+    --status-pending: 38 92% 55%;
+    --status-pending-foreground: 256.4 24.4% 8.8%;
+    --status-unknown: 257.6 10.4% 68%;
+    --status-unknown-foreground: 256.4 24.4% 8.8%;
+  }
 }
 
 /* Dynamic color overrides from personalization */

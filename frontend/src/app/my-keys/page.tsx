@@ -453,12 +453,12 @@ function MyKeysContent() {
                     </TableCell>
                     <TableCell>
                       {key.is_expired ? (
-                        <Badge variant="destructive" className="gap-1">
+                        <Badge variant="negative" className="gap-1">
                           <AlertCircle className="h-3 w-3" />
                           Expired
                         </Badge>
                       ) : (
-                        <Badge variant="default" className="gap-1 bg-green-600">
+                        <Badge variant="positive" className="gap-1">
                           <CheckCircle className="h-3 w-3" />
                           Active
                         </Badge>

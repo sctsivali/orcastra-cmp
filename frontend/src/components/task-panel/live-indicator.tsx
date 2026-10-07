@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+import { Activity } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { badgeVariants, type BadgeTone } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { TaskFeedSnapshot } from "./use-task-feed";
 
@@ -16,34 +18,40 @@ export type LiveState =
   | "offline";
 
 interface Presentation {
-  dot: string;
+  tone: BadgeTone;
   text: string;
   tooltip: string;
 }
 
-// The dot sits on the --status-* tokens, the same four the cluster status dots use. The only
-// motion is on "reconnecting", where the value genuinely is changing, and the keyframe is the
-// house one behind the reduced-motion guard in globals.css.
+// A solid chip on the shared state tones from md up, so the word is visible and colour only
+// reinforces it; the accessible name is the tooltip text at every width.
+const TONE_ICON: Record<BadgeTone, string> = {
+  positive: "text-status-online",
+  caution: "text-status-pending",
+  neutral: "text-status-unknown",
+  negative: "text-status-offline",
+};
+
 function present(state: LiveState, nextRetry: number | null): Presentation {
   switch (state) {
     case "connected":
-      return { dot: "bg-status-online", text: "Live", tooltip: "Live updates are connected." };
+      return { tone: "positive", text: "Live", tooltip: "Live updates are connected." };
     case "degraded":
       return {
-        dot: "bg-status-pending",
+        tone: "caution",
         text: "Degraded",
         tooltip: "Some hypervisor sources are unavailable. Tasks and logs may be incomplete or stale.",
       };
     case "journal-paused":
       return {
-        dot: "bg-status-pending",
+        tone: "caution",
         text: "Journal paused",
         tooltip:
           "No backend worker is following the clusters right now, so new tasks may be missing until one takes over.",
       };
     case "reconnecting":
       return {
-        dot: "bg-status-pending animate-pulse-gentle",
+        tone: "caution",
         text: "Reconnecting",
         tooltip:
           nextRetry === null
@@ -52,21 +60,21 @@ function present(state: LiveState, nextRetry: number | null): Presentation {
       };
     case "polling":
       return {
-        dot: "bg-status-pending",
+        tone: "caution",
         text: "Polling",
         tooltip: "Live updates unavailable, polling every 10 seconds.",
       };
     case "paused":
       return {
-        dot: "bg-status-unknown",
+        tone: "neutral",
         text: "Paused",
         tooltip: "Paused while this tab was in the background, resumes when you return.",
       };
     case "offline":
-      return { dot: "bg-status-offline", text: "Offline", tooltip: "Task data cannot be refreshed from the dashboard API." };
+      return { tone: "negative", text: "Offline", tooltip: "Task data cannot be refreshed from the dashboard API." };
     default:
       return {
-        dot: "bg-status-pending animate-pulse-gentle",
+        tone: "caution",
         text: "Connecting",
         tooltip: "Connecting to live updates.",
       };
@@ -97,7 +105,7 @@ export function LiveIndicator({ feed, apiDown = false, disconnected = 0 }: {
   disconnected?: number;
 }) {
   const state = liveStateOf(feed, apiDown, disconnected);
-  const { dot, text, tooltip } = present(state, feed.nextRetryInSeconds);
+  const { tone, text, tooltip } = present(state, feed.nextRetryInSeconds);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -106,10 +114,12 @@ export function LiveIndicator({ feed, apiDown = false, disconnected = 0 }: {
           aria-label={tooltip}
           tabIndex={0}
           data-live-state={state}
-          className="inline-flex items-center gap-1.5 rounded-sm px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex shrink-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} />
-          <span className="hidden text-xs text-muted-foreground md:inline">{text}</span>
+          {/* The strip has no room for a word on a phone: the chip pushed the refresh and
+              expand controls off screen at 390px. Below md the state is a toned icon. */}
+          <Activity className={cn("h-4 w-4 md:hidden", TONE_ICON[tone])} aria-hidden="true" />
+          <span className={cn(badgeVariants({ variant: tone }), "hidden px-2 md:inline-flex")}>{text}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent>{tooltip}</TooltipContent>

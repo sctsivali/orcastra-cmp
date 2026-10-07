@@ -100,7 +100,7 @@ export function MicroCloudVersionChecker({ currentVersion }: MicroCloudVersionCh
 
   if (versionInfo.isLatest) {
     return (
-      <Badge variant="outline" className="gap-1 text-green-600 border-green-600">
+      <Badge variant="positive" className="gap-1">
         <CheckCircle className="h-3 w-3" />
         Latest
       </Badge>
@@ -110,12 +110,13 @@ export function MicroCloudVersionChecker({ currentVersion }: MicroCloudVersionCh
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Badge 
-          variant="outline" 
-          className="gap-1 text-orange-600 border-orange-600 cursor-pointer hover:bg-orange-50 dark:hover:bg-orange-950 transition-colors"
-        >
-          <AlertCircle className="h-3 w-3" />
-          Update Available
+        {/* A real button: a div trigger never takes focus, so a keyboard user could not open the
+            upgrade instructions at all. */}
+        <Badge asChild variant="caution" className="gap-1 cursor-pointer hover:opacity-90">
+          <button type="button">
+            <AlertCircle className="h-3 w-3" aria-hidden="true" />
+            Update Available
+          </button>
         </Badge>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
