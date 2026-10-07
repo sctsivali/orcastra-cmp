@@ -2219,7 +2219,6 @@ import type {
   MonitoringDashboardResponse, 
   ClusterMonitoringMetrics, 
   MetricsHistoryPoint,
-  MonitoringNetworkMetrics,
   CertificateListResponse,
   CertificateInfo,
   CertificateRenewalRequest,
@@ -2238,12 +2237,9 @@ export const monitoringAPI = {
     return fetchAPI<ClusterMonitoringMetrics>(`/monitoring/nodes/${encodeURIComponent(nodeName)}/metrics`);
   },
 
-  getHistory: async (points: number = 60): Promise<MetricsHistoryPoint[]> => {
-    return fetchAPI<MetricsHistoryPoint[]>(`/monitoring/history?points=${points}`);
-  },
-
-  getNetworkMetrics: async (): Promise<MonitoringNetworkMetrics> => {
-    return fetchAPI<MonitoringNetworkMetrics>("/monitoring/network");
+  /** History collected in the last `windowSeconds`, whatever the collection cadence was. */
+  getHistory: async (windowSeconds: number = 300): Promise<MetricsHistoryPoint[]> => {
+    return fetchAPI<MetricsHistoryPoint[]>(`/monitoring/history?window=${windowSeconds}`);
   },
 };
 

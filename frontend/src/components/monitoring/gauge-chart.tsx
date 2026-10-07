@@ -6,17 +6,29 @@ import {
 } from "@/components/ui/tooltip";
 
 interface GaugeChartProps {
-  value: number;
+  /** null draws an empty arc with `emptyLabel`, never a zero reading. */
+  value: number | null;
   max?: number;
   label: string;
   color?: string;
   size?: number;
   statusMessage?: string; // Optional status message to show on hover when value is 0
+  /** What the gauge says when there is no reading, ex; "Calculating…". */
+  emptyLabel?: string;
 }
 
-export function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120, statusMessage }: GaugeChartProps) {
-  const reported = Number.isFinite(value) && value >= 0 && Number.isFinite(max) && max > 0;
-  const percentage = usagePercent(value, max);
+export function GaugeChart({
+  value,
+  max = 100,
+  label,
+  color = "#3b82f6",
+  size = 120,
+  statusMessage,
+  emptyLabel = "Unavailable",
+}: GaugeChartProps) {
+  const reported =
+    value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(max) && max > 0;
+  const percentage = reported ? usagePercent(value, max) : 0;
   const strokeWidth = 12;
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * Math.PI; // Half circle
@@ -61,7 +73,7 @@ export function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 
           textAnchor="middle"
           className="fill-foreground text-xl font-bold"
         >
-          {reported ? `${percentage.toFixed(1)}%` : "Unavailable"}
+          {reported ? `${percentage.toFixed(1)}%` : emptyLabel}
         </text>
       </svg>
       <span className="text-sm font-medium text-muted-foreground mt-1">{label}</span>

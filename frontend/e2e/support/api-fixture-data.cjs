@@ -268,7 +268,30 @@ function fullInstance(status = "Running") {
   };
 }
 
-function instanceMetrics(call) {
+function instanceMetrics(call, instanceStatus = "Running") {
+  if (instanceStatus !== "Running") {
+    return {
+      instance_name: "tenant-owned-vm",
+      host: "cluster-a",
+      status: instanceStatus,
+      cpu_usage_percent: 0,
+      memory_used_bytes: 0,
+      memory_total_bytes: 0,
+      memory_usage_percent: 0,
+      disk_usage_bytes: {},
+      network_rx_bytes: {},
+      network_tx_bytes: {},
+      processes: 0,
+      uptime_seconds: 0,
+      base_image: null,
+      ipv4_addresses: [],
+      ipv6_addresses: [],
+      pid: null,
+      cpu_sample_status: "not_applicable",
+      unavailable_sections: [],
+      timestamp: iso(),
+    };
+  }
   const calculating = call === 1;
   return {
     instance_name: "tenant-owned-vm",
@@ -289,7 +312,8 @@ function instanceMetrics(call) {
     pid: 1234,
     cpu_sample_status: calculating ? "calculating" : "ready",
     unavailable_sections: [],
-    // The first reading deliberately proves the 15-second stale threshold.
+    // note: an old server timestamp on purpose. Freshness is the browser's receive time, so a
+    // server clock behind the browser must not mark a reading that just arrived as stale.
     timestamp: calculating ? iso(-20_000) : iso(),
   };
 }
@@ -302,11 +326,16 @@ function monitoringDashboard() {
     type: "virtual-machine",
     status: "running",
     cpu_usage: 22.5,
+    cpu_status: "ready",
+    cpu_busy_vcpus: 0.9,
+    cpu_vcpus: 4,
     memory_usage_bytes: 3 * gib,
     memory_limit_bytes: 8 * gib,
     disk_usage_bytes: 24 * gib,
     network_rx_bytes: 1024 * 1024,
     network_tx_bytes: 512 * 1024,
+    network_rx_bytes_per_sec: 2048,
+    network_tx_bytes_per_sec: 1024,
   };
   return {
     timestamp: iso(),
@@ -322,7 +351,12 @@ function monitoringDashboard() {
     total_cpu: 32,
     used_cpu: 4,
     cpu_usage_percent: 12.5,
-    realtime_cpu_percent: 22.5,
+    realtime_cpu_percent: 2.81,
+    cpu_busy_threads: 0.9,
+    cpu_busy_percent: 2.81,
+    cpu_status: "ready",
+    cpu_reporting_instances: 1,
+    cpu_reporting_threads: 32,
     total_memory_bytes: 128 * gib,
     used_memory_bytes: 32 * gib,
     memory_usage_percent: 25,
@@ -362,6 +396,12 @@ function monitoringDashboard() {
         gpu_utilization_supported: false,
         instance_count: 1,
         running_instances: 1,
+        container_count: 0,
+        vm_count: 1,
+        cpu_busy_threads: 0.9,
+        cpu_busy_percent: 2.81,
+        cpu_status: "ready",
+        cpu_reporting_instances: 1,
       },
     ],
     storage_pools: [
@@ -377,6 +417,7 @@ function monitoringDashboard() {
         usage_percent: 29.3,
       },
     ],
+    consumers: [consumer],
     top_cpu_consumers: [consumer],
     top_memory_consumers: [consumer],
     warnings: { total: 0, critical: 0, warning: 0, info: 0 },
@@ -384,24 +425,27 @@ function monitoringDashboard() {
   };
 }
 
-function monitoringHistory(points = 60) {
-  const count = Math.min(Math.max(Number(points) || 12, 2), 24);
+// One point per 30 s collection, as the collector writes them, over the requested window.
+function monitoringHistory(windowSeconds = 300) {
+  const count = Math.min(Math.max(Math.floor((Number(windowSeconds) || 300) / 30), 2), 48);
   return Array.from({ length: count }, (_, index) => ({
-    timestamp: iso((index - count) * 5_000),
-    cpu_usage_percent: 10 + index * 0.5,
+    timestamp: iso((index - count) * 30_000),
+    cpu_usage_percent: index === 0 ? null : 10 + index * 0.5,
     memory_usage_percent: 25 + index * 0.25,
     storage_usage_percent: 29.3,
-    network_rx_bytes: index * 100_000,
-    network_tx_bytes: index * 80_000,
-    disk_io_bytes: index * 20_000,
+    network_rx_bytes: 0,
+    network_tx_bytes: 0,
+    network_rx_bytes_per_sec: 2000 + index * 10,
+    network_tx_bytes_per_sec: 1000 + index * 10,
+    disk_io_bytes: 0,
     running_instances: 1,
     nodes: {
       "cluster-a": {
-        cpu_usage_percent: 10 + index * 0.5,
+        cpu_usage_percent: index === 0 ? null : 10 + index * 0.5,
         memory_usage_percent: 25 + index * 0.25,
         storage_usage_percent: 29.3,
-        network_rx_bytes: index * 100_000,
-        network_tx_bytes: index * 80_000,
+        network_rx_bytes_per_sec: 2000 + index * 10,
+        network_tx_bytes_per_sec: 1000 + index * 10,
         running_instances: 1,
       },
     },

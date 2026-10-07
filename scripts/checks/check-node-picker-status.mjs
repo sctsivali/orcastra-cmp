@@ -67,7 +67,7 @@ const PICKERS = new Map([
 // Not pickers, though they trip the shape test below.
 const NOT_A_PICKER = new Map([
   ['components/groups/edit-group-dialog.tsx', 'node is a disabled Input, not a choice'],
-  ['app/inventory/monitoring/monitoring-content.tsx', 'delegates to NodeFilterSelect; its own Select is Top-N'],
+  ['app/inventory/monitoring/monitoring-content.tsx', 'delegates to NodeFilterSelect; the Top-N Select lives in TopConsumersCard'],
   ['components/integrations/create-api-key-dialog.tsx', 'mounts ClusterAccessSelector, registered above'],
   ['components/integrations/edit-api-key-permissions-dialog.tsx', 'mounts ClusterAccessSelector, registered above'],
 ]);
