@@ -5,6 +5,7 @@ empty collection is a real reading. The pylxd-style StateWrapper fills omitted f
 and `0` for its older consumers, so presence comes from its `has_field`, never from the value.
 """
 
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional
 
@@ -66,7 +67,9 @@ def cpu_usage_ns(state: Mapping[str, Any], agent: GuestAgentStatus) -> Optional[
         return None
     cpu = state.get("cpu")
     usage = cpu.get("usage") if isinstance(cpu, Mapping) else None
-    if not isinstance(usage, (int, float)) or usage < 0:
+    if not isinstance(usage, (int, float)) or isinstance(usage, bool):
+        return None
+    if not math.isfinite(usage) or usage < 0:
         return None
     return float(usage)
 

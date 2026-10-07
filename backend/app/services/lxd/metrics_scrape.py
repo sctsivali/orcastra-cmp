@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 from pylxd.exceptions import LXDAPIException
 from requests import exceptions as requests_exc
+from urllib3 import exceptions as urllib3_exc
 
 from .cpu_allocation import STANDALONE_LOCATIONS
 from .metrics_text import InstanceSeries, parse_instance_series
@@ -151,14 +152,26 @@ def _scrape(
     read_timeout = max(1.0, min(4.0, deadline - time.monotonic() - 1.5))
     started = time.time()
     try:
+        # note: identity, so the byte cap below counts what gets parsed rather than what a
+        # compressed body could expand to.
         response = client.api.metrics.get(
-            params=params, is_api=False, timeout=(2, read_timeout), stream=True
+            params=params,
+            is_api=False,
+            timeout=(2, read_timeout),
+            stream=True,
+            headers={"Accept-Encoding": "identity"},
         )
     except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
         _fail(cache, key, "timeout", exc)
         return None
     except LXDAPIException as exc:
-        _fail(cache, key, "refused", exc)
+        # important: never str(exc). pylxd's __str__ reads the whole error body, which is
+        # exactly the unbounded read the streaming below exists to prevent.
+        status = getattr(exc.response, "status_code", None)
+        close = getattr(exc.response, "close", None)
+        if callable(close):
+            close()
+        _fail(cache, key, "refused", f"HTTP {status}")
         return None
     # important: streamed against a byte cap and a wall-clock budget. Reading the whole body
     # first held any size an endpoint chose to send, and a slow drip kept the thread as long
@@ -171,11 +184,22 @@ def _scrape(
         response.close()
         _fail(cache, key, "too_large", f"{declared} bytes declared")
         return None
+    encoding = str(response.headers.get("Content-Encoding") or "identity").strip().lower()
+    if encoding not in ("identity", ""):
+        response.close()
+        _fail(cache, key, "unparseable", f"content encoding {encoding[:40]}")
+        return None
     chunks: list[bytes] = []
     received = 0
     stop_at = deadline - 1.0
     try:
-        for chunk in response.iter_content(chunk_size=_CHUNK_BYTES):
+        # important: read1, not iter_content. iter_content waits for a full chunk, so a body
+        # dripping one byte inside each socket timeout held the thread for hours between
+        # deadline checks; read1 returns whatever arrived and the clock is checked every time.
+        while True:
+            chunk = response.raw.read1(_CHUNK_BYTES)
+            if not chunk:
+                break
             received += len(chunk)
             if received > MAX_BODY_BYTES:
                 _fail(cache, key, "too_large", f"over {MAX_BODY_BYTES} bytes")
@@ -184,14 +208,19 @@ def _scrape(
                 _fail(cache, key, "timeout", "body still arriving at the deadline")
                 return None
             chunks.append(chunk)
-    except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
+    except (requests_exc.RequestException, urllib3_exc.HTTPError, OSError) as exc:
         _fail(cache, key, "timeout", exc)
         return None
     finally:
         response.close()
     collected_at = (started + time.time()) / 2
+    if time.monotonic() > stop_at:
+        _fail(cache, key, "timeout", "no budget left to parse")
+        return None
     try:
-        text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+        # important: UTF-8 whatever the endpoint declares. A declared charset picks the decoder,
+        # and some (punycode) are quadratic in pure Python.
+        text = b"".join(chunks).decode("utf-8", errors="replace")
         series = parse_instance_series(text, project=project)
     except Exception as exc:  # noqa: BLE001
         _fail(cache, key, "unparseable", exc)

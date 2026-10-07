@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Dict, Optional
 
+from app.core.lxd_names import LXD_NAME_PATTERN
+
 logger = logging.getLogger(__name__)
 
 _LINE = re.compile(r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>.*)\})?\s+(?P<value>\S+)(?:\s+\S+)?\s*$")
@@ -24,6 +26,9 @@ _LINE = re.compile(r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>.*)\})?\
 _LABEL = re.compile(r'(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\]|\\.)*)"')
 # A real LXD line is under 300 characters; anything far longer is not one worth parsing.
 _MAX_LINE = 4096
+# More instances than one member of a project could run; past this a scrape is not LXD's.
+_MAX_SERIES = 5000
+_INSTANCE_NAME = re.compile(LXD_NAME_PATTERN)
 _PREFIXES = ("lxd_", "incus_")
 
 # note: whole disks only. A partition repeats its disk's bytes (sda1 is part of sda), a loop
@@ -129,12 +134,15 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
             continue
         labels = {key: _unescape(val) for key, val in _LABEL.findall(match.group("labels") or "")}
         name = labels.get("name")
-        if not name or labels.get("project", project) != project:
+        if not name or labels.get("project", project) != project or not _INSTANCE_NAME.match(name):
+            continue
+        if name not in found and len(found) >= _MAX_SERIES:
+            malformed += 1
             continue
         entry = found.setdefault(name, {"type": labels.get("type"), "disk_devices": set()})
         if target in ("disk_read", "disk_written"):
             device = labels.get("device", "")
-            if not _WHOLE_DISK.match(device):
+            if not _WHOLE_DISK.match(device) or len(entry["disk_devices"]) >= 16:  # type: ignore[arg-type]
                 continue
             entry["disk_devices"].add(device)  # type: ignore[union-attr]
             entry[target] = float(entry.get(target) or 0.0) + value  # type: ignore[arg-type]

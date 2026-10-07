@@ -71,14 +71,27 @@ def test_other_projects_and_unlabelled_families_are_ignored():
 
 def test_label_order_escapes_timestamps_and_the_incus_prefix():
     text = (
-        'incus_memory_MemTotal_bytes{type="container",project="p",name="a\\"b"} 42 1700000000000\n'
-        'lxd_memory_MemFree_bytes{project="p",name="a\\"b"} 7\n'
+        'incus_memory_MemTotal_bytes{type="cont\\"ainer",project="p",name="ab"} 42 1700000000000\n'
+        'lxd_memory_MemFree_bytes{project="p",name="ab"} 7\n'
     )
 
     parsed = parse_instance_series(text, project="p")
 
-    assert parsed['a"b'].mem_total == 42
-    assert parsed['a"b'].mem_free == 7
+    assert parsed["ab"].mem_total == 42
+    assert parsed["ab"].mem_free == 7
+    assert parsed["ab"].instance_type == 'cont"ainer'
+
+
+def test_names_lxd_would_refuse_are_dropped_and_series_are_capped(monkeypatch):
+    from app.services.lxd import metrics_text
+
+    monkeypatch.setattr(metrics_text, "_MAX_SERIES", 3)
+    lines = ['lxd_memory_MemFree_bytes{name="bad name",project="p"} 1\n']
+    lines += [f'lxd_memory_MemFree_bytes{{name="i{n}",project="p"}} {n}\n' for n in range(10)]
+
+    parsed = parse_instance_series("".join(lines), project="p")
+
+    assert set(parsed) == {"i0", "i1", "i2"}
 
 
 def test_malformed_and_non_finite_lines_are_skipped_not_fatal():
