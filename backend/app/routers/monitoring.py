@@ -22,6 +22,7 @@ from app.models.schemas import (
 from app.services.monitoring_history import (
     append_point,
     build_point,
+    claim_history_slot,
     history_key as _monitoring_history_key,
     read_window,
 )
@@ -75,8 +76,8 @@ ws_router = APIRouter(
 # Thread pool for the per-cluster warnings fan-out
 _executor = ThreadPoolExecutor(max_workers=10)
 
-_last_history_store_times: Dict[str, float] = {}  # Track history writes per scope
-_history_min_interval: float = 4.0  # Minimum seconds between history stores
+# Per-process history slots, used only while Redis is unavailable (see claim_history_slot).
+_last_history_store_times: Dict[str, float] = {}
 
 
 # note: node status is NOT collected here. This module used to carry its own copy of the
@@ -107,7 +108,30 @@ _history_min_interval: float = 4.0  # Minimum seconds between history stores
 # note: v2 since the body gained nullable CPU fields. During a rolling deploy an older worker
 # must never parse a body it cannot validate, and the v1 entries simply expire.
 MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard:v2"
-_DASHBOARD_CACHE_TTL = 35  # background collector runs every 30s
+_DASHBOARD_CACHE_TTL = 35
+# The scope the background collector refreshes: admins and the collector itself.
+COLLECTED_SCOPE_KEY = "dashboard:scope=all"
+# important: the collected scope's entry outlives a whole collection cycle (the sweep plus the
+# 30 s pause), so collector followers relaying it and admins reading it always find it. At 35 s
+# it expired every cycle, and each follower then swept the whole fleet itself. Equal to
+# MetricsCollector.LEASE_SECONDS: the entry lives as long as the lease of the leader that wrote it.
+COLLECTED_DASHBOARD_TTL = 120
+
+
+def _dashboard_ttl(scope_key: str) -> int:
+    return COLLECTED_DASHBOARD_TTL if scope_key == COLLECTED_SCOPE_KEY else _DASHBOARD_CACHE_TTL
+
+
+def cached_dashboard() -> Optional[MonitoringDashboardResponse]:
+    """The current scope's cached dashboard, or None. Never sweeps the fleet."""
+    payload = get_cache_manager().get("api_responses", get_scope_cache_key(MONITORING_DASHBOARD_CACHE_KEY))
+    if not payload:
+        return None
+    try:
+        return MonitoringDashboardResponse(**payload)
+    except Exception as exc:  # noqa: BLE001 - an unreadable entry is a miss, the caller rebuilds
+        logger.warning("Ignoring an unreadable cached monitoring dashboard: %s", exc)
+        return None
 
 # note: no herd lock here any more. single_flight("monitoring:dashboard") serialises arrivals
 # per scope key, including ordinary cache misses, which is what the local lock was approximating
@@ -137,10 +161,11 @@ async def get_monitoring_dashboard(
     cache = get_cache_manager()
     dashboard_key = get_scope_cache_key(MONITORING_DASHBOARD_CACHE_KEY)
 
-    cached_response = None if fresh else cache.get("api_responses", dashboard_key)
-    if cached_response is not None:
-        logger.debug("Returning cached dashboard response (background collector)")
-        return MonitoringDashboardResponse(**cached_response)
+    if not fresh:
+        cached_response = cached_dashboard()
+        if cached_response is not None:
+            logger.debug("Returning cached dashboard response (background collector)")
+            return cached_response
     monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
 
     try:
@@ -469,19 +494,17 @@ async def get_monitoring_dashboard(
         # Store metrics in history for charts (append to rolling buffer).
         # Each org/tenant ACL gets its own history stream so charts render
         # without exposing global/background collector data.
-        global _last_history_store_times
-        current_time = time.time()
+        # note: not when no cluster answered. That dashboard is all zeros, the same misreading
+        # the cache below refuses to keep, and as a point it drew the fleet idling at zero.
         history_key = _monitoring_history_key(scope_key)
-        last_store_time = _last_history_store_times.get(history_key, 0)
-        
         if (
-            current_time - last_store_time >= _history_min_interval
-            and _resource_generation(cache, _MONITORING_CACHE_KIND)
-            == monitoring_generation
+            connected_nodes
+            and _resource_generation(cache, _MONITORING_CACHE_KIND) == monitoring_generation
+            and claim_history_slot(
+                cache, history_key, now=time.time(), local=_last_history_store_times
+            )
         ):
             try:
-                _last_history_store_times[history_key] = current_time
-
                 history = cache.get("monitoring_history", history_key) or []
                 new_point = build_point(
                     nodes_metrics,
@@ -494,7 +517,7 @@ async def get_monitoring_dashboard(
                 history = append_point(history, new_point)
                 cache.set("monitoring_history", history_key, history, ttl=86400)  # 24 hour TTL
                 
-                if scope_key == "dashboard:scope=all" and new_point["cpu_usage_percent"] is not None:
+                if scope_key == COLLECTED_SCOPE_KEY and new_point["cpu_usage_percent"] is not None:
                     asyncio.create_task(_persist_snapshot(new_point))
                 
             except Exception as hist_err:
@@ -517,7 +540,7 @@ async def get_monitoring_dashboard(
                     "api_responses",
                     dashboard_key,
                     response.model_dump(),
-                    ttl=_DASHBOARD_CACHE_TTL,
+                    ttl=_dashboard_ttl(scope_key),
                 )
             else:
                 logger.info("Not caching monitoring dashboard: data changed during the read")

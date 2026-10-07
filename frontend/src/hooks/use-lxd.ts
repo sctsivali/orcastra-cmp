@@ -2075,7 +2075,7 @@ export function useMonitoringHistory(
     queryKey: ["monitoring", "history", scopeKey, windowSeconds],
     queryFn: () => api.monitoring.getHistory(windowSeconds),
     enabled,
-    refetchInterval: POLL_MS.active, // a new point lands about every 30 seconds
+    refetchInterval: POLL_MS.active, // one new point per collection: the sweep, then a 30 s pause
     staleTime: 30000,
     gcTime: 600000, // keep visited ranges for fast switching back
     refetchIntervalInBackground: false, // Stop polling when tab is hidden
