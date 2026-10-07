@@ -35,6 +35,7 @@ import { InstanceActionDialogs } from "./components/instance-action-dialogs";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
+import { useLiveRecord } from "@/hooks/use-live-record";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
@@ -72,6 +73,10 @@ import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { InstanceSpecificationDialog } from "@/components/instance-specification/instance-specification-dialog";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
+
+function instanceRecordId(instance: VMInfo): string {
+  return `${instance.host}\u0000${instance.project || "default"}\u0000${instance.name}`;
+}
 
 function InstancesContent() {
   const { scopeKey } = useActorQueryScope();
@@ -255,6 +260,14 @@ function InstancesContent() {
   };
 
   const currentSelectedInstance = selectionIsCurrent ? selectedInstance : null;
+  // The dialog follows the row as the events stream updates it; the clicked object alone kept
+  // showing the status the instance had when it was clicked.
+  const { record: liveSelectedInstance } = useLiveRecord<VMInfo>(
+    instances,
+    currentSelectedInstance ? instanceRecordId(currentSelectedInstance) : null,
+    instanceRecordId,
+  );
+  const dialogInstance = liveSelectedInstance ?? currentSelectedInstance;
 
   const sortedInstances = useMemo(
     () => sortItems(filters.filteredRows),
@@ -404,7 +417,7 @@ function InstancesContent() {
       </Card>
 
       <InstanceDetailDialog
-        instance={currentSelectedInstance}
+        instance={dialogInstance}
         isOpen={selectionIsCurrent && isMonitoringModalOpen}
         onClose={() => {
           setIsMonitoringModalOpen(false);

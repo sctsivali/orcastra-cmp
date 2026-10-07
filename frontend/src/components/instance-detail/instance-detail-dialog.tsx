@@ -46,6 +46,11 @@ export function InstanceDetailDialog({
   onEditSpecification,
 }: InstanceDetailDialogProps) {
   const [tab, setTab] = React.useState<string>(defaultTab);
+  // note: set during render, not in an effect, so the first frame of a new opening already
+  // knows that an older cached reading must not decide the runtime state.
+  const [opening, setOpening] = React.useState(() => ({ open: isOpen, at: Date.now() }));
+  if (opening.open !== isOpen) setOpening({ open: isOpen, at: Date.now() });
+  const openedAt = opening.at;
   const pageVisible = useDocumentVisible();
 
   React.useEffect(() => {
@@ -66,16 +71,18 @@ export function InstanceDetailDialog({
     instance?.project ?? undefined,
   );
 
-  const detail: VMInfo | null = instance
+  const record: VMInfo | null = instance
     ? hydrateDetail
       ? fetched ?? instance
       : instance
     : null;
-  const effectiveProject = detail?.project || project || "default";
+  const effectiveProject = record?.project || project || "default";
 
-  // important: gated on the tab, not just on the dialog. The modal this replaces started a
-  // 10-second poll the instant it opened, and kept it running while the operator read something
-  // else entirely.
+  // important: gated on the tab and the page, not on the row's status. The modal this replaces
+  // polled from the moment it opened; the row-status gate that followed froze the panel on
+  // "not running" for an instance started while the dialog was open, because the row was the one
+  // captured at click time. The metrics response carries the runtime state itself, and the
+  // polling policy keeps a slow check going while the instance is not running.
   const {
     data: metrics,
     dataUpdatedAt: metricsUpdatedAt,
@@ -85,10 +92,10 @@ export function InstanceDetailDialog({
     isLoading: isLoadingMetrics,
     refetch: refetchMetrics,
   } = useInstanceMetrics(
-    detail?.host ?? "",
-    detail?.name ?? "",
+    record?.host ?? "",
+    record?.name ?? "",
     effectiveProject,
-    isOpen && !!detail && tab === "metrics" && pageVisible && detail.status === "Running",
+    isOpen && !!record && tab === "metrics" && pageVisible,
   );
 
   const refreshMetrics = React.useCallback(
@@ -96,10 +103,28 @@ export function InstanceDetailDialog({
     [refetchMetrics],
   );
 
+  // A start or stop the list saw re-checks at once rather than at the next slow poll.
+  const rowStatus = record?.status;
+  const previousRowStatus = React.useRef(rowStatus);
+  React.useEffect(() => {
+    if (previousRowStatus.current === rowStatus) return;
+    previousRowStatus.current = rowStatus;
+    if (isOpen && tab === "metrics") void refetchMetrics({ cancelRefetch: false });
+  }, [rowStatus, isOpen, tab, refetchMetrics]);
+
+  // A metrics reading taken since this dialog opened is newer than the row it was opened from,
+  // so its runtime state wins; a cached reading from an earlier opening never does.
+  const liveStatus =
+    metrics && metricsUpdatedAt >= openedAt && metrics.status !== record?.status
+      ? metrics.status
+      : null;
+  const detail: VMInfo | null = record && liveStatus ? { ...record, status: liveStatus } : record;
+
   if (!detail) return null;
 
-  const serverTimestamp = metrics?.timestamp ? Date.parse(metrics.timestamp) : Number.NaN;
-  const updatedAt = Number.isFinite(serverTimestamp) ? serverTimestamp : metricsUpdatedAt || null;
+  // note: the browser's own receive time, so the age label never compares a server clock with a
+  // browser clock that disagrees with it.
+  const updatedAt = metricsUpdatedAt || null;
   const statusDisplay = instanceStatusDisplay(detail.status);
 
   return (

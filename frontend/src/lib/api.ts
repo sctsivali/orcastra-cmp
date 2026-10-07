@@ -1465,17 +1465,6 @@ export const instanceAPI = {
       { signal: opts.signal },
     );
   },
-
-  getMetrics: async (
-    name: string,
-    host: string,
-    project = "default",
-  ): Promise<InstanceMetrics> => {
-    const params = new URLSearchParams({ host, project });
-    return fetchAPI<InstanceMetrics>(
-      `/instances/${encodeURIComponent(name)}/metrics?${params.toString()}`,
-    );
-  },
 };
 
 // Profile Operations

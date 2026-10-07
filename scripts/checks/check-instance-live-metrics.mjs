@@ -8,7 +8,7 @@
  * Run: node scripts/checks/check-instance-live-metrics.mjs [repo-root]
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,11 +34,25 @@ const files = {
   instanceRow: "frontend/src/app/inventory/instances/components/instance-table-row.tsx",
   instanceActions: "frontend/src/app/inventory/instances/components/use-instance-actions.ts",
   pendingRows: "frontend/src/app/inventory/instances/components/pending-create-rows.tsx",
+  polling: "frontend/src/lib/instance-metrics-polling.ts",
+  metricsView: "frontend/src/lib/instance-metrics-view.ts",
 };
 
 const bodies = Object.fromEntries(
   Object.entries(files).map(([name, file]) => [name, readFileSync(join(root, file), "utf8")]),
 );
+
+// The Metrics panel is split into components/instance-detail/metrics/; its contracts read the
+// panel, its pieces and the shared view-model as one body.
+const metricsDir = join(root, "frontend/src/components/instance-detail/metrics");
+bodies.metrics = [
+  bodies.metrics,
+  bodies.metricsView,
+  ...readdirSync(metricsDir)
+    .filter((name) => /\.tsx?$/.test(name))
+    .sort()
+    .map((name) => readFileSync(join(metricsDir, name), "utf8")),
+].join("\n");
 
 const checks = [
   [
@@ -62,8 +76,9 @@ const checks = [
     "Monitoring does not limit hydration to an incomplete top-consumer summary",
   ],
   [
-    /tab === "metrics" && pageVisible && detail\.status === "Running"/.test(bodies.dialog),
-    "metrics are not gated by the open Metrics tab, visibility, and Running state",
+    /isOpen && !!record && tab === "metrics" && pageVisible,/.test(bodies.dialog) &&
+      !/tab === "metrics" && pageVisible && \w+\.status === "Running"/.test(bodies.dialog),
+    "metrics must be gated by the open Metrics tab and visibility, never by a row status captured at click time",
   ],
   [
     /live:\s*5 \* 1000/.test(bodies.queryConfig) &&
@@ -71,11 +86,21 @@ const checks = [
     "live metrics must poll at five seconds and become stale after three intervals",
   ],
   [
-    /backingOffInterval\(POLL_MS\.live/.test(bodies.hooks) &&
-      /401 \|\| error\.status === 403 \|\| error\.status === 429/.test(bodies.hooks) &&
-      /query\.state\.data\.status !== "Running"/.test(bodies.hooks) &&
-      /refetchIntervalInBackground:\s*false/.test(bodies.hooks),
-    "the metrics query lost backoff, terminal-error, stopped-instance, or background guards",
+    /refetchInterval: metricsRefetchInterval/.test(bodies.hooks) &&
+      /refetchIntervalInBackground:\s*false/.test(bodies.hooks) &&
+      /!isMetricsAccessError\(query\.state\.error\)/.test(bodies.hooks) &&
+      /backingOffInterval\(POLL_MS\.live/.test(bodies.polling) &&
+      /status === 401 \|\| status === 403/.test(bodies.polling) &&
+      /if \(isMetricsAccessError\(error\)\) return false;/.test(bodies.polling) &&
+      /isMetricsRateLimited\(error\)[\s\S]{0,200}retryAfter/.test(bodies.polling) &&
+      /data\.status !== "Running"\) return POLL_MS\.active;/.test(bodies.polling) &&
+      /cpu_sample_status === "calculating"\) return METRICS_SECOND_SAMPLE_MS;/.test(bodies.polling),
+    "the metrics query lost its refusal stop, Retry-After resume, backoff, stopped-instance, second-sample, or background guards",
+  ],
+  [
+    /errorUpdatedAt - dataUpdatedAt/.test(bodies.queryConfig) &&
+      !/state\.fetchFailureCount/.test(bodies.queryConfig),
+    "backingOffInterval must grow with how long a query has failed; React Query resets fetchFailureCount on every fetch",
   ],
   [
     /queryKeys\.instanceMetrics\(scopeKey, host, instanceName, project\)/.test(bodies.hooks) &&
@@ -213,21 +238,24 @@ const checks = [
     "manual metrics refresh must reject so RefreshButton can report a failed request",
   ],
   [
-    /instance\.status === "Running" \? metrics\?\.status \?\? instance\.status : instance\.status/.test(
-      bodies.metrics,
+    /metrics && metricsUpdatedAt >= openedAt && metrics\.status !== record\?\.status/.test(
+      bodies.dialog,
     ) &&
-      /instance\.status === "Running" && !!metrics && metrics\.status !== "Running"/.test(
-        bodies.metrics,
-      ) &&
+      /const updatedAt = metricsUpdatedAt \|\| null;/.test(bodies.dialog) &&
       /label="Check instance metrics again"/.test(bodies.metrics),
-    "cached Running metrics must not override a current stopped instance, while fresh stopped metrics must win over a stale Running row",
+    "only a metrics reading taken since the dialog opened may override the row's runtime state, and freshness must use the browser's receive time",
+  ],
+  [
+    /useLiveRecord<VMInfo>\(/.test(bodies.instancesPage) &&
+      /instance=\{dialogInstance\}/.test(bodies.instancesPage),
+    "the Instances page dialog must follow the live row, not the object captured at click time",
   ],
   [
     !/metricsSampleCount|trackedMetricsIdentity|lastMetricsTimestamp|isCpuCalculating/.test(
       bodies.dialog,
     ) &&
       /metrics\.cpu_sample_status === "calculating"/.test(bodies.metrics) &&
-      /metrics\.cpu_sample_status === "unavailable"/.test(bodies.metrics),
+      /metrics\.cpu_sample_status === "ready"/.test(bodies.metrics),
     "CPU readiness must use the server contract rather than a local sample-count heuristic",
   ],
   [
@@ -241,7 +269,9 @@ const checks = [
   [
     /new Set\(metrics\.unavailable_sections\)/.test(bodies.metrics) &&
       /<PartialReadNotice>/.test(bodies.metrics) &&
-      /formatSectionList\(metrics\.unavailable_sections\)/.test(bodies.metrics) &&
+      /formatSectionList\(unexplainedSections\)/.test(bodies.metrics) &&
+      /cpu_effective_vcpus/.test(bodies.metrics) &&
+      /<GuestAgentNotice status=\{metrics\.guest_agent\} \/>/.test(bodies.metrics) &&
       /allSectionsUnavailable/.test(bodies.metrics),
     "partial and fully unavailable metric sections must remain distinct and name the missing readings",
   ],
