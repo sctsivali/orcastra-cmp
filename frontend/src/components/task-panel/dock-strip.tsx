@@ -34,7 +34,7 @@ export interface DockStripProps {
 
 // note: globals.css forces every button to 44 px below md, so the list and its triggers take
 // the strip's full height there and only shrink to the 28 px row from md up.
-const TRIGGER_CLASS = "px-2 py-0 text-xs md:h-7";
+const TRIGGER_CLASS = "shrink-0 px-2 py-0 text-xs md:h-7";
 const COUNT_CLASS = "ml-1.5 px-1.5 py-0 tabular-nums";
 
 // The strip is the whole panel when collapsed: 44 px below md, where globals.css forces every
@@ -74,7 +74,9 @@ export function DockStrip({
         {open ? <ChevronDown className="h-4 w-4" aria-hidden="true" /> : <ChevronUp className="h-4 w-4" aria-hidden="true" />}
       </Button>
 
-      <TabsList className="h-11 p-0 md:h-8 md:p-0.5" aria-label="Task panel tabs">
+      {/* min-w-0 lets the tabs give way on a phone. With the default min-width the tab counts
+          pushed the refresh, expand and operator controls off a 390px screen. */}
+      <TabsList className="h-11 min-w-0 justify-start overflow-x-auto p-0 md:h-8 md:p-0.5" aria-label="Task panel tabs">
         <TabsTrigger value="tasks" className={TRIGGER_CLASS} onClick={() => expandIfCollapsed("tasks")}>
           Tasks
           {running > 0 && (
@@ -110,7 +112,7 @@ export function DockStrip({
               type="button"
               variant="ghost"
               size="icon"
-              className="h-7 w-7 text-status-pending"
+              className="h-7 w-7 shrink-0 text-status-pending"
               aria-label={`Live task updates interrupted on ${disconnected.length} ${disconnected.length === 1 ? "cluster" : "clusters"}`}
               onClick={() => onExpandTo("queue")}
             >
@@ -132,12 +134,12 @@ export function DockStrip({
         label={tab === "log" && open ? "Refresh log" : tab === "queue" && open ? "Refresh queue" : "Refresh tasks"}
         hideTimestamp
         variant="ghost"
-        className="h-7 w-7"
+        className="h-7 w-7 shrink-0"
         onRefresh={refreshNow}
       />
 
       {showOperator && (
-        <Button asChild variant="ghost" size="icon" className="h-7 w-7">
+        <Button asChild variant="ghost" size="icon" className="h-7 w-7 shrink-0">
           <IntentLink href={inventoryLinks.operations({})} aria-label="Open the Operations page">
             <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
           </IntentLink>
