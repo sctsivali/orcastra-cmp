@@ -6,9 +6,8 @@ dashboard the leader stored to their own clients and never sweep.
 
 important: the lease is held, not taken per cycle. A per-cycle lease that expired after 30 s
 elected nobody for the rest of a cycle that lasted the sweep plus 30 s, so another worker took it
-mid-cycle and swept again. The leader renews at the start of every cycle and after its sweep; the
-lease lapses only when it stops renewing (a crash, or a sweep longer than the lease), and the next
-worker to look then takes over.
+mid-cycle and swept again. Every worker runs a heartbeat that claims the lease: the leader's
+renews it, through any sweep, and a follower's takes it over once the leader stops renewing.
 """
 
 import logging

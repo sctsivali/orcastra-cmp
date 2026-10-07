@@ -9,12 +9,13 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, List, Optional
+from typing import Any, Optional
 import threading
 
 from app.core import vault_status
 from app.core.blocking import BlockingTimeout, run_blocking
 from app.services.collector_leadership import CollectorLease, DashboardRelay
+from app.services.metrics_prewarm import CachePrewarm
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ ENSURE_CONNECTIONS_TIMEOUT = float(
 )
 
 
-class MetricsCollector:
+class MetricsCollector(CachePrewarm):
     """
     Background service that collects and stores metrics at regular intervals.
     Runs independently of frontend requests to ensure continuous data collection.
@@ -46,7 +47,14 @@ class MetricsCollector:
     # dashboard was built three to four times per cycle and about 70% of history points were
     # copies.
     COLLECTION_LEASE_KEY = "orcastra:metrics_collector:cycle_lease"
-    LEASE_SECONDS = 120
+    # important: short, and kept alive by a heartbeat rather than by the cycle. A lease long
+    # enough to outlive a cycle also outlived a dead leader: on a deploy the old container's
+    # workers keep collecting while uvicorn drains connections, Docker kills them before the
+    # lifespan hands the lease back, and nothing swept until it lapsed, measured at two and a
+    # half minutes. Renewed every 5 s, a 20 s lease holds through any sweep and a dead leader
+    # is replaced within 20 s.
+    LEASE_SECONDS = 20
+    HEARTBEAT_SECONDS = 5.0
     # How often a follower looks for a new dashboard to relay while it waits out the interval.
     RELAY_POLL_SECONDS = 5.0
 
@@ -63,6 +71,7 @@ class MetricsCollector:
         self._dashboards = DashboardRelay()
         self._leading = False
         self._prewarm_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
         
     def start(self, lxd_service=None):
         """Start the background collector."""
@@ -78,6 +87,7 @@ class MetricsCollector:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 self._task = loop.create_task(self._collection_loop())
+                self._heartbeat_task = loop.create_task(self._heartbeat_loop())
             else:
                 # If no event loop is running, we'll start it when one is available
                 logger.info("Event loop not running, collector will start when available")
@@ -92,9 +102,11 @@ class MetricsCollector:
         if self._task:
             self._task.cancel()
             self._task = None
-        if self._prewarm_task:
-            self._prewarm_task.cancel()
-            self._prewarm_task = None
+        for task in (self._heartbeat_task, self._prewarm_task):
+            if task:
+                task.cancel()
+        self._heartbeat_task = None
+        self._prewarm_task = None
         self._lease.release()
         logger.info("Metrics collector stopped")
         
@@ -106,6 +118,7 @@ class MetricsCollector:
         self._lxd_service = lxd_service
         self._running = True
         self._task = asyncio.create_task(self._collection_loop())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         logger.info(f"Metrics collector started async with {self.collection_interval}s interval")
         
     async def _collection_loop(self):
@@ -127,8 +140,16 @@ class MetricsCollector:
 
         logger.info("Background metrics collection loop ended")
 
+    async def _heartbeat_loop(self) -> None:
+        """Keep the lease while leading, and take it over as soon as it lapses."""
+        while self._running:
+            self._leading = self._claim_collection_lease()
+            await asyncio.sleep(self.HEARTBEAT_SECONDS)
+
     async def _relay_until_next_cycle(self) -> None:
-        """Wait out the interval. A follower relays a new dashboard as soon as one lands."""
+        """Wait out the interval. A follower relays a new dashboard as soon as one lands, and
+        one that has just taken over the lease starts its first sweep at once."""
+        following = not self._leading
         deadline = time.monotonic() + self.collection_interval
         while self._running:
             remaining = deadline - time.monotonic()
@@ -137,6 +158,8 @@ class MetricsCollector:
             await asyncio.sleep(min(self.RELAY_POLL_SECONDS, remaining))
             if not self._leading:
                 await self._dashboards.relay()
+            elif following:
+                return
 
     def _claim_collection_lease(self) -> bool:
         """True when this worker leads this cycle: it took the lease or renewed its own."""
@@ -191,195 +214,6 @@ class MetricsCollector:
         except Exception as e:
             logger.warning(f"Background metrics collection: {e}")
 
-    async def _prewarm_instances_cache(self):
-        """
-        Pre-warm critical API caches to ensure fast response times.
-        This runs every 30 seconds to keep caches fresh before TTL expiry (120s).
-        
-        Performance impact (roughly estimated):
-        - Cold cache: ~11 seconds for instances, varies for others
-        - Warm cache: ~25-50 milliseconds
-        """
-        try:
-            from app.core.cache import get_cache_manager
-            # important: prewarm keys must be built the same way the endpoints
-            # build theirs. Without get_scope_cache_key() they lacked the
-            # ":scope=all" suffix, so nothing ever read them and every request
-            # after a TTL expiry still paid the full cold cost.
-            from app.core.cache import (
-                NODES_AVAILABILITY_CACHE_KEY,
-                NODES_AVAILABILITY_CACHE_TTL,
-                REGIONS_OVERVIEW_CACHE_KEY,
-            )
-            from app.core.org_scope import get_scope_cache_key
-            
-            cache = get_cache_manager()
-            
-            # important: the TTL belongs to the endpoint, not to this loop. A single
-            # hardcoded 180 pinned the instances list six times longer than GET /instances
-            # intends, so a prewarm both wrote a key the endpoint owns and changed how long
-            # it lived. Each of these matches its handler's own cache.set.
-
-            # note: no instances prewarm. It wrote "instances:list:host=None:...", a key GET
-            # /instances never reads (its key is "instances:list:v2:...:project=..."), so every
-            # worker paid a full recursion=2 fleet list each cycle for a value nobody used.
-
-            # Pre-warm VMs cache (VM-only view) - key: vms:list:host=None:status=None
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key("vms:list:host=None:status=None:o=0:l=0"),
-                self._fetch_vms,
-                ttl=180,
-            )
-
-            # Pre-warm regions cache (slowest endpoint, 15-45s cold)
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY),
-                self._fetch_regions,
-                ttl=120,
-            )
-
-            # Pre-warm storage pool resources cache
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key("storage_pool_resources:all"),
-                self._fetch_storage_pool_resources,
-                ttl=60,
-            )
-
-            # Pre-warm cluster availability so a node picker never pays for a probe sweep.
-            # important: unlike the list fan-outs above, an all-offline result IS the answer
-            # here and must be cached. Those refuse an empty result because an empty list
-            # cannot be told apart from "nobody answered"; here "everything is offline" is
-            # precisely the fact the picker needs to show.
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY),
-                self._fetch_availability,
-                ttl=NODES_AVAILABILITY_CACHE_TTL,
-            )
-            
-        except Exception as e:
-            logger.warning(f"Failed to pre-warm caches: {e}")
-    
-    async def _prewarm_single_cache(self, cache, cache_key: str, fetch_func, ttl: int):
-        """Pre-warm a single cache entry if expired.
-
-        important: a fetcher returns None to mean "nobody answered, do not remember this".
-        The endpoints refuse to cache a fan-out no cluster answered, and this loop writes
-        the same keys, so without that refusal here the collector reinstated the outage
-        30s later through a side door and the endpoint's own guard accomplished nothing.
-        """
-        try:
-            cached = cache.get("api_responses", cache_key)
-            if cached:
-                logger.debug(f"Cache already warm: {cache_key}")
-                return
-
-            logger.info(f"Pre-warming cache: {cache_key}")
-            start = asyncio.get_event_loop().time()
-
-            data = await fetch_func()
-            if data:
-                cache.set("api_responses", cache_key, data, ttl=ttl)
-                elapsed = asyncio.get_event_loop().time() - start
-                logger.info(f"Cache warmed in {elapsed:.2f}s: {cache_key}")
-            else:
-                logger.warning(f"Not warming {cache_key}: no cluster answered")
-
-        except Exception as e:
-            logger.debug(f"Pre-warm failed for {cache_key}: {e}")
-    
-    def _unreachable(self, connected_nodes: List[str]) -> List[str]:
-        """Registered clusters that did not answer this sweep.
-
-        important: a prewarm writes the payload the endpoint later serves, so any field the
-        endpoint fills must be filled here too. Leaving this to the model default wrote an
-        empty list into the cache, and every unforced read then reported a healthy fleet
-        while fourteen clusters were down. The same shape mismatch took out GET /nodes.
-        """
-        return sorted(set(self._lxd_service.get_node_names()) - set(connected_nodes))
-
-    async def _fetch_vms(self):
-        """Fetch VMs data for cache warming."""
-        from app.models.schemas import VMListResponse
-        all_vms, connected_nodes = await self._lxd_service.list_all_vms()
-        if not connected_nodes:
-            # mirrors the guard in routers/vms.py
-            return None
-        # Filter to VMs only (type == virtual-machine)
-        vms_only = [vm for vm in all_vms if vm.type == "virtual-machine"]
-        response = VMListResponse(
-            total=len(vms_only),
-            vms=vms_only,
-            nodes=connected_nodes,
-            unreachable_nodes=self._unreachable(connected_nodes),
-        )
-        return response.model_dump()
-    
-    # note: there is deliberately no nodes prewarm. It used to write
-    # {"nodes": [<names>], "count": N} to a key nobody read, so the shape mismatch
-    # against NodesStatusResponse was invisible. Once the keys were corrected to
-    # carry the scope suffix the two collided and GET /nodes returned 500 for the
-    # rest of the TTL. Warming it properly means replicating the handler's Vault
-    # cluster merge, which is not worth duplicating; get_node_names() never did
-    # the expensive work anyway, so nothing is lost by leaving this cold.
-    
-    async def _fetch_regions(self):
-        """Fetch regions overview for cache warming."""
-        try:
-            from app.routers.regions import get_regions_overview
-            result = await get_regions_overview(lxd_service=self._lxd_service)
-            # result is a dict or Pydantic model
-            if hasattr(result, 'model_dump'):
-                return result.model_dump()
-            return result
-        except Exception as e:
-            logger.debug(f"Regions pre-warm fetch failed: {e}")
-            return None
-    
-    async def _fetch_availability(self):
-        """Fetch cluster availability for cache warming."""
-        try:
-            from app.services.lxd import status as lxd_status
-            result = await lxd_status.resolve_availability(self._lxd_service)
-            return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
-        except Exception as e:
-            logger.debug(f"Availability pre-warm fetch failed: {e}")
-            return None
-
-    async def _fetch_storage_pool_resources(self):
-        """Fetch storage pool resources for cache warming."""
-        try:
-            from app.routers.storage_pools import _serialize_pool_resources
-            all_resources = {}
-            answered = 0
-            nodes = self._lxd_service.connection_manager.get_node_names()
-            for node_name in nodes:
-                try:
-                    client = self._lxd_service.get_client_with_reconnect(node_name)
-                    if client is None:
-                        continue
-                    pools = client.storage_pools.all()
-                    answered += 1
-                    for pool in pools:
-                        try:
-                            resources = pool.resources.get()
-                            all_resources[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            if nodes and not answered:
-                # counting answers, not entries: a fleet that is up but has no pools is a
-                # legitimate empty result, an outage is not.
-                return None
-            return {"resources": all_resources}
-        except Exception as e:
-            logger.debug(f"Storage pool resources pre-warm failed: {e}")
-            return None
-    
     async def _ensure_cluster_connections(self):
         """Run the connection sweep off the event loop.
 
