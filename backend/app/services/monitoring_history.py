@@ -24,6 +24,10 @@ HISTORY_TTL_SECONDS = 86400
 HISTORY_RETENTION = timedelta(hours=24)
 HISTORY_MAX_POINTS = 8640
 DEFAULT_WINDOW_SECONDS = 300
+# Shortest gap between two points of one scope. Well under a collection cycle, well over the
+# few seconds that separate workers finishing the same sweep.
+HISTORY_SLOT_SECONDS = 20
+HISTORY_SLOT_PREFIX = "orcastra:monitoring_history_slot"
 
 
 def history_key(scope_key: str) -> str:
@@ -31,6 +35,29 @@ def history_key(scope_key: str) -> str:
     if scope_key.startswith("dashboard:"):
         return f"monitoring:history:{scope_key.split(':', 1)[1]}"
     return f"monitoring:history:{scope_key}"
+
+
+def claim_history_slot(cache: Any, key: str, *, now: float, local: Dict[str, float]) -> bool:
+    """Whether this computation may append the scope's next point. One winner per slot.
+
+    important: shared through Redis, not per process. Each of the four workers kept its own
+    "last stored" time, so when several of them built the same dashboard within a few seconds
+    every one of them appended it: over a day about 70% of the points were copies, and the
+    read-modify-write of the history value let concurrent appends overwrite each other. `local`
+    is the per-process fallback for when Redis is unavailable.
+    """
+    client = getattr(cache, "redis_client", None)
+    if client is not None:
+        try:
+            return bool(
+                client.set(f"{HISTORY_SLOT_PREFIX}:{key}", repr(now), nx=True, ex=HISTORY_SLOT_SECONDS)
+            )
+        except Exception as exc:  # noqa: BLE001 - a lost slot read costs a duplicate, not a gap
+            logger.debug("History slot unavailable for %s: %s", key, exc)
+    if now - local.get(key, 0.0) < HISTORY_SLOT_SECONDS:
+        return False
+    local[key] = now
+    return True
 
 
 def _sum_rates(values: Sequence[Optional[float]]) -> Optional[float]:

@@ -7,12 +7,14 @@ This ensures historical data continuity even when no clients are connected.
 import asyncio
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional
+from typing import Any, List, Optional
 import threading
 
 from app.core import vault_status
 from app.core.blocking import BlockingTimeout, run_blocking
+from app.services.collector_leadership import CollectorLease, DashboardRelay
 
 logger = logging.getLogger(__name__)
 
@@ -31,29 +33,23 @@ class MetricsCollector:
     """
     Background service that collects and stores metrics at regular intervals.
     Runs independently of frontend requests to ensure continuous data collection.
-    
-    TIMING (roughly estimated):
-    - Cache TTL: 180 seconds
-    - Collection interval: 60 seconds  
-    - Pre-warm takes ~25-45 seconds (instances + VMs + monitoring)
-    - Total cycle: ~85-105 seconds (well within 180s TTL)
+
+    One worker leads: it sweeps the fleet for the dashboard, then pauses for
+    `collection_interval` seconds, so a cycle is the sweep plus the pause. Every other worker
+    keeps its own cluster connections and relays the leader's dashboard to its own WebSocket
+    clients without sweeping anything itself.
     """
-    
-    # Cache TTL for API responses (180s = 3 minutes)
-    CACHE_TTL = 180
 
     # important: the collector is started from the FastAPI lifespan, which runs once per worker.
-    # With WEB_CONCURRENCY=4 that is four collectors, each calling the dashboard with fresh=True
-    # every cycle, so the configured interval bought a quarter of the fan-out it promised: four
-    # full sweeps of every cluster per cycle instead of one. Measured on this fleet by the
-    # startup line appearing four times.
-    #
-    # One short Redis lease per cycle elects a single collector. The others still read the
-    # dashboard from the shared cache so their own WebSocket subscribers keep receiving pushes;
-    # only the expensive sweep is elected. The lease expires with the cycle, so a worker that
-    # dies mid-collection is simply replaced next time round rather than needing a release.
+    # With WEB_CONCURRENCY=4 that is four collectors; see collector_leadership for how one of
+    # them leads and the others only relay. Over a day on the dev fleet, before that, the
+    # dashboard was built three to four times per cycle and about 70% of history points were
+    # copies.
     COLLECTION_LEASE_KEY = "orcastra:metrics_collector:cycle_lease"
-    
+    LEASE_SECONDS = 120
+    # How often a follower looks for a new dashboard to relay while it waits out the interval.
+    RELAY_POLL_SECONDS = 5.0
+
     def __init__(self, collection_interval: int = 60):
         """
         Initialize the metrics collector.
@@ -63,6 +59,10 @@ class MetricsCollector:
         self._task: Optional[asyncio.Task] = None
         self._lxd_service = None
         self._lock = threading.Lock()
+        self._lease = CollectorLease(self.COLLECTION_LEASE_KEY, self.LEASE_SECONDS, _shared_redis)
+        self._dashboards = DashboardRelay()
+        self._leading = False
+        self._prewarm_task: Optional[asyncio.Task] = None
         
     def start(self, lxd_service=None):
         """Start the background collector."""
@@ -92,6 +92,10 @@ class MetricsCollector:
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._prewarm_task:
+            self._prewarm_task.cancel()
+            self._prewarm_task = None
+        self._lease.release()
         logger.info("Metrics collector stopped")
         
     async def start_async(self, lxd_service=None):
@@ -110,46 +114,33 @@ class MetricsCollector:
         
         # Minimal delay just to ensure server is ready
         await asyncio.sleep(2)
-        
-        # Immediately collect metrics on startup to warm up cache
-        logger.info("Performing initial metrics collection to warm up cache...")
-        try:
-            await self._collect_metrics()
-            logger.info("Initial metrics collection completed - cache is warm")
-        except Exception as e:
-            logger.warning(f"Initial metrics collection failed: {e}")
-        
+
+        # note: the first cycle runs at once and warms the cache. A separate warm-up call used to
+        # run here as well, which swept the whole fleet twice back to back on every start.
         while self._running:
             try:
                 await self._collect_metrics()
             except Exception as e:
                 logger.error(f"Error in metrics collection: {e}", exc_info=True)
-            
-            # Wait for next collection interval
-            await asyncio.sleep(self.collection_interval)
-            
+
+            await self._relay_until_next_cycle()
+
         logger.info("Background metrics collection loop ended")
-        
+
+    async def _relay_until_next_cycle(self) -> None:
+        """Wait out the interval. A follower relays a new dashboard as soon as one lands."""
+        deadline = time.monotonic() + self.collection_interval
+        while self._running:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(self.RELAY_POLL_SECONDS, remaining))
+            if not self._leading:
+                await self._dashboards.relay()
+
     def _claim_collection_lease(self) -> bool:
-        """True when this worker should run the expensive sweep this cycle.
-
-        Falls back to True when Redis is unavailable, so a single-worker or Redis-down
-        deployment keeps collecting exactly as it did before rather than going silent.
-        """
-        try:
-            from app.core.cache import get_cache_manager
-
-            client = getattr(get_cache_manager(), "redis_client", None)
-            if client is None:
-                return True
-            # nx: exactly one worker wins. ex: the lease dies with the cycle, so the next one
-            # re-elects and a leader that crashed mid-sweep costs one cycle, not the loop.
-            return bool(
-                client.set(self.COLLECTION_LEASE_KEY, os.getpid(), nx=True, ex=self.collection_interval)
-            )
-        except Exception as exc:
-            logger.debug(f"Collection lease unavailable, collecting locally: {exc}")
-            return True
+        """True when this worker leads this cycle: it took the lease or renewed its own."""
+        return self._lease.claim()
 
     async def _collect_metrics(self):
         """
@@ -167,47 +158,39 @@ class MetricsCollector:
                 return
         
         try:
-            # IMPORTANT: Perform connection health check first
-            # This ensures clusters stay connected even if they were disconnected
-            # due to timeout, network issues, or container restart
+            self._leading = self._claim_collection_lease()
+
+            # IMPORTANT: Perform connection health check first, in every worker: each one holds
+            # its own cluster connections. This ensures clusters stay connected even if they
+            # were disconnected due to timeout, network issues, or container restart.
             await self._ensure_cluster_connections()
-            
-            # PRE-WARM INSTANCES CACHE - Critical for performance
-            # This keeps the instances endpoint fast (32ms vs 41s)
-            await self._prewarm_instances_cache()
-            
+
+            if not self._leading:
+                # important: a follower never builds the dashboard, not even on a cache miss.
+                # It relays what the leader stored; a miss only means nothing is relayed yet.
+                await self._dashboards.relay()
+                return
+
             # Import here to avoid circular dependency
             from app.routers.monitoring import get_monitoring_dashboard
-            
-            # Call the dashboard endpoint - it handles all metrics collection and history storage
-            # This ensures a single code path for metrics collection, avoiding race conditions.
-            # fresh=True bypasses the 35s dashboard cache so the elected collector always
-            # performs a full collection and stores a history point every cycle. Every other
-            # worker reads the shared cache instead, which is enough to keep its own WebSocket
-            # subscribers fed without repeating the sweep.
-            leading = self._claim_collection_lease()
-            result = await get_monitoring_dashboard(lxd_service=self._lxd_service, fresh=leading)
-            logger.debug(
-                "Background collector cycle complete (collected=%s)", leading
-            )
-            
-            # Push to WebSocket subscribers (if any connected)
-            try:
-                from app.services.ws_broadcast import get_monitoring_broadcaster
-                broadcaster = get_monitoring_broadcaster()
-                if broadcaster.client_count > 0:
-                    # note: mode="json" so datetimes go out as ISO 8601. The broadcaster's
-                    # json.dumps(default=str) wrote "2026-10-07 12:00:00+00:00" with a space,
-                    # which not every browser's Date.parse accepts, and the page now reads it.
-                    data = result.model_dump(mode="json") if hasattr(result, 'model_dump') else result
-                    await broadcaster.broadcast(data)
-                    logger.debug(f"Pushed monitoring data to {broadcaster.client_count} WS clients")
-            except Exception as ws_err:
-                logger.debug(f"WS broadcast skipped: {ws_err}")
-            
+
+            # The leader builds the dashboard through the endpoint's own code path, which also
+            # stores the history point. fresh=True so every cycle is a new reading.
+            result = await get_monitoring_dashboard(lxd_service=self._lxd_service, fresh=True)
+            # A long sweep must not let the lease lapse under it.
+            self._leading = self._claim_collection_lease()
+            await self._dashboards.push(result)
+
+            # PRE-WARM API CACHES on the leader only; followers sweeping these as well was the
+            # same duplicated work. In the background, one run at a time: the dashboard sweep
+            # takes about 30 s and the prewarm another 10 to 40, and run in line they stretched a
+            # cycle to 80 to 100 s, past the page's 90 s stale mark.
+            if self._leading and (self._prewarm_task is None or self._prewarm_task.done()):
+                self._prewarm_task = asyncio.create_task(self._prewarm_instances_cache())
+
         except Exception as e:
             logger.warning(f"Background metrics collection: {e}")
-    
+
     async def _prewarm_instances_cache(self):
         """
         Pre-warm critical API caches to ensure fast response times.
@@ -498,6 +481,12 @@ class MetricsCollector:
                 
         except Exception as e:
             logger.debug(f"Cluster connection health check error: {e}")
+
+
+def _shared_redis() -> Any:
+    from app.core.cache import get_cache_manager
+
+    return getattr(get_cache_manager(), "redis_client", None)
 
 
 # Singleton instance
