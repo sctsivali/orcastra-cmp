@@ -23,20 +23,17 @@ import {
   ChevronDown,
   Wifi,
   WifiOff,
-  Cpu,
-  HardDrive,
   Network,
   Clock,
   ArrowDownToLine,
   ArrowUpFromLine,
-  Activity,
   Loader2,
 } from "lucide-react";
-import { cn, formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
-import { InstanceMetrics } from "@/types";
+import { cn, formatBytes, formatNetworkRate } from "@/lib/utils";
 import { useSession } from "next-auth/react";
 import { useInstanceMetrics } from "@/hooks";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { InstanceResourceChips, InstanceResourcesPanel } from "./instance-resources";
 
 // ============ Types ============
 
@@ -270,12 +267,6 @@ export function ConsoleResourceBar({
   const dlTotal = sessionStats?.bandwidth?.download_bytes ?? 0;
   const ulTotal = sessionStats?.bandwidth?.upload_bytes ?? 0;
 
-  // Instance metrics
-  const cpuPercent = instanceMetrics?.cpu_usage_percent ?? 0;
-  const memUsed = instanceMetrics?.memory_used_bytes ?? 0;
-  const memTotal = instanceMetrics?.memory_total_bytes ?? 1;
-  const memPercent = instanceMetrics?.memory_usage_percent ?? 0;
-
   // Connection status indicator
   const StatusIcon = isConnected ? Wifi : isConnecting ? Loader2 : WifiOff;
   const statusColor = isConnected
@@ -343,35 +334,7 @@ export function ConsoleResourceBar({
 
         <div className="h-3 w-px bg-terminal-border" />
 
-        {/* CPU (only when metrics available) */}
-        {instanceMetrics && (
-          <>
-            <div className="flex items-center gap-1 text-xs">
-              <Cpu className="h-3 w-3 text-blue-400" />
-              <span className={cn(
-                "font-mono",
-                cpuPercent > 80 ? "text-red-400" : cpuPercent > 50 ? "text-yellow-400" : "text-gray-300"
-              )}>
-                {cpuPercent.toFixed(1)}%
-              </span>
-            </div>
-
-            <div className="h-3 w-px bg-terminal-border" />
-
-            {/* Memory */}
-            <div className="flex items-center gap-1 text-xs">
-              <Activity className="h-3 w-3 text-green-400" />
-              <span className={cn(
-                "font-mono",
-                memPercent > 80 ? "text-red-400" : memPercent > 60 ? "text-yellow-400" : "text-gray-300"
-              )}>
-                {formatMemory(memUsed, 0)}/{formatMemory(memTotal, 0)}
-              </span>
-            </div>
-
-            <div className="h-3 w-px bg-terminal-border" />
-          </>
-        )}
+        {instanceMetrics && <InstanceResourceChips metrics={instanceMetrics} />}
 
         {/* Network bandwidth */}
         <div className="flex items-center gap-2 text-xs text-gray-400">
@@ -440,83 +403,7 @@ export function ConsoleResourceBar({
               Instance Resources
             </h4>
             <div className="space-y-2 bg-terminal rounded-lg p-3">
-              {metricsLoading ? (
-                <div className="flex items-center justify-center py-4 text-gray-500">
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Loading metrics...
-                </div>
-              ) : !instanceMetrics ? (
-                <div className="text-gray-500 py-2 text-center">
-                  Metrics unavailable
-                </div>
-              ) : (
-                <>
-                  {/* CPU */}
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span className="text-gray-400 flex items-center gap-1">
-                        <Cpu className="h-3 w-3 text-blue-400" /> CPU
-                      </span>
-                      <span className={cn(
-                        "font-mono",
-                        cpuPercent > 80 ? "text-red-400" : cpuPercent > 50 ? "text-yellow-400" : "text-gray-300"
-                      )}>
-                        {cpuPercent.toFixed(1)}%
-                      </span>
-                    </div>
-                    <ProgressBar
-                      value={cpuPercent}
-                      color={cpuPercent > 80 ? "bg-red-500" : cpuPercent > 50 ? "bg-yellow-500" : "bg-blue-500"}
-                    />
-                  </div>
-
-                  {/* Memory */}
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span className="text-gray-400 flex items-center gap-1">
-                        <Activity className="h-3 w-3 text-green-400" /> Memory
-                      </span>
-                      <span className="text-gray-300 font-mono">
-                        {formatMemory(memUsed, 0)} / {formatMemory(memTotal, 0)}
-                      </span>
-                    </div>
-                    <ProgressBar
-                      value={memPercent}
-                      color={memPercent > 80 ? "bg-red-500" : memPercent > 60 ? "bg-yellow-500" : "bg-green-500"}
-                    />
-                  </div>
-
-                  {/* Disk */}
-                  {Object.entries(instanceMetrics.disk_usage_bytes).map(([device, bytes]) => (
-                    <div key={device}>
-                      <div className="flex justify-between mb-1">
-                        <span className="text-gray-400 flex items-center gap-1">
-                          <HardDrive className="h-3 w-3 text-orange-400" /> {device}
-                        </span>
-                        <span className="text-gray-300 font-mono">{formatBytes(bytes)}</span>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Instance Network */}
-                  {Object.entries(instanceMetrics.network_rx_bytes || {}).map(([iface, rx]) => (
-                    <div key={iface}>
-                      <div className="flex justify-between mb-1">
-                        <span className="text-gray-400 flex items-center gap-1">
-                          <Network className="h-3 w-3 text-purple-400" /> {iface}
-                        </span>
-                        <span className="text-gray-300">
-                          <span className="text-green-400 font-mono">↓{formatBytes(rx)}</span>
-                          {" "}
-                          <span className="text-blue-400 font-mono">
-                            ↑{formatBytes(instanceMetrics.network_tx_bytes?.[iface] ?? 0)}
-                          </span>
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
+              <InstanceResourcesPanel metrics={instanceMetrics} loading={metricsLoading} />
             </div>
           </div>
         </div>
@@ -549,25 +436,6 @@ function InfoRow({
       <span className={cn("max-w-[200px] text-gray-300", valueClass)}>
         <OverflowText value={value} label={label.toLowerCase()} mode="overlay" tone="chrome" mono={mono} />
       </span>
-    </div>
-  );
-}
-
-/** Thin progress bar widget */
-function ProgressBar({
-  value,
-  color = "bg-blue-500",
-}: {
-  value: number;
-  color?: string;
-}) {
-  const clamped = Math.min(Math.max(value, 0), 100);
-  return (
-    <div className="w-full bg-terminal-border rounded-full h-1.5 overflow-hidden">
-      <div
-        className={cn("h-full rounded-full transition-all duration-300", color)}
-        style={{ width: `${clamped}%` }}
-      />
     </div>
   );
 }

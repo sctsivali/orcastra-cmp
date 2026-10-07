@@ -37,17 +37,41 @@ export type InstanceCpuSampleStatus =
 
 export type InstanceMetricSection = "cpu" | "memory" | "disk" | "network" | "processes";
 
+/** A virtual machine's lxd-agent: without it LXD reports no CPU, memory or processes. */
+export type InstanceGuestAgentStatus = "not_applicable" | "connected" | "unreachable" | "disabled";
+
+export type InstanceRateStatus = "ready" | "calculating" | "unavailable";
+
+// note: every field added after the readiness contract is optional, so a newer frontend still
+// renders against an older backend while a deploy rolls through.
 export interface InstanceMetrics {
   instance_name: string;
   host: string;
   status: VMStatus;
+  /** Busy share of the effective vCPUs, 0 to 100. Usable only when cpu_sample_status is ready. */
   cpu_usage_percent: number;
+  cpu_busy_vcpus?: number | null;
+  cpu_effective_vcpus?: number | null;
+  /** Window behind the CPU and network rates, in seconds. */
+  sample_window_seconds?: number | null;
   memory_used_bytes: number;
   memory_total_bytes: number;
   memory_usage_percent: number;
+  memory_available_bytes?: number | null;
+  memory_cache_bytes?: number | null;
+  /** True when memory_used_bytes still counts page cache the guest can reclaim. */
+  memory_includes_cache?: boolean;
   disk_usage_bytes: Record<string, number>;
+  disk_total_bytes?: Record<string, number>;
+  disk_read_bytes_per_second?: number | null;
+  disk_write_bytes_per_second?: number | null;
+  disk_io_window_seconds?: number | null;
+  disk_io_status?: InstanceRateStatus;
   network_rx_bytes: Record<string, number>;
   network_tx_bytes: Record<string, number>;
+  network_rx_bytes_per_second?: Record<string, number>;
+  network_tx_bytes_per_second?: Record<string, number>;
+  guest_agent?: InstanceGuestAgentStatus;
   processes: number;
   uptime_seconds: number;
   base_image: string | null;
@@ -1559,26 +1583,6 @@ export interface SystemOverview {
   total_storage_bytes: number;
   used_storage_bytes: number;
   clusters: ClusterMetrics[];
-  timestamp: string;
-}
-
-export interface InstanceMetricsDetail {
-  name: string;
-  host: string;
-  project: string;
-  type: string;
-  status: string;
-  cpu_usage_percent: number;
-  cpu_seconds_total: number;
-  memory_usage_bytes: number;
-  memory_limit_bytes: number;
-  memory_usage_percent: number;
-  disk_read_bytes: number;
-  disk_write_bytes: number;
-  network_rx_bytes: number;
-  network_tx_bytes: number;
-  processes: number;
-  uptime_seconds: number;
   timestamp: string;
 }
 

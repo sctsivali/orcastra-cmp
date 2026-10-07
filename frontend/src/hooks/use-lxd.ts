@@ -10,6 +10,11 @@ import {
 } from "@tanstack/react-query";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import {
+  isMetricsAccessError,
+  metricsRefetchInterval,
+  shouldRetryMetrics,
+} from "@/lib/instance-metrics-polling";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useRef, useState } from "react";
 import { APIError } from "@/types/api";
@@ -316,18 +321,6 @@ export function useDeleteVM() {
 }
 
 // Instance Metrics Hook
-const instanceMetricsInterval = backingOffInterval(POLL_MS.live, 60 * 1000);
-
-function isTerminalMetricsError(error: unknown): boolean {
-  if (error instanceof APIError) {
-    return error.status === 401 || error.status === 403 || error.status === 429;
-  }
-  if (error instanceof Error) {
-    return /\b(?:401|403|429)\b/.test(error.message);
-  }
-  return false;
-}
-
 export function useInstanceMetrics(
   host: string,
   instanceName: string,
@@ -341,18 +334,14 @@ export function useInstanceMetrics(
     queryFn: () => vmAPI.getMetrics(host, instanceName, project),
     enabled: (query) =>
       isAuthenticated && enabled && !!host && !!instanceName &&
-      !isTerminalMetricsError(query.state.error),
-    // Five seconds is fast enough to read as live without opening a WebSocket per dialog.
-    // Failures back off to one minute. Authorization and rate-limit failures stop the automatic
-    // loop entirely, and a response that says the instance stopped does the same.
-    refetchInterval: (query) => {
-      if (query.state.data && query.state.data.status !== "Running") return false;
-      if (isTerminalMetricsError(query.state.error)) return false;
-      return instanceMetricsInterval(query);
-    },
+      !isMetricsAccessError(query.state.error),
+    // Five seconds is fast enough to read as live without opening a WebSocket per dialog. The
+    // cadence rules (refusal, Retry-After, backoff, stopped, second sample) live in
+    // lib/instance-metrics-polling.ts.
+    refetchInterval: metricsRefetchInterval,
     refetchIntervalInBackground: false,
     staleTime: POLL_MS.live / 2,
-    retry: (failureCount, error) => !isTerminalMetricsError(error) && failureCount < 2,
+    retry: shouldRetryMetrics,
     retryOnMount: false,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,

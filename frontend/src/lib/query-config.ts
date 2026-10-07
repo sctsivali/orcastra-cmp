@@ -58,7 +58,14 @@ export function jitter(base: number): number {
 }
 
 /** Minimal shape of the query object React Query hands a refetchInterval function. */
-type PollingQuery = { state: { fetchFailureCount: number } };
+type PollingQuery = {
+  state: {
+    status: string;
+    dataUpdatedAt: number;
+    errorUpdatedAt: number;
+    errorUpdateCount: number;
+  };
+};
 
 /**
  * Poll at `base`, backing off geometrically while the query is failing.
@@ -66,11 +73,21 @@ type PollingQuery = { state: { fetchFailureCount: number } };
  * A cluster that is not answering is where polling costs most and buys least: every attempt
  * sits on a connect timeout, and the operator already has the last reading on screen with its
  * age beside it, which is worth more than a fifth identical failure.
+ *
+ * important: the wait is how long the query has been failing, not `fetchFailureCount`. React
+ * Query resets that count at the start of every fetch, so after its own retries it always read
+ * the same number and the "backoff" sat at one constant interval for as long as a cluster was
+ * down. Waiting as long as it has already been failing doubles the gap on each attempt.
  */
 export function backingOffInterval(base: number, max: number = 5 * 60 * 1000) {
   return (query: PollingQuery): number => {
-    const failures = query.state.fetchFailureCount;
-    return failures <= 0 ? base : Math.min(base * 2 ** failures, max);
+    const { status, dataUpdatedAt, errorUpdatedAt, errorUpdateCount } = query.state;
+    if (status !== "error") return base;
+    const failingFor =
+      dataUpdatedAt > 0
+        ? errorUpdatedAt - dataUpdatedAt
+        : base * 2 ** Math.min(Math.max(errorUpdateCount, 1), 10);
+    return Math.min(Math.max(2 * base, failingFor), max);
   };
 }
 
