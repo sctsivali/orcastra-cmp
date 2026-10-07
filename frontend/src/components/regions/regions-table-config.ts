@@ -6,7 +6,7 @@ import { formatContinent, formatLabel } from "@/lib/utils";
 export const REGIONS = defineTable<any>()({
   searchPlaceholder: "Search regions",
   defaultSort: { field: "region_name", direction: "asc" },
-  searchExtra: (r) => [r.city, r.country_name, r.country_code, r.facility_name, r.facility_provider, formatContinent(r.continent)],
+  searchExtra: (r) => [r.city, r.province, r.country_name, r.country_code, r.facility_name, r.facility_provider, formatContinent(r.continent)],
   columns: [
     { field: "region_name", label: "Region", sort: (r) => r.region_name, search: (r) => r.region_name, filter: fromSort("text") },
     {
@@ -25,6 +25,12 @@ export const REGIONS = defineTable<any>()({
       sort: (r) => r.country_name,
       facet: (r) => r.country_name,
       facetSpec: {} },
+    {
+      field: "province",
+      label: "Province",
+      sort: (r) => r.province,
+      facet: (r) => r.province,
+      facetSpec: { emptyLabel: "(outside Indonesia)" } },
     {
       field: "provider",
       label: "Facility Provider",

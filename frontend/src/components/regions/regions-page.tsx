@@ -78,7 +78,7 @@ function RegionCard({
                     )}
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    {hasCountry ? `${region.city}, ${region.country_name}` : "No location data"}
+                    {hasCountry ? `${region.city}, ${region.province ?? region.country_name}` : "No location data"}
                   </CardDescription>
                   {region.facility_name && (
                     <div className="flex items-center gap-1.5 mt-1">

@@ -98,6 +98,7 @@ export function ClusterDetailDialog({
           content: location ? (
             <DetailGrid cols={3}>
               <DetailField label="Region" value={location.region_name} />
+              {location.province && <DetailField label="Province" value={location.province} />}
               <DetailField label="Country" value={location.country_name} />
               <DetailField label="City" value={location.city} />
               <DetailField label="Continent" value={formatContinent(location.continent)} />

@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
-import { Loader2 } from "lucide-react";
+import { Loader2, Maximize2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RegionSummary } from "@/types/api";
@@ -25,8 +26,8 @@ const RegionsMap = dynamic<RegionsMapProps>(
  *
  * A cluster registered without location metadata comes back at latitude and longitude 0,
  * which is a real coordinate in the Gulf of Guinea rather than a null. Plotting it puts a
- * marker in the Atlantic, thousands of kilometres from anything, and the map's bounds keep
- * the operator from ever panning there to work out what it was.
+ * marker in the Atlantic, thousands of kilometres from anything, and fitting the map to the
+ * clusters would then frame half the planet to include it.
  */
 function isUnplaceable(region: RegionSummary): boolean {
   const { latitude, longitude } = region;
@@ -50,6 +51,7 @@ export function RegionsMapCard({
   isLoading,
 }: RegionsMapCardProps) {
   const [tilesFellBack, setTilesFellBack] = React.useState(false);
+  const [fitSignal, setFitSignal] = React.useState(0);
 
   const placeable = React.useMemo(() => regions.filter((r) => !isUnplaceable(r)), [regions]);
   const unplaceableCount = regions.length - placeable.length;
@@ -58,11 +60,24 @@ export function RegionsMapCard({
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-lg">Cluster Locations</CardTitle>
-        <CardDescription>
-          Click on a marker to view region details below. Scroll to zoom.
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 pb-2">
+        <div className="space-y-1.5">
+          <CardTitle className="text-lg">Cluster Locations</CardTitle>
+          <CardDescription>
+            Click on a marker to view region details below. Scroll to zoom.
+          </CardDescription>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={isLoading || placeable.length === 0}
+          onClick={() => setFitSignal((n) => n + 1)}
+        >
+          <Maximize2 className="mr-2 h-4 w-4" aria-hidden />
+          Fit to clusters
+        </Button>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -70,6 +85,7 @@ export function RegionsMapCard({
         ) : (
           <RegionsMap
             regions={placeable}
+            fitSignal={fitSignal}
             selectedRegion={selectedRegion}
             onSelectRegion={onSelectRegion}
             basemap={basemap}
