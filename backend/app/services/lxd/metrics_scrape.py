@@ -15,6 +15,7 @@ they were authorized for.
 """
 
 import logging
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -41,6 +42,10 @@ NEGATIVE_TTL_SECONDS = {
 }
 MIN_BUDGET_SECONDS = 3.0
 MAX_BODY_BYTES = 8 * 1024 * 1024
+_CHUNK_BYTES = 64 * 1024
+# A cluster member name as LXD allows it. Anything else came from an endpoint that is not
+# behaving like LXD and must not reach a cache key, a log line or a target parameter.
+_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 
 _flight_locks: Dict[str, threading.Lock] = {}
 _flight_users: Dict[str, int] = {}
@@ -115,7 +120,13 @@ def _store(cache: Any, key: str, value: Dict[str, Any], ttl: int) -> None:
 
 
 def _fail(cache: Any, key: str, kind: str, detail: object) -> None:
-    logger.info("Skipping LXD metrics for %s for %ss: %s (%s)", key, NEGATIVE_TTL_SECONDS[kind], kind, detail)
+    logger.info(
+        "Skipping LXD metrics for %s for %ss: %s (%s)",
+        key[:160],
+        NEGATIVE_TTL_SECONDS[kind],
+        kind,
+        str(detail)[:200],
+    )
     _store(cache, key, {"failed": kind}, NEGATIVE_TTL_SECONDS[kind])
 
 
@@ -140,20 +151,48 @@ def _scrape(
     read_timeout = max(1.0, min(4.0, deadline - time.monotonic() - 1.5))
     started = time.time()
     try:
-        response = client.api.metrics.get(params=params, is_api=False, timeout=(2, read_timeout))
+        response = client.api.metrics.get(
+            params=params, is_api=False, timeout=(2, read_timeout), stream=True
+        )
     except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
         _fail(cache, key, "timeout", exc)
         return None
     except LXDAPIException as exc:
         _fail(cache, key, "refused", exc)
         return None
-    collected_at = (started + time.time()) / 2
-    body = response.content or b""
-    if len(body) > MAX_BODY_BYTES:
-        _fail(cache, key, "too_large", f"{len(body)} bytes")
-        return None
+    # important: streamed against a byte cap and a wall-clock budget. Reading the whole body
+    # first held any size an endpoint chose to send, and a slow drip kept the thread as long
+    # as it liked, one read timeout at a time.
     try:
-        series = parse_instance_series(response.text, project=project)
+        declared = int(response.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    if declared > MAX_BODY_BYTES:
+        response.close()
+        _fail(cache, key, "too_large", f"{declared} bytes declared")
+        return None
+    chunks: list[bytes] = []
+    received = 0
+    stop_at = deadline - 1.0
+    try:
+        for chunk in response.iter_content(chunk_size=_CHUNK_BYTES):
+            received += len(chunk)
+            if received > MAX_BODY_BYTES:
+                _fail(cache, key, "too_large", f"over {MAX_BODY_BYTES} bytes")
+                return None
+            if time.monotonic() > stop_at:
+                _fail(cache, key, "timeout", "body still arriving at the deadline")
+                return None
+            chunks.append(chunk)
+    except (requests_exc.Timeout, requests_exc.ConnectionError) as exc:
+        _fail(cache, key, "timeout", exc)
+        return None
+    finally:
+        response.close()
+    collected_at = (started + time.time()) / 2
+    try:
+        text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+        series = parse_instance_series(text, project=project)
     except Exception as exc:  # noqa: BLE001
         _fail(cache, key, "unparseable", exc)
         return None
@@ -180,6 +219,9 @@ def project_metrics(
     then comes from the state read and disk I/O is reported unavailable.
     """
     if deadline - time.monotonic() < MIN_BUDGET_SECONDS:
+        return None
+    if (member or "") not in STANDALONE_LOCATIONS and not _MEMBER.match(member or ""):
+        logger.debug("Not scraping metrics for an unrecognisable member on %s", cluster)
         return None
     cache = _cache()
     key = _key(cluster, member, project)

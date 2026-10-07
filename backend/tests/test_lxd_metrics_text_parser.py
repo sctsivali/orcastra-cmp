@@ -20,6 +20,7 @@ lxd_memory_MemTotal_bytes{name="web",project="tenant-a",type="container"} 858993
 lxd_memory_MemAvailable_bytes{name="web",project="tenant-a",type="container"} 3771674624
 lxd_memory_MemFree_bytes{name="web",project="tenant-a",type="container"} 2579918848
 lxd_memory_Cached_bytes{name="web",project="tenant-a",type="container"} 1191755776
+lxd_memory_Shmem_bytes{name="web",project="tenant-a",type="container"} 209715200
 lxd_go_goroutines 152
 lxd_uptime_seconds 99999.1
 """
@@ -34,6 +35,7 @@ lxd_memory_MemTotal_bytes{name="vm",project="tenant-a",type="virtual-machine"} 4
 lxd_memory_MemAvailable_bytes{name="vm",project="tenant-a",type="virtual-machine"} 3014754304
 lxd_memory_MemFree_bytes{name="vm",project="tenant-a",type="virtual-machine"} 857030656
 lxd_memory_Cached_bytes{name="vm",project="tenant-a",type="virtual-machine"} 2190761984
+lxd_memory_Shmem_bytes{name="vm",project="tenant-a",type="virtual-machine"} 20131840
 """
 
 
@@ -101,25 +103,65 @@ def test_series_round_trip_through_the_cache_shape():
     assert InstanceSeries.from_json(series.to_json()) == series
 
 
-def test_honest_memory_excludes_reclaimable_cache():
+def test_vm_memory_is_the_guest_kernels_own_reading():
     vm = honest_memory(parse_instance_series(VM, project="tenant-a")["vm"])
-    container = honest_memory(parse_instance_series(CONTAINER, project="tenant-a")["web"])
 
     assert vm == {
         "used": 4078280704 - 3014754304,
         "total": 4078280704,
         "available": 3014754304,
-        "cache": 2190761984,
+        "cache": 2190761984 - 20131840,
     }
-    assert container["used"] == 8589934592 - 3771674624
 
 
-def test_honest_memory_falls_back_when_available_does_not_exceed_free():
-    series = InstanceSeries(mem_total=1000, mem_available=300, mem_free=300, mem_cached=200)
+def test_container_shared_memory_counts_as_used_not_available():
+    """LXD 5.21 sets a container's MemAvailable to MemFree plus every file page, tmpfs included."""
+    container = honest_memory(parse_instance_series(CONTAINER, project="tenant-a")["web"])
 
-    assert honest_memory(series)["used"] == 500
+    usage = 8589934592 - 2579918848
+    reclaimable = 1191755776 - 209715200
+    assert container["used"] == usage - reclaimable
+    assert container["cache"] == reclaimable
+    assert container["available"] == 8589934592 - container["used"]
 
 
-def test_honest_memory_needs_a_total_and_available():
+def test_a_container_holding_only_shmem_is_not_read_as_idle():
+    """The live case: 200 MiB in /dev/shm of a 1 GiB container read as 2 MiB used."""
+    mib = 1024 * 1024
+    series = InstanceSeries(
+        instance_type="container",
+        mem_total=1024 * mib,
+        mem_free=819 * mib,
+        mem_available=1022 * mib,
+        mem_cached=203 * mib,
+        mem_shmem=200 * mib,
+    )
+
+    assert honest_memory(series)["used"] == 202 * mib
+
+
+def test_honest_memory_needs_a_total_and_its_inputs():
     assert honest_memory(InstanceSeries(mem_total=0, mem_available=1)) is None
     assert honest_memory(InstanceSeries(mem_total=10)) is None
+    assert honest_memory(InstanceSeries(instance_type="container", mem_total=10, mem_available=5)) is None
+
+
+def test_a_hostile_line_parses_in_linear_time():
+    """A run of name characters with no `=\"` made the old label regex quadratic."""
+    import time
+
+    body = "lxd_cpu_effective_total{" + "a" * 1_000_000 + "} 1\n"
+    body += 'lxd_memory_MemTotal_bytes{name="ok",project="p"} 5\n'
+    started = time.monotonic()
+
+    parsed = parse_instance_series(body, project="p")
+
+    assert time.monotonic() - started < 1.0
+    assert parsed["ok"].mem_total == 5
+
+
+def test_long_labels_with_many_pairs_still_parse():
+    labels = ",".join(f'k{n}="v{n}"' for n in range(100)) + ',name="a",project="p"'
+    parsed = parse_instance_series(f"lxd_memory_MemFree_bytes{{{labels}}} 3\n", project="p")
+
+    assert parsed["a"].mem_free == 3

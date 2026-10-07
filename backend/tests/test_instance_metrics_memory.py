@@ -142,3 +142,46 @@ def test_a_container_takes_its_effective_vcpus_from_metrics(monkeypatch, scrapes
     metrics = _read(monkeypatch, instance)
 
     assert metrics.cpu_effective_vcpus == 6
+
+
+def test_container_disk_io_is_never_reported_as_a_measured_zero(monkeypatch, scrapes):
+    """A ZFS-backed container's writes never reach its cgroup's disk counters."""
+    instance = _instance(kind="container")
+    series = _series()
+    container_series = InstanceSeries(
+        instance_type="container",
+        mem_total=series.mem_total,
+        mem_available=series.mem_available,
+        mem_free=series.mem_free,
+        mem_cached=series.mem_cached,
+        mem_shmem=0.0,
+        disk_read=0.0,
+        disk_written=0.0,
+        disk_devices=("nvme0n1",),
+    )
+    scrapes.extend(
+        [
+            ProjectScrape(collected_at=100.0, series={"vm": container_series}),
+            ProjectScrape(collected_at=112.0, series={"vm": container_series}),
+        ]
+    )
+
+    _read(monkeypatch, instance)
+    metrics = _read(monkeypatch, instance)
+
+    assert metrics.disk_io_status == "unavailable"
+    assert metrics.disk_write_bytes_per_second is None
+
+
+def test_an_unreachable_agent_reports_no_disk_io(monkeypatch, scrapes):
+    scrapes.extend(
+        [
+            ProjectScrape(collected_at=100.0, series={"vm": _series()}),
+            ProjectScrape(collected_at=112.0, series={"vm": _series(5_000.0, 5_000.0)}),
+        ]
+    )
+
+    _read(monkeypatch, _instance(processes=-1))
+    metrics = _read(monkeypatch, _instance(processes=-1))
+
+    assert metrics.disk_io_status == "unavailable"

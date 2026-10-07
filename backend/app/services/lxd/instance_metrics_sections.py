@@ -87,6 +87,8 @@ def apply_state_sections(
         unavailable.add("memory")
     elif not agent_offline:
         used, total = memory.get("usage"), memory.get("total")
+        used = used if isinstance(used, (int, float)) else None
+        total = total if isinstance(total, (int, float)) else None
         if used is None or total is None:
             unavailable.add("memory")
         if used is not None:
@@ -103,12 +105,12 @@ def apply_state_sections(
         unavailable.add("disk")
     else:
         for device, data in disk.items():
-            usage = (data or {}).get("usage")
-            if usage is None:
+            usage = data.get("usage") if isinstance(data, Mapping) else None
+            if not isinstance(usage, (int, float)):
                 unavailable.add("disk")
                 continue
             metrics.disk_usage_bytes[device] = int(usage)
-            total = (data or {}).get("total")
+            total = data.get("total")
             if isinstance(total, (int, float)) and total > 0:
                 metrics.disk_total_bytes[device] = int(total)
 
@@ -119,7 +121,12 @@ def apply_state_sections(
         for iface, data in network.items():
             if iface == "lo":
                 continue
-            counters = (data or {}).get("counters") or {}
+            if not isinstance(data, Mapping):
+                unavailable.add("network")
+                continue
+            counters = data.get("counters")
+            if not isinstance(counters, Mapping):
+                counters = {}
             received, sent = counters.get("bytes_received"), counters.get("bytes_sent")
             if received is None or sent is None:
                 unavailable.add("network")
@@ -127,8 +134,9 @@ def apply_state_sections(
                 metrics.network_rx_bytes[iface] = int(received)
             if sent is not None:
                 metrics.network_tx_bytes[iface] = int(sent)
-            for address in (data or {}).get("addresses") or []:
-                if not is_display_address(address):
+            addresses = data.get("addresses")
+            for address in addresses if isinstance(addresses, list) else []:
+                if not isinstance(address, Mapping) or not is_display_address(address):
                     continue
                 target = (
                     metrics.ipv4_addresses

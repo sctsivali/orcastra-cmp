@@ -22,8 +22,17 @@ logger = logging.getLogger(__name__)
 STANDALONE_LOCATIONS = frozenset({"", "none"})
 
 
+# A CPU id above this is not a CPU set, it is a value built to make the parser allocate.
+_MAX_CPU_ID = 65535
+
+
 def parse_cpu_limit(value: object, default: int = 1) -> int:
-    """Cores a `limits.cpu` value pins or counts. `default` for unset or unparseable."""
+    """Cores a `limits.cpu` value pins or counts. `default` for unset or unparseable.
+
+    note: counted on merged intervals, never by materialising every id. "0-4000000000" used to
+    build a set of four billion ints, and the monitoring sweep now parses every running
+    instance's limit on each collection.
+    """
     if value is None:
         return default
     text = str(value).strip()
@@ -32,24 +41,39 @@ def parse_cpu_limit(value: object, default: int = 1) -> int:
     if text.isdigit():
         count = int(text)
         return count if count > 0 else default
-    ids: set[int] = set()
+    intervals: list[tuple[int, int]] = []
     for part in text.split(","):
         part = part.strip()
         if not part:
             continue
         if part.isdigit():
-            ids.add(int(part))
+            lo = hi = int(part)
+        else:
+            low, sep, high = part.partition("-")
+            if not sep or not low.isdigit() or not high.isdigit():
+                logger.debug("Unparseable limits.cpu %r, counting %d", value, default)
+                return default
+            lo, hi = int(low), int(high)
+            if hi < lo:
+                logger.debug("Reversed limits.cpu range %r, counting %d", value, default)
+                return default
+        if hi > _MAX_CPU_ID:
+            logger.debug("Out-of-range limits.cpu %r, counting %d", value, default)
+            return default
+        intervals.append((lo, hi))
+    if not intervals:
+        return default
+    intervals.sort()
+    count = 0
+    current_lo, current_hi = intervals[0]
+    for lo, hi in intervals[1:]:
+        if lo <= current_hi + 1:
+            current_hi = max(current_hi, hi)
             continue
-        low, sep, high = part.partition("-")
-        if not sep or not low.isdigit() or not high.isdigit():
-            logger.debug("Unparseable limits.cpu %r, counting %d", value, default)
-            return default
-        lo, hi = int(low), int(high)
-        if hi < lo:
-            logger.debug("Reversed limits.cpu range %r, counting %d", value, default)
-            return default
-        ids.update(range(lo, hi + 1))
-    return len(ids) if ids else default
+        count += current_hi - current_lo + 1
+        current_lo, current_hi = lo, hi
+    count += current_hi - current_lo + 1
+    return count
 
 
 def instance_cpu_allocation(instance: Any, default: int = 1) -> int:

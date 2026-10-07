@@ -112,3 +112,19 @@ def test_over_commit_yields_ratio_and_zero_available():
     assert allocation_ratio(0, 0) == 0.0
     assert clamp_available(80, 307) == 0
     assert clamp_available(80, 12) == 68
+
+
+def test_a_huge_range_is_refused_without_building_it():
+    """parse_cpu_limit used to materialise every id; four billion would exhaust a worker."""
+    import time
+
+    started = time.monotonic()
+    assert parse_cpu_limit("0-4000000000") == 1
+    assert parse_cpu_limit("0-65535") == 65536
+    assert time.monotonic() - started < 0.5
+
+
+def test_adjacent_and_overlapping_ranges_merge():
+    assert parse_cpu_limit("0-3,4-7") == 8
+    assert parse_cpu_limit("4-7,0-5") == 8
+    assert parse_cpu_limit("0-3,2,3,10") == 5

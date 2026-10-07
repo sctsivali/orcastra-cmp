@@ -183,3 +183,43 @@ def test_a_dialog_poll_moments_ago_is_reused_not_overwritten():
     stored_after = STATE_SAMPLER._local.get_many([STATE_SAMPLER.key("c1:default:a:uuid-a")])[0]
     assert stored_after.taken_at == stored_before.taken_at == 1010.0
     assert monitoring_usage.FLEET_MIN_WINDOW_SECONDS == 10.0
+
+
+def test_a_malformed_row_marks_only_itself_unavailable():
+    """A real LXD never sends this; an endpoint that does must not take the dashboard down."""
+    bad = row("bad", cpu_ns=0, read_at=1000.0)
+    bad.live_state["memory"] = [1]
+    bad.live_state["network"] = {"eth0": "junk", "eth1": {"counters": [1, 2]}}
+    good = row("good", cpu_ns=0, read_at=1000.0)
+
+    usages = _usage([bad, good])
+
+    assert [u.vm.name for u in usages] == ["bad", "good"]
+    assert usages[0].memory_bytes == 0
+    assert usages[1].cpu_status == "calculating"
+
+
+def test_long_names_and_many_interfaces_stay_bounded():
+    from app.services.lxd.instance_metrics import build_state_sample
+
+    identity, sample, _agent = build_state_sample(
+        cluster="c",
+        project="p" * 5000,
+        name="n",
+        instance_type="container",
+        config={"volatile.uuid": "u"},
+        expanded_config={},
+        last_used_at="x" * 10_000,
+        state={
+            "cpu": {"usage": 1},
+            "pid": 7,
+            "network": {
+                f"if{n}": {"counters": {"bytes_received": n, "bytes_sent": n}} for n in range(500)
+            },
+        },
+        taken_at=1.0,
+    )
+
+    assert len(identity) < 400
+    assert len(sample.epoch) < 100
+    assert len(sample.counters) <= 1 + 2 * 64
