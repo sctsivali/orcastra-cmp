@@ -495,7 +495,7 @@ EOF`}
                   <p className="text-sm text-destructive">{errors.region_id.message}</p>
                 )}
                 <p id="region_id-hint" className="text-xs text-muted-foreground">
-                  Any kabupaten or kota in Indonesia, or a country elsewhere. This places the node on the regions map.
+                  Any regency or city in Indonesia, or a country elsewhere. This places the node on the regions map.
                 </p>
               </div>
 
