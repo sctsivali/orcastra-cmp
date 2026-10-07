@@ -10,7 +10,6 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 // important: after Leaflet's own stylesheets, so these overrides win on document order.
 import "./map-theme.css";
 import { RegionSummary } from "@/types/api";
-import { INDONESIA_BOUNDS } from "@/lib/regions-data";
 import { useTheme } from "@/components/theme-provider";
 import { BasemapConfig, OFFLINE_BASEMAP, OFFLINE_MAX_ZOOM } from "@/lib/map-basemap";
 import { OfflineBasemap } from "./offline-basemap";
@@ -18,6 +17,40 @@ import { createClusterIcon, createPopupContent, getRegionIcon } from "./map-icon
 
 /** Repeated failures mean the endpoint is wrong or gone; one is a hiccup on a single tile. */
 const TILE_ERROR_LIMIT = 4;
+
+const WORLD_CENTER: L.LatLngTuple = [15, 20];
+const WORLD_ZOOM = 2;
+// note: one copy of the world, a little past the antimeridian. The bundled outline is drawn
+// once, so panning further sideways only showed empty sea.
+const WORLD_BOUNDS = L.latLngBounds([-85, -200], [85, 200]);
+// Fitting never zooms in further than this, so one cluster still shows its surroundings.
+const FIT_MAX_ZOOM = 6;
+
+/**
+ * Frames every plotted region when the set of regions changes or the operator asks for it.
+ * Keyed on ids and coordinates rather than the array, which the overview poll replaces every
+ * cycle: re-fitting on each poll would yank the map away from wherever the operator panned.
+ */
+function FitToRegions({ regions, fitSignal, maxZoom }: { regions: RegionSummary[]; fitSignal: number; maxZoom: number }) {
+  const map = useMap();
+  const latest = React.useRef({ regions, maxZoom });
+  latest.current = { regions, maxZoom };
+  const signature = regions
+    .map((r) => `${r.region_id}@${r.latitude},${r.longitude}`)
+    .sort()
+    .join("|");
+
+  React.useEffect(() => {
+    if (!map) return;
+    const points = latest.current.regions.map((r) => [r.latitude, r.longitude] as L.LatLngTuple);
+    const ceiling = Math.min(FIT_MAX_ZOOM, latest.current.maxZoom);
+    if (points.length === 0) map.setView(WORLD_CENTER, WORLD_ZOOM);
+    else if (points.length === 1) map.setView(points[0], ceiling);
+    else map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: ceiling });
+  }, [map, signature, fitSignal]);
+
+  return null;
+}
 
 interface MarkerClusterLayerProps {
   regions: RegionSummary[];
@@ -165,6 +198,8 @@ function BasemapLayer({ basemap, onFallback }: BasemapLayerProps) {
 
 export interface RegionsMapProps {
   regions: RegionSummary[];
+  // bumped by the card's "Fit to clusters" button
+  fitSignal?: number;
   selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
   basemap: BasemapConfig;
@@ -173,6 +208,7 @@ export interface RegionsMapProps {
 
 export default function RegionsMap({
   regions,
+  fitSignal = 0,
   selectedRegion,
   onSelectRegion,
   basemap,
@@ -197,22 +233,13 @@ export default function RegionsMap({
     effectiveBasemap.mode === "offline" ? OFFLINE_MAX_ZOOM : effectiveBasemap.maxZoom;
   const focusZoom = Math.min(10, maxZoom);
 
-  const maxBounds = React.useMemo(
-    () =>
-      L.latLngBounds(
-        [INDONESIA_BOUNDS.maxBounds.south, INDONESIA_BOUNDS.maxBounds.west],
-        [INDONESIA_BOUNDS.maxBounds.north, INDONESIA_BOUNDS.maxBounds.east]
-      ),
-    []
-  );
-
   return (
     <MapContainer
-      center={[INDONESIA_BOUNDS.center.lat, INDONESIA_BOUNDS.center.lng]}
-      zoom={INDONESIA_BOUNDS.zoom}
-      minZoom={INDONESIA_BOUNDS.minZoom}
+      center={WORLD_CENTER}
+      zoom={WORLD_ZOOM}
+      minZoom={1}
       maxZoom={maxZoom}
-      maxBounds={maxBounds}
+      maxBounds={WORLD_BOUNDS}
       maxBoundsViscosity={1.0}
       className="h-[400px] w-full rounded-lg z-0"
       attributionControl={false}
@@ -231,6 +258,8 @@ export default function RegionsMap({
       <BasemapLayer basemap={effectiveBasemap} onFallback={handleFallback} />
 
       <ZoomControl position="topright" />
+
+      <FitToRegions regions={regions} fitSignal={fitSignal} maxZoom={maxZoom} />
 
       <MarkerClusterLayer
         regions={regions}

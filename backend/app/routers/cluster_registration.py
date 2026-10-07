@@ -22,6 +22,7 @@ from app.models.schemas import (
     derive_status,
     ClusterLocationUpdateRequest,
     ClusterLocationUpdateResponse,
+    GeoLocation,
 )
 from app.core.config import get_settings
 from app.core.vault_client import get_vault_client
@@ -37,6 +38,7 @@ from app.core.cache import (
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
 from app.services.activity_logger import get_activity_logger
+from app.services.region_catalog import get_region_catalog
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,7 +142,7 @@ async def register_cluster(
         # Prepare location data for storage
         location_data = None
         if request.location:
-            location_data = request.location.model_dump()
+            location_data = get_region_catalog().canonical_location(request.location.model_dump(exclude_none=True))
         
         # Step 2: Save metadata with auto-detected type and location
         logger.info(f"Saving metadata for cluster {cluster_id}")
@@ -1162,13 +1164,14 @@ async def update_cluster_location(
             logger.warning(f"No existing metadata for cluster {cluster_id}, creating fresh")
             existing_metadata = {"endpoint": "", "display_name": cluster_id, "type": "LXD"}
         
-        # Update location in metadata
-        location_data = request.location.model_dump()
+        # Update location in metadata. A catalogue region is stored as the catalogue has it,
+        # whatever name or coordinates the request carried.
+        location_data = get_region_catalog().canonical_location(request.location.model_dump(exclude_none=True))
         existing_metadata["location"] = location_data
         
         # IMPORTANT: Sync zone with location.city for backwards compatibility
         # The zone field is displayed in the clusters table
-        new_zone = request.location.city
+        new_zone = location_data["city"]
         
         # Save updated metadata with synced zone
         cert_manager.save_cluster_metadata(
@@ -1200,19 +1203,19 @@ async def update_cluster_location(
             target_id=cluster_id,
             details={
                 "location": location_data,
-                "region_name": request.location.region_name,
-                "city": request.location.city,
+                "region_name": location_data["region_name"],
+                "city": location_data["city"],
                 "zone_updated_to": new_zone,
             }
         )
         
-        logger.info(f"Updated location for cluster {cluster_id}: {request.location.region_name}, {request.location.city} (zone set to: {new_zone})")
+        logger.info(f"Updated location for cluster {cluster_id}: {location_data['region_name']}, {location_data['city']} (zone set to: {new_zone})")
         
         return ClusterLocationUpdateResponse(
             success=True,
             message=f"Location updated successfully for cluster '{cluster_id}'",
             cluster_id=cluster_id,
-            location=request.location
+            location=GeoLocation(**location_data)
         )
         
     except HTTPException:

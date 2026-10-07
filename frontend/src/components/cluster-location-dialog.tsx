@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Search, Check, Loader2, Globe } from "lucide-react";
+import { Loader2, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,14 +12,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { useUpdateClusterLocation } from "@/hooks/use-lxd";
-import { REGIONS_DATA, type Region } from "@/lib/regions-data";
-import { cn } from "@/lib/utils";
-
-// Filter Indonesia regions only
-const INDONESIA_REGIONS = REGIONS_DATA.filter(r => r.country_code === "ID");
+import { RegionPicker, useRegionCatalog } from "@/components/regions/region-picker";
+import { regionContext, resolveRegion, toGeoLocation, type Region } from "@/lib/regions/catalog";
+import type { GeoLocation } from "@/types/api";
 
 interface ClusterLocationDialogProps {
   open: boolean;
@@ -27,11 +25,7 @@ interface ClusterLocationDialogProps {
   cluster: {
     cluster_id: string;
     display_name: string;
-    location?: {
-      region_id: string;
-      region_name: string;
-      city: string;
-    };
+    location?: GeoLocation | null;
   } | null;
   onSuccess?: () => void;
 }
@@ -42,74 +36,47 @@ export function ClusterLocationDialog({
   cluster,
   onSuccess,
 }: ClusterLocationDialogProps) {
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [selectedRegion, setSelectedRegion] = React.useState<Region | null>(null);
+  const [selected, setSelected] = React.useState<Region | null>(null);
+  const { data: catalog } = useRegionCatalog();
   const updateLocation = useUpdateClusterLocation();
+  const current = cluster?.location ?? null;
 
-  // Filter regions based on search query
-  const filteredRegions = React.useMemo(() => {
-    if (!searchQuery.trim()) return INDONESIA_REGIONS;
-    const query = searchQuery.toLowerCase();
-    return INDONESIA_REGIONS.filter(
-      (region: Region) =>
-        region.name.toLowerCase().includes(query) ||
-        region.city.toLowerCase().includes(query) ||
-        region.country_name.toLowerCase().includes(query)
-    );
-  }, [searchQuery]);
-
-  // Reset state when dialog opens/closes
+  // Pre-select the stored location; a retired id resolves to the entry that replaced it, so
+  // saving without touching the picker also migrates the cluster to the current catalogue.
   React.useEffect(() => {
-    if (open) {
-      setSearchQuery("");
-      // Pre-select current location if exists
-      if (cluster?.location?.region_id) {
-        const currentRegion = INDONESIA_REGIONS.find(
-          (r: Region) => r.id === cluster.location?.region_id
-        );
-        setSelectedRegion(currentRegion || null);
-      } else {
-        setSelectedRegion(null);
-      }
-    }
-  }, [open, cluster]);
+    if (!open) return;
+    setSelected(catalog ? resolveRegion(catalog, current?.region_id) ?? null : null);
+  }, [open, catalog, current?.region_id]);
 
   // important: isPending is React state, so the disabled prop only updates on the next render.
   // Two clicks inside one tick both fire the mutation. Claimed synchronously, before any await.
   const submitInFlightRef = React.useRef(false);
 
   const handleSave = async () => {
-    if (!cluster || !selectedRegion) return;
+    if (!cluster || !selected) return;
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
 
     try {
+      // note: the PATCH replaces the whole location, so the facility recorded at registration
+      // travels with it. Leaving it out used to erase it on every location edit.
       await updateLocation.mutateAsync({
         clusterId: cluster.cluster_id,
-        location: {
-          region_id: selectedRegion.id,
-          region_name: selectedRegion.name,
-          country_code: selectedRegion.country_code,
-          country_name: selectedRegion.country_name,
-          city: selectedRegion.city,
-          latitude: selectedRegion.latitude,
-          longitude: selectedRegion.longitude,
-          timezone: selectedRegion.timezone,
-          continent: selectedRegion.continent,
-        },
+        location: toGeoLocation(selected, {
+          facility_name: current?.facility_name,
+          facility_provider: current?.facility_provider,
+        }),
       });
-
       toast({
         title: "Location Updated",
-        description: `${cluster.display_name} is now located in ${selectedRegion.city}, ${selectedRegion.name}`,
+        description: `${cluster.display_name} is now placed in ${selected.name}, ${regionContext(selected)}.`,
       });
-
       onOpenChange(false);
       onSuccess?.();
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast({
         title: "Failed to Update Location",
-        description: error.message || "An error occurred",
+        description: error instanceof Error ? error.message : "An error occurred",
         variant: "destructive",
       });
     } finally {
@@ -121,78 +88,40 @@ export function ClusterLocationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0 pb-4">
-          <DialogTitle>
-            Set Cluster Location
-          </DialogTitle>
+          <DialogTitle>Set Cluster Location</DialogTitle>
           <DialogDescription>
             {cluster && (
               <>
-                Select the geographic location for{" "}
-                <span className="font-semibold">{cluster.display_name}</span>
+                Where <span className="font-semibold">{cluster.display_name}</span> runs. It is
+                placed on the regions map at this point.
               </>
             )}
           </DialogDescription>
         </DialogHeader>
 
         <DialogBody className="space-y-4 pr-2">
-          {/* Search Input */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search region, city, or province..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-
-          {/* Current Location */}
-          {cluster?.location && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 p-2 rounded-md">
-              <Globe className="h-4 w-4" />
+          {current && (
+            <div className="flex items-center gap-2 rounded-md bg-muted/50 p-2 text-sm text-muted-foreground">
+              <Globe className="h-4 w-4 shrink-0" aria-hidden />
               <span>
-                Current: {cluster.location.city}, {cluster.location.region_name}
+                Current: {current.region_name}, {current.province ?? current.country_name}
               </span>
             </div>
           )}
 
-          {/* Region List */}
-          <div className="min-h-[180px] max-h-[300px] overflow-y-auto border rounded-md [scrollbar-gutter:stable]">
-            <div className="p-2 space-y-1">
-              {filteredRegions.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  No regions found matching "{searchQuery}"
-                </div>
-              ) : (
-                filteredRegions.map((region: Region) => (
-                  <button
-                    key={region.id}
-                    onClick={() => setSelectedRegion(region)}
-                    className={cn(
-                      "w-full flex items-center justify-between p-3 rounded-md text-left transition-colors",
-                      selectedRegion?.id === region.id
-                        ? "bg-primary text-primary-foreground"
-                        : "hover:bg-muted"
-                    )}
-                  >
-                    <div>
-                      <div className="font-medium">{region.city}</div>
-                      <div className={cn(
-                        "text-xs",
-                        selectedRegion?.id === region.id
-                          ? "text-primary-foreground/80"
-                          : "text-muted-foreground"
-                      )}>
-                        {region.name} • {region.country_name}
-                      </div>
-                    </div>
-                    {selectedRegion?.id === region.id && (
-                      <Check className="h-4 w-4" />
-                    )}
-                  </button>
-                ))
-              )}
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="cluster-location-region">Region</Label>
+            <RegionPicker
+              id="cluster-location-region"
+              value={selected?.id ?? ""}
+              onValueChange={setSelected}
+              disabled={updateLocation.isPending}
+            />
+            {selected && (
+              <p className="text-xs text-muted-foreground">
+                {selected.city}, {regionContext(selected)} ({selected.latitude}, {selected.longitude})
+              </p>
+            )}
           </div>
         </DialogBody>
 
@@ -200,17 +129,14 @@ export function ClusterLocationDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={handleSave}
-            disabled={!selectedRegion || updateLocation.isPending}
-          >
+          <Button onClick={handleSave} disabled={!selected || updateLocation.isPending}>
             {updateLocation.isPending ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Saving...
               </>
             ) : (
-              "Set Location"
+              "Set location"
             )}
           </Button>
         </DialogFooter>

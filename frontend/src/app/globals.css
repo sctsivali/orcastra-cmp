@@ -442,8 +442,11 @@ tbody tr {
 /* ===== MODAL/DIALOG MOBILE FIX ===== */
 /* Ensure dialogs are always visible in viewport on mobile */
 @media (max-width: 768px) {
-  /* Dialog content - ensure it's within viewport */
-  [role="dialog"][data-state="open"] {
+  /* Dialog content - ensure it's within viewport.
+   * important: popovers carry role="dialog" too. Without the marker exclusion this centred
+   * every combobox list on a phone relative to its 0-wide popper wrapper, so a list opened
+   * under a field sat half off the left edge (measured: content at x=-106 on a 390px screen). */
+  [role="dialog"][data-state="open"]:not(.orcastra-popover-content) {
     position: fixed !important;
     top: 50% !important;
     left: 50% !important;

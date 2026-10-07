@@ -2040,6 +2040,10 @@ export interface GeoLocation {
   continent: string;
   facility_name?: string;
   facility_provider?: string;
+  // set for an Indonesian kabupaten or kota; region_name is the short form ("Bogor (Regency)")
+  province?: string;
+  admin_code?: string;
+  official_name?: string;
 }
 
 export interface ClusterGeoInfo extends ClusterInfo {
@@ -2087,6 +2091,7 @@ export interface RegionSummary {
   latitude: number;
   longitude: number;
   continent: string;
+  province?: string;
   facility_name?: string;
   facility_provider?: string;
   

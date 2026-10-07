@@ -8,7 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { 
   ArrowLeft, Info, CheckCircle, 
-  Copy, Terminal, RefreshCw, Loader2, MapPin, Building2, ChevronsUpDown, Check 
+  Copy, Terminal, RefreshCw, Loader2, MapPin, Building2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,26 +16,14 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
 
 import { toast } from "@/hooks/use-toast";
 import { formatHypervisorType } from "@/lib/utils";
 import { ClusterStatus, APIError } from "@/types/api";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
-import { getRegionById, REGIONS_DATA, type Region } from "@/lib/regions-data";
 import { copyText } from "@/lib/clipboard";
+import { loadRegionCatalog, resolveRegion, toGeoLocation } from "@/lib/regions/catalog";
+import { RegionPicker } from "@/components/regions/region-picker";
 
 const nodeRegisterSchema = z.object({
   cluster_id: z
@@ -104,7 +92,6 @@ export function NodeRegisterForm() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = React.useState(false);
   const [identityName, setIdentityName] = React.useState<string>("");
-  const [regionOpen, setRegionOpen] = React.useState(false);
   
   const registerCluster = useRegisterCluster();
   const checkClusterAuth = useCheckClusterAuth();
@@ -118,12 +105,6 @@ export function NodeRegisterForm() {
     cluster_id?: string;
     cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
   } | null>(null);
-
-  // Get Indonesia regions only
-  const indonesiaRegions = React.useMemo(
-    () => REGIONS_DATA.filter((r) => r.country_code === "ID"),
-    []
-  );
 
   // Generate unique identity name: orca-{clustername}-{datetime}
   const generateIdentityName = (clusterId: string): string => {
@@ -237,20 +218,10 @@ export function NodeRegisterForm() {
     setIdentityName(uniqueIdentityName);
 
     // Get region info for location data
-    const regionInfo = getRegionById(data.region_id);
-    const locationData = regionInfo ? {
-      region_id: regionInfo.id,
-      country_code: regionInfo.country_code,
-      country_name: regionInfo.country_name,
-      region_name: regionInfo.name,
-      city: regionInfo.city,
-      latitude: regionInfo.latitude,
-      longitude: regionInfo.longitude,
-      timezone: regionInfo.timezone,
-      continent: regionInfo.continent,
-      ...(data.facility_name?.trim() && { facility_name: data.facility_name.trim() }),
-      ...(data.facility_provider?.trim() && { facility_provider: data.facility_provider.trim() }),
-    } : undefined;
+    const regionInfo = resolveRegion(await loadRegionCatalog(), data.region_id);
+    const locationData = regionInfo
+      ? toGeoLocation(regionInfo, { facility_name: data.facility_name, facility_provider: data.facility_provider })
+      : undefined;
 
     try {
       const response = await registerCluster.mutateAsync({
@@ -505,70 +476,26 @@ EOF`}
 
               {/* Region / City Selector */}
               <div className="space-y-2">
-                <Label htmlFor="region_id">Region / City</Label>
+                <Label htmlFor="region_id">Region</Label>
                 <Controller
                   name="region_id"
                   control={control}
-                  render={({ field }) => {
-                    const selectedRegion = indonesiaRegions.find((r) => r.id === field.value);
-                    return (
-                      <Popover open={regionOpen} onOpenChange={setRegionOpen}>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            role="combobox"
-                            aria-expanded={regionOpen}
-                            disabled={isSubmitting}
-                            className="w-full justify-between font-normal"
-                          >
-                            {selectedRegion ? (
-                              <span className="flex items-center gap-2 truncate">
-                                <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                {selectedRegion.city} ({selectedRegion.name})
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">Search or select a region...</span>
-                            )}
-                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-                          <Command>
-                            <CommandInput placeholder="Type to search city or region..." />
-                            <CommandList>
-                              <CommandEmpty>No region found.</CommandEmpty>
-                              <CommandGroup>
-                                {indonesiaRegions.map((region) => (
-                                  <CommandItem
-                                    key={region.id}
-                                    value={`${region.city} ${region.name}`}
-                                    onSelect={() => {
-                                      field.onChange(region.id);
-                                      setRegionOpen(false);
-                                    }}
-                                  >
-                                    <Check
-                                      className={`mr-2 h-4 w-4 ${
-                                        field.value === region.id ? "opacity-100" : "opacity-0"
-                                      }`}
-                                    />
-                                    <MapPin className="mr-2 h-3 w-3 text-muted-foreground" />
-                                    {region.city} ({region.name})
-                                  </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-                    );
-                  }}
+                  render={({ field }) => (
+                    <RegionPicker
+                      id="region_id"
+                      value={field.value}
+                      onValueChange={(region) => field.onChange(region.id)}
+                      disabled={isSubmitting}
+                      ariaInvalid={!!errors.region_id}
+                      ariaDescribedBy="region_id-hint"
+                    />
+                  )}
                 />
                 {errors.region_id && (
                   <p className="text-sm text-destructive">{errors.region_id.message}</p>
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Select the geographical location of this node for the regions map
+                <p id="region_id-hint" className="text-xs text-muted-foreground">
+                  Any kabupaten or kota in Indonesia, or a country elsewhere. This places the node on the regions map.
                 </p>
               </div>
 

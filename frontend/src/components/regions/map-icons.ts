@@ -149,7 +149,7 @@ export function createPopupContent(region: RegionSummary): string {
         ${escapeHtml(region.region_name)}
       </h3>
       <p style="font-size: 12px; color: hsl(var(--muted-foreground)); margin-bottom: 4px;">
-        ${escapeHtml(region.city)}, ${escapeHtml(region.country_name)}
+        ${escapeHtml(region.city)}, ${escapeHtml(region.province ?? region.country_name)}
       </p>
       ${facilitySection}
 

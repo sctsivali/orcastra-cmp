@@ -947,8 +947,12 @@ class ProjectUpdateResponse(BaseModel):
 # ========== Geo Location Models ==========
 
 class GeoLocation(BaseModel):
-    """Geographic location information for a node/cluster."""
-    region_id: str = Field(..., description="Region identifier (ex;, 'id-jkt', 'us-iad')")
+    """Geographic location information for a registered Cluster.
+
+    Also the shape stored locations are read back into, so it carries no constraint a location
+    saved before the constraint existed could fail. Input is checked by GeoLocationInput.
+    """
+    region_id: str = Field(..., description="Region identifier (for example, 'id-3174' for Kota Administrasi Jakarta Selatan or 'c-sg' for Singapore)")
     region_name: str = Field(..., description="Region display name (ex;, 'Jakarta')")
     country_code: str = Field(..., min_length=2, max_length=2, description="ISO 3166-1 alpha-2 country code")
     country_name: str = Field(..., description="Country name")
@@ -959,6 +963,30 @@ class GeoLocation(BaseModel):
     continent: str = Field(..., description="Continent code (ex;, 'AS', 'EU', 'NA')")
     facility_name: Optional[str] = Field(None, description="Data center or facility name (ex;, 'Main Data Center')")
     facility_provider: Optional[str] = Field(None, description="Facility provider/operator (ex;, 'Acme Corporation')")
+    province: Optional[str] = Field(None, description="Indonesian province, for a kabupaten or kota region")
+    admin_code: Optional[str] = Field(None, description="Kepmendagri administrative code (for example, '31.74')")
+    official_name: Optional[str] = Field(None, description="Full Kepmendagri name (for example, 'Kota Administrasi Jakarta Selatan'); region_name is the short form")
+
+
+class GeoLocationInput(GeoLocation):
+    """A location as a client submits it.
+
+    A region id from the bundled catalogue is resolved server-side, so its stored name and
+    coordinates always come from the verified catalogue, never from the request.
+    """
+    region_id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                           description="Region identifier from the region catalogue, or a client-defined one")
+    region_name: str = Field(..., min_length=1, max_length=200, description="Region display name")
+    country_code: str = Field(..., pattern=r"^[A-Z]{2}$", description="ISO 3166-1 alpha-2 country code")
+    country_name: str = Field(..., min_length=1, max_length=100, description="Country name")
+    city: str = Field(..., min_length=1, max_length=200, description="City name")
+    timezone: str = Field(..., min_length=1, max_length=64, description="IANA time zone (for example, 'Asia/Jakarta')")
+    continent: str = Field(..., pattern=r"^[A-Z]{2}$", description="Continent code (for example, 'AS', 'EU', or 'NA')")
+    facility_name: Optional[str] = Field(None, max_length=200, description="Data center or facility name")
+    facility_provider: Optional[str] = Field(None, max_length=200, description="Facility provider/operator")
+    province: Optional[str] = Field(None, max_length=100, description="Indonesian province, for a kabupaten or kota region")
+    admin_code: Optional[str] = Field(None, pattern=r"^\d{2}(\.\d{2})?$", description="Kepmendagri administrative code")
+    official_name: Optional[str] = Field(None, max_length=200, description="Full Kepmendagri name")
 
 
 class ClusterRegisterRequest(BaseModel):
@@ -972,7 +1000,7 @@ class ClusterRegisterRequest(BaseModel):
     zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
     merchant_id: Optional[str] = Field(None, description="Merchant/organization identifier")
     # New geo location fields
-    location: Optional[GeoLocation] = Field(None, description="Geographic location information")
+    location: Optional[GeoLocationInput] = Field(None, description="Geographic location information")
 
     @field_validator("endpoint")
     @classmethod
@@ -1045,7 +1073,7 @@ class ClusterInfo(BaseModel):
 
 class ClusterLocationUpdateRequest(BaseModel):
     """Request to update cluster location."""
-    location: GeoLocation = Field(..., description="New geographic location information")
+    location: GeoLocationInput = Field(..., description="New geographic location information")
 
 
 class ClusterLocationUpdateResponse(BaseModel):
@@ -1601,6 +1629,7 @@ class RegionSummary(BaseModel):
     latitude: float = Field(..., description="Latitude coordinate")
     longitude: float = Field(..., description="Longitude coordinate")
     continent: str = Field(..., description="Continent code")
+    province: Optional[str] = Field(None, description="Indonesian province, for a kabupaten or kota region")
     facility_name: Optional[str] = Field(None, description="Data center or facility name")
     facility_provider: Optional[str] = Field(None, description="Facility provider/operator")
     

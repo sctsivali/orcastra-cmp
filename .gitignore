@@ -79,6 +79,8 @@ scripts/*
 # it is on a production VM with no access to this working tree.
 !scripts/upgrade_preflight.sh
 !scripts/rollback_release.sh
+# The region catalogue generator: rebuilding and verifying the catalogue needs it in the repo.
+!scripts/regions/
 !scripts/setup_opensearch_dashboards.sh
 config/
 backup/
