@@ -30,25 +30,36 @@ class _Cache:
         self.ttls[(namespace, key)] = ttl
 
 
+class _Raw:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def read1(self, amt=-1):
+        owner = self._owner
+        if owner.offset >= len(owner.body):
+            return b""
+        if owner.chunk_delay:
+            time.sleep(owner.chunk_delay)
+        size = owner.chunk_size or amt
+        chunk = owner.body[owner.offset : owner.offset + size]
+        owner.offset += len(chunk)
+        owner.read += 1
+        return chunk
+
+
 class _Response:
     """What pylxd hands back for a raw, streamed GET."""
 
     def __init__(self, body: str, headers=None, chunk_delay=0.0, chunk_size=None):
-        self._body = body.encode()
-        self.headers = headers if headers is not None else {"Content-Length": str(len(self._body))}
+        self.body = body.encode()
+        self.headers = headers if headers is not None else {"Content-Length": str(len(self.body))}
         self.encoding = "utf-8"
         self.closed = False
-        self._chunk_delay = chunk_delay
-        self._chunk_size = chunk_size
+        self.chunk_delay = chunk_delay
+        self.chunk_size = chunk_size
+        self.offset = 0
         self.read = 0
-
-    def iter_content(self, chunk_size=1):
-        size = self._chunk_size or chunk_size
-        for start in range(0, len(self._body), size):
-            if self._chunk_delay:
-                time.sleep(self._chunk_delay)
-            self.read += 1
-            yield self._body[start : start + size]
+        self.raw = _Raw(self)
 
     def close(self):
         self.closed = True
@@ -65,9 +76,15 @@ class _Metrics:
         self.chunk_size = chunk_size
         self.responses = []
 
-    def get(self, params=None, is_api=True, timeout=None, stream=False):
+    def get(self, params=None, is_api=True, timeout=None, stream=False, headers=None):
         self.calls.append(
-            {"params": dict(params or {}), "is_api": is_api, "timeout": timeout, "stream": stream}
+            {
+                "params": dict(params or {}),
+                "is_api": is_api,
+                "timeout": timeout,
+                "stream": stream,
+                "headers": dict(headers or {}),
+            }
         )
         if self.delay:
             time.sleep(self.delay)
@@ -105,6 +122,7 @@ def test_a_standalone_host_takes_no_target_and_reads_raw_text(cache):
     assert metrics.calls[0]["params"] == {"project": "p"}
     assert metrics.calls[0]["is_api"] is False
     assert metrics.calls[0]["stream"] is True
+    assert metrics.calls[0]["headers"] == {"Accept-Encoding": "identity"}
     assert metrics.responses[0].closed
 
 
@@ -220,3 +238,46 @@ def test_too_little_budget_skips_the_scrape(cache):
 
     assert project_metrics(_client(metrics), "c", "none", "p", deadline=time.monotonic() + 1) is None
     assert metrics.calls == []
+
+
+def test_an_error_body_is_never_read(cache):
+    """pylxd's LXDAPIException.__str__ reads the whole body; the scrape must not call it."""
+
+    class _ErrorResponse:
+        status_code = 500
+        closed = False
+
+        def json(self):
+            raise AssertionError("the error body was read")
+
+        @property
+        def content(self):
+            raise AssertionError("the error body was read")
+
+        def close(self):
+            self.closed = True
+
+    response = _ErrorResponse()
+    metrics = _Metrics(error=LXDAPIException(response))
+
+    assert project_metrics(_client(metrics), "c", "none", "p", deadline=_deadline()) is None
+    assert response.closed
+    assert cache.entries[(metrics_scrape.CACHE_NAMESPACE, "c:none:p")] == {"failed": "refused"}
+
+
+def test_a_declared_charset_never_picks_the_decoder(cache):
+    metrics = _Metrics(headers={"Content-Type": "text/plain; charset=punycode"})
+    for response_body in (BODY,):
+        metrics.body = response_body
+
+    scrape = project_metrics(_client(metrics), "c", "none", "p", deadline=_deadline())
+
+    assert scrape is not None and scrape.series["web"].mem_total == 100
+
+
+def test_a_compressed_body_is_refused(cache):
+    metrics = _Metrics(headers={"Content-Encoding": "gzip"})
+
+    assert project_metrics(_client(metrics), "c", "none", "p", deadline=_deadline()) is None
+    assert cache.entries[(metrics_scrape.CACHE_NAMESPACE, "c:none:p")] == {"failed": "unparseable"}
+    assert metrics.responses[0].closed

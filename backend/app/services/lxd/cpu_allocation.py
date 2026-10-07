@@ -38,9 +38,13 @@ def parse_cpu_limit(value: object, default: int = 1) -> int:
     text = str(value).strip()
     if not text:
         return default
+    # note: isdigit() accepts "²" and other non-ASCII digits that int() refuses, and int()
+    # refuses more than 4300 digits; neither is a CPU set LXD would store.
+    if not text.isascii() or len(text) > 4096:
+        return default
     if text.isdigit():
         count = int(text)
-        return count if count > 0 else default
+        return count if 0 < count <= _MAX_CPU_ID + 1 else default
     intervals: list[tuple[int, int]] = []
     for part in text.split(","):
         part = part.strip()

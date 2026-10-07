@@ -128,3 +128,9 @@ def test_adjacent_and_overlapping_ranges_merge():
     assert parse_cpu_limit("0-3,4-7") == 8
     assert parse_cpu_limit("4-7,0-5") == 8
     assert parse_cpu_limit("0-3,2,3,10") == 5
+
+
+def test_non_ascii_digits_and_absurd_lengths_fall_back():
+    assert parse_cpu_limit("²") == 1
+    assert parse_cpu_limit("9" * 5000) == 1
+    assert parse_cpu_limit("100000") == 1

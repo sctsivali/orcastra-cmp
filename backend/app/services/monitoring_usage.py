@@ -172,7 +172,7 @@ async def read_instance_usage(
                 taken_at=read_at,
             )
         except Exception as exc:  # noqa: BLE001 - one malformed row must not fail the dashboard
-            logger.warning("Skipping usage for %s/%s: %s", vm.host, vm.name, str(exc)[:200])
+            logger.warning("Skipping usage for %s/%s: %s", vm.host, str(vm.name)[:80], str(exc)[:200])
             prepared.append((vm, None, None, None))
             continue
         samples[identity] = sample
@@ -200,7 +200,7 @@ async def read_instance_usage(
                 _usage(vm, state, sample, readings.get(identity) if identity else None, host_threads)
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Skipping usage for %s/%s: %s", vm.host, vm.name, str(exc)[:200])
+            logger.warning("Skipping usage for %s/%s: %s", vm.host, str(vm.name)[:80], str(exc)[:200])
             usages.append(_usage(vm, None, None, None, host_threads))
     return usages
 

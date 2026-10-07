@@ -153,3 +153,19 @@ def test_the_start_time_matches_whether_it_arrives_as_text_or_a_datetime():
     )
 
     assert as_text[1].epoch == as_datetime[1].epoch
+
+
+def test_an_infinite_cpu_counter_is_not_a_reading():
+    _, sample, _ = build_state_sample(
+        cluster="c",
+        project="p",
+        name="n",
+        instance_type="container",
+        config={},
+        expanded_config={},
+        last_used_at=None,
+        state={"cpu": {"usage": float("inf")}, "processes": 3},
+        taken_at=1.0,
+    )
+
+    assert "cpu_ns" not in sample.counters
