@@ -5,6 +5,7 @@ Provides unified interface for all LXD operations.
 
 import asyncio
 import logging
+import time
 from typing import Callable, List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
@@ -696,7 +697,10 @@ class LXDService:
         # deleted when the cluster is merely offline.
         if client is None:
             raise LXDConnectionError(f"Could not connect to {host}")
-        return read_instance_metrics(client, host, instance_name, project)
+        # note: two seconds under the wall budget, so a slow /1.0/metrics read is dropped
+        # before run_blocking gives up on the whole sample.
+        deadline = time.monotonic() + _INSTANCE_METRICS_TIMEOUT_SECONDS - 2.0
+        return read_instance_metrics(client, host, instance_name, project, deadline=deadline)
 
     async def get_instance_metrics(
         self,
