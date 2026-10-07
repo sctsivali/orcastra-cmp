@@ -131,7 +131,8 @@ function MemoryDetail({ node }: { node: NodeStatus }) {
   return (
     <DetailGrid cols={4}>
       <DetailField label="Total" value={formatMemory(resources.memory_total)} />
-      <DetailField label="Allocated" value={formatMemory(resources.memory_used)} />
+      {/* note: host memory in use (LXD's resources API), not what instances were allocated. */}
+      <DetailField label="In Use" value={formatMemory(resources.memory_used)} />
       <DetailField label="Available" value={formatMemory(resources.memory_available)} />
       <DetailField
         label="Hugepages"

@@ -15,9 +15,10 @@ import {
   metricsRefetchInterval,
   shouldRetryMetrics,
 } from "@/lib/instance-metrics-polling";
+import { DEFAULT_HISTORY_WINDOW_SECONDS, HISTORY_WINDOWS } from "@/lib/monitoring-history";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useRef, useState } from "react";
-import { APIError } from "@/types/api";
+import { APIError, type MetricsHistoryPoint } from "@/types/api";
 import { 
   vmAPI, 
   imageAPI, 
@@ -2023,16 +2024,22 @@ export function useFacilitySuggestions() {
 
 // ========== Monitoring Hooks ==========
 
-export function useMonitoringDashboard(enabled: boolean = true, refetchInterval: number = 10000) {
+/**
+ * The monitoring dashboard. `polling` is false while the admin WebSocket pushes each collection.
+ *
+ * note: 30 s, the server's cadence. The response is cached for 35 s and rebuilt by a collector
+ * every 30 s, so a 5 s poll only fetched the same body six times.
+ */
+export function useMonitoringDashboard(enabled: boolean = true, polling: boolean = true) {
   const scopeKey = useMonitoringScopeKey();
   return useRefreshableQuery({
     queryKey: ["monitoring", "dashboard", scopeKey],
     queryFn: (read) => api.monitoring.getDashboard(read),
     enabled,
-    refetchInterval: refetchInterval > 0 ? refetchInterval : false, // 0 = disabled (WS push active)
+    refetchInterval: polling ? POLL_MS.active : false,
     staleTime: 5000, // Consider fresh for 5 seconds to avoid redundant fetches
     gcTime: 60 * 1000,
-    refetchOnWindowFocus: refetchInterval > 0, // Only refetch on focus when polling
+    refetchOnWindowFocus: polling, // Only refetch on focus when polling
     refetchIntervalInBackground: false, // Stop polling when tab is hidden
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
@@ -2051,79 +2058,47 @@ export function useMonitoringNodeMetrics(nodeName: string, enabled: boolean = tr
   });
 }
 
-export function useMonitoringHistory(points: number = 60, enabled: boolean = true) {
+/**
+ * Chart history for the last `windowSeconds`.
+ *
+ * note: no prefetch of the other ranges. Each history read parses the stored history on the
+ * server, so warming five ranges on every page load cost five parses nobody had asked for.
+ */
+export function useMonitoringHistory(
+  windowSeconds: number = DEFAULT_HISTORY_WINDOW_SECONDS,
+  enabled: boolean = true,
+) {
   const queryClient = useQueryClient();
   const scopeKey = useMonitoringScopeKey();
 
-  // Prefetch all time ranges on mount for instant switching
-  // Backend reads from the same in-memory cache, so these are very fast
-  useEffect(() => {
-    if (!enabled) return;
-    const allRanges = [60, 180, 360, 720, 4320, 8640];
-    // Sort by proximity to current range (prefetch nearest first)
-    const sortedRanges = allRanges
-      .filter(r => r !== points)
-      .sort((a, b) => Math.abs(a - points) - Math.abs(b - points));
-
-    const timers = sortedRanges.map((range, idx) => {
-      // Stagger prefetches slightly to avoid burst
-      return setTimeout(() => {
-        queryClient.prefetchQuery({
-          queryKey: ["monitoring", "history", scopeKey, range],
-          queryFn: () => api.monitoring.getHistory(range),
-          staleTime: 30000,
-        });
-      }, idx * 200);
-    });
-    // Pausing during the stagger window must cancel work that has not started yet. Without
-    // cleanup, the page could still issue history requests after the operator pressed Pause.
-    return () => timers.forEach((timer) => clearTimeout(timer));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, scopeKey]); // Only on mount/enable change - not on points change
-
   return useQuery({
-    queryKey: ["monitoring", "history", scopeKey, points],
-    queryFn: async () => {
-      try {
-        const data = await api.monitoring.getHistory(points);
-        return data;
-      } catch (error) {
-        console.error(`Failed to fetch history for ${points} points:`, error);
-        throw error;
-      }
-    },
+    queryKey: ["monitoring", "history", scopeKey, windowSeconds],
+    queryFn: () => api.monitoring.getHistory(windowSeconds),
     enabled,
-    refetchInterval: 15000, // Update history every 15 seconds
-    staleTime: 30000, // 30 seconds - prevents refetch when switching back to a recently visited range
-    gcTime: 600000, // 10 minutes - keep all time range caches alive for fast switching
+    refetchInterval: POLL_MS.active, // a new point lands about every 30 seconds
+    staleTime: 30000,
+    gcTime: 600000, // keep visited ranges for fast switching back
     refetchIntervalInBackground: false, // Stop polling when tab is hidden
     retry: 2, // Retry up to 2 times on failure
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
     placeholderData: (previousData) => {
       // Keep previous data for seamless display while fetching
       if (previousData) return previousData;
-      // Cross-range fallback: prefer closest cached range for best visual fit
-      const cachedRanges = [60, 180, 360, 720, 4320, 8640]
-        .filter(r => r !== points)
-        .sort((a, b) => Math.abs(a - points) - Math.abs(b - points));
-      for (const r of cachedRanges) {
-        const cached = queryClient.getQueryData<any[]>(["monitoring", "history", scopeKey, r]);
+      // Cross-range fallback: the closest range already cached
+      const nearest = HISTORY_WINDOWS.map((range) => range.seconds)
+        .filter((seconds) => seconds !== windowSeconds)
+        .sort((a, b) => Math.abs(a - windowSeconds) - Math.abs(b - windowSeconds));
+      for (const seconds of nearest) {
+        const cached = queryClient.getQueryData<MetricsHistoryPoint[]>([
+          "monitoring",
+          "history",
+          scopeKey,
+          seconds,
+        ]);
         if (cached && cached.length > 0) return cached;
       }
       return undefined;
     },
-  });
-}
-
-export function useMonitoringNetwork(enabled: boolean = true) {
-  const scopeKey = useMonitoringScopeKey();
-  return useQuery({
-    queryKey: ["monitoring", "network", scopeKey],
-    queryFn: () => api.monitoring.getNetworkMetrics(),
-    enabled,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: false,
-    staleTime: 5000,
   });
 }
 

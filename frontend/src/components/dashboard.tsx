@@ -97,7 +97,7 @@ export function Dashboard() {
 
       {/* Nodes Status */}
       {isPartner ? (
-        <NodeStatusCards lastUpdatedAt={dataUpdatedAt} onRefresh={handleOverviewRefresh} />
+        <NodeStatusCards onRefresh={handleOverviewRefresh} />
       ) : (
         <TenantClusterStatusCards />
       )}

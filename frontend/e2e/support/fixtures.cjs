@@ -351,7 +351,8 @@ async function installApiFixtures(page, role, options = {}) {
     } else if (path === "/monitoring/dashboard") {
       body = monitoringDashboard();
     } else if (path === "/monitoring/history") {
-      body = monitoringHistory(url.searchParams.get("points"));
+      if (url.searchParams.has("points")) state.unexpected.push(entry);
+      body = monitoringHistory(url.searchParams.get("window"));
     } else if (path === "/warnings/system/all") {
       body = {
         total: 0,
@@ -383,7 +384,7 @@ async function installApiFixtures(page, role, options = {}) {
         headers = { "Retry-After": "30" };
         body = { detail: "Request budget reached" };
       } else {
-        body = instanceMetrics(call);
+        body = instanceMetrics(call, state.instanceStatus);
       }
     } else {
       state.unexpected.push(entry);

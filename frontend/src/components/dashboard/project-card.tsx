@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { parseLimitsCpu, parseLxdSize } from "@/lib/lxd-limits";
+import { parseLxdSize } from "@/lib/lxd-limits";
 import {
   FolderKanban,
   ChevronDown,
@@ -36,7 +36,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { InstanceRow } from "./instance-row";
 import { ProjectDeleteDialog, ProjectEditDialog } from "./project-card-dialogs";
 import { NodeLink } from "@/components/ui/node-link";
-import { formatByteQuota, formatMemoryQuota } from "@/lib/utils";
+import { formatBytes, formatMemory } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
@@ -110,37 +110,10 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
     }
   };
 
-  // calculate resource usage from instances
-  const resourceUsage = React.useMemo(() => {
-    let cpuUsed = 0;
-    let ramUsedBytes = 0;
-    let storageUsedBytes = 0;
-
-    instances.forEach((vm) => {
-      // count CPU the way the backend does (a range or a set is its size, not 0). The row
-      // carries the instance-local config only, so a profile-inherited limit still counts as
-      // unset here; the per-node figures come from the API and are exact.
-      const vmCpu = vm.config?.["limits.cpu"];
-      if (vmCpu) {
-        cpuUsed += parseLimitsCpu(vmCpu, 0);
-      }
-
-      // Count memory.
-      if (vm.resources?.memory_usage) {
-        ramUsedBytes += vm.resources.memory_usage;
-      }
-
-      // count storage from disk usage
-      if (vm.resources?.disk_usage) {
-        Object.values(vm.resources.disk_usage).forEach((bytes) => {
-          storageUsedBytes += bytes;
-        });
-      }
-    });
-
-    return { cpuUsed, ramUsedBytes, storageUsedBytes };
-  }, [instances]);
-
+  // important: limits only. The used side of these chips summed `vm.resources`, which the
+  // instance list never carries, so memory and storage always read "0 of" their limit, and the
+  // vCPU side counted instance-local config only. LXD counts project usage on allocation, so a
+  // live figure would answer a different question anyway.
   // parse project limits
   const limits = React.useMemo(() => {
     const cpuLimit = project.config?.["limits.cpu"] ? parseInt(project.config["limits.cpu"]) : null;
@@ -299,8 +272,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             never handed less room than its text needs. The 104px floor is measured rather than
             guessed. Chip chrome costs 36px (padding, icon, gap, border) and the widest short
             value, "Unlimited", is 59px in Geist 12px/600, so even the narrowest chip clears it.
-            note: the value wraps, it does not truncate. A quota is what an operator acts on, and
-            a wrapped "19.9 of 512.0" still says 512 where a clipped one says "19.9 of 5". */}
+            note: the value wraps, it does not truncate. A limit is what an operator acts on, and
+            a wrapped value still says 512 where a clipped one says 5. */}
         <div className="grid gap-2 pt-2 grid-cols-[repeat(auto-fit,minmax(104px,1fr))]">
           {[
             {
@@ -308,7 +281,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
               Icon: Cpu,
               label: "vCPU",
               spec: limits.cpuLimit
-                ? { value: `${resourceUsage.cpuUsed} of ${limits.cpuLimit}`, unit: "vCPU" }
+                ? { value: String(limits.cpuLimit), unit: "vCPU limit" }
                 : { value: "Unlimited", unit: "vCPU" },
             },
             {
@@ -316,7 +289,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
               Icon: MemoryStick,
               label: "Memory",
               spec: limits.ramLimitBytes
-                ? formatMemoryQuota(resourceUsage.ramUsedBytes, limits.ramLimitBytes)
+                ? limitSpec(formatMemory(limits.ramLimitBytes, { split: true }))
                 : { value: "Unlimited", unit: "Memory" },
             },
             {
@@ -324,7 +297,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
               Icon: HardDrive,
               label: "Storage",
               spec: limits.storageLimitBytes
-                ? formatByteQuota(resourceUsage.storageUsedBytes, limits.storageLimitBytes)
+                ? limitSpec(formatBytes(limits.storageLimitBytes, { split: true }))
                 : { value: "Unlimited", unit: "Storage" },
             },
           ].map(({ key, Icon, label, spec }) => (
@@ -420,4 +393,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
       />
     </Card>
   );
+}
+
+function limitSpec({ value, unit }: { value: string; unit: string }): { value: string; unit: string } {
+  return { value, unit: `${unit} limit` };
 }

@@ -1615,6 +1615,13 @@ export interface ClusterMonitoringMetrics {
   gpu_utilization_supported?: boolean;
   instance_count: number;
   running_instances: number;
+  container_count?: number;
+  vm_count?: number;
+  /** Hardware threads busy running this Cluster's instances; null until there is a reading. */
+  cpu_busy_threads?: number | null;
+  cpu_busy_percent?: number | null;
+  cpu_status?: InstanceRateStatus;
+  cpu_reporting_instances?: number;
 }
 
 export interface InstanceMonitoringSummary {
@@ -1623,12 +1630,20 @@ export interface InstanceMonitoringSummary {
   project?: string | null;
   type: string;
   status: string;
-  cpu_usage: number;
+  /** Busy share of the instance's effective vCPUs; null until cpu_status is ready. */
+  cpu_usage: number | null;
+  cpu_status?: InstanceRateStatus;
+  cpu_busy_vcpus?: number | null;
+  cpu_vcpus?: number | null;
+  /** Includes page cache. */
   memory_usage_bytes: number;
   memory_limit_bytes: number;
   disk_usage_bytes: number;
+  /** Lifetime totals since the instance started. */
   network_rx_bytes: number;
   network_tx_bytes: number;
+  network_rx_bytes_per_sec?: number | null;
+  network_tx_bytes_per_sec?: number | null;
 }
 
 export interface StoragePoolMetrics {
@@ -1646,15 +1661,6 @@ export interface StoragePoolMetrics {
   usage_percent: number;
 }
 
-export interface MonitoringNetworkMetrics {
-  total_rx_bytes: number;
-  total_tx_bytes: number;
-  total_rx_packets: number;
-  total_tx_packets: number;
-  interfaces: Record<string, { rx_bytes: number; tx_bytes: number; rx_packets: number; tx_packets: number }>;
-  timestamp: string;
-}
-
 export interface WarningsSummary {
   total: number;
   critical: number;
@@ -1663,21 +1669,29 @@ export interface WarningsSummary {
 }
 
 export interface NodeMetricsPoint {
-  cpu_usage_percent: number;
+  /** Busy share of the Cluster's hardware threads; null when no reading existed then. */
+  cpu_usage_percent: number | null;
   memory_usage_percent: number;
   storage_usage_percent: number;
-  network_rx_bytes: number;
-  network_tx_bytes: number;
+  /** Legacy lifetime counters, absent on points that carry rates. */
+  network_rx_bytes?: number;
+  network_tx_bytes?: number;
+  network_rx_bytes_per_sec?: number | null;
+  network_tx_bytes_per_sec?: number | null;
   running_instances: number;
 }
 
 export interface MetricsHistoryPoint {
   timestamp: string;
-  cpu_usage_percent: number;
+  /** Busy share of the reporting hardware threads; null when no reading existed then. */
+  cpu_usage_percent: number | null;
   memory_usage_percent: number;
   storage_usage_percent?: number;
+  /** Legacy lifetime counters; 0 on points that carry the per-second rates. */
   network_rx_bytes: number;
   network_tx_bytes: number;
+  network_rx_bytes_per_sec?: number | null;
+  network_tx_bytes_per_sec?: number | null;
   disk_io_bytes: number;
   running_instances: number;
   nodes?: Record<string, NodeMetricsPoint>;
@@ -1704,8 +1718,15 @@ export interface MonitoringDashboardResponse {
   used_cpu: number;
   cpu_usage_percent: number;
   
-  // Real-time CPU usage from running instances
+  /** Deprecated alias of cpu_busy_percent (0 while that is null). */
   realtime_cpu_percent: number;
+  /** Hardware threads busy running instances, across the Clusters that reported. */
+  cpu_busy_threads?: number | null;
+  cpu_busy_percent?: number | null;
+  cpu_status?: InstanceRateStatus;
+  cpu_reporting_instances?: number;
+  /** Hardware threads of the Clusters that reported: the cpu_busy_percent denominator. */
+  cpu_reporting_threads?: number;
   
   total_memory_bytes: number;
   used_memory_bytes: number;
@@ -1726,6 +1747,8 @@ export interface MonitoringDashboardResponse {
   // Detailed Metrics
   nodes: ClusterMonitoringMetrics[];
   storage_pools: StoragePoolMetrics[];
+  /** Per Cluster, the leaders of CPU, memory, disk and network rate. */
+  consumers?: InstanceMonitoringSummary[];
   top_cpu_consumers: InstanceMonitoringSummary[];
   top_memory_consumers: InstanceMonitoringSummary[];
   

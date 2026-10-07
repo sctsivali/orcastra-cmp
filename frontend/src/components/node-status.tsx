@@ -100,8 +100,11 @@ function LoadingSkeleton() {
 interface NodeStatusCardsProps {
   /** Refresh the whole overview instead of just this section. Must reject on failure. */
   onRefresh?: () => Promise<unknown> | unknown;
-  /** Timestamp of the data the parent refreshed, when onRefresh is supplied. */
-  lastUpdatedAt?: number | null;
+}
+
+function clustersCollectedAt(collectedAt: string | null | undefined): number {
+  const parsed = collectedAt ? Date.parse(collectedAt) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 // The boundary lives here, next to the useTableFilters read that needs it, so the section can
@@ -114,7 +117,7 @@ export function NodeStatusCards(props: NodeStatusCardsProps) {
   );
 }
 
-function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsProps) {
+function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
   const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useNodesStatus();
   const { navigate } = useNavigationProgress();
   const { isPartner } = usePermissions();
@@ -216,9 +219,11 @@ function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
             <h2 id={headingId} className="text-lg font-semibold">Clusters</h2>
             <NodeConnectionSummary nodes={data?.nodes} allConnected={data?.all_connected} />
           </div>
+          {/* important: when the cluster data was collected. This showed the instance list's
+              fetch time, so cards behind a 180 s cache read "10s ago" while minutes old. */}
           <RefreshButton
             label="Refresh overview"
-            lastUpdatedAt={onRefresh ? lastUpdatedAt : dataUpdatedAt}
+            lastUpdatedAt={clustersCollectedAt(data?.collected_at) || dataUpdatedAt}
             onRefresh={onRefresh ?? refreshNow}
           />
         </div>

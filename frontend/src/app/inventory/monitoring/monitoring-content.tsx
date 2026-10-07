@@ -13,7 +13,6 @@ import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container,
 // Dynamically import Lottie to avoid SSR issues
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Brush } from "recharts";
-import { format } from "date-fns";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +24,6 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { NodeFilterSelect } from "@/components/monitoring/node-filter-select";
 import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
@@ -133,78 +131,6 @@ const MetricCard = memo(function MetricCard({
   );
 });
 
-// Gauge Chart Component
-// Top Consumer Card
-interface TopConsumerCardProps {
-  instance: InstanceMonitoringSummary;
-  rank: number;
-  type: "cpu" | "memory" | "storage" | "network";
-  onOpen: (instance: InstanceMonitoringSummary) => void;
-}
-
-const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, onOpen }: TopConsumerCardProps) {
-  const project = instance.project || "default";
-  const renderValue = () => {
-    switch (type) {
-      case "cpu":
-        return (
-          <>
-            <p className="text-sm font-bold text-blue-600">{instance.cpu_usage.toFixed(1)}%</p>
-            <p className="text-xs text-muted-foreground">CPU Usage</p>
-          </>
-        );
-      case "memory":
-        return (
-          <>
-            <p className="text-sm font-bold text-green-600">{formatMemory(instance.memory_usage_bytes)}</p>
-            <p className="text-xs text-muted-foreground">Memory</p>
-          </>
-        );
-      case "storage":
-        return (
-          <>
-            <p className="text-sm font-bold text-amber-600">{formatBytes(instance.disk_usage_bytes)}</p>
-            <p className="text-xs text-muted-foreground">Disk Usage</p>
-          </>
-        );
-      case "network":
-        return (
-          <>
-            <p className="text-sm font-bold text-purple-600">
-              ↓{formatBytes(instance.network_rx_bytes)}
-            </p>
-            <p className="text-sm font-bold text-pink-600">
-              ↑{formatBytes(instance.network_tx_bytes)}
-            </p>
-          </>
-        );
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      aria-label={`Open resource details for ${instance.name} on ${instance.host} in project ${project}`}
-      onClick={() => onOpen(instance)}
-      className="flex w-full items-center gap-3 rounded-lg bg-muted/50 p-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-    >
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-card text-sm font-semibold tabular-nums">
-        {rank}
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{instance.name}</p>
-        <p className="text-xs text-muted-foreground truncate">{instance.host} / {project}</p>
-      </div>
-      <div className="text-right shrink-0">
-        {renderValue()}
-        <Badge variant="outline" className="text-xs mt-1">
-          {instance.type === "virtual-machine" ? "VM" : "CT"}
-        </Badge>
-      </div>
-    </button>
-  );
-});
-
 // Chart Statistics Component
 interface ChartStatsProps {
   min: number;
@@ -256,6 +182,16 @@ function LoadingSkeleton() {
 
 // Colors for charts
 import { GaugeChart } from "@/components/monitoring/gauge-chart";
+import { CpuUsageGauge, type CpuUsageReading } from "@/components/monitoring/cpu-usage-gauge";
+import { TopConsumersCard, consumerPool } from "@/components/monitoring/top-consumers-card";
+import { LiveTimestamp } from "@/components/ui/live-timestamp";
+import { STALE_AFTER_MS } from "@/lib/query-config";
+import {
+  DEFAULT_HISTORY_WINDOW_SECONDS,
+  HISTORY_WINDOWS,
+  collectedAtOf,
+  toChartPoints,
+} from "@/lib/monitoring-history";
 import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
 import { NodeCard } from "@/components/monitoring/node-card";
 import { inventoryLinks } from "@/lib/inventory-links";
@@ -534,16 +470,6 @@ const NODE_COLORS = [
   "#84cc16", // lime
 ];
 
-// Time range options
-const TIME_RANGES = [
-  { label: "5m", value: 60, description: "Last 5 minutes" },
-  { label: "15m", value: 180, description: "Last 15 minutes" },
-  { label: "30m", value: 360, description: "Last 30 minutes" },
-  { label: "1h", value: 720, description: "Last 1 hour" },
-  { label: "6h", value: 4320, description: "Last 6 hours" },
-  { label: "24h", value: 8640, description: "Last 24 hours" },
-];
-
 // Instance Details Dialog
 interface InstanceDetailsDialogProps {
   open: boolean;
@@ -691,10 +617,9 @@ export default function MonitoringContent() {
   const { isPartner } = usePermissions();
   const { scopeKey: actorScope } = useActorQueryScope();
   const queryClient = useQueryClient();
-  const [refreshInterval, setRefreshInterval] = useState(5000);
   const [isPaused, setIsPaused] = useState(false);
   const [pausedSnapshot, setPausedSnapshot] = useState<MonitoringDisplaySnapshot | null>(null);
-  const [timeRange, setTimeRange] = useState(60); // Default 5 minutes (60 points at 5s intervals)
+  const [timeRange, setTimeRange] = useState<number>(DEFAULT_HISTORY_WINDOW_SECONDS);
   const [chartTab, setChartTab] = useState<"cpu" | "memory" | "storage" | "network">("cpu");
   
   // Instance dialog state
@@ -720,14 +645,12 @@ export default function MonitoringContent() {
   const monitoringUiIsCurrent = monitoringUiActorScope === actorScope;
   
   // Sort order for top consumers (true = highest first, false = lowest first)
-  const [sortDescending, setSortDescending] = useState(true);
   
   // Node selection for filtering
   const [selectedNodeState, setSelectedNode] = useState<string>("all");
   const selectedNode = monitoringUiIsCurrent ? selectedNodeState : "all";
   
   // Top N consumers count
-  const [topNCount, setTopNCount] = useState<number>(5);
   
   // Storage pools sort order
   const [storagePoolsSortDesc, setStoragePoolsSortDesc] = useState(true);
@@ -792,7 +715,7 @@ export default function MonitoringContent() {
     error: liveDashboardError,
     refreshNow: refreshDashboard,
     dataUpdatedAt: liveDataUpdatedAt,
-  } = useMonitoringDashboard(!isPaused, wsConnected ? 0 : refreshInterval);
+  } = useMonitoringDashboard(!isPaused, !wsConnected);
   
   const { 
     data: liveHistoryData,
@@ -828,12 +751,20 @@ export default function MonitoringContent() {
     ? frozenSnapshot?.historyLoading ?? false
     : liveHistoryLoading;
   const historyFetching = isPaused ? false : liveHistoryFetching;
+  const liveCollectedAt = collectedAtOf(liveDashboardData) || liveDataUpdatedAt;
   const dataUpdatedAt = isPaused
-    ? frozenSnapshot?.updatedAt ?? liveDataUpdatedAt
-    : liveDataUpdatedAt;
+    ? frozenSnapshot?.updatedAt ?? liveCollectedAt
+    : liveCollectedAt;
 
   const toggleMonitoringPause = useCallback(() => {
     if (isPaused) {
+      // note: marked stale, not refetched here. The observers are still disabled at this
+      // point; once Resume re-enables them a stale query reads at once instead of waiting out
+      // the 30 s cadence, which left a resumed page on the paused snapshot for half a minute.
+      void queryClient.invalidateQueries({
+        queryKey: ["monitoring"],
+        refetchType: "none",
+      });
       setIsPaused(false);
       setPausedSnapshot(null);
       return;
@@ -848,7 +779,7 @@ export default function MonitoringContent() {
       dashboardError: liveDashboardError,
       dashboardLoading: liveDashboardLoading,
       historyLoading: liveHistoryLoading,
-      updatedAt: liveDataUpdatedAt,
+      updatedAt: liveCollectedAt,
     });
     setIsPaused(true);
     void Promise.all([
@@ -876,7 +807,7 @@ export default function MonitoringContent() {
     liveDashboardData,
     liveDashboardError,
     liveDashboardLoading,
-    liveDataUpdatedAt,
+    liveCollectedAt,
     liveHistoryData,
     liveHistoryLoading,
     liveSystemWarnings,
@@ -925,7 +856,8 @@ export default function MonitoringContent() {
         dashboardError: null,
         dashboardLoading: false,
         historyLoading: false,
-        updatedAt: dashboardState?.dataUpdatedAt || previous?.updatedAt || 0,
+        updatedAt:
+          collectedAtOf(dashboardState?.data) || dashboardState?.dataUpdatedAt || previous?.updatedAt || 0,
       });
     }
 
@@ -1234,7 +1166,6 @@ export default function MonitoringContent() {
     if (!dashboardData) return null;
     if (selectedNode === "all") {
       const singleNode = dashboardData.nodes?.length === 1 ? dashboardData.nodes[0] : null;
-      const allNodesCpuPercent = singleNode?.cpu_usage_percent ?? dashboardData.realtime_cpu_percent;
 
       return {
         total_instances: dashboardData.total_instances,
@@ -1247,7 +1178,14 @@ export default function MonitoringContent() {
         inactive_nodes: dashboardData.inactive_nodes,
         total_nodes: dashboardData.total_nodes,
         cpu_usage_percent: singleNode?.cpu_usage_percent ?? dashboardData.cpu_usage_percent,
-        realtime_cpu_percent: allNodesCpuPercent,
+        cpu_reading: {
+          status: dashboardData.cpu_status ?? "unavailable",
+          busyPercent: dashboardData.cpu_busy_percent ?? null,
+          busyThreads: dashboardData.cpu_busy_threads ?? null,
+          threads: dashboardData.cpu_reporting_threads ?? dashboardData.total_cpu,
+          reportingInstances: dashboardData.cpu_reporting_instances ?? 0,
+          runningInstances: dashboardData.running_instances,
+        } as CpuUsageReading,
         memory_usage_percent: dashboardData.memory_usage_percent,
         storage_usage_percent: dashboardData.storage_usage_percent,
         total_cpu: dashboardData.total_cpu,
@@ -1269,26 +1207,25 @@ export default function MonitoringContent() {
     const node = dashboardData.nodes?.find(n => n.node_name === selectedNode);
     if (!node) return null;
     
-    // Calculate container/vm count from top consumers (they have type and host info)
-    const nodeContainers = dashboardData.top_cpu_consumers?.filter(
-      i => i.host === selectedNode && i.type === "container"
-    ).length || 0;
-    const nodeVMs = dashboardData.top_cpu_consumers?.filter(
-      i => i.host === selectedNode && i.type === "virtual-machine"
-    ).length || 0;
-    
     return {
       total_instances: node.instance_count || 0,
       running_instances: node.running_instances || 0,
       stopped_instances: (node.instance_count || 0) - (node.running_instances || 0),
       other_instances: 0,
-      container_count: nodeContainers,
-      vm_count: nodeVMs,
+      container_count: node.container_count ?? 0,
+      vm_count: node.vm_count ?? 0,
       online_nodes: node.is_online ? 1 : 0,
       inactive_nodes: node.is_online ? 0 : 1,
       total_nodes: 1,
       cpu_usage_percent: node.cpu_usage_percent || 0,
-      realtime_cpu_percent: node.cpu_usage_percent || 0,
+      cpu_reading: {
+        status: node.is_online ? node.cpu_status ?? "unavailable" : "unavailable",
+        busyPercent: node.cpu_busy_percent ?? null,
+        busyThreads: node.cpu_busy_threads ?? null,
+        threads: node.cpu_total || 0,
+        reportingInstances: node.cpu_reporting_instances ?? 0,
+        runningInstances: node.running_instances || 0,
+      } as CpuUsageReading,
       memory_usage_percent: node.memory_usage_percent || 0,
       storage_usage_percent: node.storage_usage_percent || 0,
       total_cpu: node.cpu_total || 0,
@@ -1318,121 +1255,16 @@ export default function MonitoringContent() {
     [filteredStats?.total_storage_bytes, dashboardData?.total_storage_bytes]
   );
 
-  const chartData = useMemo(() => {
-    if (!historyData) return [];
-    
-    // Calculate network rate (delta between points)
-    return historyData.map((point, idx) => {
-      const prevPoint = idx > 0 ? historyData[idx - 1] : null;
-      
-      // Get the data for the selected node or use aggregate
-      let cpuPercent = point.cpu_usage_percent;
-      let memoryPercent = point.memory_usage_percent;
-      let storagePercent = point.storage_usage_percent || 0;
-      let networkRxBytes = point.network_rx_bytes;
-      let networkTxBytes = point.network_tx_bytes;
-      let runningInstances = point.running_instances;
-      const nodeEntries = point.nodes ? Object.entries(point.nodes) : [];
-      const singleAggregateNode = selectedNode === "all" && nodeEntries.length === 1 ? nodeEntries[0][1] : null;
-      if (singleAggregateNode) {
-        cpuPercent = singleAggregateNode.cpu_usage_percent;
-        memoryPercent = singleAggregateNode.memory_usage_percent;
-        storagePercent = singleAggregateNode.storage_usage_percent || 0;
-        networkRxBytes = singleAggregateNode.network_rx_bytes;
-        networkTxBytes = singleAggregateNode.network_tx_bytes;
-        runningInstances = singleAggregateNode.running_instances;
-      }
-      
-      // If a specific node is selected and per-node data is available, use it
-      if (selectedNode !== "all" && point.nodes && point.nodes[selectedNode]) {
-        const nodeData = point.nodes[selectedNode];
-        cpuPercent = nodeData.cpu_usage_percent;
-        memoryPercent = nodeData.memory_usage_percent;
-        storagePercent = nodeData.storage_usage_percent || 0;
-        networkRxBytes = nodeData.network_rx_bytes;
-        runningInstances = nodeData.running_instances;
-        
-        // Get previous point's node data for network rate calculation
-        const prevNodeData = prevPoint?.nodes?.[selectedNode];
-        networkTxBytes = nodeData.network_tx_bytes;
-        
-        // Network rate calculation using node-specific data
-        let nodeNetworkRxRate = 0;
-        let nodeNetworkTxRate = 0;
-        
-        if (prevNodeData) {
-          const timeDelta = (new Date(point.timestamp).getTime() - new Date(prevPoint!.timestamp).getTime()) / 1000;
-          if (timeDelta > 0) {
-            nodeNetworkRxRate = (networkRxBytes - prevNodeData.network_rx_bytes) / timeDelta;
-            nodeNetworkTxRate = (networkTxBytes - prevNodeData.network_tx_bytes) / timeDelta;
-            if (nodeNetworkRxRate < 0) nodeNetworkRxRate = 0;
-            if (nodeNetworkTxRate < 0) nodeNetworkTxRate = 0;
-          }
-        }
-        
-        const memoryUsedBytes = (memoryPercent / 100) * totalMemoryBytes;
-        const storageUsedBytes = (storagePercent / 100) * totalStorageBytes;
-        
-        return {
-          time: format(new Date(point.timestamp), "HH:mm:ss"),
-          cpu: cpuPercent,
-          memory: memoryPercent,
-          memoryUsedBytes,
-          storage: storagePercent,
-          storageUsedBytes,
-          diskIoBytes: point.disk_io_bytes || 0,
-          networkRxRate: nodeNetworkRxRate,
-          networkTxRate: nodeNetworkTxRate,
-          instances: runningInstances,
-        };
-      }
-      
-      // Default: use aggregate data for all nodes
-      let networkRxRate = 0;
-      let networkTxRate = 0;
-      
-      if (prevPoint) {
-        const timeDelta = (new Date(point.timestamp).getTime() - new Date(prevPoint.timestamp).getTime()) / 1000;
-        if (timeDelta > 0) {
-          networkRxRate = (point.network_rx_bytes - prevPoint.network_rx_bytes) / timeDelta;
-          networkTxRate = (point.network_tx_bytes - prevPoint.network_tx_bytes) / timeDelta;
-          // Clamp negative values (counter reset)
-          if (networkRxRate < 0) networkRxRate = 0;
-          if (networkTxRate < 0) networkTxRate = 0;
-        }
-      }
-      
-      // Calculate actual bytes based on percentage
-      const memoryUsedBytes = (point.memory_usage_percent / 100) * totalMemoryBytes;
-      const storageUsedBytes = ((point.storage_usage_percent || 0) / 100) * totalStorageBytes;
-      
-      // Build per-node data for multi-line chart (when "all" is selected)
-      const perNodeData: Record<string, number> = {};
-      if (point.nodes) {
-        Object.entries(point.nodes).forEach(([nodeName, nodeData]) => {
-          // Add per-node CPU, memory, storage values with node name prefix
-          perNodeData[`cpu_${nodeName}`] = (nodeData as any).cpu_usage_percent || 0;
-          perNodeData[`memory_${nodeName}`] = (nodeData as any).memory_usage_percent || 0;
-          perNodeData[`storage_${nodeName}`] = (nodeData as any).storage_usage_percent || 0;
-        });
-      }
-      
-      return {
-        time: format(new Date(point.timestamp), "HH:mm:ss"),
-        cpu: point.cpu_usage_percent,
-        memory: point.memory_usage_percent,
-        memoryUsedBytes,
-        storage: point.storage_usage_percent || 0,
-        storageUsedBytes,
-        diskIoBytes: point.disk_io_bytes || 0, // Storage I/O for the storage chart
-        networkRxRate,
-        networkTxRate,
-        instances: point.running_instances,
-        // Per-node data for multi-line chart
-        ...perNodeData,
-      };
-    });
-  }, [historyData, totalMemoryBytes, totalStorageBytes, selectedNode]);
+  const chartData = useMemo(
+    () =>
+      toChartPoints(
+        historyData,
+        selectedNode,
+        { memoryBytes: totalMemoryBytes, storageBytes: totalStorageBytes },
+        timeRange,
+      ),
+    [historyData, selectedNode, totalMemoryBytes, totalStorageBytes, timeRange],
+  );
   
   // Downsample chart data for performance - limit to ~200 points for smooth rendering
   // This significantly improves hover/tooltip performance for large time ranges (6h, 24h)
@@ -1468,60 +1300,6 @@ export default function MonitoringContent() {
     }
   }, [displayChartData.length, zoomLevel, brushEndIndex, isZoomed]);
   
-  // Shared filtered consumer base - single filter pass instead of 4 separate ones
-  const filteredCpuConsumers = useMemo(() => {
-    if (!dashboardData?.top_cpu_consumers) return [];
-    if (selectedNode === "all") return dashboardData.top_cpu_consumers;
-    return dashboardData.top_cpu_consumers.filter(item => item.host === selectedNode);
-  }, [dashboardData?.top_cpu_consumers, selectedNode]);
-
-  const filteredMemoryConsumers = useMemo(() => {
-    if (!dashboardData?.top_memory_consumers) return [];
-    if (selectedNode === "all") return dashboardData.top_memory_consumers;
-    return dashboardData.top_memory_consumers.filter(item => item.host === selectedNode);
-  }, [dashboardData?.top_memory_consumers, selectedNode]);
-
-  // Sorted consumers for storage and network (derived from shared filtered base)
-  const topStorageConsumers = useMemo(() => {
-    if (filteredCpuConsumers.length === 0) return [];
-    return [...filteredCpuConsumers]
-      .sort((a, b) => sortDescending 
-        ? (b.disk_usage_bytes || 0) - (a.disk_usage_bytes || 0)
-        : (a.disk_usage_bytes || 0) - (b.disk_usage_bytes || 0))
-      .slice(0, topNCount);
-  }, [filteredCpuConsumers, sortDescending, topNCount]);
-  
-  const topNetworkConsumers = useMemo(() => {
-    if (filteredCpuConsumers.length === 0) return [];
-    return [...filteredCpuConsumers]
-      .sort((a, b) => {
-        const aTotal = (a.network_rx_bytes || 0) + (a.network_tx_bytes || 0);
-        const bTotal = (b.network_rx_bytes || 0) + (b.network_tx_bytes || 0);
-        return sortDescending ? bTotal - aTotal : aTotal - bTotal;
-      })
-      .slice(0, topNCount);
-  }, [filteredCpuConsumers, sortDescending, topNCount]);
-  
-  // Sorted CPU consumers
-  const sortedCpuConsumers = useMemo(() => {
-    if (filteredCpuConsumers.length === 0) return [];
-    return [...filteredCpuConsumers]
-      .sort((a, b) => sortDescending 
-        ? (b.cpu_usage || 0) - (a.cpu_usage || 0)
-        : (a.cpu_usage || 0) - (b.cpu_usage || 0))
-      .slice(0, topNCount);
-  }, [filteredCpuConsumers, sortDescending, topNCount]);
-  
-  // Sorted Memory consumers
-  const sortedMemoryConsumers = useMemo(() => {
-    if (filteredMemoryConsumers.length === 0) return [];
-    return [...filteredMemoryConsumers]
-      .sort((a, b) => sortDescending 
-        ? (b.memory_usage_bytes || 0) - (a.memory_usage_bytes || 0)
-        : (a.memory_usage_bytes || 0) - (b.memory_usage_bytes || 0))
-      .slice(0, topNCount);
-  }, [filteredMemoryConsumers, sortDescending, topNCount]);
-
   const selectedTopConsumerVm = useMemo(
     () => selectedTopConsumer ? toVmInfoFromMonitoringSummary(selectedTopConsumer) : null,
     [selectedTopConsumer]
@@ -1749,13 +1527,17 @@ export default function MonitoringContent() {
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Monitoring</h1>
           <p className="text-muted-foreground">
-            Real-time resource metrics across all clusters
+            Resource metrics across all clusters
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <LiveTimestamp
+            updatedAt={dataUpdatedAt || null}
+            staleAfterMs={isPaused ? undefined : STALE_AFTER_MS.active}
+          />
           <RefreshButton
+            hideTimestamp
             label="Refresh monitoring"
-            lastUpdatedAt={dataUpdatedAt}
             onRefresh={refreshMonitoring}
           />
           <UITooltip>
@@ -1823,18 +1605,18 @@ export default function MonitoringContent() {
               Resource Utilization
             </CardTitle>
             <CardDescription>
-              {selectedNode === "all" ? "Overall resource allocation and usage across all clusters" : `Resource usage for ${selectedNode}`}
+              {selectedNode === "all" ? "Usage and allocation across all clusters" : `Usage and allocation on ${selectedNode}`}
             </CardDescription>
           </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             <div className="text-center">
-              <GaugeChart 
-                value={filteredStats.realtime_cpu_percent || 0} 
-                label="CPU Usage" 
+              <CpuUsageGauge
+                reading={filteredStats.cpu_reading}
+                label="CPU Usage"
                 color={CHART_COLORS.cpu}
-                statusMessage={isPartner && filteredStats.realtime_cpu_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
+                statusMessage={isPartner && filteredStats.cpu_reading.status !== "ready" && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
                 Allocated: {filteredStats.used_cpu} vCPU / {filteredStats.total_cpu} hardware threads (
@@ -1883,7 +1665,7 @@ export default function MonitoringContent() {
               <CardTitle>
                 Resource Metrics
               </CardTitle>
-              <CardDescription>Real-time resource usage over time</CardDescription>
+              <CardDescription>Usage over time, one point per collection</CardDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {/* Zoom/Pan Controls */}
@@ -1971,14 +1753,14 @@ export default function MonitoringContent() {
               
               {/* Time Range Selector */}
               <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-                {TIME_RANGES.map((range) => (
+                {HISTORY_WINDOWS.map((range) => (
                   <Button
-                    key={range.value}
-                    variant={timeRange === range.value ? "default" : "ghost"}
+                    key={range.seconds}
+                    variant={timeRange === range.seconds ? "default" : "ghost"}
                     size="sm"
                     className={cn(
                       "h-7 px-3 text-xs font-medium transition-all",
-                      timeRange === range.value 
+                      timeRange === range.seconds 
                         ? "bg-primary text-primary-foreground shadow-sm" 
                         : "hover:bg-muted-foreground/10"
                     )}
@@ -1987,7 +1769,7 @@ export default function MonitoringContent() {
                     onClick={() => {
                       // Use transition for non-blocking UI during heavy chart recomputation
                       startTimeRangeTransition(() => {
-                        setTimeRange(range.value);
+                        setTimeRange(range.seconds);
                       });
                       handleResetZoom(); // Reset zoom when changing time range
                     }}
@@ -2596,128 +2378,12 @@ export default function MonitoringContent() {
           </CardContent>
         </Card>
 
-        {/* Top Consumers - 4 Tabs */}
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <CardTitle>
-                  Top Consumers
-                </CardTitle>
-                <CardDescription>Instances with highest resource usage</CardDescription>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {/* Top N Selection */}
-                <Select value={topNCount.toString()} onValueChange={(v) => setTopNCount(parseInt(v))}>
-                  <SelectTrigger className="w-[80px] sm:w-[90px] h-8">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="5">Top 5</SelectItem>
-                    <SelectItem value="10">Top 10</SelectItem>
-                    <SelectItem value="15">Top 15</SelectItem>
-                    <SelectItem value="20">Top 20</SelectItem>
-                  </SelectContent>
-                </Select>
-                <UITooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setSortDescending(!sortDescending)}
-                      className="flex items-center gap-1.5 h-8 px-2.5 sm:px-3 shrink-0"
-                    >
-                      {sortDescending ? (
-                        <>
-                          <ArrowDown className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                          <span className="text-xs">Highest</span>
-                        </>
-                      ) : (
-                        <>
-                          <ArrowUp className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                          <span className="text-xs">Lowest</span>
-                        </>
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {sortDescending ? "Click to show lowest first" : "Click to show highest first"}
-                  </TooltipContent>
-                </UITooltip>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <Tabs defaultValue="cpu">
-              <TabsList className="grid w-full grid-cols-4 mb-4 h-auto p-1">
-                <TabsTrigger value="cpu" className="text-xs px-2 py-1.5">CPU</TabsTrigger>
-                <TabsTrigger value="memory" className="text-xs px-2 py-1.5">Memory</TabsTrigger>
-                <TabsTrigger value="storage" className="text-xs px-2 py-1.5">Storage</TabsTrigger>
-                <TabsTrigger value="network" className="text-xs px-2 py-1.5">Network</TabsTrigger>
-              </TabsList>
-              <TabsContent value="cpu" className="space-y-2 max-h-[280px] overflow-y-auto">
-                {sortedCpuConsumers.length > 0 ? (
-                  sortedCpuConsumers.map((instance, idx) => (
-                    <TopConsumerCard
-                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
-                      instance={instance}
-                      rank={idx + 1}
-                      type="cpu"
-                      onOpen={openTopConsumer}
-                    />
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No running instances</p>
-                )}
-              </TabsContent>
-              <TabsContent value="memory" className="space-y-2 max-h-[280px] overflow-y-auto">
-                {sortedMemoryConsumers.length > 0 ? (
-                  sortedMemoryConsumers.map((instance, idx) => (
-                    <TopConsumerCard
-                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
-                      instance={instance}
-                      rank={idx + 1}
-                      type="memory"
-                      onOpen={openTopConsumer}
-                    />
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No running instances</p>
-                )}
-              </TabsContent>
-              <TabsContent value="storage" className="space-y-2 max-h-[280px] overflow-y-auto">
-                {topStorageConsumers.length > 0 ? (
-                  topStorageConsumers.map((instance, idx) => (
-                    <TopConsumerCard
-                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
-                      instance={instance}
-                      rank={idx + 1}
-                      type="storage"
-                      onOpen={openTopConsumer}
-                    />
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No running instances</p>
-                )}
-              </TabsContent>
-              <TabsContent value="network" className="space-y-2 max-h-[280px] overflow-y-auto">
-                {topNetworkConsumers.length > 0 ? (
-                  topNetworkConsumers.map((instance, idx) => (
-                    <TopConsumerCard
-                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
-                      instance={instance}
-                      rank={idx + 1}
-                      type="network"
-                      onOpen={openTopConsumer}
-                    />
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground py-4">No running instances</p>
-                )}
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
+        {/* Top Consumers: each resource ranked on its own */}
+        <TopConsumersCard
+          pool={consumerPool(dashboardData)}
+          selectedNode={selectedNode}
+          onOpen={openTopConsumer}
+        />
       </div>
 
       {/* Alarm Statistics. Partner+ only: every tile below navigates to /inventory/warnings or

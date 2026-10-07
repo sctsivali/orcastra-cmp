@@ -164,6 +164,9 @@ export function DiskCard({ metrics }: { metrics: InstanceMetrics }) {
 export function NetworkCard({ metrics }: { metrics: InstanceMetrics }) {
   const interfaces = Object.keys(metrics.network_rx_bytes ?? {});
   if (interfaces.length === 0) return null;
+  // note: a backend from before per-second rates sends no rate maps at all; it gets totals,
+  // never a "next sample" promise it will not keep.
+  const ratesReported = metrics.network_rx_bytes_per_second !== undefined;
   const rx = metrics.network_rx_bytes_per_second ?? {};
   const tx = metrics.network_tx_bytes_per_second ?? {};
   const window = formatSampleWindow(metrics.sample_window_seconds);
@@ -176,11 +179,23 @@ export function NetworkCard({ metrics }: { metrics: InstanceMetrics }) {
           <DetailGrid cols={2}>
             <DetailField
               label="Receive"
-              value={<RateValue rate={rx[iface]} total={metrics.network_rx_bytes[iface]} />}
+              value={
+                <RateValue
+                  rate={rx[iface]}
+                  reported={ratesReported}
+                  total={metrics.network_rx_bytes[iface]}
+                />
+              }
             />
             <DetailField
               label="Transmit"
-              value={<RateValue rate={tx[iface]} total={metrics.network_tx_bytes?.[iface] ?? 0} />}
+              value={
+                <RateValue
+                  rate={tx[iface]}
+                  reported={ratesReported}
+                  total={metrics.network_tx_bytes?.[iface] ?? 0}
+                />
+              }
             />
           </DetailGrid>
         </div>
@@ -190,11 +205,22 @@ export function NetworkCard({ metrics }: { metrics: InstanceMetrics }) {
   );
 }
 
-function RateValue({ rate, total }: { rate: number | undefined; total: number }) {
+function RateValue({
+  rate,
+  reported,
+  total,
+}: {
+  rate: number | undefined;
+  reported: boolean;
+  total: number;
+}) {
+  if (!reported) {
+    return <span className="tabular-nums">{formatBytes(total)} since start</span>;
+  }
   return (
     <span className="flex flex-col">
-      <span className="tabular-nums">
-        {rate === undefined ? "Calculating…" : formatNetworkRate(rate)}
+      <span className={rate === undefined ? "text-xs text-muted-foreground" : "tabular-nums"}>
+        {rate === undefined ? "Rate after the next sample" : formatNetworkRate(rate)}
       </span>
       <span className="text-xs text-muted-foreground tabular-nums">
         {formatBytes(total)} since start

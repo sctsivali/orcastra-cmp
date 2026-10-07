@@ -51,18 +51,19 @@ test("Monitoring pause freezes automation while manual refresh and resume still 
   await pause.hover();
   await expect(page.getByRole("tooltip")).toContainText("Workloads will keep running");
 
-  // Let every staggered history prefetch finish before taking the pause baseline.
-  await expect
-    .poll(
-      () =>
-        new Set(
-          api.requests
-            .filter((request) => request.path === "/monitoring/history")
-            .map((request) => new URLSearchParams(request.search).get("points")),
-        ).size,
-      { timeout: 8_000 },
-    )
-    .toBe(6);
+  // History is read for the selected time window only: no prefetch of the other ranges, and
+  // never by point count, which assumed a cadence the collector does not have.
+  await expect.poll(() => countRequests(api, "/monitoring/history"), { timeout: 8_000 }).toBeGreaterThan(0);
+  const windows = new Set(
+    api.requests
+      .filter((request) => request.path === "/monitoring/history")
+      .map((request) => new URLSearchParams(request.search).get("window")),
+  );
+  expect([...windows]).toEqual(["300"]);
+  await expect(page.getByText("Real-time resource metrics across all clusters")).toHaveCount(0);
+  await expect(page.getByText(/Updated /).first()).toBeVisible();
+  await expect(page.getByText("2.8%", { exact: true })).toBeVisible();
+  await expect(page.getByText("0.9 of 32 hardware threads busy")).toBeVisible();
 
   await pause.click();
   const resume = page.getByRole("button", { name: "Resume automatic monitoring updates" });
@@ -169,7 +170,8 @@ test("Top Consumer hydrates once and live Metrics preserve the last good sample"
   await dialog.getByRole("tab", { name: "Metrics" }).click();
   await expect.poll(() => api.metricsCalls.length).toBe(1);
   await expect(dialog.getByText("Calculating…", { exact: true })).toBeVisible();
-  await expect(dialog.getByText(/These readings are stale/)).toBeAttached();
+  // The fixture's server clock is 20 s behind; the age comes from when the reading arrived.
+  await expect(dialog.getByText(/These readings are stale/)).toHaveCount(0);
 
   // Browser visibility is part of the activation predicate. A hidden document gets no poll.
   await setDocumentVisibility(page, "hidden");
@@ -198,8 +200,8 @@ test("Top Consumer hydrates once and live Metrics preserve the last good sample"
   await expect(dialog.getByText("22.5%", { exact: true })).toBeVisible();
   await expect(dialog.getByText("Showing the last successful readings.")).toBeVisible();
 
-  // Rate limits and permission failures are terminal for automatic polling. Manual retry may
-  // report one, but no background loop may keep probing an endpoint that told us to stop.
+  // A rate limit waits for its Retry-After (30 s here) before polling resumes on its own, and a
+  // permission failure stops the loop for good. Neither may keep probing within the wait.
   api.metricsMode = "limited";
   await dialog.getByRole("button", { name: "Refresh instance metrics" }).click();
   await expect(dialog.getByRole("heading", { name: "Metrics temporarily limited" })).toBeVisible({
@@ -222,7 +224,7 @@ test("Top Consumer hydrates once and live Metrics preserve the last good sample"
   await expectCleanHarness(api);
 });
 
-test("stopped Top Consumer never starts a metrics poll", async ({ page }, testInfo) => {
+test("stopped Top Consumer checks once, then only at the slow cadence", async ({ page }, testInfo) => {
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", { instanceStatus: "Stopped" });
 
@@ -239,10 +241,14 @@ test("stopped Top Consumer never starts a metrics poll", async ({ page }, testIn
   await expect(
     dialogHeading.locator("xpath=..").getByText("Stopped", { exact: true }),
   ).toBeVisible();
+  // One read confirms the runtime state; while stopped, the next check is 30 s away, so a
+  // start is still noticed without a five-second loop against a stopped instance.
   await dialog.getByRole("tab", { name: "Metrics" }).click();
   await expect(dialog.getByRole("heading", { name: "Instance is not running" })).toBeVisible();
+  await expect.poll(() => api.metricsCalls.length, { timeout: 8_000 }).toBe(1);
   await page.waitForTimeout(5_500);
-  expect(api.metricsCalls).toHaveLength(0);
+  expect(api.metricsCalls).toHaveLength(1);
+  await expect(dialog.getByRole("button", { name: "Check instance metrics again" })).toBeVisible();
 
   await capture(page, testInfo, "monitoring-stopped-instance-metrics");
   await expectCleanHarness(api);

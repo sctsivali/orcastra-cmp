@@ -94,6 +94,7 @@ export function InstanceResourcesPanel({
   const cpuState = cpuReading(metrics);
   const memory = memoryReading(metrics);
   const totals = metrics.disk_total_bytes ?? {};
+  const ratesReported = metrics.network_rx_bytes_per_second !== undefined;
   const rx = metrics.network_rx_bytes_per_second ?? {};
   const tx = metrics.network_tx_bytes_per_second ?? {};
 
@@ -155,13 +156,24 @@ export function InstanceResourcesPanel({
             <Network className="h-3 w-3 text-purple-400" aria-hidden="true" /> {iface}
           </span>
           <span className="text-gray-300 font-mono">
-            <span className="text-green-400">
-              ↓{rx[iface] !== undefined ? formatNetworkRate(rx[iface], 1) : "…"}
-            </span>{" "}
-            <span className="text-blue-400">
-              ↑{tx[iface] !== undefined ? formatNetworkRate(tx[iface], 1) : "…"}
-            </span>
-            <span className="text-gray-500"> ({formatBytes(received + (metrics.network_tx_bytes?.[iface] ?? 0), 1)} total)</span>
+            {ratesReported ? (
+              <>
+                <span className="text-green-400">
+                  ↓{rx[iface] !== undefined ? formatNetworkRate(rx[iface], 1) : "…"}
+                </span>{" "}
+                <span className="text-blue-400">
+                  ↑{tx[iface] !== undefined ? formatNetworkRate(tx[iface], 1) : "…"}
+                </span>
+                <span className="text-gray-500">
+                  {" "}({formatBytes(received + (metrics.network_tx_bytes?.[iface] ?? 0), 1)} total)
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-green-400">↓{formatBytes(received, 1)}</span>{" "}
+                <span className="text-blue-400">↑{formatBytes(metrics.network_tx_bytes?.[iface] ?? 0, 1)}</span>
+              </>
+            )}
           </span>
         </div>
       ))}
