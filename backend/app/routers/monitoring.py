@@ -112,9 +112,9 @@ _DASHBOARD_CACHE_TTL = 35
 # The scope the background collector refreshes: admins and the collector itself.
 COLLECTED_SCOPE_KEY = "dashboard:scope=all"
 # important: the collected scope's entry outlives a whole collection cycle (the sweep plus the
-# 30 s pause), so collector followers relaying it and admins reading it always find it. At 35 s
-# it expired every cycle, and each follower then swept the whole fleet itself. Equal to
-# MetricsCollector.LEASE_SECONDS: the entry lives as long as the lease of the leader that wrote it.
+# 30 s pause) and a leader being replaced in the middle of one, so collector followers relaying
+# it and admins reading it always find it. At 35 s it expired every cycle, and each follower then
+# swept the whole fleet itself.
 COLLECTED_DASHBOARD_TTL = 120
 
 

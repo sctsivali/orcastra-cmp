@@ -5,10 +5,13 @@ WEB_CONCURRENCY=4 that is four collectors. A lease taken per cycle with a 30 s e
 nobody for the rest of a cycle that lasted the sweep plus 30 s, so another worker took it
 mid-cycle and swept again: over a day the dashboard was built three to four times per cycle.
 
-These tests pin the held lease: one leader, kept by renewing, replaced only once it stops
-renewing, handed back on shutdown, and a deployment without Redis keeps collecting rather than
-going silent, because a collector that elects nobody is worse than one that over-collects.
+These tests pin the held lease: one leader, kept by a heartbeat, replaced within one lease once
+it stops beating, handed back on shutdown, and a deployment without Redis keeps collecting rather
+than going silent, because a collector that elects nobody is worse than one that over-collects.
 """
+
+import asyncio
+import time
 
 from app.routers import monitoring
 from app.services import collector_leadership
@@ -71,26 +74,72 @@ def test_exactly_one_worker_wins_a_cycle(monkeypatch):
     assert verdicts.count(True) == 1, f"expected one leader, got {verdicts}"
 
 
-def test_the_leader_keeps_the_lease_through_a_long_cycle(monkeypatch):
-    """A cycle is the sweep plus the 30 s pause; nobody else may lead inside it."""
+def test_a_heartbeat_keeps_the_lease_through_long_sweeps(monkeypatch):
+    """Every worker beats every 5 s: the leader's beats renew, the followers' never win."""
     redis = _FakeRedis()
     leader, *followers = _workers(monkeypatch, redis)
     assert leader._claim_collection_lease() is True
 
-    for elapsed in (45, 90, 160, 230):
-        redis.now = elapsed
+    beat = MetricsCollector.HEARTBEAT_SECONDS
+    while redis.now < 300:
+        redis.now += beat
+        assert leader._claim_collection_lease() is True, "a beating leader keeps the job"
         assert [f._claim_collection_lease() for f in followers] == [False] * 3
-        assert leader._claim_collection_lease() is True, "renewing must keep the job"
 
 
-def test_the_lease_outlives_a_whole_cycle(monkeypatch):
+def test_the_lease_survives_missed_beats_but_not_a_dead_leader():
+    assert MetricsCollector.LEASE_SECONDS >= 3 * MetricsCollector.HEARTBEAT_SECONDS
+    assert MetricsCollector.LEASE_SECONDS <= 30, "a dead leader must be replaced within seconds"
+
+
+def test_the_collected_dashboard_outlives_a_cycle(monkeypatch):
     collector = _workers(monkeypatch, _FakeRedis(), count=1)[0]
 
-    assert collector.LEASE_SECONDS >= 3 * collector.collection_interval
-    assert monitoring.COLLECTED_DASHBOARD_TTL == collector.LEASE_SECONDS, (
-        "the collected dashboard must live as long as the lease of the leader that wrote it, "
-        "or followers find it expired and have nothing to relay"
+    assert monitoring.COLLECTED_DASHBOARD_TTL >= 3 * collector.collection_interval, (
+        "followers and admins must find the leader's dashboard for a whole sweep plus pause, "
+        "and while a lapsed lease is taken over"
     )
+
+
+def test_starting_beats_and_stopping_cancels_the_heartbeat(monkeypatch):
+    redis = _FakeRedis()
+    collector = _workers(monkeypatch, redis, count=1)[0]
+
+    async def _idle_loop():
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(collector, "_collection_loop", _idle_loop)
+
+    async def _run():
+        await collector.start_async(lxd_service=object())
+        await asyncio.sleep(0)
+        assert collector._leading is True, "the first beat claims at once"
+        heartbeat = collector._heartbeat_task
+        collector.stop()
+        await asyncio.sleep(0)
+        return heartbeat
+
+    heartbeat = asyncio.run(_run())
+
+    assert heartbeat.cancelled()
+    assert redis.store == {}, "a clean stop hands the lease back"
+
+
+def test_a_follower_that_takes_over_sweeps_at_once(monkeypatch):
+    collector = _workers(monkeypatch, _FakeRedis(), count=1)[0]
+    collector._running = True
+    collector._leading = False
+    collector.RELAY_POLL_SECONDS = 0.01
+
+    async def _relay():
+        collector._leading = True  # the heartbeat took over the lapsed lease meanwhile
+
+    monkeypatch.setattr(collector._dashboards, "relay", _relay)
+    started = time.monotonic()
+
+    asyncio.run(collector._relay_until_next_cycle())
+
+    assert time.monotonic() - started < 1.0, "a new leader must not wait out a follower's pause"
 
 
 def test_a_dead_leader_is_replaced_once_its_lease_lapses(monkeypatch):

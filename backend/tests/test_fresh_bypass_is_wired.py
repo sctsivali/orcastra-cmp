@@ -1219,7 +1219,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
         }
 
     def test_prewarm_passes_unreachable_nodes_to_every_model_that_has_it(self):
-        collector = ROUTERS.parent / "services" / "metrics_collector.py"
+        collector = ROUTERS.parent / "services" / "metrics_prewarm.py"
         models = self._models_declaring("unreachable_nodes")
         self.assertIn("VMListResponse", models, "fixture is wrong, not the code")
 
@@ -1233,7 +1233,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                 continue
             constructed += 1
             if not any(kw.arg == "unreachable_nodes" for kw in node.keywords):
-                offenders.append(f"{name} at metrics_collector.py:{node.lineno}")
+                offenders.append(f"{name} at metrics_prewarm.py:{node.lineno}")
         self.assertEqual(
             offenders,
             [],
@@ -1252,7 +1252,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
         guard closed the front door while the prewarm walked in the back. The signal is a
         fetcher returning None, which the caller's existing `if data:` already honours.
         """
-        collector = ROUTERS.parent / "services" / "metrics_collector.py"
+        collector = ROUTERS.parent / "services" / "metrics_prewarm.py"
         tree = ast.parse(collector.read_text())
         models = self._models_declaring("unreachable_nodes")
 
@@ -1275,7 +1275,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                 for n in ast.walk(fn)
             )
             if not bails:
-                offenders.append(f"{fn.name} at metrics_collector.py:{fn.lineno}")
+                offenders.append(f"{fn.name} at metrics_prewarm.py:{fn.lineno}")
         self.assertEqual(
             offenders,
             [],
@@ -1291,7 +1291,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
         instances list survived six times longer than GET /instances intends. The TTL is
         the endpoint's decision and belongs at the call site.
         """
-        collector = ROUTERS.parent / "services" / "metrics_collector.py"
+        collector = ROUTERS.parent / "services" / "metrics_prewarm.py"
         tree = ast.parse(collector.read_text())
 
         helper = next(
