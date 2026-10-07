@@ -19,9 +19,6 @@ import {
   LayoutGrid,
   Terminal as TerminalIcon,
   Server,
-  Loader2,
-  AlertCircle,
-  CheckCircle2,
   ChevronUp,
   ChevronDown,
   Pin,
@@ -44,23 +41,10 @@ import {
 import { TerminalInstance, TerminalInstanceHandle } from "./terminal-instance";
 import { InstanceOperations } from "./instance-operations";
 import { FileUploadDialog } from "./file-upload-dialog";
+import { SessionStatusIcon } from "./session-status";
 
 interface TerminalWindowProps {
   terminal: TerminalInstanceType;
-}
-
-// Status indicator component
-function StatusIndicator({ status }: { status: TerminalInstanceType["status"] }) {
-  switch (status) {
-    case "connecting":
-      return <Loader2 className="h-3 w-3 animate-spin text-yellow-400" />;
-    case "connected":
-      return <CheckCircle2 className="h-3 w-3 text-green-400" />;
-    case "error":
-      return <AlertCircle className="h-3 w-3 text-red-400" />;
-    default:
-      return <div className="h-2 w-2 rounded-full bg-gray-400" />;
-  }
 }
 
 export function TerminalWindow({ terminal }: TerminalWindowProps) {
@@ -312,7 +296,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
           {/* Left: Icon and Title */}
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <TerminalIcon className="h-4 w-4 text-blue-400 shrink-0" />
-            <StatusIndicator status={terminal.status} />
+            <SessionStatusIcon status={terminal.status} />
             <span className="text-sm font-medium text-gray-200 truncate">
               {terminal.title}
             </span>

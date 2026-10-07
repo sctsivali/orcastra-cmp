@@ -115,7 +115,7 @@ export function NicAddressSection({ instance }: { instance: VMInfo }) {
               <div className="min-w-0 space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{nic.device}</span>
-                  <Badge variant={nic.address ? "info" : "muted"}>
+                  <Badge variant={nic.address ? "secondary" : "outline"}>
                     {nic.address ? "Static" : "DHCP"}
                   </Badge>
                   {nic.inherited && <Badge variant="outline">Inherited</Badge>}

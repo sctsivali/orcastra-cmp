@@ -28,17 +28,13 @@ import {
 
 export type ClusterStatusTone = "positive" | "caution" | "neutral" | "negative";
 
-export type ClusterStatusBadgeVariant = "success" | "warning" | "error" | "muted";
-
 export interface ClusterStatusMeta {
   /** Normalised enum value. Never undefined: unknown input resolves to a real member. */
   status: ClusterStatus;
   /** Display label. Title case, hand-written, safe to render anywhere. */
   label: string;
-  /** For a Status column or a detail dialog, where a chip is the established treatment. */
-  badgeVariant: ClusterStatusBadgeVariant;
   icon: LucideIcon;
-  /** Background utility for a status dot, from the --status-* tokens. */
+  /** Background utility from the --status-* tokens, for the status strip on a cluster card. */
   dotClassName: string;
   /** Foreground utility for an inline icon. */
   iconClassName: string;
@@ -64,7 +60,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
   [ClusterStatus.ONLINE]: {
     status: ClusterStatus.ONLINE,
     label: "Online",
-    badgeVariant: "success",
     icon: CheckCircle2,
     dotClassName: "bg-status-online",
     iconClassName: "text-status-online",
@@ -76,7 +71,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
     // note: not formatLabel("not_authorized"), which gives "Not Authorized" and reads as a
     // permission denial. The cluster answered; the trust handshake is what is unfinished.
     label: "Pending Trust",
-    badgeVariant: "warning",
     icon: ShieldAlert,
     dotClassName: "bg-status-pending",
     iconClassName: "text-status-pending",
@@ -86,7 +80,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
   [ClusterStatus.PENDING]: {
     status: ClusterStatus.PENDING,
     label: "Pending",
-    badgeVariant: "muted",
     icon: Clock,
     dotClassName: "bg-status-unknown",
     iconClassName: "text-status-unknown",
@@ -96,7 +89,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
   [ClusterStatus.OFFLINE]: {
     status: ClusterStatus.OFFLINE,
     label: "Offline",
-    badgeVariant: "error",
     // XCircle for offline, AlertTriangle for error: the existing clusters page already drew
     // that line and it is worth keeping. A host that is down and a fault in us are different
     // problems, and the icon is the only thing separating them once both go red.
@@ -109,7 +101,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
   [ClusterStatus.ERROR]: {
     status: ClusterStatus.ERROR,
     label: "Error",
-    badgeVariant: "error",
     icon: AlertTriangle,
     dotClassName: "bg-status-offline",
     iconClassName: "text-status-offline",
@@ -121,7 +112,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
 const UNKNOWN: Entry = {
   status: ClusterStatus.PENDING,
   label: "Unknown",
-  badgeVariant: "muted",
   icon: HelpCircle,
   dotClassName: "bg-status-unknown",
   iconClassName: "text-status-unknown",

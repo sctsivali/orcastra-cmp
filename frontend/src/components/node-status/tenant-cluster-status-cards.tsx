@@ -10,7 +10,6 @@ import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNodeAvailability } from "@/hooks/use-lxd";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import { cn } from "@/lib/utils";
 
 function AvailabilitySkeleton() {
   return (
@@ -104,8 +103,8 @@ export function TenantClusterStatusCards() {
                       )}
                     </div>
                   </div>
-                  <Badge variant={cluster.available ? "success" : "muted"} className="shrink-0 gap-1">
-                    <StatusIcon className={cn("h-3 w-3", meta.iconClassName)} aria-hidden="true" />
+                  <Badge variant={cluster.available ? "positive" : "negative"} className="shrink-0 gap-1">
+                    <StatusIcon className="h-3 w-3" aria-hidden="true" />
                     {label}
                   </Badge>
                 </CardContent>

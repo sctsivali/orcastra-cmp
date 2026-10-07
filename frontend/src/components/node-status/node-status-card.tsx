@@ -194,7 +194,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
           <div className="flex items-center gap-2 shrink-0">
             {/* "Connected" and "Online" were two spellings of one idea across two pages.
                 One vocabulary now, from lib/cluster-status.ts. */}
-            <Badge variant={statusMeta.badgeVariant} className="gap-1">
+            <Badge variant={statusMeta.tone} className="gap-1">
               <StatusIcon className="h-3 w-3" />
               {statusMeta.label}
             </Badge>

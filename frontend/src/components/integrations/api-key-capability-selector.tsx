@@ -76,7 +76,7 @@ export function ApiKeyCapabilitySelector({
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-sm font-medium">{name}</span>
                     {capability.elevated && (
-                      <Badge variant="warning" className="gap-1 px-2">
+                      <Badge variant="caution" className="gap-1 px-2">
                         <ShieldAlert className="h-3 w-3" aria-hidden="true" />
                         {capability.elevated_reason ?? "Needs a deliberate decision"}
                       </Badge>

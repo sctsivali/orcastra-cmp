@@ -188,7 +188,7 @@ const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, on
       onClick={() => onOpen(instance)}
       className="flex w-full items-center gap-3 rounded-lg bg-muted/50 p-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-sm">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-card text-sm font-semibold tabular-nums">
         {rank}
       </div>
       <div className="flex-1 min-w-0">
@@ -421,7 +421,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
               <div key={idx} className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span
-                    className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
+                    className="inline-block w-2.5 h-2.5 rounded-[2px] shrink-0"
                     style={{ backgroundColor: entry.color }}
                   />
                   <span className="text-sm truncate">{nodeName}</span>
@@ -2561,8 +2561,13 @@ export default function MonitoringContent() {
                     className="flex items-center justify-between gap-3 py-2 px-2 rounded-lg hover:bg-muted transition-colors cursor-pointer text-left"
                   >
                     <div className="flex items-center gap-2">
-                      <div 
-                        className="w-3 h-3 rounded-full shrink-0"
+                      {/* A legend key for the chart slice, so it takes the slice's own colour.
+                          Square rather than round: a round swatch beside a state word reads as a
+                          status dot, which this console does not use. note: not rounded-sm, which
+                          tailwind.config.ts maps to 8px and renders a 12px square as a circle. */}
+                      <div
+                        aria-hidden="true"
+                        className="h-3 w-3 shrink-0 rounded-[2px]"
                         style={{ backgroundColor: item.color }}
                       />
                       <span className="text-sm">{item.name}</span>

@@ -56,7 +56,7 @@ import {
   History,
   ShieldAlert,
   AlertTriangle } from "lucide-react";
-import { cn, formatBytes, formatLabel, formatNetworkRate } from "@/lib/utils";
+import { formatBytes, formatLabel, formatNetworkRate } from "@/lib/utils";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -438,12 +438,6 @@ function ActiveSessionsTab() {
                 className="gap-1.5"
                 aria-pressed={autoRefresh}
               >
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full bg-current",
-                    autoRefresh ? "animate-pulse motion-reduce:animate-none" : "opacity-50",
-                  )}
-                />
                 {autoRefresh ? "Live" : "Paused"}
               </Button>
               <RefreshButton

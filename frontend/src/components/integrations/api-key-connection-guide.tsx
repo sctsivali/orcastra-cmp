@@ -174,7 +174,7 @@ export function ApiKeyConnectionGuide({
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline">{formatApplicationType(key.app_type)}</Badge>
           {isLegacyUnscopedKey(key.capabilities) ? (
-            <Badge variant="warning">Unscoped</Badge>
+            <Badge variant="caution">Unscoped</Badge>
           ) : (
             (key.capabilities ?? []).map((capability) => (
               <Badge

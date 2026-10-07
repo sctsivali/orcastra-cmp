@@ -892,10 +892,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
             <DialogFooter className="flex items-center gap-2">
               {isPermissionsDirty && (
-                <span className="text-xs text-amber-600 dark:text-amber-400 mr-auto flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-status-pending animate-pulse"></span>
+                <Badge variant="caution" className="mr-auto">
                   Unsaved changes
-                </span>
+                </Badge>
               )}
               <Button
                 onClick={handleSavePermissions}

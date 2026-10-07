@@ -76,13 +76,13 @@ const DEAD = new Set(['components/tag-manager-legacy.tsx']);
 // The tint-plus-saturated-text pairing everywhere outside the cleared tree. This is what stops
 // the pattern spreading into the surfaces the Cluster submenu change deliberately left alone.
 // Ratchet: may fall, never rise.
-const TINT_PAIR_BASELINE = 26;
+const TINT_PAIR_BASELINE = 2;
 
 // A <Badge> naming its own foreground colour at the call site. Badge exists so a chip's colour
 // is one decision in one file, and a className override is how the same semantic ends up in
 // two shades in two files.
 // Ratchet: may fall, never rise.
-const BADGE_OVERRIDE_BASELINE = 9;
+const BADGE_OVERRIDE_BASELINE = 0;
 
 // --- counted blind spots ----------------------------------------------------------------
 //
@@ -110,7 +110,7 @@ const SPLIT_KEY_BASELINE = 0;
 // a proximity rule would fire on the reference implementation. This is the population a genuine
 // cross-line pair could hide inside.
 // Ratchet: may fall, never rise.
-const UNPAIRED_TINT_BASELINE = 37;
+const UNPAIRED_TINT_BASELINE = 35;
 
 // --- measured contrast failures ---------------------------------------------------------
 //
@@ -119,15 +119,7 @@ const UNPAIRED_TINT_BASELINE = 37;
 // listed pair that now PASSES also fails, so the map cannot go stale claiming a defect somebody
 // already fixed.
 const KNOWN_CONTRAST_FAILURES = new Map([
-  // Numbers are the worse of --card and --background, which is what the rule scores. On
-  // --card alone these read 3.15, 2.73, 3.82 and 4.18, which is the figure badge.tsx quotes.
-  // The four tinted status variants. Left in place because the Cluster submenu change was
-  // scoped to that submenu and these are still live on technologies, gpu and instance-create.
-  // The replacement exists beside them: variant={meta.tone}, measured 4.72:1 to 9.96:1.
-  ['badge#success#light', 3.0],
-  ['badge#warning#light', 2.61],
-  ['badge#error#light', 3.64],
-  ['badge#info#light', 3.99],
+  // Numbers are the worse of --card and --background, which is what the rule scores.
   // A token change, not a call-site change. --destructive at 0 84.2% 60.2% is too light to
   // carry white, and moving it moves every destructive Button and confirm dialog at once.
   ['badge#destructive#light', 3.61],
@@ -293,6 +285,28 @@ if (dark && accent) {
 }
 
 const THEMES = { light, dark };
+
+// The fixed-dark console and terminal chrome rebinds the status pair to its dark-theme values
+// through .terminal-status, because a light-theme chip measures 3.30:1 on that ground. That
+// block is a copy, so it is held equal here: a dark status tuned for contrast must not leave a
+// stale twin on the chrome.
+const chromeStatus = tokenBlock(css, '.terminal-status');
+if (!chromeStatus) offenders.push('globals.css: could not read the .terminal-status token block');
+else if (dark) {
+  for (const [name, rgb] of chromeStatus) {
+    const want = dark.get(name);
+    if (!name.startsWith('status-')) {
+      offenders.push(`globals.css .terminal-status declares --${name}; it may only rebind --status-* tokens`);
+    } else if (!want || want.join() !== rgb.join()) {
+      offenders.push(`globals.css .terminal-status --${name} differs from its .dark value`);
+    }
+  }
+  for (const name of dark.keys()) {
+    if (name.startsWith('status-') && !chromeStatus.has(name)) {
+      offenders.push(`globals.css .terminal-status is missing --${name}, which .dark declares`);
+    }
+  }
+}
 
 /** Resolve one utility's colour, or null when it carries none of its own. */
 function resolve(kind, rest, theme, where) {
@@ -684,10 +698,10 @@ if (offenders.length) {
   console.error('\nSemantic colour:');
   for (const o of offenders) console.error(`  ${o}`);
   console.error('\nA status is a token, and a chip is solid. Use a Badge tone variant');
-  console.error('(positive, caution, neutral, negative) or a --status-* dot beside plain text:');
+  console.error('(positive, caution, neutral, negative), or plain text where a chip is too loud:');
   console.error('  components/ui/badge.tsx        the tone variants and their measurements');
   console.error('  lib/cluster-status.ts          the one status vocabulary');
-  console.error('  components/regions/regions-page.tsx   the dot rendering');
+  console.error('  components/terminal/session-status.tsx   the chip on fixed-dark chrome');
   console.error('See documentation/ui/frontend-design-language.md, "Status colour is a token,');
   console.error('and a pill is not the default container".');
   process.exit(1);

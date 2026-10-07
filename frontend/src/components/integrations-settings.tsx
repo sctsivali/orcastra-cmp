@@ -694,7 +694,7 @@ function IntegrationsSettingsContent() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline">{formatApplicationType(apiKey.app_type)}</Badge>
                     {isLegacyUnscopedKey(apiKey.capabilities) ? (
-                      <Badge variant="warning" className="gap-1">
+                      <Badge variant="caution" className="gap-1">
                         <ShieldAlert className="h-3 w-3" aria-hidden="true" />
                         Unscoped legacy key
                       </Badge>

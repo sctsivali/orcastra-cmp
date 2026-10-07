@@ -101,7 +101,7 @@ export function StorageDeviceList({ devices }: { devices: StorageDeviceInfo[] })
                   {disk.type}
                 </Badge>
               ) : null}
-              {disk.read_only ? <Badge variant="warning">Read only</Badge> : null}
+              {disk.read_only ? <Badge variant="caution">Read only</Badge> : null}
               {disk.removable ? (
                 <Badge variant="outline" className="font-normal">
                   Removable

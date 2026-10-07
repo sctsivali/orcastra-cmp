@@ -122,7 +122,7 @@ export function useNodePickerOptions(
         label,
         sublabel,
         status: meta
-          ? { label: meta.label, dotClassName: meta.dotClassName, tone: meta.tone }
+          ? { label: meta.label, tone: meta.tone }
           : undefined,
         statusReason: row?.reason ?? undefined,
         disabled:

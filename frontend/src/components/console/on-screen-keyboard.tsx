@@ -533,10 +533,10 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
       {(modifiers.ctrl || modifiers.alt || modifiers.shift || modifiers.meta) && (
         <div className="flex items-center justify-center gap-1 mt-1 text-[10px] text-zinc-400">
           <span>Active:</span>
-          {modifiers.ctrl && <span className="px-1 py-0.5 bg-primary/30 text-primary-foreground rounded">Ctrl</span>}
-          {modifiers.alt && <span className="px-1 py-0.5 bg-primary/30 text-primary-foreground rounded">Alt</span>}
-          {modifiers.shift && <span className="px-1 py-0.5 bg-primary/30 text-primary-foreground rounded">Shift</span>}
-          {modifiers.meta && <span className="px-1 py-0.5 bg-primary/30 text-primary-foreground rounded">Win</span>}
+          {modifiers.ctrl && <span className="rounded bg-zinc-100 px-1 py-0.5 font-medium text-zinc-900">Ctrl</span>}
+          {modifiers.alt && <span className="rounded bg-zinc-100 px-1 py-0.5 font-medium text-zinc-900">Alt</span>}
+          {modifiers.shift && <span className="rounded bg-zinc-100 px-1 py-0.5 font-medium text-zinc-900">Shift</span>}
+          {modifiers.meta && <span className="rounded bg-zinc-100 px-1 py-0.5 font-medium text-zinc-900">Win</span>}
         </div>
       )}
     </div>

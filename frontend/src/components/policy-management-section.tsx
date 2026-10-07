@@ -58,15 +58,6 @@ import {
 // filter out snapshot (not ready yet)
 const VISIBLE_PERMISSIONS = ALL_TENANT_PERMISSIONS.filter((p) => p !== "snapshot");
 
-// ── Permission color mapping ──
-const PERM_COLORS: Record<TenantPermission, string> = {
-  view: "bg-blue-500/10 text-blue-600 border-blue-500/20",
-  operate: "bg-orange-500/10 text-orange-600 border-orange-500/20",
-  console: "bg-purple-500/10 text-purple-600 border-purple-500/20",
-  snapshot: "bg-cyan-500/10 text-cyan-600 border-cyan-500/20",
-  file_transfer: "bg-green-500/10 text-green-600 border-green-500/20",
-};
-
 /** compact permission badges (no icons) */
 function PermissionBadges({ permissions }: { permissions: string[] }) {
   return (
@@ -74,11 +65,7 @@ function PermissionBadges({ permissions }: { permissions: string[] }) {
       {(permissions as TenantPermission[])
         .filter((p) => p !== "snapshot")
         .map((p) => (
-          <Badge
-            key={p}
-            variant="outline"
-            className={`text-[10px] py-0 px-1.5 ${PERM_COLORS[p]}`}
-          >
+          <Badge key={p} variant="secondary" className="px-2 py-0">
             {TENANT_PERMISSION_LABELS[p].split(" ")[0]}
           </Badge>
         ))}
@@ -229,7 +216,6 @@ function RuleEditor({
                       sublabel: clusterSublabel(c.cluster_id, c.display_name, c.endpoint),
                       status: {
                         label: meta.label,
-                        dotClassName: meta.dotClassName,
                         tone: meta.tone,
                       },
                     };

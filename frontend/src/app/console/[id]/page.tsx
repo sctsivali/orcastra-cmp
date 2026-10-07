@@ -20,8 +20,6 @@ import {
   Search,
   RefreshCw,
   Loader2,
-  CheckCircle2,
-  AlertCircle,
   X,
   Play,
   Square,
@@ -40,7 +38,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { SessionStatusBadge } from "@/components/terminal/session-status";
 import {
   Tooltip,
   TooltipContent,
@@ -1362,40 +1360,6 @@ function ConsoleContent() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Status badge
-  const StatusBadge = () => {
-    switch (currentStatus) {
-      case "connecting":
-      case "loading":
-        return (
-          <Badge variant="secondary" className="gap-1 bg-yellow-500/20 text-yellow-400">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Connecting
-          </Badge>
-        );
-      case "connected":
-        return (
-          <Badge variant="secondary" className="gap-1 bg-green-500/20 text-green-400">
-            <CheckCircle2 className="h-3 w-3" />
-            Connected
-          </Badge>
-        );
-      case "error":
-        return (
-          <Badge variant="secondary" className="gap-1 bg-red-500/20 text-red-400">
-            <AlertCircle className="h-3 w-3" />
-            Error
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="secondary" className="gap-1 bg-gray-500/20 text-gray-400">
-            Disconnected
-          </Badge>
-        );
-    }
-  };
-
   return (
     <div className="flex flex-col h-screen bg-terminal">
       {/* Header */}
@@ -1423,7 +1387,7 @@ function ConsoleContent() {
             <span className="text-gray-400">{host}</span>
             <span className="text-gray-600 text-sm">({project})</span>
           </div>
-          <StatusBadge />
+          <SessionStatusBadge status={currentStatus === "loading" ? "connecting" : currentStatus} />
           {/* A human watching this console could not tell that an agent was driving the same X
               session. The Sessions page shows it afterwards; this shows it while it matters. */}
           <AgentActivityBadge instanceName={instanceName} accessToken={getAccessToken()} />

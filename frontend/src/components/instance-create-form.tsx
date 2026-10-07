@@ -2314,7 +2314,7 @@ function InstanceCreateFormContent() {
                         <span className="break-words text-sm">{gpu.label}</span>
                       )}
                       {gpu.gpuClass === "display" && (
-                        <Badge variant="warning">Display only</Badge>
+                        <Badge variant="caution">Display only</Badge>
                       )}
                       <span className="text-xs text-muted-foreground">
                         physical

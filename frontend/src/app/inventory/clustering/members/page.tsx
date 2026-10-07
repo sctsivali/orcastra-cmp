@@ -248,7 +248,6 @@ function ClusterMembersContent() {
                 badge: formatHypervisorType(cluster.cluster_type),
                 status: {
                   label: meta.label,
-                  dotClassName: meta.dotClassName,
                   tone: meta.tone,
                 },
               };

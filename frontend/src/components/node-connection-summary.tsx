@@ -10,7 +10,7 @@ import {
 import type { NodeStatus } from "@/types";
 import { usePermissions } from "@/hooks/use-permissions";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
 interface NodeConnectionSummaryProps {
   nodes?: NodeStatus[];
@@ -78,16 +78,9 @@ export function NodeConnectionSummary({
                     <p className="text-xs text-muted-foreground">Cluster ID: {node.name}</p>
                   )}
                   <p className="break-all font-mono text-xs text-muted-foreground">{node.endpoint}</p>
-                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "h-1.5 w-1.5 shrink-0 rounded-full",
-                        clusterStatusMeta(node).dotClassName
-                      )}
-                    />
+                  <Badge variant={clusterStatusMeta(node).tone}>
                     {clusterStatusMeta(node).label}
-                  </p>
+                  </Badge>
                   <p className="text-xs text-destructive">{getDisconnectedReason(node)}</p>
                 </div>
               ))}

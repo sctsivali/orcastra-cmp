@@ -221,11 +221,7 @@ export function ClusterAccessSelector({
                       <p className="break-words text-sm font-medium">{row.name}</p>
                       <span className="flex shrink-0 items-center gap-2">
                         {row.meta && (
-                          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <span
-                              aria-hidden
-                              className={cn("h-1.5 w-1.5 rounded-full", row.meta.dotClassName)}
-                            />
+                          <span className="text-xs text-muted-foreground">
                             <span className="sr-only">Status: </span>
                             {row.meta.label}
                           </span>

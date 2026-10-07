@@ -22,7 +22,7 @@ import {
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { cn, formatBytes, formatHypervisorType, formatMemory } from "@/lib/utils";
+import { formatBytes, formatHypervisorType, formatMemory } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
@@ -51,18 +51,17 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
           srLabel: "Status: Unavailable",
         };
   const getStatusBadge = () => (
-    <Badge variant={statusMeta.badgeVariant}>{statusMeta.label}</Badge>
+    <Badge variant={statusMeta.tone} className="shrink-0 whitespace-nowrap">
+      {statusMeta.label}
+    </Badge>
   );
 
   return (
-    <Card className={cn(
-      "transition-all hover:shadow-md",
-      !node.is_online && "opacity-60"
-    )}>
+    <Card className="transition-all hover:shadow-md">
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Server className="h-5 w-5 text-muted-foreground" />
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Server className="h-5 w-5 shrink-0 text-muted-foreground" />
             <CardTitle className="text-base">{node.node_name}</CardTitle>
           </div>
           {/* status_message is the backend exception reflected back (monitoring.py builds it
@@ -153,7 +152,9 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
             </div>
           </>
         ) : (
-          <div className="text-center py-4 text-muted-foreground">
+          // note: the dimming lives here and not on the Card. Fading the whole card faded the
+          // status chip with it, which put a solid chip back at tint strength.
+          <div className="text-center py-4 text-muted-foreground opacity-60">
             <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
             {/* One source for the word, so the badge above and this line can never disagree.
                 It used to compare node.cluster_status to the literal "pending_trust", which the
@@ -163,7 +164,7 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
               Cluster is {statusMeta.label.toLowerCase()}
             </p>
             {isPartner && node.status_message && (
-              <p className="text-xs mt-1 max-w-[200px] mx-auto">{node.status_message}</p>
+              <p className="text-xs mt-1 max-w-[200px] mx-auto break-words">{node.status_message}</p>
             )}
           </div>
         )}

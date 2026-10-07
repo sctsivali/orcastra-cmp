@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { SessionStatusBadge } from "@/components/terminal/session-status";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -372,22 +373,6 @@ export function ConsoleWindow({
     return null;
   }
 
-  // Get status badge
-  const getStatusBadge = () => {
-    switch (consoleInstance.connectionStatus) {
-      case "connected":
-        return <Badge variant="default" className="bg-green-500">Connected</Badge>;
-      case "connecting":
-        return <Badge variant="secondary">Connecting...</Badge>;
-      case "disconnected":
-        return <Badge variant="outline">Disconnected</Badge>;
-      case "error":
-        return <Badge variant="destructive">Error</Badge>;
-      default:
-        return null;
-    }
-  };
-
   const windowContent = (
     <>
       {/* Session Conflict Dialog */}
@@ -485,7 +470,7 @@ export function ConsoleWindow({
               {consoleInstance.project}
             </Badge>
           )}
-          {getStatusBadge()}
+          <SessionStatusBadge status={consoleInstance.connectionStatus} chrome={false} />
         </div>
 
         {/* Window controls */}
