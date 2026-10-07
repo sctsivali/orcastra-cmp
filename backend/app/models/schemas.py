@@ -131,6 +131,12 @@ class VMInfo(BaseModel):
     effective_memory_limit: Optional[str] = Field(None, exclude=True)
     effective_limits_known: bool = Field(False, exclude=True)
     expanded_devices_known: bool = Field(False, exclude=True)
+    # note: excluded from every dump, so neither the wire nor a cached list carries it. The
+    # monitoring sweep reads it straight off a fresh recursion=2 list to sample CPU and network
+    # rates without a second state request per instance; `live_state_read_at` is when the list
+    # read happened, the only honest sample time for those counters.
+    live_state: Optional[Dict[str, Any]] = Field(None, exclude=True)
+    live_state_read_at: Optional[float] = Field(None, exclude=True)
     profiles: List[str] = Field(default_factory=list, description="Applied profiles")
     tags: List[str] = Field(default_factory=list, description="Instance tags for organization and filtering")
     
@@ -1487,6 +1493,23 @@ class ClusterMonitoringMetrics(BaseModel):
     cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
     cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total")
     cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
+    cpu_busy_threads: Optional[float] = Field(
+        None,
+        description=(
+            "Hardware threads kept busy by this Cluster's running instances over the last "
+            "sample window; None until a reading is available"
+        ),
+    )
+    cpu_busy_percent: Optional[float] = Field(
+        None, description="cpu_busy_threads as a percentage of cpu_total"
+    )
+    cpu_status: Literal["ready", "calculating", "unavailable"] = Field(
+        "unavailable",
+        description="Whether cpu_busy_threads is a reading, waits for a second sample, or is not reported",
+    )
+    cpu_reporting_instances: int = Field(
+        0, description="Running instances whose CPU reading went into cpu_busy_threads"
+    )
     
     # Memory Metrics
     memory_total_bytes: int = Field(0, description="Total memory in bytes")
@@ -1510,6 +1533,8 @@ class ClusterMonitoringMetrics(BaseModel):
     # Instance counts
     instance_count: int = Field(0, description="Total instances on this Cluster")
     running_instances: int = Field(0, description="Running instances on this Cluster")
+    container_count: int = Field(0, description="Containers on this Cluster")
+    vm_count: int = Field(0, description="Virtual machines on this Cluster")
 
 
 class InstanceMonitoringSummary(BaseModel):
@@ -1519,12 +1544,28 @@ class InstanceMonitoringSummary(BaseModel):
     project: str = Field("default", description="Project name")
     type: str = Field("container", description="Instance type")
     status: str = Field(..., description="Instance status")
-    cpu_usage: float = Field(0, description="CPU usage")
-    memory_usage_bytes: int = Field(0, description="Memory usage in bytes")
+    cpu_usage: Optional[float] = Field(
+        None,
+        description="Busy share of the instance's effective vCPUs, 0 to 100; None until cpu_status is ready",
+    )
+    cpu_status: Literal["ready", "calculating", "unavailable"] = Field(
+        "unavailable", description="Whether the CPU figures are a reading yet"
+    )
+    cpu_busy_vcpus: Optional[float] = Field(
+        None, description="vCPU-seconds used per second over the sample window"
+    )
+    cpu_vcpus: Optional[int] = Field(None, description="vCPUs cpu_usage is measured against")
+    memory_usage_bytes: int = Field(0, description="Memory in use in bytes, including page cache")
     memory_limit_bytes: int = Field(0, description="Memory limit in bytes")
     disk_usage_bytes: int = Field(0, description="Total disk usage in bytes")
-    network_rx_bytes: int = Field(0, description="Network received bytes")
-    network_tx_bytes: int = Field(0, description="Network transmitted bytes")
+    network_rx_bytes: int = Field(0, description="Network bytes received since the instance started")
+    network_tx_bytes: int = Field(0, description="Network bytes sent since the instance started")
+    network_rx_bytes_per_sec: Optional[float] = Field(
+        None, description="Receive rate over the sample window, in bytes per second"
+    )
+    network_tx_bytes_per_sec: Optional[float] = Field(
+        None, description="Transmit rate over the sample window, in bytes per second"
+    )
 
 
 class StoragePoolMetrics(BaseModel):
@@ -1544,16 +1585,6 @@ class StoragePoolMetrics(BaseModel):
     usage_percent: float = Field(0.0, description="Usage percentage")
 
 
-class NetworkMetrics(BaseModel):
-    """Aggregated network metrics."""
-    total_rx_bytes: int = Field(0, description="Total received bytes")
-    total_tx_bytes: int = Field(0, description="Total transmitted bytes")
-    total_rx_packets: int = Field(0, description="Total received packets")
-    total_tx_packets: int = Field(0, description="Total transmitted packets")
-    interfaces: Dict[str, Dict[str, int]] = Field(default_factory=dict, description="Per-interface stats")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(), description="Metrics timestamp")
-
-
 class WarningsSummary(BaseModel):
     """Summary of warnings/alerts."""
     total: int = Field(0, description="Total warnings count")
@@ -1565,11 +1596,23 @@ class WarningsSummary(BaseModel):
 class MetricsHistoryPoint(BaseModel):
     """Single point in metrics history for graphing."""
     timestamp: datetime = Field(..., description="Data point timestamp")
-    cpu_usage_percent: float = Field(0.0, description="CPU usage at this time")
+    cpu_usage_percent: Optional[float] = Field(
+        None,
+        description=(
+            "Busy share of the hardware threads behind the instances that reported, or None when "
+            "no reading was available at this time"
+        ),
+    )
     memory_usage_percent: float = Field(0.0, description="Memory usage at this time")
     storage_usage_percent: float = Field(0.0, description="Storage usage at this time")
-    network_rx_bytes: int = Field(0, description="Network RX bytes at this time")
-    network_tx_bytes: int = Field(0, description="Network TX bytes at this time")
+    network_rx_bytes: int = Field(0, description="Legacy cumulative receive counter; 0 on points that carry rates")
+    network_tx_bytes: int = Field(0, description="Legacy cumulative transmit counter; 0 on points that carry rates")
+    network_rx_bytes_per_sec: Optional[float] = Field(
+        None, description="Fleet receive rate at this time, in bytes per second"
+    )
+    network_tx_bytes_per_sec: Optional[float] = Field(
+        None, description="Fleet transmit rate at this time, in bytes per second"
+    )
     disk_io_bytes: int = Field(0, description="Disk I/O at this time")
     running_instances: int = Field(0, description="Running instances at this time")
     nodes: Optional[Dict[str, Any]] = Field(default=None, description="Per-Cluster metrics breakdown")
@@ -1597,8 +1640,25 @@ class MonitoringDashboardResponse(BaseModel):
     used_cpu: int = Field(0, description="vCPUs allocated across all Clusters")
     cpu_usage_percent: float = Field(0.0, description="CPU allocation percentage")
     
-    # Real-time CPU usage (from instance metrics)
-    realtime_cpu_percent: float = Field(0.0, description="Real-time average CPU usage from running instances")
+    # CPU utilisation (from the instances' own counters)
+    realtime_cpu_percent: float = Field(
+        0.0, description="Deprecated alias of cpu_busy_percent, 0.0 while it is None"
+    )
+    cpu_busy_threads: Optional[float] = Field(
+        None, description="Hardware threads kept busy by running instances, across reporting Clusters"
+    )
+    cpu_busy_percent: Optional[float] = Field(
+        None, description="cpu_busy_threads as a percentage of the reporting Clusters' hardware threads"
+    )
+    cpu_status: Literal["ready", "calculating", "unavailable"] = Field(
+        "unavailable", description="Whether cpu_busy_threads is a reading yet"
+    )
+    cpu_reporting_instances: int = Field(
+        0, description="Running instances whose CPU reading went into cpu_busy_threads"
+    )
+    cpu_reporting_threads: int = Field(
+        0, description="Hardware threads of the Clusters that reported: the cpu_busy_percent denominator"
+    )
     
     total_memory_bytes: int = Field(0, description="Total memory across all Clusters")
     used_memory_bytes: int = Field(0, description="Used memory bytes")
@@ -1623,8 +1683,15 @@ class MonitoringDashboardResponse(BaseModel):
     storage_pools: List[StoragePoolMetrics] = Field(default_factory=list, description="Storage pool details")
     
     # Top Consumers
-    top_cpu_consumers: List[InstanceMonitoringSummary] = Field(default_factory=list, description="Top CPU consumers")
-    top_memory_consumers: List[InstanceMonitoringSummary] = Field(default_factory=list, description="Top memory consumers")
+    consumers: List[InstanceMonitoringSummary] = Field(
+        default_factory=list,
+        description=(
+            "Running instances that lead any resource on their Cluster: CPU, memory, disk or "
+            "network, 20 per resource per Cluster"
+        ),
+    )
+    top_cpu_consumers: List[InstanceMonitoringSummary] = Field(default_factory=list, description="Deprecated: top 20 by busy vCPUs; use consumers")
+    top_memory_consumers: List[InstanceMonitoringSummary] = Field(default_factory=list, description="Deprecated: top 20 by memory; use consumers")
     
     # Warnings Summary
     warnings: Optional[WarningsSummary] = Field(None, description="Warnings summary")

@@ -64,6 +64,28 @@ def instance_rate_identity(
     return ":".join(quote(part or "", safe="") for part in (cluster, project, name, uuid))
 
 
+def _start_marker(last_used_at: Any) -> str:
+    """Whole seconds of the last start, the same for LXD's string and a parsed datetime.
+
+    important: the dialog reads last_used_at as LXD's raw string ("...T00:00:00Z") and the fleet
+    list carries it through VMInfo, where pydantic has already parsed it into a datetime. Put
+    into the epoch as they come, the two never matched, and each surface re-seeded the other's
+    baseline on every poll.
+    """
+    moment = last_used_at
+    if isinstance(moment, str):
+        text = moment.strip()
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            return text
+    if isinstance(moment, datetime):
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return str(int(moment.timestamp()))
+    return ""
+
+
 def build_state_sample(
     *,
     cluster: str,
@@ -94,7 +116,7 @@ def build_state_sample(
                     counters[f"{key}:{iface}"] = float(value)
     # A restart or a move gives the instance a new init or QEMU pid and a new start time, and
     # every counter starts again from zero, so either one ends the baseline.
-    epoch = f"{state.get('pid') or 0}:{last_used_at or ''}"
+    epoch = f"{state.get('pid') or 0}:{_start_marker(last_used_at)}"
     identity = instance_rate_identity(
         cluster, project, name, (config or {}).get("volatile.uuid")
     )

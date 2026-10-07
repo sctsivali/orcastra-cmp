@@ -383,13 +383,12 @@ AGGREGATE_ONLY = {
     # Returns None for anyone without a tenant ACL, so it never narrows a Partner in the first
     # place, and it answers with image fingerprints, which are a cluster-level artifact.
     "_allowed_image_fingerprints_by_host",
-    # These three sum counters. get_network_metrics keys its totals by interface name (eth0),
-    # not by instance, and the dashboard and node metrics emit host-level figures. A Partner on
-    # a shared cluster sees totals that include another organization's traffic, which is a
-    # property of the host being shared, not a disclosure of what runs on it.
+    # These two emit host-level figures. A Partner on a shared cluster sees totals that include
+    # another organization's load, which is a property of the host being shared, not a
+    # disclosure of what runs on it. The dashboard's per-instance consumers come only from rows
+    # check_tenant_permission kept, and that check applies project_is_visible first.
     "get_monitoring_dashboard",
     "get_node_metrics",
-    "get_network_metrics",
 }
 
 

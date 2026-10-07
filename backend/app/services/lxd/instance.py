@@ -5,6 +5,7 @@ Handles create, start, stop, restart, delete, and list operations for instances.
 
 import logging
 import asyncio
+import time
 import secrets
 import socket
 from typing import Callable, List, Tuple, Optional, Dict, Any
@@ -643,7 +644,13 @@ _instance_detail_executor = ThreadPoolExecutor(
 _cluster_member = normalize_cluster_member
 
 
-def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -> VMInfo:
+def _vm_info_from_row(
+    row: Dict[str, Any],
+    node_name: str,
+    node_endpoint: str,
+    *,
+    read_at: Optional[float] = None,
+) -> VMInfo:
     """One record of an all-projects, recursion=2 instance list to VMInfo.
 
     `project` is what the daemon stamped on the row (list_across_projects refuses rows
@@ -655,6 +662,7 @@ def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -
     expanded_devices = row.get("expanded_devices")
     tags_str = config_data.get("user.tags", "")
     tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else []
+    live_state = _live_state(row, read_at)
     return VMInfo(
         name=row.get("name", ""),
         status=parse_vm_status(row.get("status", "Unknown"), row.get("status_code", 0)),
@@ -687,7 +695,17 @@ def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -
         tags=tags,
         project=row.get("project") or "default",
         location=_cluster_member(row.get("location")),
+        live_state=live_state,
+        live_state_read_at=read_at if live_state is not None else None,
     )
+
+
+def _live_state(row: Dict[str, Any], read_at: Optional[float]) -> Optional[Dict[str, Any]]:
+    """The inline state of a running row from a timed read, else None."""
+    state = row.get("state")
+    if read_at is None or row.get("status") != "Running" or not isinstance(state, dict):
+        return None
+    return state
 
 
 def _list_instances_in_project(
@@ -1148,6 +1166,8 @@ class InstanceManager:
             # State is attached at recursion=2 so the row mapper does not make a request per
             # running instance. A scoped read names its project directly; the fleet path keeps
             # the all-projects optimization and compatibility fallback.
+            read_started = time.time()
+            read_at: Optional[float] = None
             try:
                 if project is None:
                     rows, complete = list_across_projects(
@@ -1162,6 +1182,9 @@ class InstanceManager:
                         2,
                         request_timeout=_SCOPED_INSTANCE_STATE_READ_TIMEOUT,
                     )
+                # note: the midpoint of the list read. LXD gathers each row's state somewhere
+                # inside that request, so the midpoint is off by at most half its duration.
+                read_at = (read_started + time.time()) / 2
             except requests_exc.ReadTimeout:
                 # A large partner cloud can outrun the read budget with state attached.
                 # Listing without addresses beats reporting the cluster unreachable.
@@ -1188,7 +1211,7 @@ class InstanceManager:
                 )
             for row in rows:
                 try:
-                    vms.append(_vm_info_from_row(row, node_name, node_endpoint))
+                    vms.append(_vm_info_from_row(row, node_name, node_endpoint, read_at=read_at))
                 except Exception as e:
                     logger.error(
                         "Error processing instance %s/%s on %s: %s",
