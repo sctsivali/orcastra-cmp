@@ -24,6 +24,8 @@ from app.core.rate_sampler import RateReading, RateSampler, Sample, SamplerPolic
 from app.models.instance_metrics import GuestAgentStatus, InstanceMetrics
 from .cpu_allocation import STANDALONE_LOCATIONS, effective_vcpus
 from .exceptions import LXDConnectionError, LXDOperationError
+from .metrics_scrape import ProjectScrape, project_metrics
+from .metrics_text import InstanceSeries, honest_memory
 from .instance_metrics_sections import (
     INSTANCE_METRIC_SECTIONS,
     apply_state_sections,
@@ -39,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 STATE_SAMPLER = RateSampler(
     "instance_state", SamplerPolicy(min_window=1.5, max_age=120.0, ttl_seconds=180)
+)
+# note: a 10 s floor because the counters come from a scrape cached for 10 s; a shorter window
+# would only ever compare a scrape with itself.
+IO_SAMPLER = RateSampler(
+    "instance_io", SamplerPolicy(min_window=10.0, max_age=180.0, ttl_seconds=240)
 )
 
 _HOST_THREADS_TTL_SECONDS = 1800.0
@@ -153,18 +160,86 @@ def apply_rates(
             metrics.network_tx_bytes_per_second[iface] = round(rate, 1)
 
 
-def _observe(identity: str, sample: Sample) -> Optional[RateReading]:
+def _observe(sampler: RateSampler, identity: str, sample: Sample) -> Optional[RateReading]:
     try:
-        return STATE_SAMPLER.observe(identity, sample)
+        return sampler.observe(identity, sample)
     except Exception as exc:  # noqa: BLE001 - rates are optional, the sample is not
-        logger.warning("Rate sampler failed for %s: %s", identity, exc)
+        logger.warning("Rate sampler %s failed for %s: %s", sampler.namespace, identity, exc)
         return None
 
 
+def apply_honest_memory(
+    metrics: InstanceMetrics, series: Optional[InstanceSeries], agent: GuestAgentStatus
+) -> None:
+    """Replace the state read's cache-inclusive memory with what the guest's programs hold.
+
+    important: only for a container or a VM whose agent answers. Without the agent LXD falls
+    back to QEMU's host-side RSS, which is not the guest's memory at all.
+    """
+    if series is None or agent not in ("not_applicable", "connected"):
+        return
+    if "memory" in metrics.unavailable_sections:
+        return
+    reading = honest_memory(series)
+    if reading is None:
+        return
+    metrics.memory_used_bytes = int(reading["used"] or 0)
+    metrics.memory_total_bytes = int(reading["total"] or 0)
+    metrics.memory_available_bytes = reading["available"]
+    metrics.memory_cache_bytes = reading["cache"]
+    metrics.memory_includes_cache = False
+    if metrics.memory_total_bytes > 0:
+        metrics.memory_usage_percent = round(
+            metrics.memory_used_bytes / metrics.memory_total_bytes * 100, 2
+        )
+
+
+def apply_disk_io(
+    metrics: InstanceMetrics,
+    scrape: Optional[ProjectScrape],
+    series: Optional[InstanceSeries],
+    identity: str,
+    epoch: str,
+) -> None:
+    """Disk I/O rates over whole physical disks, from two scrapes at least 10 s apart."""
+    if scrape is None or series is None:
+        return
+    counters: Dict[str, float] = {}
+    if series.disk_read is not None:
+        counters["disk_read"] = series.disk_read
+    if series.disk_written is not None:
+        counters["disk_write"] = series.disk_written
+    if not counters:
+        return
+    reading = _observe(
+        IO_SAMPLER, identity, Sample(taken_at=scrape.collected_at, epoch=epoch, counters=counters)
+    )
+    if reading is None:
+        return
+    if reading.status != "ready" or not reading.rates:
+        metrics.disk_io_status = "calculating"
+        return
+    metrics.disk_io_status = "ready"
+    metrics.disk_io_window_seconds = reading.window_seconds
+    if "disk_read" in reading.rates:
+        metrics.disk_read_bytes_per_second = round(reading.rates["disk_read"], 1)
+    if "disk_write" in reading.rates:
+        metrics.disk_write_bytes_per_second = round(reading.rates["disk_write"], 1)
+
+
 def read_instance_metrics(
-    client: Any, host: str, instance_name: str, project: str = "default"
+    client: Any,
+    host: str,
+    instance_name: str,
+    project: str = "default",
+    *,
+    deadline: Optional[float] = None,
 ) -> InstanceMetrics:
-    """One metrics sample. Blocking: runs on the instance metrics executor."""
+    """One metrics sample. Blocking: runs on the instance metrics executor.
+
+    `deadline` is a time.monotonic() value. Without one, the /1.0/metrics read is skipped and
+    memory and disk come from the state read alone.
+    """
     try:
         # important: scoped to the project the caller authorized. A name is unique per project,
         # so searching every project answered with whichever tenant's instance LXD listed first.
@@ -209,17 +284,38 @@ def read_instance_metrics(
         metrics.uptime_seconds = uptime_seconds(state, last_used_at, metrics.timestamp)
         metrics.base_image = base_image(config)
 
+        scrape = (
+            project_metrics(
+                client,
+                host,
+                getattr(instance, "location", None),
+                found_project or project,
+                deadline=deadline,
+            )
+            if deadline is not None
+            else None
+        )
+        series = scrape.series.get(instance_name) if scrape is not None else None
+        apply_honest_memory(metrics, series, agent)
+
         cpu_counted = "cpu_ns" in sample.counters
         vcpus: Optional[int] = None
         if cpu_counted:
-            vcpus = effective_vcpus(instance)
+            reported = series.cpu_effective if series is not None else None
+            vcpus = effective_vcpus(instance, reported=reported)
             if vcpus is None:
                 vcpus = effective_vcpus(
                     instance,
                     host_threads=host_threads(client, host, getattr(instance, "location", None)),
                 )
         metrics.cpu_effective_vcpus = vcpus
-        apply_rates(metrics, _observe(identity, sample), cpu_counted=cpu_counted, vcpus=vcpus)
+        apply_rates(
+            metrics,
+            _observe(STATE_SAMPLER, identity, sample),
+            cpu_counted=cpu_counted,
+            vcpus=vcpus,
+        )
+        apply_disk_io(metrics, scrape, series, identity, sample.epoch)
         return metrics
     except LXDOperationError:
         raise
