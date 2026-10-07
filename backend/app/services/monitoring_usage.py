@@ -220,6 +220,11 @@ def rollup(nodes: Sequence[ClusterMonitoringMetrics], usages: Sequence[InstanceU
 
     A Cluster that has running instances but no reading yet is left out of the fleet sums
     rather than counted as idle, which would read a Cluster mid-recovery as quiet.
+
+    important: the fleet is ready only once a Cluster that runs something has a reading, or
+    when nothing runs anywhere. An idle Cluster is a true 0, but on its own it made the whole
+    fleet "ready" at 0.0% while every busy Cluster was still calculating: seen live on the first
+    sweep after a restart, drawn as a dive to zero and persisted.
     """
     by_node: Dict[str, List[InstanceUsage]] = {}
     for usage in usages:
@@ -227,10 +232,13 @@ def rollup(nodes: Sequence[ClusterMonitoringMetrics], usages: Sequence[InstanceU
     busy_total = 0.0
     threads_total = 0
     reporting = 0
+    online = False
+    # Statuses of the Clusters that run something; an idle Cluster cannot vouch for the fleet.
     statuses: List[CpuStatus] = []
     for node in nodes:
         if not node.is_online:
             continue
+        online = True
         items = by_node.get(node.node_name, [])
         ready = [u for u in items if u.cpu_status == "ready" and u.busy_vcpus is not None]
         if node.running_instances == 0:
@@ -245,7 +253,8 @@ def rollup(nodes: Sequence[ClusterMonitoringMetrics], usages: Sequence[InstanceU
             busy, status = None, "unavailable"
         node.cpu_status = status
         node.cpu_reporting_instances = len(ready)
-        statuses.append(status)
+        if node.running_instances > 0:
+            statuses.append(status)
         if busy is None:
             continue
         node.cpu_busy_threads = round(busy, 2)
@@ -254,8 +263,10 @@ def rollup(nodes: Sequence[ClusterMonitoringMetrics], usages: Sequence[InstanceU
             busy_total += busy
             threads_total += node.cpu_total
             reporting += len(ready)
-    if "ready" in statuses:
-        fleet_status: CpuStatus = "ready"
+    if not statuses:
+        fleet_status: CpuStatus = "ready" if online else "unavailable"
+    elif "ready" in statuses:
+        fleet_status = "ready"
     elif "calculating" in statuses:
         fleet_status = "calculating"
     else:
