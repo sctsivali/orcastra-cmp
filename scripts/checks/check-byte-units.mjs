@@ -193,6 +193,9 @@ for (const snippet of [
 
 const backendByteFiles = [
   "backend/app/models/schemas.py",
+  "backend/app/models/instance_metrics.py",
+  "backend/app/services/lxd/instance_metrics.py",
+  "backend/app/services/lxd/instance_metrics_sections.py",
   "backend/app/routers/cluster_members.py",
   "backend/app/routers/monitoring.py",
   "backend/app/services/lxd/node_resources.py",

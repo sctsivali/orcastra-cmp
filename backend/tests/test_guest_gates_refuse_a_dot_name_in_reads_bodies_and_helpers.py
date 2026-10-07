@@ -20,7 +20,7 @@ from app.core import cloud_init_config
 from app.mcp import tools_inventory, tools_write
 from app.services.lxd import proxy_path_params
 from app.services.lxd.proxy_operations import PROXY_OPERATION_LEVELS
-from app.services.lxd.resources import ResourceManager
+from app.services.lxd.instance_metrics import read_instance_metrics
 from app.services.lxd.utils import find_instance_in_projects
 from tests._guest_gate_doors import (  # noqa: F401
     EVERY, LEGACY, NARROW, NO_GUEST, ORCAHUB, SPELLING_IDS, TWO, Cluster, SnapshotClient, _http, _STATE,
@@ -171,7 +171,7 @@ def test_find_instance_in_projects_encodes_every_other_name_as_one_segment(value
 def test_the_dashboard_metrics_read_sends_nothing_for_a_dot_name(value: str) -> None:
     client, calls = _helper_client()
     with pytest.raises(Exception):
-        ResourceManager().get_instance_metrics(client, "nuc-1", value, "default")
+        read_instance_metrics(client, "nuc-1", value, "default")
     assert calls == [] and client.api.session.calls == []
 
 

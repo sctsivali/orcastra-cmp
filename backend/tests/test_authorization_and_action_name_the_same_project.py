@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.services.lxd import instance as instance_module
-from app.services.lxd import resources as resources_module
+from app.services.lxd import instance_metrics as metrics_module
 
 HOST = "nuc1"
 NAME = "web-01"
@@ -112,7 +112,7 @@ def _app(
 def recorder(monkeypatch):
     r = _Recorder()
     monkeypatch.setattr(instance_module, "find_instance_in_projects", r)
-    monkeypatch.setattr(resources_module, "find_instance_in_projects", r)
+    monkeypatch.setattr(metrics_module, "find_instance_in_projects", r)
     return r
 
 

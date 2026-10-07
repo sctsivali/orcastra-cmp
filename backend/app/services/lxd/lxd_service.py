@@ -24,6 +24,7 @@ from .node_resources import resources_for_host
 from .project_usage import ProjectUsage, read_project_usage
 from .freshness import read_resources
 from .resources import ResourceManager
+from .instance_metrics import read_instance_metrics
 from .instance import InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager, ImageStoreListing
@@ -38,8 +39,16 @@ logger = logging.getLogger(__name__)
 
 # Shared thread pool for blocking operations
 _blocking_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_blocking")
+
+# important: instance metrics get their own pool. The node-status sweep submits to
+# _blocking_executor through a bare run_in_executor that run_blocking cannot count, so a sweep
+# could take every thread and leave a five-second poll queueing until its budget ran out, which
+# the dialog then reported as "Cluster did not answer" for a healthy instance. The per-cluster
+# cap keeps one slow cluster from holding the whole pool.
+_instance_metrics_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="instance_metrics")
 _INSTANCE_METRICS_TIMEOUT_SECONDS = 12.0
 _INSTANCE_METRICS_MAX_IN_FLIGHT = 10
+_INSTANCE_METRICS_MAX_IN_FLIGHT_PER_CLUSTER = 3
 
 # Failed-node skip is delegated to the shared circuit breaker
 # (app.services.lxd.health) so every connection path - status checks, instance
@@ -675,8 +684,11 @@ class LXDService:
         instance_name: str,
         project: str = "default"
     ) -> InstanceMetrics:
-        """Read one metrics sample. Must run on the bounded LXD executor."""
-        client = self.connection_manager.get_client(host)
+        """Read one metrics sample. Must run on the instance metrics executor."""
+        # important: connect_or_get_client, not connection_manager.get_client. The latter is
+        # memory-only and answers None in a worker that has never connected to this cluster,
+        # so with four workers the same poll answered 200 or 503 depending on which one took it.
+        client = connect_or_get_client(self, host)
         # important: without this, a None client reaches find_instance_in_projects, which
         # swallows the AttributeError in both of its loops and returns (None, None). The
         # caller then reports "Instance '<name>' not found on <host>" and the router
@@ -684,7 +696,7 @@ class LXDService:
         # deleted when the cluster is merely offline.
         if client is None:
             raise LXDConnectionError(f"Could not connect to {host}")
-        return self.resource_manager.get_instance_metrics(client, host, instance_name, project)
+        return read_instance_metrics(client, host, instance_name, project)
 
     async def get_instance_metrics(
         self,
@@ -705,8 +717,10 @@ class LXDService:
             project,
             timeout=_INSTANCE_METRICS_TIMEOUT_SECONDS,
             label=f"instance.metrics:{host}",
-            executor=_blocking_executor,
+            executor=_instance_metrics_executor,
             max_in_flight=_INSTANCE_METRICS_MAX_IN_FLIGHT,
+            concurrency_key=host,
+            max_in_flight_per_key=_INSTANCE_METRICS_MAX_IN_FLIGHT_PER_CLUSTER,
         )
 
 
