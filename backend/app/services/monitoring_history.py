@@ -9,6 +9,10 @@ counters, and an instance entering the sample added its whole history to that su
 chart drew as a spike. Points now carry the fleet's bytes per second, and their per-Cluster
 entries carry the same so a Postgres reload can rebuild the fleet figure.
 
+note: memory is the hosts' memory in use, the figure the gauge and each Cluster card show. A
+point used to sum the running instances' memory, page cache included, over the hosts' total,
+so the chart under the gauge disagreed with it by the size of the cache.
+
 The points themselves are stored and read by services/monitoring_history_store.py.
 """
 
@@ -72,7 +76,7 @@ def build_point(
     usages: Sequence[InstanceUsage],
     *,
     fleet_cpu_percent: Optional[float],
-    total_memory: int,
+    memory_usage_percent: float,
     storage_usage_percent: float,
     running_instances: int,
     now: Optional[datetime] = None,
@@ -84,12 +88,9 @@ def build_point(
     per_node: Dict[str, Dict[str, Any]] = {}
     for node in nodes:
         items = by_node.get(node.node_name, [])
-        memory = sum(u.memory_bytes for u in items)
         per_node[node.node_name] = {
             "cpu_usage_percent": node.cpu_busy_percent,
-            "memory_usage_percent": (
-                round(memory / node.memory_total_bytes * 100, 2) if node.memory_total_bytes > 0 else 0
-            ),
+            "memory_usage_percent": node.memory_usage_percent,
             "storage_usage_percent": node.storage_usage_percent,
             "network_rx_bytes_per_sec": _sum_rates([u.rx_bps for u in items]),
             "network_tx_bytes_per_sec": _sum_rates([u.tx_bps for u in items]),
@@ -98,11 +99,10 @@ def build_point(
             "gpu_total": node.gpu_total,
             "gpu_used": node.gpu_used,
         }
-    memory_used = sum(u.memory_bytes for u in usages)
     return {
         "timestamp": (now or datetime.now(timezone.utc)).isoformat(),
         "cpu_usage_percent": fleet_cpu_percent,
-        "memory_usage_percent": round(memory_used / total_memory * 100, 2) if total_memory > 0 else 0,
+        "memory_usage_percent": memory_usage_percent,
         "storage_usage_percent": storage_usage_percent,
         "network_rx_bytes": 0,
         "network_tx_bytes": 0,

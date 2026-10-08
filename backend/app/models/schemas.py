@@ -1561,7 +1561,20 @@ class InstanceMonitoringSummary(BaseModel):
         None, description="vCPU-seconds used per second over the sample window"
     )
     cpu_vcpus: Optional[int] = Field(None, description="vCPUs cpu_usage is measured against")
-    memory_usage_bytes: int = Field(0, description="Memory in use in bytes, including page cache")
+    memory_usage_bytes: int = Field(
+        0,
+        description=(
+            "Memory in use in bytes. Includes reclaimable page cache unless memory_includes_cache "
+            "is false"
+        ),
+    )
+    memory_includes_cache: bool = Field(
+        True,
+        description=(
+            "False when memory_usage_bytes comes from the instance's metrics and leaves out the "
+            "page cache the guest can reclaim; true when it is the state read's figure"
+        ),
+    )
     memory_limit_bytes: int = Field(0, description="Memory limit in bytes")
     disk_usage_bytes: int = Field(0, description="Total disk usage in bytes")
     network_rx_bytes: int = Field(0, description="Network bytes received since the instance started")
@@ -1609,7 +1622,13 @@ class MetricsHistoryPoint(BaseModel):
             "no reading was available at this time"
         ),
     )
-    memory_usage_percent: float = Field(0.0, description="Memory usage at this time")
+    memory_usage_percent: float = Field(
+        0.0,
+        description=(
+            "Host memory in use at this time, the dashboard gauge's figure. Points written before "
+            "it carried the running instances' memory, page cache included"
+        ),
+    )
     storage_usage_percent: float = Field(0.0, description="Storage usage at this time")
     network_rx_bytes: int = Field(0, description="Legacy cumulative receive counter; 0 on points that carry rates")
     network_tx_bytes: int = Field(0, description="Legacy cumulative transmit counter; 0 on points that carry rates")
@@ -1671,8 +1690,16 @@ class MonitoringDashboardResponse(BaseModel):
     memory_usage_percent: float = Field(0.0, description="Overall memory usage percentage")
     
     # Real-time memory usage (from instance metrics)
-    realtime_memory_bytes: int = Field(0, description="Real-time memory usage from running instances")
-    realtime_memory_percent: float = Field(0.0, description="Real-time memory usage percentage")
+    realtime_memory_bytes: int = Field(
+        0,
+        description=(
+            "Deprecated: the sum of running instances' memory figures, cache included where the "
+            "metrics did not answer. Use used_memory_bytes"
+        ),
+    )
+    realtime_memory_percent: float = Field(
+        0.0, description="Deprecated: realtime_memory_bytes over total memory. Use memory_usage_percent"
+    )
     
     total_storage_bytes: int = Field(0, description="Total storage across all Clusters")
     used_storage_bytes: int = Field(0, description="Used storage bytes")

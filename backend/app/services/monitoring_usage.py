@@ -52,6 +52,10 @@ class InstanceUsage:
     tx_total: int
     rx_bps: Optional[float]
     tx_bps: Optional[float]
+    # The guest agent's status from the state read; None when the row has no state.
+    agent: Optional[str] = None
+    # False once memory_bytes comes from the instance's metrics without reclaimable page cache.
+    memory_includes_cache: bool = True
 
     @property
     def key(self) -> Tuple[str, str, str]:
@@ -111,6 +115,7 @@ def _usage(
     sample: Optional[Sample],
     reading: Optional[RateReading],
     host_threads: Mapping[str, int],
+    agent: Optional[str] = None,
 ) -> InstanceUsage:
     if state is None or sample is None:
         return InstanceUsage(vm, "unavailable", None, None, None, 0, 0, 0, 0, 0, None, None)
@@ -144,6 +149,7 @@ def _usage(
         tx,
         _rate_sum(rates, "net_rx:"),
         _rate_sum(rates, "net_tx:"),
+        agent,
     )
 
 
@@ -151,17 +157,17 @@ async def read_instance_usage(
     running_vms: Sequence[VMInfo], host_threads: Mapping[str, int]
 ) -> List[InstanceUsage]:
     """Usage for every running instance; rows without live state report unavailable CPU."""
-    prepared: List[Tuple[VMInfo, Optional[str], Optional[Sample], Optional[Dict[str, Any]]]] = []
+    prepared: List[Tuple[VMInfo, Optional[str], Optional[Sample], Optional[Dict[str, Any]], Optional[str]]] = []
     samples: Dict[str, Sample] = {}
     for vm in running_vms:
         raw = getattr(vm, "live_state", None)
         read_at = getattr(vm, "live_state_read_at", None)
         if not isinstance(raw, dict) or read_at is None:
-            prepared.append((vm, None, None, None))
+            prepared.append((vm, None, None, None, None))
             continue
         try:
             state = state_mapping(raw)
-            identity, sample, _agent = build_state_sample(
+            identity, sample, agent = build_state_sample(
                 cluster=vm.host,
                 project=vm.project or "default",
                 name=vm.name,
@@ -174,10 +180,10 @@ async def read_instance_usage(
             )
         except Exception as exc:  # noqa: BLE001 - one malformed row must not fail the dashboard
             logger.warning("Skipping usage for %s/%s: %s", vm.host, str(vm.name)[:80], str(exc)[:200])
-            prepared.append((vm, None, None, None))
+            prepared.append((vm, None, None, None, None))
             continue
         samples[identity] = sample
-        prepared.append((vm, identity, sample, state))
+        prepared.append((vm, identity, sample, state, agent))
 
     readings: Dict[str, RateReading] = {}
     if samples:
@@ -195,10 +201,10 @@ async def read_instance_usage(
             readings = {}
 
     usages: List[InstanceUsage] = []
-    for vm, identity, sample, state in prepared:
+    for vm, identity, sample, state, agent in prepared:
         try:
             usages.append(
-                _usage(vm, state, sample, readings.get(identity) if identity else None, host_threads)
+                _usage(vm, state, sample, readings.get(identity) if identity else None, host_threads, agent)
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Skipping usage for %s/%s: %s", vm.host, str(vm.name)[:80], str(exc)[:200])
@@ -321,6 +327,7 @@ def summary(usage: InstanceUsage) -> InstanceMonitoringSummary:
         cpu_busy_vcpus=usage.busy_vcpus,
         cpu_vcpus=usage.vcpus,
         memory_usage_bytes=usage.memory_bytes,
+        memory_includes_cache=usage.memory_includes_cache,
         memory_limit_bytes=usage.memory_limit_bytes,
         disk_usage_bytes=usage.disk_bytes,
         network_rx_bytes=usage.rx_total,

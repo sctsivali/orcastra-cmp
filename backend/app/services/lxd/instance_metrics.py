@@ -29,8 +29,8 @@ from app.core.member_names import is_member_name, is_standalone_location
 
 from .cpu_allocation import effective_vcpus
 from .exceptions import LXDConnectionError, LXDOperationError
-from .metrics_scrape import ProjectScrape, project_metrics
-from .metrics_text import InstanceSeries, honest_memory
+from .metrics_scrape import ProjectScrape, instance_scrape
+from .metrics_text import InstanceSeries, honest_memory_for
 from .instance_metrics_sections import (
     INSTANCE_METRIC_SECTIONS,
     apply_state_sections,
@@ -221,16 +221,10 @@ def _observe(sampler: RateSampler, identity: str, sample: Sample) -> Optional[Ra
 def apply_honest_memory(
     metrics: InstanceMetrics, series: Optional[InstanceSeries], agent: GuestAgentStatus
 ) -> None:
-    """Replace the state read's cache-inclusive memory with what the guest's programs hold.
-
-    important: only for a container or a VM whose agent answers. Without the agent LXD falls
-    back to QEMU's host-side RSS, which is not the guest's memory at all.
-    """
-    if series is None or agent not in ("not_applicable", "connected"):
-        return
+    """Replace the state read's cache-inclusive memory with what the guest's programs hold."""
     if "memory" in metrics.unavailable_sections:
         return
-    reading = honest_memory(series)
+    reading = honest_memory_for(series, agent)
     if reading is None:
         return
     metrics.memory_used_bytes = int(reading["used"] or 0)
@@ -342,7 +336,7 @@ def read_instance_metrics(
         metrics.base_image = base_image(config)
 
         scrape = (
-            project_metrics(
+            instance_scrape(
                 client,
                 host,
                 getattr(instance, "location", None),

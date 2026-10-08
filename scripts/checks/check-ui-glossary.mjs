@@ -141,6 +141,7 @@ const backendGlossaryFiles = [
   "backend/app/services/monitoring_history_store.py",
   "backend/app/services/monitoring_usage.py",
   "backend/app/services/monitoring_sweep.py",
+  "backend/app/services/monitoring_memory.py",
   "backend/app/core/host_detail.py",
   "backend/app/routers/nodes.py",
   "backend/app/services/lxd/node_resources.py",

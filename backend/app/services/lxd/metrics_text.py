@@ -1,4 +1,4 @@
-"""Read the few series the instance dialog needs out of LXD's /1.0/metrics (OpenMetrics text).
+"""Read the few series the instance dialog and the dashboard need out of LXD's /1.0/metrics.
 
 LXD's state endpoint reports VM memory as MemTotal - MemFree, which counts page cache as used,
 and has no disk I/O counters at all. /1.0/metrics carries both, per instance.
@@ -13,7 +13,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field, replace
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from app.core.lxd_names import LXD_NAME_PATTERN
 
@@ -26,8 +26,9 @@ _LINE = re.compile(r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>.*)\})?\
 _LABEL = re.compile(r'(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\]|\\.)*)"')
 # A real LXD line is under 300 characters; anything far longer is not one worth parsing.
 _MAX_LINE = 4096
-# More instances than one member of a project could run; past this a scrape is not LXD's.
+# More instances than one member could run; past this a scrape is not LXD's.
 _MAX_SERIES = 5000
+_MAX_PROJECT = 256
 _INSTANCE_NAME = re.compile(LXD_NAME_PATTERN)
 _PREFIXES = ("lxd_", "incus_")
 
@@ -100,9 +101,9 @@ def _unescape(value: str) -> str:
     return value.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
 
 
-def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSeries]:
-    """Per-instance series of one project, keyed by instance name."""
-    found: Dict[str, Dict[str, object]] = {}
+def _parse_series(text: str, project: Optional[str]) -> Dict[Tuple[str, str], InstanceSeries]:
+    """Per-instance series keyed by (project, name); `project` keeps that project's only."""
+    found: Dict[Tuple[str, str], Dict[str, object]] = {}
     malformed = 0
     for raw in text.splitlines():
         line = raw.strip()
@@ -134,12 +135,15 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
             continue
         labels = {key: _unescape(val) for key, val in _LABEL.findall(match.group("labels") or "")}
         name = labels.get("name")
-        if not name or labels.get("project", project) != project or not _INSTANCE_NAME.fullmatch(name):
+        owner = labels.get("project", project or "default")
+        if not name or not _INSTANCE_NAME.fullmatch(name) or not owner or len(owner) > _MAX_PROJECT:
             continue
-        if name not in found and len(found) >= _MAX_SERIES:
+        if project is not None and owner != project:
+            continue
+        if (owner, name) not in found and len(found) >= _MAX_SERIES:
             malformed += 1
             continue
-        entry = found.setdefault(name, {"type": labels.get("type"), "disk_devices": set()})
+        entry = found.setdefault((owner, name), {"type": labels.get("type"), "disk_devices": set()})
         if target in ("disk_read", "disk_written"):
             device = labels.get("device", "")
             if not _WHOLE_DISK.match(device) or len(entry["disk_devices"]) >= 16:  # type: ignore[arg-type]
@@ -149,17 +153,31 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
         else:
             entry[target] = value
     if malformed:
-        logger.debug("Skipped %d malformed metrics line(s) for project %s", malformed, project)
-    series: Dict[str, InstanceSeries] = {}
-    for name, values in found.items():
+        logger.debug("Skipped %d malformed metrics line(s) for project %s", malformed, project or "(all)")
+    series: Dict[Tuple[str, str], InstanceSeries] = {}
+    for key, values in found.items():
         devices = tuple(sorted(values.pop("disk_devices")))  # type: ignore[arg-type]
         kind = values.pop("type")
-        series[name] = replace(
+        series[key] = replace(
             InstanceSeries(instance_type=kind if isinstance(kind, str) else None),
             disk_devices=devices,
-            **{key: float(val) for key, val in values.items()},  # type: ignore[arg-type]
+            **{field_name: float(val) for field_name, val in values.items()},  # type: ignore[arg-type]
         )
     return series
+
+
+def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSeries]:
+    """Per-instance series of one project, keyed by instance name."""
+    return {name: series for (_, name), series in _parse_series(text, project).items()}
+
+
+def parse_member_series(text: str) -> Dict[Tuple[str, str], InstanceSeries]:
+    """Per-instance series of every project on a member, keyed by (project, name).
+
+    note: a scrape without `project` covers every project the member runs. A line without a
+    project label belongs to "default", which is where LXD reports it.
+    """
+    return _parse_series(text, None)
 
 
 def honest_memory(series: InstanceSeries) -> Optional[Dict[str, Optional[int]]]:
@@ -193,3 +211,14 @@ def honest_memory(series: InstanceSeries) -> Optional[Dict[str, Optional[int]]]:
         "available": int(total - used),
         "cache": int(reclaimable) if reclaimable is not None else None,
     }
+
+
+def honest_memory_for(series: Optional[InstanceSeries], agent: str) -> Optional[Dict[str, Optional[int]]]:
+    """honest_memory behind the one gate the dialog and the dashboard share.
+
+    important: only for a container or a VM whose agent answers. Without the agent LXD falls
+    back to QEMU's host-side RSS, which is not the guest's memory at all.
+    """
+    if series is None or agent not in ("not_applicable", "connected"):
+        return None
+    return honest_memory(series)

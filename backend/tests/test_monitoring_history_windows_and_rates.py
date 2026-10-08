@@ -36,7 +36,7 @@ def test_points_carry_network_rates_and_a_new_instance_adds_no_spike():
         nodes,
         usages,
         fleet_cpu_percent=None,
-        total_memory=1000,
+        memory_usage_percent=37.5,
         storage_usage_percent=5.0,
         running_instances=2,
         now=NOW,
@@ -48,6 +48,27 @@ def test_points_carry_network_rates_and_a_new_instance_adds_no_spike():
     assert point["network_rx_bytes"] == 0
     assert point["cpu_usage_percent"] is None
     assert MetricsHistoryPoint(**point).cpu_usage_percent is None
+
+
+def test_a_point_carries_the_gauge_memory_not_the_instances_sum():
+    """The chart sits under the gauge; summing instance memory added the page cache to it."""
+    usages = _usages([row("big", memory=900, read_at=1000.0), row("small", memory=50, read_at=1000.0)])
+    busy = node("c1", threads=8, running=2).model_copy(update={"memory_usage_percent": 41.25})
+    idle = node("c2", threads=8, running=0).model_copy(update={"memory_usage_percent": 3.5})
+
+    point = build_point(
+        [busy, idle],
+        usages,
+        fleet_cpu_percent=10.0,
+        memory_usage_percent=22.38,
+        storage_usage_percent=5.0,
+        running_instances=2,
+        now=NOW,
+    )
+
+    assert point["memory_usage_percent"] == 22.38
+    assert point["nodes"]["c1"]["memory_usage_percent"] == 41.25, "the Cluster card's figure"
+    assert point["nodes"]["c2"]["memory_usage_percent"] == 3.5
 
 
 def test_postgres_rows_rebuild_fleet_rates_from_their_cluster_entries():
