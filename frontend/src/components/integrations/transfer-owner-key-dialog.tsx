@@ -44,8 +44,8 @@ interface TransferOwnerKeyDialogProps {
  *
  * The owner is the only key that may sync the organization, update its members and policies and
  * provision tenant access for it, so the picker offers only keys that could do all of that: active
- * OrcaHub keys that hold org.sync and are not an add-on's credential. The slug has to be typed,
- * because a move to the wrong key hands one integration another's organization.
+ * OrcaHub keys holding inventory.read and org.sync, never an add-on's credential. The slug has to
+ * be typed, because a move to the wrong key hands one integration another's organization.
  */
 export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: TransferOwnerKeyDialogProps) {
   const queryClient = useQueryClient();
@@ -151,13 +151,13 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
                   options={options}
                   placeholder={candidates.length ? "Choose an active OrcaHub key" : "No key can own it"}
                   searchPlaceholder="Search keys by name, application, or id"
-                  emptyText="No active OrcaHub key with org.sync matches."
+                  emptyText="No active OrcaHub key with inventory.read and org.sync matches."
                   disabled={candidates.length === 0 || mutation.isPending}
                   ariaDescribedBy="transfer-owner-key-help"
                 />
                 <p id="transfer-owner-key-help" className="text-xs text-muted-foreground">
-                  Only active OrcaHub keys that hold org.sync and are not an add-on credential are
-                  listed.
+                  Only active OrcaHub keys holding inventory.read and org.sync are listed, never an
+                  add-on credential.
                 </p>
               </div>
 

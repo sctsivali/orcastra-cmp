@@ -97,12 +97,14 @@ def test_the_checked_ones_refuse_before_they_write() -> None:
         assert REFUSAL in _calls(enders[where]), f"{where} no longer checks what the key owns"
 
 
-def test_withdrawing_org_sync_is_checked_too() -> None:
+def test_withdrawing_a_sync_capability_is_checked_too() -> None:
     """Not a key's end by shape, but the same freeze: the owner can no longer sync."""
     tree = ast.parse((APP / "routers" / "integrations.py").read_text())
     (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "update_api_key_capabilities"]
     assert REFUSAL in _calls(fn)
     assert "has_capability" in _calls(fn)
+    names = {node.id for node in ast.walk(fn) if isinstance(node, ast.Name)}
+    assert "SYNC_CAPABILITIES" in names, "the check must cover every capability an owner syncs with"
 
 
 def _function(where: str) -> ast.AST:

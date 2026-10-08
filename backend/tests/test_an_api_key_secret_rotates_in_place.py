@@ -10,8 +10,9 @@ inside their bound; its creator and an Admin skip that check. An add-on credenti
 installation rotates it.
 """
 
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, AsyncIterator, Dict, List
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -403,6 +404,31 @@ async def test_a_non_creator_on_their_own_sides_cluster_may_rotate(world, partne
     assert _denied(world) == [("success", None)]
 
 
+async def test_a_grant_widened_while_the_rotation_waited_is_judged(world, partner_scope, monkeypatch) -> None:
+    """The key is read under its lock, so a grant edit that held the lock first is the one judged."""
+    async def nobody_else(_db: Any, _email: str, _clusters: set) -> set:
+        return set()
+
+    monkeypatch.setattr(integrations, "_clusters_held_by_another_party", nobody_else)
+    _stored(world, created_by="teammate-who-left@example.test")
+    real_lock = integrations.serialize_key_ownership
+
+    @asynccontextmanager
+    async def _widened_first(session: Any, key_id: str) -> AsyncIterator[None]:
+        async with real_lock(session, key_id):
+            doc = world["vault"].docs[f"{BASE}/metadata"]
+            doc["cluster_permissions"] = [*doc["cluster_permissions"],
+                                          {"cluster_id": "c9", "permissions": ["read"], "projects": ["*"]}]
+            yield
+
+    monkeypatch.setattr(integrations, "serialize_key_ownership", _widened_first)
+    with pytest.raises(HTTPException) as caught:
+        await _rotate(OTHER, _orgs())
+    assert caught.value.status_code == 403 and "c9" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "cluster_out_of_scope")]
+
+
 async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, partner_scope, monkeypatch) -> None:
     async def refuse(*_a: Any, **_k: Any) -> None:
         raise AssertionError("the mint check ran for a caller who already held the secret")
@@ -485,12 +511,15 @@ async def test_rotation_keeps_the_id_and_the_organizations_it_owns(world) -> Non
 # note: the route's own gates
 
 def _route(user: AuthenticatedUser) -> TestClient:
+    from app.core.database import get_db
     from app.core.rbac import get_current_user
 
     app = FastAPI()
     app.include_router(integrations.router)
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[integrations.org_scope_dependency] = lambda: None
+    # note: the rotation takes the key's lock on the request's database session
+    app.dependency_overrides[get_db] = lambda: _orgs()
     return TestClient(app, raise_server_exceptions=False)
 
 

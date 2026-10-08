@@ -333,6 +333,8 @@ TARGETS = [
     ("unreadable_expiry", {"expires_at": "not-a-date"}, 409, "target_key_expired"),
     ("inactive", {"is_active": False}, 409, "target_key_inactive"),
     ("cannot_sync", {"capabilities": ["inventory.read", "tenant.provision"]}, 409, "target_key_cannot_sync"),
+    # note: /sync admits a key holding inventory.read, so an owner without it cannot sync either
+    ("cannot_read", {"capabilities": ["org.sync", "tenant.provision"]}, 409, "target_key_cannot_sync"),
     ("not_orcahub", {"app_type": "mcp"}, 409, "target_key_not_orcahub"),
     ("add_on", {"extension_install_id": 7, "app_type": "automation"}, 409, "target_key_is_add_on"),
 ]

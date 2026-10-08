@@ -22,6 +22,7 @@ from app.core.api_key_capability_audit import CAPABILITIES_UPDATE_ACTION, capabi
 from app.core.auth import AuthenticatedUser
 from app.routers import integrations
 from app.services.activity_logger import ACTION_CATEGORIES, HIGH_SEVERITY_ACTIONS, EventCategory
+from tests._sqlite_session import org_tables, sqlite_session
 
 SECRETS = ("oas_do_not_log_me", "hash-do-not-log", "https://callback.example.test")
 PARTNER = AuthenticatedUser(user_id="p1", email="partner@example.test", groups=["role_partner"])
@@ -192,12 +193,14 @@ async def test_a_failed_audit_write_does_not_fail_the_edit(
 
     monkeypatch.setattr(integrations, "activity_logger", _Exploding())
     vault = surface["use"](_key(capabilities=["inventory.read"]))
+    # note: a database, because the edit withdraws inventory.read and so first reads which
+    # organizations the key owns. It owns none.
     info = await integrations.update_api_key_capabilities(
         "oak_edit",
         integrations.APIKeyCapabilitiesRequest(capabilities=["org.sync"]),
         None,
         PARTNER,
-        None,
+        sqlite_session(*org_tables()),
     )
     assert info.capabilities == ["org.sync"]
     assert vault.writes

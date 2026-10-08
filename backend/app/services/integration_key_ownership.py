@@ -24,8 +24,9 @@ a key that can never authenticate again, so their sync, member updates and provi
 for good, and the only way out was SQL against production. `transfer_owner` is that way out, as
 an audited Administrator action, and `refuse_if_key_owns_organizations` stops the key routes from
 creating the state in the first place: a key that owns an active OrcaHub organization is not
-revoked, deleted or stripped of org.sync, for any caller, an Administrator included. Rotating its
-secret keeps the key id, so it is the way to stop a leaked secret without freezing anything.
+revoked, deleted or stripped of a capability it syncs with, for any caller, an Administrator
+included. Rotating its secret keeps the key id, so it is the way to stop a leaked secret without
+freezing anything.
 
 Concurrency: a decision about one key's ownership runs inside `serialize_key_ownership` for that
 key, and the key is read and judged inside it, so two decisions about the same key never
@@ -37,7 +38,7 @@ import hashlib
 import logging
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
@@ -56,6 +57,10 @@ TRANSFER_ACTION = "integration.organization.owner.transfer"
 # `missing` a key Vault says does not exist, `unknown` a key whose record could not be read.
 OWNER_KEY_STATES = ("active", "expiring", "expired", "revoked", "inactive", "missing", "unknown", "unclaimed")
 
+# What an owner syncs with. /sync admits a key holding inventory.read, and the organization and
+# member half of the push needs org.sync too, so an owner missing either one freezes what it owns.
+SYNC_CAPABILITIES = ("inventory.read", "org.sync")
+
 # What a refusal lists. The message names a few, the answer up to the cap, the count all of them.
 MAX_LISTED_SLUGS = 20
 MAX_NAMED_SLUGS = 5
@@ -67,7 +72,6 @@ OWNERSHIP_UNKNOWN_DETAIL = (
 _ENDING = {
     "revoke": "Revoking it",
     "delete": "Deleting it",
-    "capabilities": "Withdrawing its org.sync capability",
     "uninstall": "Uninstalling the add-on",
 }
 
@@ -186,14 +190,33 @@ def _named(slugs: List[str], hidden: int) -> str:
     return f"{shown} and {' and '.join(rest)}" if shown else " and ".join(rest)
 
 
-def _owned_message(action: str, total: int, slugs: List[str], hidden: int, *, admin: bool, add_on: bool) -> str:
+def _capability_names(names: Sequence[str]) -> str:
+    word = "capability" if len(names) == 1 else "capabilities"
+    return f"{' and '.join(names)} {word}"
+
+
+def sync_capabilities_missing(metadata: Mapping[str, Any]) -> List[str]:
+    """The SYNC_CAPABILITIES a key does not hold. A legacy key, with no list, holds them all."""
+    return [name for name in SYNC_CAPABILITIES if not has_capability(dict(metadata), name)]
+
+
+def _owned_message(
+    action: str,
+    total: int,
+    slugs: List[str],
+    hidden: int,
+    *,
+    admin: bool,
+    add_on: bool,
+    withdrawn: Sequence[str] = (),
+) -> str:
     one = total == 1
     them, their = ("it", "its") if one else ("them", "their")
     noun = "organization" if one else "organizations"
     if action == "capabilities":
         effect = (
-            f"{_ENDING[action]} would leave {them} with an owner that can no longer sync {them}, so "
-            f"{their} sync and member updates would stop."
+            f"Withdrawing its {_capability_names(list(withdrawn) or ['org.sync'])} would leave {them} "
+            f"with an owner that can no longer sync {them}, so {their} sync and member updates would stop."
         )
     else:
         effect = (
@@ -215,16 +238,24 @@ def _owned_message(action: str, total: int, slugs: List[str], hidden: int, *, ad
 
 
 async def refuse_if_key_owns_organizations(
-    db: AsyncSession, key_id: str, *, action: str, user: Any, metadata: Mapping[str, Any]
+    db: AsyncSession,
+    key_id: str,
+    *,
+    action: str,
+    user: Any,
+    metadata: Mapping[str, Any],
+    withdrawn: Sequence[str] = (),
 ) -> None:
     """409 when the key owns an active OrcaHub organization, 503 when that cannot be read.
+
+    `withdrawn` names the SYNC_CAPABILITIES a capability edit would take away, for its message.
 
     The caller has already authorized the key (so an id outside the caller's reach is still 404),
     holds serialize_key_ownership(key_id), and has written nothing yet. There is no Administrator
     bypass: the remedy is to transfer the organizations or delete them, which an Administrator can.
 
     note: a caller who is not an Administrator sees only the slugs of organizations they belong to;
-    the rest are counted. The audit record names them all, up to the cap.
+    the rest are counted, in the answer and in its audit record alike.
 
     important: the 503 detail is a fixed sentence. The exception text of a database failure names
     the database, and this answer reaches the browser.
@@ -250,16 +281,21 @@ async def refuse_if_key_owns_organizations(
     detail = {
         "error": "key_owns_organizations",
         "action": action,
-        "message": _owned_message(action, len(owned), slugs, hidden, admin=admin, add_on=add_on),
+        "message": _owned_message(
+            action, len(owned), slugs, hidden, admin=admin, add_on=add_on, withdrawn=withdrawn
+        ),
         "api_key_id": key_id,
         "organization_count": len(owned),
         "organization_slugs": slugs[:MAX_LISTED_SLUGS],
         "hidden_organization_count": hidden,
         "remedies": remedies,
     }
+    # important: the same slugs the caller was shown. A refusal's record is visible to the caller who
+    # triggered it, so naming the hidden organizations there would undo hiding them in the answer.
     audit = {
-        "owned_organization_slugs": [org.slug for org in owned][:MAX_LISTED_SLUGS],
+        "owned_organization_slugs": slugs[:MAX_LISTED_SLUGS],
         "owned_organization_count": len(owned),
+        "owned_organization_hidden_count": hidden,
     }
     raise KeyOwnsOrganizations(detail, audit)
 
@@ -284,6 +320,7 @@ async def carry_owned_organizations(
         .where(Organization.api_key_id == from_key_id)
         .order_by(Organization.slug)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     carried: List[Tuple[int, str, Optional[str]]] = []
     for org in rows.scalars().all():
@@ -327,8 +364,8 @@ def owner_key_refusal(
     """Why a key cannot become an owner, as (status, error code, message), or None when it can.
 
     An owner has to be able to do what owning means: sync the organization. So it is an active
-    OrcaHub key holding org.sync (a legacy key without a capability list holds every one), and not
-    an add-on credential, which its installation owns and rotates.
+    OrcaHub key holding SYNC_CAPABILITIES (a legacy key without a capability list holds every one),
+    and not an add-on credential, which its installation owns and rotates.
 
     note: an add-on credential is named before its state. Its app_type is automation, so the
     later test would call it "not an OrcaHub connection", which is true and says less.
@@ -350,9 +387,11 @@ def owner_key_refusal(
         return 409, f"target_key_{state}", (
             f"This API key is {state}, so it could not sync the organization. Choose an active key."
         )
-    if not has_capability(dict(metadata), "org.sync"):
+    missing = sync_capabilities_missing(metadata)
+    if missing:
         return 409, "target_key_cannot_sync", (
-            "This API key does not have the org.sync capability, so it could not sync the organization."
+            f"This API key does not have the {_capability_names(missing)}, so it could not sync the "
+            "organization."
         )
     app_type = metadata.get("app_type")
     if app_type and app_type != "orcahub":
@@ -433,8 +472,13 @@ async def transfer_owner(
     tests/test_the_one_org_rule_holds_for_orcahubs_bodies_and_every_claim_path.py finds every
     writer of organizations.api_key_id by that shape.
     """
+    # note: populate_existing, because the caller may already hold this row from an earlier read in
+    # the same session, and the owner reported has to be the one the lock saw.
     org = (await db.execute(
-        select(Organization).where(Organization.id == organization_id).with_for_update()
+        select(Organization)
+        .where(Organization.id == organization_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )).scalar_one_or_none()
     if org is None:
         return None, None

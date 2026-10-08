@@ -1,4 +1,4 @@
-"""A key that owns an OrcaHub organization is not revoked, deleted or stripped of org.sync.
+"""A key that owns an OrcaHub organization is not revoked, deleted or stripped of what it syncs with.
 
 Only the owner key syncs an organization, updates its members and policies and provisions for it,
 and no other key can take it over. Revoking or deleting the owner therefore froze its
@@ -113,6 +113,7 @@ async def test_an_admin_cannot_end_an_owner_key(
     assert (record["action"], record["target_id"]) == (audited, PLAIN)
     assert record["details"]["owned_organization_slugs"] == ["acme-cloud", "fossgo"]
     assert record["details"]["owned_organization_count"] == 2
+    assert record["details"]["owned_organization_hidden_count"] == 0
     assert owned["locks"] == [PLAIN]
 
 
@@ -131,7 +132,11 @@ async def test_a_partner_sees_only_the_organizations_it_belongs_to(
     assert "(acme-cloud and 1 you cannot see)" in detail["message"]
     assert "Ask an administrator to transfer them" in detail["message"]
     nothing_changed(owned)
-    assert denial(owned)["details"]["owned_organization_slugs"] == ["acme-cloud", "fossgo"]
+    # note: the record names what the answer named. The caller who triggered it can read it.
+    record = denial(owned)
+    assert (record["details"]["owned_organization_slugs"], record["details"]["owned_organization_count"],
+            record["details"]["owned_organization_hidden_count"]) == (["acme-cloud"], 2, 1)
+    assert "fossgo" not in repr(record)
 
 
 async def test_one_organization_reads_in_the_singular(owned: Dict[str, Any]) -> None:
@@ -190,7 +195,8 @@ async def test_ownership_that_cannot_be_read_ends_nothing(owned: Dict[str, Any],
     nothing_changed(owned)
 
 
-# note: withdrawing org.sync freezes the organizations as surely as a revoke
+# note: withdrawing org.sync or inventory.read freezes the organizations as surely as a revoke.
+# /sync admits a key holding inventory.read, and its organization half needs org.sync too.
 
 def store(owned: Dict[str, Any], key_id: str, metadata: Dict[str, Any]) -> None:
     owned["vault"].store[_FakeVault._path(key_id, "metadata")] = metadata
@@ -218,8 +224,26 @@ async def test_withdrawing_org_sync_from_an_owner_is_refused(owned: Dict[str, An
     assert denial(owned)["action"] == "integration.api_key.capabilities.update"
 
 
-@pytest.mark.parametrize("after", [["inventory.read", "org.sync"], ["org.sync", "tenant.provision"]])
-async def test_an_owner_keeps_any_edit_that_keeps_org_sync(owned: Dict[str, Any], after: List[str]) -> None:
+@pytest.mark.parametrize("after, named", [
+    (["org.sync", "tenant.provision"], "Withdrawing its inventory.read capability would leave them"),
+    (["tenant.provision"], "Withdrawing its inventory.read and org.sync capabilities would leave them"),
+], ids=["inventory_read", "both"])
+async def test_withdrawing_inventory_read_from_an_owner_is_refused(
+    owned: Dict[str, Any], after: List[str], named: str
+) -> None:
+    store(owned, PLAIN, {**plain_metadata(), "capabilities": ["inventory.read", "org.sync"]})
+    owned["scope"](ADMIN)
+    response = await send(ADMIN, owned["db"], "PUT", f"{KEYS}/{PLAIN}/capabilities", {"capabilities": after})
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert (detail["error"], detail["action"]) == ("key_owns_organizations", "capabilities")
+    assert named in detail["message"]
+    assert owned["vault"].writes == [] and owned["evicted"] == []
+    assert denial(owned)["action"] == "integration.api_key.capabilities.update"
+
+
+@pytest.mark.parametrize("after", [["inventory.read", "org.sync"], ["inventory.read", "org.sync", "tenant.provision"]])
+async def test_an_owner_keeps_any_edit_that_keeps_what_it_syncs_with(owned: Dict[str, Any], after: List[str]) -> None:
     store(owned, PLAIN, {**plain_metadata(), "capabilities": ["inventory.read", "org.sync"]})
     owned["scope"](PARTNER)
     response = await send(PARTNER, owned["db"], "PUT", f"{KEYS}/{PLAIN}/capabilities", {"capabilities": after})
