@@ -12,7 +12,7 @@ SECRET = "jwt-header.jwt-body.jwt-signature"
 
 @pytest.mark.parametrize(
     "name",
-    ["token", "access_token", "client_secret", "X-Api-Key", "api_key_id", "t%6fken"],
+    ["token", "access_token", "client_secret", "X-Api-Key", "api_key_id", "t%6fken", "ticket", "Ticket"],
 )
 def test_sensitive_query_names_include_encoded_spelling(name: str) -> None:
     assert is_sensitive_param(name)
@@ -75,3 +75,15 @@ def test_installation_is_idempotent_on_both_uvicorn_loggers() -> None:
         for logger, filters, level in zip(loggers, originals, levels):
             logger.filters[:] = filters
             logger.setLevel(level)
+
+
+def test_a_websocket_ticket_never_reaches_the_handshake_line() -> None:
+    record = logging.LogRecord(
+        "uvicorn.error", logging.INFO, "", 0,
+        '%s - "WebSocket %s" [accepted]',
+        ("1.2.3.4:5", f"/api/v1/console/vm/ws?host=a&project=p&ticket={SECRET}&console_type=vga"),
+        None,
+    )
+    assert QuerySecretFilter().filter(record)
+    assert SECRET not in record.getMessage()
+    assert "host=a&project=p&ticket=[REDACTED]&console_type=vga" in record.getMessage()
