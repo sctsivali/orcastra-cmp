@@ -968,6 +968,12 @@ class GeoLocation(BaseModel):
     official_name: Optional[str] = Field(None, description="Full Kepmendagri name (for example, 'Kota Administrasi Jakarta Selatan'); region_name is the short form")
 
 
+# important: free text from a client reaches the logs, the integrator's storefront and an
+# operator's terminal (the region backfill prints stored names). A control character has no place
+# in a place name, and a newline or an escape sequence in one forges a log line or terminal output.
+NO_CONTROL_CHARACTERS = r"^[^\x00-\x1f\x7f-\x9f]*$"
+
+
 class GeoLocationInput(GeoLocation):
     """A location as a client submits it.
 
@@ -976,17 +982,19 @@ class GeoLocationInput(GeoLocation):
     """
     region_id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
                            description="Region identifier from the region catalogue, or a client-defined one")
-    region_name: str = Field(..., min_length=1, max_length=200, description="Region display name")
+    region_name: str = Field(..., min_length=1, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="Region display name")
     country_code: str = Field(..., pattern=r"^[A-Z]{2}$", description="ISO 3166-1 alpha-2 country code")
-    country_name: str = Field(..., min_length=1, max_length=100, description="Country name")
-    city: str = Field(..., min_length=1, max_length=200, description="City name")
-    timezone: str = Field(..., min_length=1, max_length=64, description="IANA time zone (for example, 'Asia/Jakarta')")
+    country_name: str = Field(..., min_length=1, max_length=100, pattern=NO_CONTROL_CHARACTERS, description="Country name")
+    city: str = Field(..., min_length=1, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="City name")
+    timezone: str = Field(..., min_length=1, max_length=64, pattern=NO_CONTROL_CHARACTERS,
+                          description="IANA time zone (for example, 'Asia/Jakarta')")
     continent: str = Field(..., pattern=r"^[A-Z]{2}$", description="Continent code (for example, 'AS', 'EU', or 'NA')")
-    facility_name: Optional[str] = Field(None, max_length=200, description="Data center or facility name")
-    facility_provider: Optional[str] = Field(None, max_length=200, description="Facility provider/operator")
-    province: Optional[str] = Field(None, max_length=100, description="Indonesian province, for a kabupaten or kota region")
+    facility_name: Optional[str] = Field(None, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="Data center or facility name")
+    facility_provider: Optional[str] = Field(None, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="Facility provider/operator")
+    province: Optional[str] = Field(None, max_length=100, pattern=NO_CONTROL_CHARACTERS,
+                                    description="Indonesian province, for a kabupaten or kota region")
     admin_code: Optional[str] = Field(None, pattern=r"^\d{2}(\.\d{2})?$", description="Kepmendagri administrative code")
-    official_name: Optional[str] = Field(None, max_length=200, description="Full Kepmendagri name")
+    official_name: Optional[str] = Field(None, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="Full Kepmendagri name")
 
 
 class ClusterRegisterRequest(BaseModel):
