@@ -1,3 +1,4 @@
+import { formatLabel } from "@/lib/utils";
 import type { InstanceMetrics } from "@/types/api";
 
 /**
@@ -59,4 +60,20 @@ export function formatVcpuCount(count: number): string {
 export function formatSampleWindow(seconds: number | null | undefined): string | null {
   if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return null;
   return `last ${seconds < 10 ? Number(seconds.toFixed(1)) : Math.round(seconds)} s`;
+}
+
+/** Why disk I/O is missing, in the dialog's words. Null when the server gave no reason. */
+export function diskIoUnavailableText(metrics: InstanceMetrics): string | null {
+  switch (metrics.disk_io_reason) {
+    case "storage_driver":
+      return metrics.disk_io_storage_driver
+        ? `Not measured for containers on ${formatLabel(metrics.disk_io_storage_driver)} storage`
+        : "Not measured for containers on this storage";
+    case "guest_agent":
+      return "Needs the guest agent";
+    case "not_reported":
+      return "Not reported by the cluster";
+    default:
+      return null;
+  }
 }

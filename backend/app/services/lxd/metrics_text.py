@@ -35,7 +35,7 @@ _PREFIXES = ("lxd_", "incus_")
 # note: whole disks only. A partition repeats its disk's bytes (sda1 is part of sda), a loop
 # device inside a guest is a snap mount, and dm-*, md* and zd* sit on top of a disk that is
 # also listed, so counting any of them adds the same bytes twice.
-_WHOLE_DISK = re.compile(r"^(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)$")
+_WHOLE_DISK = re.compile(r"(?:sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)")
 
 _FAMILIES = {
     "cpu_effective_total": "cpu_effective",
@@ -146,7 +146,7 @@ def _parse_series(text: str, project: Optional[str]) -> Dict[Tuple[str, str], In
         entry = found.setdefault((owner, name), {"type": labels.get("type"), "disk_devices": set()})
         if target in ("disk_read", "disk_written"):
             device = labels.get("device", "")
-            if not _WHOLE_DISK.match(device) or len(entry["disk_devices"]) >= 16:  # type: ignore[arg-type]
+            if not _WHOLE_DISK.fullmatch(device) or len(entry["disk_devices"]) >= 16:  # type: ignore[arg-type]
                 continue
             entry["disk_devices"].add(device)  # type: ignore[union-attr]
             entry[target] = float(entry.get(target) or 0.0) + value  # type: ignore[arg-type]

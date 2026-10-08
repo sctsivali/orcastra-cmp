@@ -29,7 +29,10 @@ from app.core.member_names import is_member_name, is_standalone_location
 
 from .cpu_allocation import effective_vcpus
 from .exceptions import LXDConnectionError, LXDOperationError
+from .container_disk_io import container_disk_io_measured
 from .metrics_scrape import ProjectScrape, instance_scrape
+from .pool_drivers import pool_driver
+from .root_disk import root_pool_of
 from .metrics_text import InstanceSeries, honest_memory_for
 from .instance_metrics_sections import (
     INSTANCE_METRIC_SECTIONS,
@@ -244,23 +247,32 @@ def apply_disk_io(
     series: Optional[InstanceSeries],
     identity: str,
     epoch: str,
+    *,
+    agent: GuestAgentStatus,
+    storage_driver: Optional[str] = None,
 ) -> None:
-    """Disk I/O rates over a VM's whole disks, from two scrapes at least 10 s apart.
+    """Disk I/O rates over an instance's whole disks, from two scrapes at least 10 s apart.
 
-    important: virtual machines only, from their guest's own block devices. A container's disk
-    counters come from its cgroup, which misses writes the storage driver does from kernel
-    threads: on a ZFS pool a container writing 40 MB a second read 0 here. Showing that as a
-    measured zero would be worse than saying nothing, so a container's disk I/O stays
-    unavailable.
+    important: a virtual machine's counters are its guest's own block devices and need its
+    agent. A container's come from its cgroup, which sees only the I/O its storage driver
+    charges to it (container_disk_io.py), so they count only on a proven driver. Where the
+    counters cannot be trusted, disk_io_reason says why instead of a measured zero.
     """
-    if scrape is None or series is None or series.instance_type != "virtual-machine":
+    if agent == "not_applicable":
+        if not container_disk_io_measured(storage_driver):
+            metrics.disk_io_reason = "storage_driver"
+            metrics.disk_io_storage_driver = storage_driver
+            return
+    elif agent != "connected":
+        metrics.disk_io_reason = "guest_agent"
         return
     counters: Dict[str, float] = {}
-    if series.disk_read is not None:
+    if series is not None and series.disk_read is not None:
         counters["disk_read"] = series.disk_read
-    if series.disk_written is not None:
+    if series is not None and series.disk_written is not None:
         counters["disk_write"] = series.disk_written
-    if not counters:
+    if scrape is None or not counters:
+        metrics.disk_io_reason = "not_reported"
         return
     reading = _observe(
         IO_SAMPLER, identity, Sample(taken_at=scrape.collected_at, epoch=epoch, counters=counters)
@@ -366,8 +378,14 @@ def read_instance_metrics(
             cpu_counted=cpu_counted,
             vcpus=vcpus,
         )
-        if agent == "connected":
-            apply_disk_io(metrics, scrape, series, identity, sample.epoch)
+        # note: only when the caller asked for the metrics read; without it nothing was asked,
+        # so no reason is given either.
+        if deadline is not None:
+            driver = None
+            if agent == "not_applicable":
+                pool = root_pool_of(getattr(instance, "expanded_devices", None))
+                driver = pool_driver(client, host, pool, deadline=deadline) if pool else None
+            apply_disk_io(metrics, scrape, series, identity, sample.epoch, agent=agent, storage_driver=driver)
         return metrics
     except LXDOperationError:
         raise

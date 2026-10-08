@@ -7,6 +7,7 @@ import { UsageMeter } from "@/components/ui/usage-meter";
 import { DetailField, DetailGrid } from "@/components/detail/detail-field";
 import {
   cpuReading,
+  diskIoUnavailableText,
   formatSampleWindow,
   formatVcpuAmount,
   formatVcpuCount,
@@ -125,6 +126,7 @@ export function DiskCard({ metrics }: { metrics: InstanceMetrics }) {
   const ioStatus = metrics.disk_io_status ?? "unavailable";
   if (devices.length === 0 && ioStatus === "unavailable") return null;
   const ioWindow = formatSampleWindow(metrics.disk_io_window_seconds);
+  const ioMissing = ioStatus === "unavailable" ? diskIoUnavailableText(metrics) : null;
   return (
     <Card className="space-y-3 p-4">
       <CardHeading icon={HardDrive} title="Disk" />
@@ -156,6 +158,8 @@ export function DiskCard({ metrics }: { metrics: InstanceMetrics }) {
             <p className="text-xs text-muted-foreground">Block device I/O, {ioWindow}</p>
           ) : null}
         </div>
+      ) : ioMissing ? (
+        <p className="text-xs text-muted-foreground">Disk I/O: {ioMissing}</p>
       ) : null}
     </Card>
   );

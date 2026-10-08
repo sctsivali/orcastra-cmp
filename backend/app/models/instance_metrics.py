@@ -14,6 +14,7 @@ from app.models.vm_status import VMStatus
 InstanceMetricSection = Literal["cpu", "memory", "disk", "network", "processes"]
 CpuSampleStatus = Literal["ready", "calculating", "unavailable", "not_applicable"]
 GuestAgentStatus = Literal["not_applicable", "connected", "unreachable", "disabled"]
+DiskIoReason = Literal["guest_agent", "storage_driver", "not_reported"]
 
 
 class InstanceMetrics(BaseModel):
@@ -69,6 +70,17 @@ class InstanceMetrics(BaseModel):
             "Whether the disk I/O rates have two samples, are waiting for the second, or are not "
             "reported by the cluster"
         ),
+    )
+    disk_io_reason: Optional[DiskIoReason] = Field(
+        None,
+        description=(
+            "Why disk I/O is unavailable: guest_agent for a virtual machine without its agent, "
+            "storage_driver for a container whose root pool's driver does not charge its I/O to "
+            "it, not_reported when the cluster sent no counters. None otherwise"
+        ),
+    )
+    disk_io_storage_driver: Optional[str] = Field(
+        None, description="The storage driver of a container's root pool, when disk_io_reason is storage_driver"
     )
     network_rx_bytes: Dict[str, int] = Field(default_factory=dict, description="Network received bytes by interface")
     network_tx_bytes: Dict[str, int] = Field(default_factory=dict, description="Network transmitted bytes by interface")

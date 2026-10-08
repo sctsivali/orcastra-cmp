@@ -67,6 +67,9 @@ export interface InstanceMetrics {
   disk_write_bytes_per_second?: number | null;
   disk_io_window_seconds?: number | null;
   disk_io_status?: InstanceRateStatus;
+  /** Why disk I/O is unavailable; absent from older backends and while the rates are measured. */
+  disk_io_reason?: "guest_agent" | "storage_driver" | "not_reported" | null;
+  disk_io_storage_driver?: string | null;
   network_rx_bytes: Record<string, number>;
   network_tx_bytes: Record<string, number>;
   network_rx_bytes_per_second?: Record<string, number>;
