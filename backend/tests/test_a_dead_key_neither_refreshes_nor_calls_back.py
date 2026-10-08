@@ -21,6 +21,7 @@ from app.core.org_scope import org_scope_dependency
 from app.models.db_models import Organization
 from app.routers import integrations
 from app.services import orcahub_sync
+from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_url_tag
 from app.services.lxd_service import get_lxd_service
 from tests._sqlite_session import org_tables, sqlite_session
 
@@ -45,6 +46,8 @@ def metadata(**state: Any) -> Dict[str, Any]:
         "created_by": PARTNER.email, "created_at": "2026-09-01T00:00:00+00:00",
         "is_active": True, "is_revoked": False, "expires_at": None,
         "app_url": "https://hub.example.test",
+        # note: stored by a sync with the secret below, as services/integration_callback_url.py requires
+        APP_URL_SECRET_TAG: callback_url_tag("hash-do-not-send"),
         "cluster_permissions": [{"cluster_id": CLUSTER, "permissions": ["admin"], "projects": ["*"]}],
         **state,
     }

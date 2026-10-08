@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_expiry import classify_key
 from app.models.db_models import Organization
+from app.services.integration_callback_url import bound_callback_url
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,13 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
         secret_data = vault_client.vault_read(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret"
         )
-        app_url = metadata.get("app_url")
+        # important: only a URL the key's current secret stored, so a URL planted with a secret that
+        # a rotation replaced never receives the new one. See services/integration_callback_url.py.
+        app_url = bound_callback_url(metadata, secret_data.get("hash"))
         raw_secret = secret_data.get("raw")
 
         if not app_url:
-            logger.warning(f"No app_url stored for API key {org.api_key_id}")
+            logger.warning(f"No callback URL stored with the current secret of API key {org.api_key_id}")
             return None
 
         if not raw_secret:
