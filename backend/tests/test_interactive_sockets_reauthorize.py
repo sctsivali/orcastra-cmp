@@ -186,18 +186,11 @@ def test_a_demoted_caller_is_closed_and_an_unchanged_one_kept(monkeypatch):
     assert unchanged.closed == []
 
 
-class _RoleCache:
-    """The shared per-user role cache, already holding Admin for this caller (a stale or forged entry)."""
+def _plant_admin_role_for(user_id: str) -> None:
+    """What a Redis writer could do while roles were cached per user: plant Admin under the old key."""
+    from app.core.cache import get_cache_manager
 
-    def __init__(self):
-        self.reads, self.writes = [], []
-
-    def get_user_roles(self, user_id):
-        self.reads.append(user_id)
-        return {"roles": ["admin"]}
-
-    def set_user_roles(self, user_id, data):
-        self.writes.append((user_id, data))
+    get_cache_manager().set("rbac_user", f"roles:{user_id}", {"roles": ["admin"]}, ttl=60)
 
 
 @pytest.mark.parametrize(
@@ -205,11 +198,10 @@ class _RoleCache:
     [IdentityCheck(False, "user_search_failed"), IdentityCheck(False, "active", frozenset({Role.PARTNER}))],
     ids=["authentik-could-not-say", "roles-unchanged"],
 )
-def test_a_round_resolves_scope_from_the_ticket_groups_and_never_touches_the_role_cache(monkeypatch, identity):
-    from app.core import rbac, rbac_cache
+def test_a_round_resolves_scope_from_the_ticket_groups_alone(monkeypatch, identity):
+    from app.core import rbac
 
-    cache = _RoleCache()
-    monkeypatch.setattr(rbac_cache, "get_rbac_cache", lambda: cache)
+    _plant_admin_role_for(USER.user_id)
     seen = []
 
     async def identity_check(user):
@@ -231,9 +223,7 @@ def test_a_round_resolves_scope_from_the_ticket_groups_and_never_touches_the_rol
 
     asyncio.run(run())
 
-    assert seen and set(seen) == {Role.PARTNER}, "the ticket's own groups, not the cache's Admin"
-    assert cache.reads == [] and cache.writes == [], "a stale shell must not write its role for REST to read"
-    assert rbac.resolve_roles(USER) == [Role.ADMIN], "outside a round the cache still serves REST as before"
+    assert seen and set(seen) == {Role.PARTNER}, "the ticket's own groups, never a planted Admin"
 
 
 def test_a_session_without_an_email_cannot_be_rechecked_and_ends():

@@ -10,8 +10,7 @@ long as the browser kept it, whatever happened to the session behind it. Two rul
     would kill a running command. Every minute it re-checks the account and its roles, the
     caller's organization scope and its own access rule, and closes with 4403 when any of them
     says no. A caller whose highest role changed is closed too, since the ticket's groups are
-    frozen. Each round resolves scope from those groups without touching the shared role cache,
-    which REST trusts over a token's groups: writing a stale role there would outlive the shell.
+    frozen and each round resolves scope from them.
 
 note: an Authentik outage never closes a session (see ws_identity); five checks in a row that
 fail for any other reason close it with 1011, since a guard that cannot check is not guarding.
@@ -26,7 +25,7 @@ from fastapi import HTTPException, WebSocket
 
 from app.core.auth import AuthenticatedUser
 from app.core.org_scope import set_org_scope_for_ws
-from app.core.rbac import get_highest_role, roles_for_group_names, roles_from_groups_only
+from app.core.rbac import get_highest_role, roles_for_group_names
 from app.services.ws_identity import check_identity
 
 logger = logging.getLogger(__name__)
@@ -86,10 +85,8 @@ async def reauthorize_while_open(
                 logger.warning("Closing %s: the role of %s changed since it opened", label, user.user_id)
                 await _close(websocket, ACCESS_REVOKED, "Access revoked")
                 return
-            # Scope from the ticket's own groups: the shared role cache is neither read nor written.
-            with roles_from_groups_only():
-                await set_org_scope_for_ws(user)
-                await check(user)
+            await set_org_scope_for_ws(user)
+            await check(user)
             errors = 0
         except HTTPException as exc:
             if exc.status_code in (401, 403, 404):
