@@ -8,19 +8,25 @@ shell at once. Readings are kept 55 seconds per account, so one check per minute
 reaches Authentik however many sessions it holds.
 
 note: what the caller may reach (organization, grants, ownership) is read again from the
-database by the session guard; this only answers "is this still a live account".
+database by the session guard. This answers whether the account is still live, and with which
+roles, so the guard can end a session whose caller was demoted: the ticket's groups are frozen at
+mint time, and checking scope with them would keep a demoted Admin an Admin for as long as the
+shell stays open.
 """
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from app.core.auth import AuthenticatedUser
+from app.core.rbac import Role
 from app.services.authentik_role_reading import RoleReading
 
 IDENTITY_CACHE_SECONDS = 55
-# Readings that are an answer about the account, not a failure to get one.
-ENDED_REASONS = frozenset({"user_not_found", "user_inactive"})
+# Readings that are an answer about the account, not a failure to get one. Two accounts carrying
+# the email is one too: the identity is no longer pinned, and a second account must not keep the
+# first one's sessions alive after it is disabled.
+ENDED_REASONS = frozenset({"user_not_found", "user_inactive", "email_ambiguous"})
 
 _readings: Dict[str, Tuple[float, RoleReading]] = {}
 
@@ -29,6 +35,8 @@ _readings: Dict[str, Tuple[float, RoleReading]] = {}
 class IdentityCheck:
     ended: bool
     reason: str
+    # The roles Authentik holds now; None when it could not say.
+    roles: Optional[FrozenSet[Role]] = None
 
 
 async def _read(email: str) -> RoleReading:
@@ -50,7 +58,7 @@ async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
         _readings[email] = (now, reading)
     if reading.roles is None:
         return IdentityCheck(reading.reason in ENDED_REASONS, reading.reason)
-    return IdentityCheck(False, "active")
+    return IdentityCheck(False, "active", reading.roles)
 
 
 def forget_identities() -> None:

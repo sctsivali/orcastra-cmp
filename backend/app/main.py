@@ -534,14 +534,22 @@ async def lifespan(app: FastAPI):
         # attaches to the wrong loop and fails intermittently under load.
         if settings.redis_enabled:
             await get_session_registry().connect(settings.redis_url)
-            from app.core.ws_ticket_store import get_ws_ticket_store
-
-            await get_ws_ticket_store().connect(settings.redis_url)
         await session_tracker.start_publisher()
         logger.info("Session tracker cleanup loop and publisher started")
     except Exception as tracker_err:
         logger.warning(f"Could not start session tracker: {tracker_err}")
     
+    # WebSocket tickets: their own block, so a failure above can never leave the store on its
+    # per-process fallback while four workers serve sockets. Redis is used whenever it answers;
+    # with REDIS_ENABLED an unreachable Redis refuses tickets instead of falling back.
+    try:
+        from app.core.ws_ticket_store import get_ws_ticket_store
+
+        if settings.redis_url:
+            await get_ws_ticket_store().connect(settings.redis_url, required=settings.redis_enabled)
+    except Exception as ticket_err:
+        logger.error("WebSocket ticket store did not start: %s", ticket_err)
+
     # Initialize default tag categories
     try:
         from app.core.database import async_session_maker
