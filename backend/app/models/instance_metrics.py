@@ -83,7 +83,9 @@ class InstanceMetrics(BaseModel):
     base_image: Optional[str] = Field(None, description="Base image used to create instance")
     ipv4_addresses: List[str] = Field(default_factory=list, description="IPv4 addresses")
     ipv6_addresses: List[str] = Field(default_factory=list, description="IPv6 addresses")
-    pid: Optional[int] = Field(None, description="Process ID of the instance")
+    pid: Optional[int] = Field(
+        None, description="Process ID of the instance on its host; null for Tenant callers"
+    )
     guest_agent: GuestAgentStatus = Field(
         "not_applicable",
         description="Virtual machine guest agent state; not_applicable for containers",

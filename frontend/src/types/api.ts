@@ -92,8 +92,9 @@ export interface VMInfo {
   status_code: number;
   ip_addresses: string[];
   host: string;
-  host_endpoint: string;
-  /** Cluster member the instance runs on, when the target is clustered. */
+  /** LXD endpoint of the instance's cluster; null for a Tenant. */
+  host_endpoint: string | null;
+  /** Cluster member the instance runs on; null on a standalone host and for a Tenant. */
   location?: string | null;
   project: string | null;
   architecture: string | null;
@@ -1337,7 +1338,8 @@ export interface MemberResources {
 export interface ClusterInfo {
   cluster_id: string;
   display_name: string;
-  endpoint: string;
+  /** LXD API endpoint; null for a Tenant. */
+  endpoint: string | null;
   zone?: string;
   /** Hypervisor family. null until the certificate is trusted and a real read is possible. */
   cluster_type: string | null;

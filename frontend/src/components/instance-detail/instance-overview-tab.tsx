@@ -10,12 +10,15 @@ import { instanceStatusDisplay } from "@/lib/instance-status";
 import type { VMInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
+import { usePermissions } from "@/hooks/use-permissions";
 
 // Everything the row already knew and the old modal never showed: description, architecture,
 // project, timestamps, profiles, tags, the cluster member, and the image the instance came from.
 export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
   const baseImage = instance.config?.["volatile.base_image"];
   const statusDisplay = instanceStatusDisplay(instance.status);
+  // The cluster member is host detail a Tenant does not receive.
+  const { isPartner } = usePermissions();
 
   return (
     <div className="space-y-4">
@@ -30,7 +33,7 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
           />
           <DetailField label="Project" value={instance.project || "default"} />
           <DetailField label="Cluster" value={<NodeLink clusterId={instance.host} />} />
-          <DetailField label="Cluster Member" value={instance.location} />
+          {isPartner ? <DetailField label="Cluster Member" value={instance.location} /> : null}
           <DetailField label="Description" value={instance.description} span="full" />
         </DetailGrid>
       </DetailSection>

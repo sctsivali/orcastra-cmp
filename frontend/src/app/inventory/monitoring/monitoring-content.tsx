@@ -67,7 +67,7 @@ const toVmInfoFromMonitoringSummary = (instance: InstanceMonitoringSummary): VMI
   status_code: instance.status === "Running" ? 103 : 102,
   ip_addresses: [],
   host: instance.host,
-  host_endpoint: "",
+  host_endpoint: null,
   project: instance.project || "default",
   architecture: null,
   created_at: null,

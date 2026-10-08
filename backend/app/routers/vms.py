@@ -36,6 +36,8 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.database import get_db
+from app.core.host_detail import metrics_for_tier, vm_for_tier, vm_list_for_tier
+from app.core.task_scope import caller_tier
 from app.core.org_scope import (
     can_view_instance,
     org_scope_dependency,
@@ -399,7 +401,7 @@ async def list_vms(
     if cached_response is not None:
         logger.debug(f"Returning cached VMs list for {cache_key}")
         # Reconstruct from cached dict
-        return VMListResponse(**cached_response)
+        return vm_list_for_tier(VMListResponse(**cached_response), caller_tier())
     list_generation = cache.instance_list_generation()
     
     try:
@@ -501,7 +503,7 @@ async def list_vms(
         else:
             logger.warning("Not caching VMs list: no cluster answered")
         
-        return response
+        return vm_list_for_tier(response, caller_tier())
         
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")
@@ -562,7 +564,7 @@ async def get_vm(
             )
         verify_instance_view_access(host, vm.project or "default", vm.name)
         
-        return vm
+        return vm_for_tier(vm, caller_tier())
         
     except HTTPException:
         raise
@@ -1087,7 +1089,7 @@ async def get_instance_metrics(
             project=scoped_project,
         )
         
-        return metrics
+        return metrics_for_tier(metrics, caller_tier())
         
     except LXDConnectionError as e:
         # A cluster that did not answer is not a client error and is not
