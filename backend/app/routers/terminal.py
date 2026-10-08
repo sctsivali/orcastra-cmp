@@ -16,12 +16,11 @@ from app.services.terminal_service import get_terminal_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
-from app.core.dependencies import AuthenticatedUser, get_ws_user
-from app.core.org_scope import (
-    set_org_scope_for_ws,
-    verify_project_access,
-    verify_tenant_permission,
-)
+from app.core.dependencies import AuthenticatedUser
+from app.core.instance_access import verify_instance_access
+from app.core.ws_auth import ws_user
+from app.services.ws_session_guard import instance_session_check, reauthorize_while_open
+from app.core.org_scope import set_org_scope_for_ws
 from app.services.migration_fence import (
     MigrationFenceConflict,
     assert_instance_not_migration_fenced,
@@ -445,12 +444,13 @@ async def terminal_websocket(
     instance_name: str,
     host: str = Query(...),
     project: str = Query("default"),
-    user: Optional[AuthenticatedUser] = Depends(get_ws_user),
+    user: Optional[AuthenticatedUser] = Depends(ws_user("terminal")),
 ):
     """
     WebSocket endpoint for terminal connection.
     Acts as a proxy between browser and LXD instance exec.
-    Auth token is passed as ``token`` query parameter.
+    Opened with a ticket from POST /ws-tickets; re-authorized every minute while open and
+    closed with 4403 once access ends.
     """
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
@@ -458,7 +458,7 @@ async def terminal_websocket(
     # important: gated on auth_enabled ALONE. This used to also require
     # `_settings.authentik_issuer`, which is the variable whose absence produces the
     # unauthenticated `user`, so the guard switched itself off in exactly the situation it
-    # existed to catch. get_ws_user now refuses a misconfigured server itself.
+    # existed to catch. ws_user now refuses a misconfigured server itself.
     if _settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -474,12 +474,9 @@ async def terminal_websocket(
     # since HTTPException is meaningless once the socket is being negotiated.
     from fastapi import HTTPException as _HTTPExc
     try:
-        project = verify_project_access(host, project)
-        verify_tenant_permission(host, project, instance_name, "view")
-        # Per-project enforcement (flag-gated). No-op for admin/partner (acl is None); for a
-        # tenant a missing or insufficient 'console' rule closes the socket rather than raising.
-        if _settings.tenant_perm_enforcement_enabled:
-            verify_tenant_permission(host, project, instance_name, "console")
+        # The project bound, the tenant's view grant and, behind the rollout flag, its console
+        # grant: the one instance gate the re-authorization below repeats every minute.
+        project = verify_instance_access(host, project, instance_name, "console")
     except _HTTPExc as exc:
         await websocket.close(code=1008, reason="forbidden")
         logger.warning(
@@ -540,7 +537,6 @@ async def terminal_websocket(
     )
 
     # Extract user details for session tracking
-    user_id = user.user_id if user else "anonymous"
     user_email = user.email if user else ""
     # resolve via RBAC to get canonical role name (admin/partner/tenant)
     if user:
@@ -570,9 +566,13 @@ async def terminal_websocket(
     if _bg_grant_id:
         from app.services.break_glass_service import watch_grant_while_open
         _bg_watch = asyncio.create_task(watch_grant_while_open(_bg_grant_id, websocket))
+    reauthorize = asyncio.create_task(reauthorize_while_open(
+        websocket, user, instance_session_check(host, project, instance_name), label=f"terminal {instance_name}@{host}",
+    ))
     try:
         await proxy.run()
     finally:
+        reauthorize.cancel()
         if _bg_watch:
             _bg_watch.cancel()
 

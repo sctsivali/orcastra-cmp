@@ -534,6 +534,9 @@ async def lifespan(app: FastAPI):
         # attaches to the wrong loop and fails intermittently under load.
         if settings.redis_enabled:
             await get_session_registry().connect(settings.redis_url)
+            from app.core.ws_ticket_store import get_ws_ticket_store
+
+            await get_ws_ticket_store().connect(settings.redis_url)
         await session_tracker.start_publisher()
         logger.info("Session tracker cleanup loop and publisher started")
     except Exception as tracker_err:
@@ -636,6 +639,9 @@ async def lifespan(app: FastAPI):
         tracker.stop_cleanup()
         tracker.stop_publisher()
         await get_session_registry().aclose()
+        from app.core.ws_ticket_store import get_ws_ticket_store
+
+        await get_ws_ticket_store().aclose()
         logger.info("Session tracker cleanup and publisher stopped")
     except Exception:
         pass
@@ -915,6 +921,10 @@ Ensure your client certificates are properly configured.
     # Events Router (WebSocket: realtime LXD operation/creation progress)
     from app.routers.events import router as events_router
     app.include_router(events_router, prefix=settings.api_prefix)
+
+    # WebSocket tickets: the single-use credential every socket above opens with
+    from app.routers.ws_tickets import router as ws_tickets_router
+    app.include_router(ws_tickets_router, prefix=settings.api_prefix)
 
     # Task journal (the bottom panel): the socket first, then the REST routers. Mounted only
     # when the journal is on, so a deployment that turned it off has no surface at all.

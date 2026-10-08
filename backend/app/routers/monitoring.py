@@ -33,6 +33,8 @@ from app.services.monitoring_history_store import (
 )
 from app.services.monitoring_memory import apply_member_memory
 from app.services.monitoring_sweep import SweepTimer, count_warnings, inventory_note, log_sweep, read_fleet
+from app.services.ws_session_guard import close_when_session_ends
+from app.core.ws_auth import ws_user
 from app.services.monitoring_usage import (
     legacy_top_lists,
     read_instance_usage,
@@ -74,7 +76,7 @@ router = APIRouter(
 # Separate router for WebSocket endpoints, because router-level HTTP auth
 # dependencies (HTTPBearer) break WebSocket upgrade requests because
 # browsers cannot send Authorization headers during the WS handshake.
-# Auth is handled inside the handler via get_ws_user() (query param token).
+# Auth is handled inside the handler via ws_user("monitoring") (a single-use ?ticket=).
 ws_router = APIRouter(
     prefix="/monitoring",
     tags=["Monitoring"],
@@ -745,52 +747,36 @@ async def get_metrics_history(
 
 
 @ws_router.websocket("/ws")
-async def monitoring_websocket(ws: WebSocket):
+async def monitoring_websocket(
+    ws: WebSocket,
+    user: Optional[Any] = Depends(ws_user("monitoring")),
+):
     """
     WebSocket endpoint for real-time monitoring push.
     Clients connect here to receive dashboard updates pushed by the
     background metrics collector, eliminating the need for polling.
     The server sends JSON-serialized MonitoringDashboardResponse on each cycle.
 
-    Auth: token passed via ``?token=`` query param (browsers cannot set
-    Authorization headers on WebSocket upgrade requests).
+    Opened with a ticket from POST /ws-tickets (browsers cannot set Authorization headers on a
+    WebSocket upgrade); closes with 4401 when the session ends. Admin only.
     """
     from app.core.config import get_settings
-    from app.core.auth import validate_jwt
 
-    # Validate auth token from query param
-    settings = get_settings()
-    if settings.auth_enabled:
-        # important: gated on auth_enabled ALONE, and the issuer is checked separately below.
-        # Requiring the issuer here as well made the whole block, including the admin-only check,
-        # skip itself on the one configuration where it was most needed: an auth-enabled server
-        # that cannot verify a token used to serve this socket to anyone. This handler validates
-        # inline rather than through get_ws_user, so it carries its own copy of the refusal.
-        if not settings.authentik_issuer:
-            logger.error(
-                "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing the "
-                "monitoring WebSocket rather than serving it unauthenticated"
-            )
-            await ws.close(code=1011, reason="Authentication is enabled but not configured")
-            return
-        token = ws.query_params.get("token")
-        if not token:
+    if get_settings().auth_enabled:
+        if user is None:
             await ws.close(code=1008, reason="Authentication required")
             return
-        try:
-            user = validate_jwt(token, settings)
-            from app.core.rbac import Role, get_highest_role, resolve_roles
-            if get_highest_role(resolve_roles(user)) != Role.ADMIN:
-                await ws.close(code=1008, reason="Monitoring WebSocket is admin-only")
-                return
-        except Exception:
-            await ws.close(code=1008, reason="Invalid or expired token")
+        from app.core.rbac import Role, get_highest_role, resolve_roles
+
+        if get_highest_role(resolve_roles(user)) != Role.ADMIN:
+            await ws.close(code=1008, reason="Monitoring WebSocket is admin-only")
             return
 
     from app.services.ws_broadcast import get_monitoring_broadcaster
 
     broadcaster = get_monitoring_broadcaster()
     await broadcaster.connect(ws)
+    session = asyncio.create_task(close_when_session_ends(ws, user))
     try:
         # Keep connection alive; ignore incoming messages (server-push only)
         while True:
@@ -801,4 +787,5 @@ async def monitoring_websocket(ws: WebSocket):
     except Exception:
         pass
     finally:
+        session.cancel()
         await broadcaster.disconnect(ws)

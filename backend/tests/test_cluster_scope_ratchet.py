@@ -21,6 +21,8 @@ CLUSTER_SCOPE_GATES = {
     "verify_instance_view_access",
     "_verify_instance_access",
     "_enforce_snapshot_access",
+    # core/instance_access.py: the shell and console gate, pinned below to keep the project bound
+    "verify_instance_access",
 }
 
 # Handlers that legitimately do not call verify_cluster_access, each with the reason.
@@ -178,3 +180,15 @@ def test_the_exempt_list_stays_honest() -> None:
     """An exemption for a file that no longer exists hides a real handler behind a stale name."""
     for (filename, _func) in EXEMPT:
         assert (ROUTERS / filename).exists(), f"EXEMPT names {filename}, which does not exist"
+
+
+def test_the_shared_instance_gate_starts_with_the_project_bound() -> None:
+    """verify_instance_access counts as a cluster gate only because it opens with this call."""
+    source = (ROUTERS.parent / "core" / "instance_access.py").read_text(encoding="utf-8")
+    helper = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "verify_instance_access"
+    )
+    first = helper.body[1] if isinstance(helper.body[0], ast.Expr) else helper.body[0]
+    assert "verify_project_access(host, project)" in ast.unparse(first)

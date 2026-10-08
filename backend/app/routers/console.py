@@ -29,7 +29,9 @@ import websockets
 from websockets import State as WebSocketState
 from websockets.exceptions import ConnectionClosed
 
-from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.ws_auth import ws_user
+from app.services.ws_session_guard import instance_session_check, reauthorize_while_open
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.org_scope import (
@@ -1626,7 +1628,7 @@ async def console_websocket(
     host: str = Query(..., description="Target cluster"),
     project: str = Query("default", description="LXD project name"),
     console_type: str = Query("vga", description="Console type: vga or console"),
-    user: Optional[AuthenticatedUser] = Depends(get_ws_user),
+    user: Optional[AuthenticatedUser] = Depends(ws_user("console")),
 ):
     """
     WebSocket endpoint for graphics console.
@@ -1635,7 +1637,7 @@ async def console_websocket(
     The client should use spice-html5 or similar SPICE client to render.
     
     IMPORTANT: spice-html5 requires 'binary' subprotocol to be accepted.
-    Auth token is passed as ``token`` query parameter.
+    Opened with a ticket from POST /ws-tickets (one per SPICE channel), re-authorized every minute.
     """
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
@@ -1643,7 +1645,7 @@ async def console_websocket(
     # important: gated on auth_enabled ALONE. This used to also require
     # `_settings.authentik_issuer`, which is the variable whose absence produces the
     # unauthenticated `user`, so the guard switched itself off in exactly the situation it
-    # existed to catch. get_ws_user now refuses a misconfigured server itself.
+    # existed to catch. ws_user now refuses a misconfigured server itself.
     if _settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -1674,11 +1676,10 @@ async def console_websocket(
         from app.services.break_glass_service import enforce_sensitive_access
         from app.core.org_scope import resolve_cluster_org
         from app.core.database import async_session_maker
-        from fastapi import HTTPException as _HTTPException
         async with async_session_maker() as _bg_db:
             try:
                 _grant = await enforce_sensitive_access(user, host, _bg_db)
-            except _HTTPException:
+            except HTTPException:
                 await websocket.close(code=1008, reason="break_glass_required")
                 logger.warning(f"Console WS blocked (break_glass_required): {instance_name}@{host} user={user.email}")
                 return
@@ -1732,9 +1733,12 @@ async def console_websocket(
     if _bg_grant_id:
         from app.services.break_glass_service import watch_grant_while_open
         _bg_watch = asyncio.create_task(watch_grant_while_open(_bg_grant_id, websocket))
+    check = instance_session_check(host, project, instance_name)
+    reauthorize = asyncio.create_task(reauthorize_while_open(websocket, user, check, label=f"console {instance_name}@{host}"))
     try:
         await proxy.run()
     finally:
+        reauthorize.cancel()
         if _bg_watch:
             _bg_watch.cancel()
     

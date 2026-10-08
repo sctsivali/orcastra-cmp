@@ -14,7 +14,8 @@ from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException
 
-from app.core.dependencies import AuthenticatedUser, get_ws_user
+from app.core.dependencies import AuthenticatedUser
+from app.core.ws_auth import ws_user
 from app.core.org_scope import (
     get_current_allowed_clusters,
     project_is_visible,
@@ -25,6 +26,7 @@ from app.core.org_scope import (
 from app.core.config import get_settings
 from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd.events_hub import get_events_hub
+from app.services.ws_session_guard import close_when_session_ends
 
 logger = logging.getLogger(__name__)
 
@@ -80,15 +82,15 @@ def frame_is_visible(host: str, payload: dict) -> bool:
 async def events_websocket(
     websocket: WebSocket,
     host: str = Query(..., description="Cluster to stream operation events from"),
-    user: Optional[AuthenticatedUser] = Depends(get_ws_user),
+    user: Optional[AuthenticatedUser] = Depends(ws_user("events")),
 ):
     """Stream a node's LXD operation events (incl. image-pull progress) to the
-    browser. Auth token is passed as the ``token`` query parameter."""
+    browser. Opened with a ticket from POST /ws-tickets; closes with 4401 when the session ends."""
     settings = get_settings()
     # important: gated on auth_enabled ALONE. This used to also require
     # `_settings.authentik_issuer`, which is the variable whose absence produces the
     # unauthenticated `user`, so the guard switched itself off in exactly the situation it
-    # existed to catch. get_ws_user now refuses a misconfigured server itself.
+    # existed to catch. ws_user now refuses a misconfigured server itself.
     if settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -153,9 +155,10 @@ async def events_websocket(
 
     sender = asyncio.create_task(_sender())
     receiver = asyncio.create_task(_receiver())
+    session = asyncio.create_task(close_when_session_ends(websocket, user))
     try:
         _, pending = await asyncio.wait(
-            {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
+            {sender, receiver, session}, return_when=asyncio.FIRST_COMPLETED
         )
         for task in pending:
             task.cancel()
@@ -166,5 +169,6 @@ async def events_websocket(
     finally:
         sender.cancel()
         receiver.cancel()
+        session.cancel()
         await hub.unsubscribe(host, queue)
         logger.info(f"[events] browser disconnected host={host}")
