@@ -2298,6 +2298,8 @@ import type {
   APIKeyValidateResponse,
   CapabilityVocabularyResponse,
   IntegrationOrganization,
+  OwnerKeyTransferRequest,
+  OwnerKeyTransferResponse,
 } from "@/types";
 
 export const integrationsAPI = {
@@ -2393,6 +2395,18 @@ export const integrationsAPI = {
   refreshOrganizations: async (apiKeyId: string): Promise<{ message: string; organizations_synced: number }> => {
     return fetchAPI(`/integrations/refresh-organizations?api_key_id=${encodeURIComponent(apiKeyId)}`, {
       method: "POST",
+    });
+  },
+
+  // Admin only. Makes another active OrcaHub key the owner of a synced organization; there is no
+  // release to no owner.
+  transferOrganizationOwner: async (
+    orgId: number,
+    request: OwnerKeyTransferRequest,
+  ): Promise<OwnerKeyTransferResponse> => {
+    return fetchAPI<OwnerKeyTransferResponse>(`/integrations/organizations/${encodeURIComponent(String(orgId))}/owner-key`, {
+      method: "PUT",
+      body: JSON.stringify(request),
     });
   },
 };
