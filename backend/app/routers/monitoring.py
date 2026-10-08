@@ -31,6 +31,7 @@ from app.services.monitoring_history_store import (
     needs_hydrate,
     record_point,
 )
+from app.services.monitoring_memory import apply_member_memory
 from app.services.monitoring_sweep import SweepTimer, count_warnings, log_sweep, read_fleet
 from app.services.monitoring_usage import (
     legacy_top_lists,
@@ -378,6 +379,7 @@ async def get_monitoring_dashboard(
             if node.connected and node.resources and node.resources.cpu_total > 0
         }
         usages = await timer.timed("rates", read_instance_usage(running_vms, host_threads))
+        usages, memory_counts = await timer.timed("scrapes", apply_member_memory(lxd_service, usages))
         fleet_cpu = rollup(nodes_metrics, usages)
         consumers = [usage_summary(usage) for usage in select_consumers(usages)]
         top_cpu_consumers, top_memory_consumers = legacy_top_lists(usages)
@@ -475,7 +477,7 @@ async def get_monitoring_dashboard(
                     nodes_metrics,
                     usages,
                     fleet_cpu_percent=fleet_cpu.busy_percent,
-                    total_memory=total_memory,
+                    memory_usage_percent=memory_usage_percent,
                     storage_usage_percent=storage_usage_percent,
                     running_instances=running_instances,
                 )
@@ -497,6 +499,7 @@ async def get_monitoring_dashboard(
             running=running_instances,
             history_written=history_written,
             warnings_skipped=warnings_skipped,
+            memory=memory_counts,
         )
         
         # important: a dashboard built while no cluster answered is all zeros, and

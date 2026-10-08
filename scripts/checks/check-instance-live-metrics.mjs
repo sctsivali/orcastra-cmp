@@ -36,6 +36,7 @@ const files = {
   pendingRows: "frontend/src/app/inventory/instances/components/pending-create-rows.tsx",
   polling: "frontend/src/lib/instance-metrics-polling.ts",
   metricsView: "frontend/src/lib/instance-metrics-view.ts",
+  consumers: "frontend/src/components/monitoring/top-consumers-card.tsx",
 };
 
 const bodies = Object.fromEntries(
@@ -279,6 +280,13 @@ const checks = [
     /const \{ isPartner \} = usePermissions\(\);/.test(bodies.metrics) &&
       /isPartner \? <DetailField label="PID" value=\{metrics\.pid\} \/> : null/.test(bodies.metrics),
     "the host PID is Partner and Admin detail; a Tenant's Metrics tab must not offer the field",
+  ],
+  [
+    /memory_includes_cache\?: boolean;/.test(bodies.types) &&
+      /instance\.memory_includes_cache === false \? "Memory in use" : "Memory, with page cache"/.test(
+        bodies.consumers,
+      ),
+    "a Top Consumers memory figure must say whether it counts page cache, per row, as the server reports it",
   ],
 ];
 

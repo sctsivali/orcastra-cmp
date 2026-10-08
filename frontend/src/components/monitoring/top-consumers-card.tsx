@@ -218,7 +218,9 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
       return (
         <>
           <p className="text-sm font-bold text-green-600 tabular-nums">{formatMemory(instance.memory_usage_bytes)}</p>
-          <p className="text-xs text-muted-foreground">Memory, with page cache</p>
+          <p className="text-xs text-muted-foreground">
+            {instance.memory_includes_cache === false ? "Memory in use" : "Memory, with page cache"}
+          </p>
         </>
       );
     case "storage":

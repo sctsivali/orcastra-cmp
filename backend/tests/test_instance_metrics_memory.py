@@ -59,7 +59,7 @@ def scrapes(monkeypatch):
     """Each read takes the next scrape; None means the metrics read was skipped or failed."""
     queue = []
     monkeypatch.setattr(
-        metrics_module, "project_metrics", lambda *_a, **_k: queue.pop(0) if queue else None
+        metrics_module, "instance_scrape", lambda *_a, **_k: queue.pop(0) if queue else None
     )
     return queue
 
@@ -95,7 +95,7 @@ def test_without_metrics_the_state_reading_is_kept_and_labelled(monkeypatch, scr
 
 def test_no_deadline_never_scrapes(monkeypatch):
     called = []
-    monkeypatch.setattr(metrics_module, "project_metrics", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(metrics_module, "instance_scrape", lambda *a, **k: called.append(1))
 
     _read(monkeypatch, _instance(), deadline=None)
 

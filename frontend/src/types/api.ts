@@ -1637,8 +1637,10 @@ export interface InstanceMonitoringSummary {
   cpu_status?: InstanceRateStatus;
   cpu_busy_vcpus?: number | null;
   cpu_vcpus?: number | null;
-  /** Includes page cache. */
+  /** Includes reclaimable page cache unless memory_includes_cache is false. */
   memory_usage_bytes: number;
+  /** False when memory_usage_bytes leaves out reclaimable page cache; absent from older backends. */
+  memory_includes_cache?: boolean;
   memory_limit_bytes: number;
   disk_usage_bytes: number;
   /** Lifetime totals since the instance started. */
