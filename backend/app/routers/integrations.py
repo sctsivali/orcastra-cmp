@@ -5034,6 +5034,15 @@ async def refresh_organizations(
     # stored callback, then have the response upserted as organizations. Same overlap rule, same
     # 404-for-out-of-scope shape, so an id cannot be probed apart from a nonexistent one.
     metadata = _authorize_api_key(vault_client, api_key_id)
+    # important: after the scope check, so it never confirms an id the caller cannot see, and
+    # before the secret is read. Refreshing such a key sent its stored credential hash to its
+    # callback URL and wrote the answer under the dead key's ownership. The OrcaHub callbacks
+    # skip it the same way (orcahub_sync._get_orcahub_credentials).
+    if classify_key(metadata) != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="This API key is revoked, inactive or expired, so it cannot be refreshed",
+        )
 
     app_url = metadata.get("app_url")
     if not app_url:

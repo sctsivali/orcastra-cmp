@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.api_key_expiry import classify_key
 from app.models.db_models import Organization
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,15 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
         metadata = vault_client.vault_read(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/metadata"
         )
+        # important: a revoked, inactive or expired key gets no callback. Its integration is
+        # gone, and the raw secret a callback carries must not leave the process for it, so the
+        # secret is not even read.
+        if classify_key(metadata) != "active":
+            logger.info(
+                "OrcaHub callback skipped for api key %s: the key is revoked, inactive or expired",
+                org.api_key_id,
+            )
+            return None
         secret_data = vault_client.vault_read(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret"
         )
