@@ -257,3 +257,25 @@ async def test_a_home_synced_again_after_a_buyer_lends_the_key_to_nobody() -> No
                      bindings=[(2, None), (3, None), (5, SELLER)])
     for email in (FOUNDER, SELLER):
         assert await integrations._keys_the_caller_manages(db, _user(email), [SELLER_KEY]) == []
+
+
+async def test_a_founder_binding_their_own_cluster_to_two_buyers_lends_no_key() -> None:
+    """The oldest synced organization on the seller's key is a buyer (the seller's home was synced
+    again later). Its founder registers a cluster of their own and binds it to that buyer and to a
+    second buyer on the same key, which looks like a sale from a home. A sale is a binding
+    provisioning made, never one the caller registered, so it lends nothing."""
+    from app.services.cluster_parties import side_keys
+
+    db = await _sale(
+        orgs=[(2, "system"), (3, "system"), (5, "system")],
+        members=[(2, FOUNDER, "partner"), (3, FOUNDER, "partner"), (5, SELLER, "partner")],
+        bindings=[(5, SELLER), (2, None), (3, None)],
+    )
+    db.add_all([OrganizationCluster(organization_id=2, cluster_id="founders-own", registered_by=FOUNDER)])
+    await db.commit()
+    db.add_all([OrganizationCluster(organization_id=3, cluster_id="founders-own", registered_by=FOUNDER)])
+    await db.commit()
+    assert await side_keys(db, FOUNDER) == set()
+    assert await integrations._keys_the_caller_manages(db, _user(FOUNDER), [SELLER_KEY]) == [], (
+        "a buyer founder could manage, and then rotate, the seller's integration key"
+    )
