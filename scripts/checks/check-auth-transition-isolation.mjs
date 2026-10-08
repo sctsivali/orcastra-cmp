@@ -224,20 +224,36 @@ assert.equal(currentPreference.retired, false, "same-actor token rotation retire
 assert.equal(calls.length, beforeCurrentPreference + 1);
 assert.equal(calls.at(-1).options.headers.Authorization, "Bearer test-token-pref-a4");
 
-// WebSocket URL builders read the same installed bearer. Once B is marked synchronized, a newly
-// mounted stream must carry B and not A.
+// A socket opens with a single-use ticket minted over the authenticated fetch, so it carries the
+// installed actor's session and never the bearer itself. Once B is installed, a newly mounted
+// stream must be minted under B and its URL must hold no token at all.
+const wsTicketApi = compileCommonJs(
+  "frontend/src/lib/ws-ticket-api.ts",
+  { "@/lib/api": api },
+  { fetch: fetchStub, window: {} },
+);
 const wsUrls = compileCommonJs(
   "frontend/src/lib/ws-url.ts",
-  { "@/lib/api": api },
+  { "@/lib/ws-ticket-api": wsTicketApi, "@/types/api": { APIError: TestAPIError } },
   { fetch: fetchStub, window: { location: { hostname: "localhost", protocol: "http:" } } },
 );
+fetchImplementation = async ({ options }) => {
+  const bearer = options.headers.Authorization.replace(/^Bearer /, "");
+  return response(201, { ticket: `ticket-of-${bearer.slice(-1)}`, tickets: null, expires_in: 30 });
+};
 api.setAccessToken("test-token-ws-a", "actor-a");
-const aWs = wsUrls.getEventsWsUrl("node-1");
+const aWs = await wsUrls.ticketedSocketUrl({ kind: "events", host: "node-1" });
+const aMint = calls.at(-1);
 api.setAccessToken("test-token-ws-b", "actor-b");
-const bWs = wsUrls.getEventsWsUrl("node-1");
-assert.match(aWs, /token=test-token-ws-a/);
-assert.match(bWs, /token=test-token-ws-b/);
-assert.doesNotMatch(bWs, /test-token-ws-a/);
+const bWs = await wsUrls.ticketedSocketUrl({ kind: "events", host: "node-1" });
+const bMint = calls.at(-1);
+assert.equal(aMint.url, "/api/v1/ws-tickets");
+assert.equal(aMint.options.method, "POST");
+assert.deepEqual(JSON.parse(aMint.options.body), { kind: "events", host: "node-1" });
+assert.equal(bMint.options.headers.Authorization, "Bearer test-token-ws-b");
+assert.match(aWs, /\/api\/v1\/events\/ws\?host=node-1&ticket=ticket-of-a$/);
+assert.match(bWs, /&ticket=ticket-of-b$/);
+assert.doesNotMatch(aWs + bWs, /token=|test-token-ws/);
 
 // Providers listens to the same actor boundary. Model its exact replacement operation with a
 // real QueryClient: same-actor token rotation keeps cache, while A -> B retires and clears it.

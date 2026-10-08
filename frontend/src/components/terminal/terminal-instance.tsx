@@ -31,8 +31,8 @@ export interface TerminalInstanceHandle {
   focus: () => void;
 }
 
-// WebSocket URL builder - shared utility for proxy-safe URLs
-import { getTerminalWsUrl } from "@/lib/ws-url";
+// WebSocket URL builder - shared utility for proxy-safe, ticketed URLs
+import { ACCESS_REVOKED_MESSAGE, WS_CLOSE, mintFailureMessage, ticketedSocketUrl } from "@/lib/ws-url";
 
 export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInstanceProps>(function TerminalInstance({
   terminalId,
@@ -51,6 +51,10 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 10; // Increased for better resilience
+  // A ticket is minted before every connect; these keep a mint from opening a socket after
+  // unmount and stop two mints from racing.
+  const mountedRef = useRef(false);
+  const mintingRef = useRef(false);
 
   const { updateTerminalStatus, setTerminalSessionId } = useTerminalStore();
 
@@ -124,12 +128,26 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
   }, [instanceName]);
 
   // Connect WebSocket
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
+  const connect = useCallback(async (): Promise<void> => {
+    if (wsRef.current?.readyState === WebSocket.OPEN || mintingRef.current) return;
 
     updateTerminalStatus(terminalId, "connecting");
+    mintingRef.current = true;
+    let wsUrl: string;
+    try {
+      wsUrl = await ticketedSocketUrl({ kind: "terminal", host, project, instance: instanceName });
+    } catch (error) {
+      mintingRef.current = false;
+      if (!mountedRef.current) return;
+      const message = mintFailureMessage(error);
+      xtermRef.current?.writeln(`\x1b[1;31m✗ ${message}\x1b[0m`);
+      updateTerminalStatus(terminalId, "error", message);
+      onError?.(message);
+      return;
+    }
+    mintingRef.current = false;
+    if (!mountedRef.current) return;
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -213,6 +231,13 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     };
 
     ws.onclose = (event) => {
+      if (event.code === WS_CLOSE.ACCESS_REVOKED) {
+        // Revoked while open: reconnecting would only be refused again.
+        xtermRef.current?.writeln(`\n\x1b[1;31m✗ ${ACCESS_REVOKED_MESSAGE}\x1b[0m`);
+        updateTerminalStatus(terminalId, "error", ACCESS_REVOKED_MESSAGE);
+        onError?.(ACCESS_REVOKED_MESSAGE);
+        return;
+      }
       // Reconnect for abnormal closures (not user-initiated)
       // code 1000 = normal closure, 1001 = going away
       if (event.code !== 1000 && event.code !== 1001 && reconnectAttempts.current < maxReconnectAttempts) {
@@ -225,7 +250,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
         updateTerminalStatus(terminalId, "connecting");
 
         reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
+          void connect();
         }, delay);
       } else if (reconnectAttempts.current >= maxReconnectAttempts) {
         xtermRef.current?.writeln("\x1b[1;31m✗ Max reconnection attempts reached. Click to retry.\x1b[0m");
@@ -275,9 +300,10 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     // Prevent double initialization in React Strict Mode
     if (initializedRef.current) return;
     initializedRef.current = true;
+    mountedRef.current = true;
 
     initTerminal();
-    connect();
+    void connect();
 
     // Handle window resize
     window.addEventListener("resize", handleResize);
@@ -335,6 +361,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
       
       // Reset initialization flag on unmount
       initializedRef.current = false;
+      mountedRef.current = false;
     };
   }, []); // Empty deps - only run once on mount
 

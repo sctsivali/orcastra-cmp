@@ -147,7 +147,13 @@ async function loadSpiceScripts(): Promise<void> {
 }
 
 // WebSocket URL builders - shared utility for proxy-safe URLs
-import { getTerminalWsUrl, getGraphicsWsUrl } from "@/lib/ws-url";
+import {
+  ACCESS_REVOKED_MESSAGE,
+  WS_CLOSE,
+  mintFailureMessage,
+  spiceSocketUrls,
+  ticketedSocketUrl,
+} from "@/lib/ws-url";
 
 // Loading fallback
 function ConsoleLoading() {
@@ -183,6 +189,9 @@ function ConsoleContent() {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const textWsRef = useRef<WebSocket | null>(null);
+  // Bumped on every connect and on teardown, so a ticket that arrives late opens nothing.
+  const textGenerationRef = useRef(0);
+  const graphicsGenerationRef = useRef(0);
   const textInitializingRef = useRef(false); // Prevent double initialization
 
   // Graphics console refs
@@ -445,8 +454,8 @@ function ConsoleContent() {
     return term;
   }, [instanceName]);
 
-  // Connect text console
-  const connectText = useCallback(() => {
+  // Connect text console, after minting its single-use ticket
+  const connectText = useCallback(async (): Promise<void> => {
     if (!instanceName || !host) return;
     // Prevent reconnect if already connected or connecting
     if (textWsRef.current?.readyState === WebSocket.OPEN || 
@@ -454,9 +463,21 @@ function ConsoleContent() {
       return;
     }
 
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
-
+    const generation = ++textGenerationRef.current;
     setTextStatus("connecting");
+    let wsUrl: string;
+    try {
+      wsUrl = await ticketedSocketUrl({ kind: "terminal", host, project, instance: instanceName });
+    } catch (mintError) {
+      if (generation !== textGenerationRef.current) return;
+      const message = mintFailureMessage(mintError);
+      xtermRef.current?.writeln(`\x1b[1;31m✗ ${message}\x1b[0m`);
+      setTextStatus("error");
+      setError(message);
+      return;
+    }
+    if (generation !== textGenerationRef.current) return;
+
     const ws = new WebSocket(wsUrl);
     textWsRef.current = ws;
 
@@ -506,7 +527,13 @@ function ConsoleContent() {
       setTextStatus("error");
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (event.code === WS_CLOSE.ACCESS_REVOKED) {
+        xtermRef.current?.writeln(`\n\x1b[1;31m✗ ${ACCESS_REVOKED_MESSAGE}\x1b[0m`);
+        setTextStatus("error");
+        setError(ACCESS_REVOKED_MESSAGE);
+        return;
+      }
       setTextStatus("disconnected");
     };
   }, [instanceName, host, project]);
@@ -542,13 +569,32 @@ function ConsoleContent() {
       // Reset stabilization flag
       isStabilizedRef.current = false;
       setGraphicsStatus("connecting");
+      const generation = ++graphicsGenerationRef.current;
+      // note: one ticket per SPICE channel. The main channel opens with the first and hands the
+      // others to its display, inputs and cursor sockets (the vendored main.js channel_uris).
+      spiceSocketUrls(instanceName, host, project).then(
+        (urls) => startSpice(urls, generation),
+        (mintError: unknown) => {
+          graphicsConnectingRef.current = false;
+          if (generation !== graphicsGenerationRef.current) return;
+          setGraphicsStatus("error");
+          setError(mintFailureMessage(mintError));
+        },
+      );
+    };
+
+    const startSpice = (urls: { main: string; channels: string[] }, generation: number): void => {
+      if (generation !== graphicsGenerationRef.current) {
+        graphicsConnectingRef.current = false;
+        return;
+      }
       try {
-        const wsUrl = getGraphicsWsUrl(instanceName, host, project);
         const SpiceMainConn = (window as any).SpiceMainConn;
         if (!SpiceMainConn) throw new Error("SpiceMainConn not available");
 
         const sc = new SpiceMainConn({
-          uri: wsUrl,
+          uri: urls.main,
+          channel_uris: urls.channels,
           screen_id: screenId,
           password: "",
           onerror: (e: Error | string) => {
@@ -602,11 +648,11 @@ function ConsoleContent() {
   }, [searchTerm]);
 
   // Reconnect
-  const handleReconnect = useCallback(() => {
+  const handleReconnect = useCallback(async (): Promise<void> => {
     if (activeTab === "text") {
       if (textWsRef.current) textWsRef.current.close();
       if (xtermRef.current) xtermRef.current.clear();
-      connectText();
+      await connectText();
     } else {
       connectGraphics();
     }
@@ -907,7 +953,7 @@ function ConsoleContent() {
       });
 
       if (operation === "restart") {
-        setTimeout(() => handleReconnect(), 2000);
+        setTimeout(() => void handleReconnect(), 2000);
       }
     } catch (error) {
       if (isActorScopeChangedError(error)) return;
@@ -971,7 +1017,7 @@ function ConsoleContent() {
       // Small delay to ensure DOM is ready after visibility change
       const timer = setTimeout(() => {
         initTextTerminal();
-        connectText();
+        void connectText();
         // Refit terminal when tab becomes active
         if (fitAddonRef.current) {
           try { fitAddonRef.current.fit(); } catch (e) {}
@@ -1328,6 +1374,8 @@ function ConsoleContent() {
         });
       
       // Also close connections
+      textGenerationRef.current += 1;
+      graphicsGenerationRef.current += 1;
       if (textWsRef.current) textWsRef.current.close();
       if (spiceRef.current) {
         try { spiceRef.current.stop(); } catch (e) {}
@@ -1340,6 +1388,8 @@ function ConsoleContent() {
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("beforeunload", handleBeforeUnload);
       clearInterval(heartbeat);
+      textGenerationRef.current += 1;
+      graphicsGenerationRef.current += 1;
       if (textWsRef.current) textWsRef.current.close();
       if (xtermRef.current) xtermRef.current.dispose();
       if (spiceRef.current) {

@@ -31,8 +31,8 @@ export interface TextConsoleHandle {
   paste: (text: string) => void;
 }
 
-// WebSocket URL builder - shared utility for proxy-safe URLs
-import { getTerminalWsUrl } from "@/lib/ws-url";
+// WebSocket URL builder - shared utility for proxy-safe, ticketed URLs
+import { ACCESS_REVOKED_MESSAGE, WS_CLOSE, mintFailureMessage, ticketedSocketUrl } from "@/lib/ws-url";
 
 export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(function TextConsole({
   consoleId,
@@ -134,8 +134,8 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
     return term;
   }, [instanceName]);
 
-  // Connect WebSocket
-  const connect = useCallback(() => {
+  // Connect WebSocket. A ticket is minted first; the console may unmount while it is.
+  const connect = useCallback(async (): Promise<void> => {
     // Prevent connection if component is unmounted or already connecting/connected
     if (!isMountedRef.current) return;
     if (isConnectingRef.current) return;
@@ -143,9 +143,24 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
         wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     isConnectingRef.current = true;
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
     updateConnectionStatus(consoleId, "connecting");
-    
+    let wsUrl: string;
+    try {
+      wsUrl = await ticketedSocketUrl({ kind: "terminal", host, project, instance: instanceName });
+    } catch (error) {
+      isConnectingRef.current = false;
+      if (!isMountedRef.current) return;
+      const message = mintFailureMessage(error);
+      xtermRef.current?.writeln(`\x1b[1;31m✗ ${message}\x1b[0m`);
+      updateConnectionStatus(consoleId, "error", message);
+      onErrorRef.current?.(message);
+      return;
+    }
+    if (!isMountedRef.current) {
+      isConnectingRef.current = false;
+      return;
+    }
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -221,6 +236,13 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
       isConnectingRef.current = false;
       // Skip close handling if component is unmounted (expected during cleanup)
       if (!isMountedRef.current) return;
+      if (event.code === WS_CLOSE.ACCESS_REVOKED) {
+        // Revoked while open: reconnecting would only be refused again.
+        xtermRef.current?.writeln(`\n\x1b[1;31m✗ ${ACCESS_REVOKED_MESSAGE}\x1b[0m`);
+        updateConnectionStatus(consoleId, "error", ACCESS_REVOKED_MESSAGE);
+        onErrorRef.current?.(ACCESS_REVOKED_MESSAGE);
+        return;
+      }
       updateConnectionStatus(consoleId, "disconnected");
       
       // Only attempt reconnect if not a clean close and within retry limit
@@ -231,7 +253,9 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
         const delay = Math.min(2000 * Math.pow(2, reconnectAttempts.current - 1), 30000);
         xtermRef.current?.writeln(`\x1b[1;33m⚠ Reconnecting in ${delay / 1000}s (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})...\x1b[0m`);
         
-        reconnectTimeoutRef.current = setTimeout(connect, delay);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          void connect();
+        }, delay);
       } else if (reconnectAttempts.current >= maxReconnectAttempts) {
         xtermRef.current?.writeln(`\x1b[1;31m✗ Max reconnection attempts reached. Please try reconnecting manually.\x1b[0m`);
       }
@@ -283,7 +307,7 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
     // and tab switching. This prevents "WebSocket closed before established" error.
     const connectTimer = setTimeout(() => {
       if (isMountedRef.current) {
-        connect();
+        void connect();
       }
     }, 100);
 

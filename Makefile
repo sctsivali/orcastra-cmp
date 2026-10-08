@@ -306,6 +306,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-node-picker-status.mjs
 	@echo "$(COLOR_GREEN)Checking poll jitter...$(COLOR_RESET)"
 	@node scripts/checks/check-poll-jitter.mjs
+	@echo "$(COLOR_GREEN)Checking WebSocket tickets...$(COLOR_RESET)"
+	@node scripts/checks/check-ws-tickets.mjs
 	@echo "$(COLOR_GREEN)Checking long-list selects...$(COLOR_RESET)"
 	@node scripts/checks/check-long-list-selects.mjs
 	@echo "$(COLOR_GREEN)Checking the banner role gate...$(COLOR_RESET)"

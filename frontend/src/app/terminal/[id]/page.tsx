@@ -60,8 +60,8 @@ type TerminalStatus = "connecting" | "connected" | "disconnected" | "error";
 type InstanceStatus = "Running" | "Stopped" | "Starting" | "Stopping" | "Restarting" | "Unknown" | "Error";
 type OperationType = 'start' | 'stop' | 'restart';
 
-// WebSocket URL builder - shared utility for proxy-safe URLs
-import { getTerminalWsUrl } from "@/lib/ws-url";
+// WebSocket URL builder - shared utility for proxy-safe, ticketed URLs
+import { ACCESS_REVOKED_MESSAGE, WS_CLOSE, mintFailureMessage, ticketedSocketUrl } from "@/lib/ws-url";
 
 // Loading fallback
 function TerminalLoading() {
@@ -89,6 +89,8 @@ function TerminalContent() {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // Bumped on every connect and on unmount, so a ticket that arrives late opens nothing.
+  const connectGenerationRef = useRef(0);
   
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [instanceStatus, setInstanceStatus] = useState<InstanceStatus>("Running");
@@ -158,14 +160,26 @@ function TerminalContent() {
     return term;
   }, [instanceName]);
 
-  // Connect WebSocket
-  const connect = useCallback(() => {
+  // Connect WebSocket, after minting its single-use ticket
+  const connect = useCallback(async (): Promise<void> => {
     if (!instanceName || !host) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
-
+    const generation = ++connectGenerationRef.current;
     setStatus("connecting");
+    let wsUrl: string;
+    try {
+      wsUrl = await ticketedSocketUrl({ kind: "terminal", host, project, instance: instanceName });
+    } catch (mintError) {
+      if (generation !== connectGenerationRef.current) return;
+      const message = mintFailureMessage(mintError);
+      xtermRef.current?.writeln(`\x1b[1;31m✗ ${message}\x1b[0m`);
+      setStatus("error");
+      setError(message);
+      return;
+    }
+    if (generation !== connectGenerationRef.current) return;
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -221,7 +235,13 @@ function TerminalContent() {
       setStatus("error");
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      if (event.code === WS_CLOSE.ACCESS_REVOKED) {
+        xtermRef.current?.writeln(`\n\x1b[1;31m✗ ${ACCESS_REVOKED_MESSAGE}\x1b[0m`);
+        setStatus("error");
+        setError(ACCESS_REVOKED_MESSAGE);
+        return;
+      }
       setStatus("disconnected");
     };
   }, [instanceName, host, project]);
@@ -245,14 +265,14 @@ function TerminalContent() {
   }, [searchTerm]);
 
   // Reconnect
-  const handleReconnect = useCallback(() => {
+  const handleReconnect = useCallback(async (): Promise<void> => {
     if (wsRef.current) {
       wsRef.current.close();
     }
     if (xtermRef.current) {
       xtermRef.current.clear();
     }
-    connect();
+    await connect();
   }, [connect]);
 
   // important: guard the reconnect. It closes the socket and opens a new one, so
@@ -299,7 +319,7 @@ function TerminalContent() {
       
       // Reconnect if restarted
       if (operation === 'restart') {
-        setTimeout(() => handleReconnect(), 2000);
+        setTimeout(() => void handleReconnect(), 2000);
       }
     } catch (error) {
       if (isActorScopeChangedError(error)) return;
@@ -387,7 +407,7 @@ function TerminalContent() {
   // Initialize
   useEffect(() => {
     initTerminal();
-    connect();
+    void connect();
 
     window.addEventListener("resize", handleResize);
 
@@ -400,6 +420,7 @@ function TerminalContent() {
     return () => {
       window.removeEventListener("resize", handleResize);
       clearInterval(heartbeat);
+      connectGenerationRef.current += 1;
       if (wsRef.current) {
         wsRef.current.close();
       }

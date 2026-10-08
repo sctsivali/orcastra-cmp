@@ -1,138 +1,98 @@
 /**
- * WebSocket URL Utilities
+ * WebSocket URLs: one table for every socket this app opens.
  *
- * Centralised helpers for building WebSocket URLs that work in both:
- *  - Local development  (http://localhost:4050)
- *  - Production / public URL / tunnelling  (https://api.orcastra.io)
+ * important: a socket proves who opened it with a single-use ticket minted right before it
+ * connects (lib/ws-ticket-api.ts), never with the access token. A browser cannot set headers on
+ * an upgrade, and a URL is what proxies, access logs and crash reports keep.
  *
- * Uses NEXT_PUBLIC_API_URL to derive the backend host so connections
- * go through the same reverse proxy / tunnel as regular HTTP API calls.
+ * NEXT_PUBLIC_API_URL gives the backend host, so sockets reach the same reverse proxy or tunnel
+ * as HTTP calls; the Next proxy does not carry upgrades.
  */
 
-import { getAccessToken } from "@/lib/api";
+import { mintWsTicket, type WsTicketRequest } from "@/lib/ws-ticket-api";
+import { APIError } from "@/types/api";
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+export type { WsTicketRequest } from "@/lib/ws-ticket-api";
+
+/** Close codes the backend sends beside the standard ones. */
+export const WS_CLOSE = {
+  /** Refused at connect: a spent, expired or foreign ticket, or no access. */
+  POLICY_VIOLATION: 1008,
+  /** The session the ticket was minted under ended. A feed mints a new one and reconnects. */
+  SESSION_ENDED: 4401,
+  /** A shell or console lost its access while open. It must not reconnect on its own. */
+  ACCESS_REVOKED: 4403,
+} as const;
+
+export const ACCESS_REVOKED_MESSAGE = "Access to this instance was revoked.";
 
 /**
  * Derive WebSocket protocol + host from NEXT_PUBLIC_API_URL.
  *
- * Examples:
- *   "https://api.orcastra.io"   → { protocol: "wss:", host: "api.orcastra.io" }
- *   "http://192.168.1.5:4050"   → { protocol: "ws:",  host: "192.168.1.5:4050" }
- *   (unset / "")                → { protocol: "ws:",  host: "localhost:4050" }
+ *   "https://api.orcastra.io"   -> { protocol: "wss:", host: "api.orcastra.io" }
+ *   "http://192.168.1.5:4050"   -> { protocol: "ws:",  host: "192.168.1.5:4050" }
+ *   (unset / "")                -> { protocol: "ws:",  host: "<page host>:4050" }
  */
 function getWsBase(): { protocol: string; host: string } {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-
   if (apiUrl) {
-    const isSecure = apiUrl.startsWith("https://");
-    const protocol = isSecure ? "wss:" : "ws:";
-    // strip scheme and trailing slashes
+    const protocol = apiUrl.startsWith("https://") ? "wss:" : "ws:";
     const host = apiUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
     return { protocol, host };
   }
-
-  // Fallback for local dev without NEXT_PUBLIC_API_URL
-  const isHttps =
-    typeof window !== "undefined" && window.location.protocol === "https:";
-  const protocol = isHttps ? "wss:" : "ws:";
-  const hostname =
-    typeof window !== "undefined" ? window.location.hostname : "localhost";
-  return { protocol, host: `${hostname}:4050` };
+  const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  return { protocol: isHttps ? "wss:" : "ws:", host: `${hostname}:4050` };
 }
 
-/** Return `&token=...` query fragment (or empty string). */
-function getTokenParam(): string {
-  try {
-    const token = getAccessToken();
-    return token ? `&token=${encodeURIComponent(token)}` : "";
-  } catch {
-    return "";
+function socketPath(request: WsTicketRequest): string {
+  const enc = encodeURIComponent;
+  switch (request.kind) {
+    case "monitoring":
+      return "/api/v1/monitoring/ws";
+    case "tasks":
+      return "/api/v1/tasks/ws";
+    case "events":
+      return `/api/v1/events/ws?host=${enc(request.host)}`;
+    case "terminal":
+      return (
+        `/api/v1/terminal/ws/${enc(request.instance)}` +
+        `?host=${enc(request.host)}&project=${enc(request.project)}`
+      );
+    case "console":
+      return (
+        `/api/v1/console/${enc(request.instance)}/ws` +
+        `?host=${enc(request.host)}&project=${enc(request.project)}&console_type=${request.console_type}`
+      );
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+function withTicket(request: WsTicketRequest, ticket: string): string {
+  const { protocol, host } = getWsBase();
+  const path = socketPath(request);
+  return `${protocol}//${host}${path}${path.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`;
+}
 
-/**
- * Build WebSocket URL for **terminal** (text console / exec).
- *
- * @param instanceName  LXD instance name
- * @param host          Target host node
- * @param project       LXD project (default: "default")
- * @param includeToken  Append Bearer token as query param (default: true)
- */
-export function getTerminalWsUrl(
-  instanceName: string,
+/** A socket URL carrying a freshly minted ticket. A failed mint rejects with the APIError. */
+export async function ticketedSocketUrl(request: WsTicketRequest): Promise<string> {
+  const { ticket } = await mintWsTicket(request);
+  return withTicket(request, ticket);
+}
+
+/** A SPICE session's URLs: the main channel's, then one per further channel (display, inputs, cursor). */
+export async function spiceSocketUrls(
+  instance: string,
   host: string,
   project: string,
-  includeToken = true,
-): string {
-  const { protocol, host: wsHost } = getWsBase();
-  const tokenParam = includeToken ? getTokenParam() : "";
-  const url =
-    `${protocol}//${wsHost}/api/v1/terminal/ws/${encodeURIComponent(instanceName)}` +
-    `?host=${encodeURIComponent(host)}` +
-    `&project=${encodeURIComponent(project)}` +
-    tokenParam;
-  return url;
+): Promise<{ main: string; channels: string[] }> {
+  const request: WsTicketRequest = { kind: "console", host, project, instance, console_type: "vga" };
+  const { ticket, tickets } = await mintWsTicket(request);
+  const all = tickets && tickets.length > 0 ? tickets : [ticket];
+  return { main: withTicket(request, all[0]), channels: all.slice(1).map((t) => withTicket(request, t)) };
 }
 
-/**
- * Build WebSocket URL for the **operation events** stream of a node.
- *
- * Streams LXD operation events (incl. image-pull `download_progress`) used to
- * show realtime instance-creation progress.
- *
- * @param host          Target host node
- * @param includeToken  Append Bearer token as query param (default: true)
- */
-export function getEventsWsUrl(host: string, includeToken = true): string {
-  const { protocol, host: wsHost } = getWsBase();
-  const tokenParam = includeToken ? getTokenParam() : "";
-  return (
-    `${protocol}//${wsHost}/api/v1/events/ws` +
-    `?host=${encodeURIComponent(host)}` +
-    tokenParam
-  );
-}
-
-/**
- * Build WebSocket URL for the **task feed** (journal deltas, fleet scope, one per tab).
- *
- * @param includeToken  Append Bearer token as query param (default: true)
- */
-export function getTasksWsUrl(includeToken = true): string {
-  const { protocol, host: wsHost } = getWsBase();
-  // The token is the only parameter here, so it leads with `?` rather than `&`.
-  const tokenParam = includeToken ? getTokenParam().replace(/^&/, "?") : "";
-  return `${protocol}//${wsHost}/api/v1/tasks/ws${tokenParam}`;
-}
-
-/**
- * Build WebSocket URL for **graphics console** (SPICE).
- *
- * @param instanceName  LXD instance name
- * @param host          Target host node
- * @param project       LXD project (default: "default")
- * @param includeToken  Append Bearer token as query param (default: true)
- */
-export function getGraphicsWsUrl(
-  instanceName: string,
-  host: string,
-  project: string,
-  includeToken = true,
-): string {
-  const { protocol, host: wsHost } = getWsBase();
-  const tokenParam = includeToken ? getTokenParam() : "";
-  const url =
-    `${protocol}//${wsHost}/api/v1/console/${encodeURIComponent(instanceName)}/ws` +
-    `?host=${encodeURIComponent(host)}` +
-    `&project=${encodeURIComponent(project)}` +
-    `&console_type=vga` +
-    tokenParam;
-  return url;
+/** What to tell the operator when a ticket could not be minted (the break-glass sentence included). */
+export function mintFailureMessage(error: unknown): string {
+  if (error instanceof APIError && error.message) return error.message;
+  return "Could not open a live connection. Try again.";
 }

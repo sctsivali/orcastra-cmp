@@ -149,7 +149,17 @@ async function installTaskFixtures(page, role, options = {}) {
 
   await page.routeWebSocket(/\/api\/v1\/tasks\/ws(?:\?.*)?$/, async (socket) => {
     const url = new URL(socket.url());
-    if (url.hostname !== baseURL.hostname || url.searchParams.get("token") !== `e2e-${role}-access-token`) {
+    // The feed opens with a single-use tasks ticket minted by installApiFixtures, never a token.
+    const ticket = url.searchParams.get("ticket");
+    const minted = ticket ? state.wsTickets.get(ticket) : undefined;
+    const valid =
+      url.hostname === baseURL.hostname &&
+      !url.searchParams.has("token") &&
+      minted?.kind === "tasks" &&
+      ticket.startsWith(`e2e-${role}-ticket-`) &&
+      !state.spentWsTickets.has(ticket);
+    if (ticket) state.spentWsTickets.add(ticket);
+    if (!valid) {
       state.webSocketAuthFailures.push({ path: url.pathname });
       await socket.close({ code: 1008, reason: "Invalid task fixture actor" });
       return;

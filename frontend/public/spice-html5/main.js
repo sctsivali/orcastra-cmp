@@ -43,6 +43,10 @@
 **          onagent     (optional)  If given, a function to be called when
 **                                  a VD agent is connected; a good opportunity
 **                                  to request a resize
+**          channel_uris (optional) Orcastra: one URI per further channel
+**                                  socket.  Each carries its own single-use
+**                                  ticket, so a channel must not reuse the
+**                                  main socket's URI when these are given.
 **
 **  Throws error if there are troubles.  Requires a modern (by 2012 standards)
 **      browser, including WebSocket and WebSocket.binaryType == arraybuffer
@@ -60,9 +64,16 @@ function SpiceMainConn()
     this.file_xfer_task_id = 0;
     this.file_xfer_read_queue = [];
     this.ports = [];
+    var options = arguments[0] || {};
+    this.channel_uris = Array.isArray(options.channel_uris) ? options.channel_uris.slice() : [];
 }
 
 SpiceMainConn.prototype = Object.create(SpiceConn.prototype);
+/* Orcastra: the next channel's own URI, falling back to the main socket's when none was given. */
+SpiceMainConn.prototype.next_channel_uri = function()
+{
+    return this.channel_uris.length > 0 ? this.channel_uris.shift() : this.ws.url;
+}
 SpiceMainConn.prototype.process_channel_message = function(msg)
 {
     if (msg.type == SPICE_MSG_MAIN_MIGRATE_BEGIN)
@@ -79,7 +90,7 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
 
     if (msg.type == SPICE_MSG_MAIN_INIT)
     {
-        this.log_info("Connected to " + this.ws.url);
+        this.log_info("Connected to " + String(this.ws.url).split("?")[0]);
         this.report_success("Connected")
         this.main_init = new SpiceMsgMainInit(msg.data);
         this.connection_id = this.main_init.session_id;
@@ -138,7 +149,7 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
         for (i = 0; i < chans.channels.length; i++)
         {
             var conn = {
-                        uri: this.ws.url,
+                        uri: null,
                         parent: this,
                         connection_id : this.connection_id,
                         type : chans.channels[i].type,
@@ -149,6 +160,7 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
             if (chans.channels[i].type == SPICE_CHANNEL_DISPLAY)
             {
                 if (chans.channels[i].id == 0) {
+                    conn.uri = this.next_channel_uri();
                     this.display = new SpiceDisplayConn(conn);
                 } else {
                     this.log_warn("The spice-html5 client does not handle multiple heads.");
@@ -156,12 +168,14 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
             }
             else if (chans.channels[i].type == SPICE_CHANNEL_INPUTS)
             {
+                conn.uri = this.next_channel_uri();
                 this.inputs = new SpiceInputsConn(conn);
                 this.inputs.mouse_mode = this.mouse_mode;
             }
             else if (chans.channels[i].type == SPICE_CHANNEL_CURSOR)
             {
                 // Cursor channel is optional but useful for custom cursor rendering
+                conn.uri = this.next_channel_uri();
                 this.cursor = new SpiceCursorConn(conn);
             }
             else

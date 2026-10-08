@@ -79,18 +79,22 @@ function SpiceConn(o)
     });
     this.ws.addEventListener('error', function(e) {
         if ('url' in e.target) {
-            this.parent.log_err("WebSocket error: Can't connect to websocket on URL: " + e.target.url);
+            this.parent.log_err("WebSocket error: Can't connect to websocket on URL: " + String(e.target.url).split("?")[0]);
         }
         this.parent.report_error(e);
     });
     this.ws.addEventListener('close', function(e) {
+        var code = e.code;
         DEBUG > 0 && console.log(">> WebSockets.onclose");
         DEBUG > 0 && console.log("id " + this.parent.connection_id +"; type " + this.parent.type);
         DEBUG > 0 && console.log(e);
         if (this.parent.state != "closing" && this.parent.state != "error" && this.parent.onerror !== undefined)
         {
             var e;
-            if (this.parent.state == "connecting")
+            /* Orcastra: 4403 is the console's access revoked while it was open. */
+            if (code === 4403)
+                e = new Error("Access to this instance was revoked.");
+            else if (this.parent.state == "connecting")
                 e = new Error("Connection refused.");
             else if (this.parent.state == "start" || this.parent.state == "link")
                 e = new Error("Unexpected protocol mismatch.");
@@ -105,7 +109,7 @@ function SpiceConn(o)
     });
 
     if (this.ws.readyState == 2 || this.ws.readyState == 3)
-        throw new Error("Unable to connect to " + o.uri);
+        throw new Error("Unable to connect to " + String(o.uri).split("?")[0]);
 
     this.timeout = window.setTimeout(spiceconn_timeout, SPICE_CONNECT_TIMEOUT, this);
 }

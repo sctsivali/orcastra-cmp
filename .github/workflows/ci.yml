@@ -165,6 +165,10 @@ jobs:
       # the timer; a page that re-renders faster than the interval never polls at all.
       - name: Poll jitter resolved once
         run: node scripts/checks/check-poll-jitter.mjs .
+      # A socket proves its caller with a single-use ticket, never the access token in its URL;
+      # the SPICE channels each take their own.
+      - name: WebSocket tickets
+        run: node scripts/checks/check-ws-tickets.mjs .
       # A list an API returns with no upper bound is a SearchableSelect, never a plain Select;
       # the project picker on the create form outgrew its popover on one fleet.
       - name: Long-list selects
