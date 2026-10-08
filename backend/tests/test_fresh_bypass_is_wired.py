@@ -223,7 +223,13 @@ class DegradedFanOutTests(unittest.TestCase):
         for path, fn in self._get_handlers():
             if fn.name in self.FAN_OUT_EXEMPT:
                 continue
-            if not any(self._calls(fn, "list_all_vms")):
+            # note: the dashboard reads the fleet through services/monitoring_sweep.read_fleet,
+            # which calls list_all_vms itself; a plain read_fleet() call is the same fan-out.
+            reads_fleet = any(
+                isinstance(c, ast.Call) and getattr(c.func, "id", None) == "read_fleet"
+                for c in ast.walk(fn)
+            )
+            if not any(self._calls(fn, "list_all_vms")) and not reads_fleet:
                 continue
             sets = [c for c in self._calls(fn, "set", "cache") if _writes_response_cache(c)]
             sets += _dashboard_cache_writes(fn)
@@ -578,7 +584,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         The rule discovers rather than lists: a handler that takes `fresh` and reaches the
         whole fleet must be serialised, or be exempt for a stated reason.
         """
-        FLEET_CALLS = ("get_node_names(", "list_all_vms(", "list_all_images(")
+        FLEET_CALLS = ("get_node_names(", "list_all_vms(", "list_all_images(", "read_fleet(")
         EXEMPT = {
             # Scoped to one node via its host parameter, and it returns is_online=False for
             # a disconnected one before doing any work. There is no fleet fan-out to collapse.

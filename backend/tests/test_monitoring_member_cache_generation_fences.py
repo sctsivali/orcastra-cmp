@@ -84,8 +84,11 @@ class _DashboardService:
             self.cache.advance("monitoring")
         return [], [CLUSTER]
 
-    async def check_nodes_status_async(self) -> list[Any]:
+    def get_node_names(self) -> list[str]:
         return []
+
+    def check_node_status(self, name: str) -> Any:
+        raise AssertionError("no cluster is registered in this fixture")
 
 
 @pytest.mark.parametrize("advance", [False, True], ids=["stable", "invalidated"])
