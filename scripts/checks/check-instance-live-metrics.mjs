@@ -288,6 +288,16 @@ const checks = [
       ),
     "a Top Consumers memory figure must say whether it counts page cache, per row, as the server reports it",
   ],
+  [
+    /disk_io_reason\?: "guest_agent" \| "storage_driver" \| "not_reported" \| null;/.test(bodies.types) &&
+      /Not measured for containers on \$\{formatLabel\(metrics\.disk_io_storage_driver\)\} storage/.test(
+        bodies.metrics,
+      ) &&
+      /"Needs the guest agent"/.test(bodies.metrics) &&
+      /"Not reported by the cluster"/.test(bodies.metrics) &&
+      /Disk I\/O: \{ioMissing\}/.test(bodies.metrics),
+    "unavailable disk I/O must say why (storage driver, guest agent, or not reported), never render a blank or a zero",
+  ],
 ];
 
 const failures = checks.filter(([passed]) => !passed).map(([, reason]) => reason);
