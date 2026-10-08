@@ -2091,6 +2091,8 @@ def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
     response_model=APIKeyListResponse,
     summary="List all API keys",
     description="Get a list of all API keys for external integrations.",
+    # important: the router admits tenants, and a key's grants and mappings are partner data.
+    dependencies=[Depends(require_partner())],
 )
 async def list_api_keys(fresh: bool = False):
     """List API keys visible to the current user (admin sees all, others see org-scoped)."""
@@ -2179,6 +2181,7 @@ async def list_api_keys(fresh: bool = False):
     response_model=APIKeyInfo,
     summary="Get API key details",
     description="Get details of a specific API key.",
+    dependencies=[Depends(require_partner())],
 )
 async def get_api_key(key_id: str):
     """Get API key details."""
@@ -2482,6 +2485,7 @@ async def add_user_mapping(
     response_model=List[ExternalUserMapping],
     summary="List user mappings",
     description="Get all user mappings for an API key.",
+    dependencies=[Depends(require_partner())],
 )
 async def list_user_mappings(key_id: str):
     """List all user mappings for an API key."""
