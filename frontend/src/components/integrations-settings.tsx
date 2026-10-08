@@ -70,6 +70,7 @@ import { VaultUnavailableNotice } from "@/components/ui/vault-unavailable-notice
 import { EditAPIKeyPermissionsDialog } from "@/components/integrations/edit-api-key-permissions-dialog";
 import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
 import { ApiKeyConnectionGuide } from "@/components/integrations/api-key-connection-guide";
+import { RotateSecretButton } from "@/components/integrations/rotate-secret-button";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -84,10 +85,14 @@ function APIKeySecretDialog({
   open,
   onClose,
   response,
+  title = "API Key Created Successfully",
+  description = "Save these credentials now. The secret will not be shown again.",
 }: {
   open: boolean;
   onClose: () => void;
   response: APIKeyCreateResponse | null;
+  title?: string;
+  description?: string;
 }) {
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -116,12 +121,8 @@ function APIKeySecretDialog({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
-          <DialogTitle>
-            API Key Created Successfully
-          </DialogTitle>
-          <DialogDescription>
-            Save these credentials now. The secret will not be shown again.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <DialogBody className="-mr-2 pr-2">
           <div className="space-y-4 py-4">
@@ -287,6 +288,8 @@ function IntegrationsSettingsContent() {
   const queryClient = useQueryClient();
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKeyCreateResponse | null>(null);
+  // note: a queue, so two rotations that overlap each show their own secret once
+  const [rotatedKeys, setRotatedKeys] = useState<APIKeyCreateResponse[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -711,7 +714,16 @@ function IntegrationsSettingsContent() {
                     keyName={String(apiKey.name || "N/A")}
                   />
                   
-                  <div className="flex items-center justify-end gap-2 border-t pt-3">
+                  <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">
+                    {/* The server refuses a revoked, inactive or expired key and an add-on's
+                        credential, so the control is offered only where a rotation can work. */}
+                    {keyStatus === "Active" && !apiKey.is_add_on_credential && (
+                      <RotateSecretButton
+                        keyId={apiKey.id}
+                        keyName={String(apiKey.name || "this key")}
+                        onRotated={(response) => setRotatedKeys((queue) => [...queue, response])}
+                      />
+                    )}
                     {!apiKey.is_revoked && (
                       <EditAPIKeyPermissionsDialog
                         apiKey={apiKey}
@@ -808,6 +820,14 @@ function IntegrationsSettingsContent() {
         open={createdKey !== null}
         onClose={() => setCreatedKey(null)}
         response={createdKey}
+      />
+      <APIKeySecretDialog
+        key={rotatedKeys[0]?.api_key_id ?? "none"}
+        open={rotatedKeys.length > 0}
+        onClose={() => setRotatedKeys((queue) => queue.slice(1))}
+        response={rotatedKeys[0] ?? null}
+        title="Secret Rotated"
+        description="The previous secret no longer works. Update the integration that uses this key, such as the OrcaHub connection, with this secret now. It will not be shown again."
       />
     </div>
   );

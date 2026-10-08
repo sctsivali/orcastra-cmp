@@ -2086,6 +2086,9 @@ export interface APIKeyInfo {
   last_used_at?: string | null;
   cluster_permissions: ClusterPermission[];
   user_mappings_count: number;
+  // An add-on installation issued this key and owns its grant, so it is rotated and rescoped from
+  // the installation rather than from the key card.
+  is_add_on_credential?: boolean;
 }
 
 export interface APIKeyCreateRequest {

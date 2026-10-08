@@ -86,7 +86,7 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 - Undo/redo support in personalization settings
 
 ### Integration & External APIs
-- API key management (create, revoke, expire)
+- API key management (create, rotate the secret in place, revoke, expire)
 - OrcaHub integration for external orchestration
 - Raw HTTP proxy to LXD for third-party tools
 - User mapping between external systems and Orcastra

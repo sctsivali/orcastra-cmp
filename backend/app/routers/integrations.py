@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, NamedTuple, Tuple, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -66,6 +66,7 @@ from app.services.lxd.proxy_operations import (
     status_name,
 )
 from app.core.api_key_expiry import (
+    classify_key,
     days_remaining,
     expiry_state,
     is_expired,
@@ -128,7 +129,12 @@ from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 from app.services.integration_roles import apply_upsert_role, may_reconcile, stored_member_role
 from app.services.integration_cluster_rebind import creator_of, rebind_creator_clusters
-from app.services.add_on_credential_edits import refuse_delete, refuse_grant_edit
+from app.services.add_on_credential_edits import (
+    is_add_on_credential,
+    refuse_delete,
+    refuse_grant_edit,
+    refuse_secret_rotation,
+)
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
     assert_cluster_safe_to_share,
@@ -307,6 +313,11 @@ class APIKeyInfo(BaseModel):
         description="Cluster access permissions"
     )
     user_mappings_count: int = Field(0, description="Number of mapped users")
+    # note: derived from the stored metadata on every read. An add-on installation owns its
+    # credential and rotates it itself, so the key card does not offer a secret rotation for one.
+    is_add_on_credential: bool = Field(
+        False, description="Whether an add-on installation issued this key and owns its grant"
+    )
 
 
 class APIKeyCreateRequest(BaseModel):
@@ -764,14 +775,15 @@ def generate_api_key_pair() -> tuple[str, str, str]:
     """
     # Generate key ID (public identifier)
     key_id = f"oak_{secrets.token_hex(16)}"  # orcastra api key
-    
-    # Generate key secret (private, shown only once)
-    key_secret = f"oas_{secrets.token_urlsafe(32)}"  # orcastra api secret
-    
-    # Hash the secret using HMAC-SHA256 (keyed hash prevents rainbow table attacks)
-    secret_hash = hmac.new(_get_hmac_key(), key_secret.encode(), hashlib.sha256).hexdigest()
-    
+    key_secret, secret_hash = generate_api_key_secret()
     return key_id, key_secret, secret_hash
+
+
+def generate_api_key_secret() -> tuple[str, str]:
+    """A new secret (shown only once) and its HMAC-SHA256 hash, keyed so a rainbow table is useless."""
+    key_secret = f"oas_{secrets.token_urlsafe(32)}"  # orcastra api secret
+    secret_hash = hmac.new(_get_hmac_key(), key_secret.encode(), hashlib.sha256).hexdigest()
+    return key_secret, secret_hash
 
 
 def verify_api_key_secret(secret: str, stored_hash: str) -> bool:
@@ -803,6 +815,19 @@ def save_api_key_to_vault(
     except Exception as e:
         logger.error(f"Failed to save API key to Vault: {e}")
         raise HTTPException(status_code=500, detail="Failed to save API key")
+
+
+def save_api_key_secret_to_vault(vault_client, key_id: str, secret_hash: str, raw_secret: str) -> None:
+    """Replace a key's secret document and nothing else, which is all a rotation writes.
+
+    note: the grant is a separate document and stays untouched, so a rotation cannot drop the
+    `capabilities` field or any other part of it. The raw copy is what the OrcaHub callbacks sign
+    with.
+    """
+    vault_client.vault_kv_put(
+        f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
+        {"hash": secret_hash, "raw": raw_secret},
+    )
 
 
 def get_api_key_from_vault(vault_client, key_id: str) -> tuple[Dict[str, Any], str]:
@@ -991,6 +1016,11 @@ def evict_api_key_cache(key_id: str) -> None:
 
     Also publishes a shared tombstone so the other workers drop their copies on the next use
     rather than honouring a revoked key until their own TTL runs out.
+
+    note: the tombstone outlives the cache TTL by the validation timeout. A validation already in
+    flight when this runs can still store the old metadata, or an old secret's digest, after the
+    local entries were dropped, and the tombstone is what makes the next hit on that entry go back
+    to Vault.
     """
     with _key_cache_lock:
         for digest in [d for d, (_, kid, _m) in _key_cache.items() if kid == key_id]:
@@ -998,7 +1028,7 @@ def evict_api_key_cache(key_id: str) -> None:
         _last_used_written.pop(key_id, None)
     try:
         get_cache_manager().set(
-            _REVOKED_NS, key_id, True, ttl=int(API_KEY_CACHE_TTL) + 5
+            _REVOKED_NS, key_id, True, ttl=int(API_KEY_CACHE_TTL + VALIDATE_KEY_TIMEOUT) + 5
         )
     except Exception as exc:
         logger.warning("Could not publish API key revocation for %s: %s", key_id, exc)
@@ -1353,7 +1383,9 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
             secret_data = vault_client.vault_read(
                 f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
             )
-            if not secret_data.get("raw"):
+            # note: only for the hash just verified. A rotation between the two reads has already
+            # stored its own raw copy, and writing this one back would revive the old secret.
+            if not secret_data.get("raw") and secret_data.get("hash") == secret_hash:
                 secret_data["raw"] = key_secret
                 vault_client.vault_kv_put(
                     f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
@@ -2389,6 +2421,95 @@ async def revoke_api_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+API_KEY_ROTATE = "integration.api_key.secret.rotate"
+
+
+def _may_take_a_rotated_secret(user: AuthenticatedUser, metadata: Dict[str, Any]) -> bool:
+    """An Admin, or whoever minted the key, compared without case.
+
+    important: revoking, deleting or narrowing a key hands its caller nothing, but a rotation hands
+    over a working secret. Cluster overlap is what lets a partner manage a key here, and on a
+    cluster another party also holds, overlap would hand one party the other's credential.
+    """
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+
+    if get_highest_role(resolve_roles(user)) == Role.ADMIN:
+        return True
+    creator = str(metadata.get("created_by") or "").strip().lower()
+    return bool(creator) and creator == (user.email or "").strip().lower()
+
+
+@router.post(
+    "/api-keys/{key_id}/rotate-secret",
+    response_model=APIKeyCreateResponse,
+    summary="Rotate an API key's secret",
+    description=(
+        "Issue a new secret for the same key id. The old secret stops working at once, on every "
+        "worker, and the new one is shown only once. The organizations the key owns stay with it."
+    ),
+)
+async def rotate_api_key_secret(
+    key_id: str,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Rotate a key's secret in place.
+
+    important: the key id is what every synced organization records as its owner, so rotating by
+    minting a new key left all of them refusing the new one and stopped their sync. Keeping the
+    id keeps the organizations, the member push and provisioning exactly as they were.
+    """
+    vault_client = get_vault_integrations_client()
+    metadata = await asyncio.to_thread(_authorize_api_key, vault_client, key_id)
+    refuse_secret_rotation(metadata)
+    if classify_key(metadata) != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="A revoked, inactive or expired key cannot be rotated. Create a new key instead.",
+        )
+    # important: everything that could fail runs before the write. Once the new secret is stored
+    # the old one is dead, and a failure after it would leave a secret nobody was ever shown.
+    user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
+    try:
+        key_info = _key_info(metadata, len(user_mappings))
+    except ValidationError:
+        raise HTTPException(
+            status_code=409,
+            detail="This key's stored record no longer validates. Update its permissions, then rotate it.",
+        ) from None
+    if not _may_take_a_rotated_secret(_rbac, metadata):
+        _audit_credential_lifecycle(
+            action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
+            result="denied", error_code="not_key_creator",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Only the key's creator or an administrator can rotate its secret.",
+        )
+    key_secret, secret_hash = generate_api_key_secret()
+    try:
+        await asyncio.to_thread(save_api_key_secret_to_vault, vault_client, key_id, secret_hash, key_secret)
+    except Exception as e:
+        # note: the write may have landed before its reply was lost, so every worker still drops
+        # its cached copy and checks Vault again
+        evict_api_key_cache(key_id)
+        logger.error("Failed to rotate the secret of API key %s: %s", key_id, type(e).__name__)
+        # note: 503, so the sentence reaches the operator. A 500 is answered with a reference.
+        raise HTTPException(
+            status_code=503,
+            detail="The secret rotation did not confirm. Rotate again before using this key.",
+        ) from None
+    # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
+    # drop its copy, so the old secret fails on the next request wherever it lands
+    evict_api_key_cache(key_id)
+    cache = get_cache_manager()
+    cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+    cache.delete("api_responses", f"integrations:api_key:{key_id}")
+    _audit_credential_lifecycle(action=API_KEY_ROTATE, key_id=key_id, metadata=metadata)
+    logger.info("API key %s secret rotated", key_id)
+    return APIKeyCreateResponse(api_key=key_info, api_key_id=key_id, api_key_secret=key_secret)
+
+
 @router.delete(
     "/api-keys/{key_id}",
     summary="Delete API key",
@@ -3040,6 +3161,7 @@ def _audit_credential_lifecycle(
     result: str = "success",
     error_message: Optional[str] = None,
     previous: Optional[Dict[str, Any]] = None,
+    error_code: Optional[str] = None,
 ) -> None:
     """Record an operator creating, revoking or deleting an integration credential.
 
@@ -3064,6 +3186,7 @@ def _audit_credential_lifecycle(
             target_type="api_key",
             target_id=key_id,
             result=result,
+            error_code=error_code,
             error_message=error_message,
             details={
                 "api_key_id": key_id,
@@ -3157,6 +3280,7 @@ def _key_info(metadata: Dict[str, Any], user_mappings_count: int = 0) -> "APIKey
         is_expired=is_expired(metadata.get("expires_at")),
         expiry_state=expiry_state(metadata.get("expires_at")),
         user_mappings_count=user_mappings_count,
+        is_add_on_credential=is_add_on_credential(metadata),
     )
 
 
