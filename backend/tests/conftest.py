@@ -107,10 +107,11 @@ def _isolate_ws_tickets():
     note: lifespan never runs here, so the store stays the local one a backend without Redis
     uses; the Redis path is driven explicitly by test_ws_ticket_store.py.
     """
-    from app.core.ws_ticket_store import set_ws_ticket_store
+    from app.core.ws_ticket_store import WsTicketStore, set_ws_ticket_store
     from app.services.ws_identity import forget_identities
 
-    set_ws_ticket_store(None)
+    # note: SECRET_KEY is unset here, so the store gets its signing key directly.
+    set_ws_ticket_store(WsTicketStore(mac_key=b"test-only-signing-key"))
     forget_identities()
     yield
     set_ws_ticket_store(None)

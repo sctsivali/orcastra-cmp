@@ -7,8 +7,11 @@ long as the browser kept it, whatever happened to the session behind it. Two rul
     under expires; the page mints a fresh ticket and reconnects, so the feed is never older
     than the session that is reading it;
   * an interactive socket (terminal, console) is not cut when its token expires, because that
-    would kill a running command. Every minute it re-checks the account, the caller's
-    organization scope and its own access rule, and closes with 4403 when any of them says no.
+    would kill a running command. Every minute it re-checks the account and its roles, the
+    caller's organization scope and its own access rule, and closes with 4403 when any of them
+    says no. A caller whose highest role changed is closed too: the ticket's groups are frozen,
+    and resolving scope with them would also write the old role back into the shared role cache
+    that the caller's REST requests read.
 
 note: an Authentik outage never closes a session (see ws_identity); five checks in a row that
 fail for any other reason close it with 1011, since a guard that cannot check is not guarding.
@@ -23,6 +26,7 @@ from fastapi import HTTPException, WebSocket
 
 from app.core.auth import AuthenticatedUser
 from app.core.org_scope import set_org_scope_for_ws
+from app.core.rbac import get_highest_role, roles_for_group_names
 from app.services.ws_identity import check_identity
 
 logger = logging.getLogger(__name__)
@@ -68,6 +72,7 @@ async def reauthorize_while_open(
     """For an interactive socket: re-check the account, scope and access every `interval`."""
     if user is None:
         return
+    opened_as = get_highest_role(roles_for_group_names(list(user.groups)))
     errors = 0
     while True:
         await asyncio.sleep(interval)
@@ -75,6 +80,10 @@ async def reauthorize_while_open(
             identity = await check_identity(user)
             if identity.ended:
                 logger.warning("Closing %s: the account %s (%s)", label, user.user_id, identity.reason)
+                await _close(websocket, ACCESS_REVOKED, "Access revoked")
+                return
+            if identity.roles is not None and get_highest_role(list(identity.roles)) != opened_as:
+                logger.warning("Closing %s: the role of %s changed since it opened", label, user.user_id)
                 await _close(websocket, ACCESS_REVOKED, "Access revoked")
                 return
             await set_org_scope_for_ws(user)

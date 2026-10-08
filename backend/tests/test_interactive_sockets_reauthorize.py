@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from app.core.auth import AuthenticatedUser
 from app.services import authentik_role_reading, ws_identity, ws_session_guard
 from app.services.authentik_role_reading import RoleReading, known_roles, unknown_role
+from app.core.rbac import Role
 from app.services.ws_identity import IdentityCheck, check_identity
 from app.services.ws_session_guard import ACCESS_REVOKED, reauthorize_while_open
 
@@ -113,7 +114,8 @@ def test_one_authentik_read_serves_a_minute_of_checks(monkeypatch):
     first = asyncio.run(check_identity(USER))
     second = asyncio.run(check_identity(USER))
 
-    assert first == second == IdentityCheck(False, "active") and reads == ["ops@example.test"]
+    assert first == second == IdentityCheck(False, "active", frozenset({Role.PARTNER}))
+    assert reads == ["ops@example.test"]
 
 
 @pytest.mark.parametrize(
@@ -121,6 +123,7 @@ def test_one_authentik_read_serves_a_minute_of_checks(monkeypatch):
     [
         (unknown_role("user_not_found"), True),
         (unknown_role("user_inactive"), True),
+        (unknown_role("email_ambiguous"), True),
         (unknown_role("authentik_unreachable"), False),
         (unknown_role("user_search_failed"), False),
         (known_roles(["role_tenant"]), False),
@@ -172,3 +175,36 @@ def test_every_feed_closes_when_its_session_ends(module_name, handler_name, kind
 
     assert f'ws_user("{kind}")' in source
     assert "close_when_session_ends(" in source and "session.cancel()" in source
+
+
+def test_a_demoted_caller_is_closed_and_an_unchanged_one_kept(monkeypatch):
+    """USER opened as a Partner; Authentik now says Tenant, so its frozen groups are stale."""
+    demoted, _ = _guard(monkeypatch, [IdentityCheck(False, "active", frozenset({Role.TENANT}))], [])
+    unchanged, _ = _guard(monkeypatch, [IdentityCheck(False, "active", frozenset({Role.PARTNER}))] * 10, [])
+
+    assert demoted.closed == [(ACCESS_REVOKED, "Access revoked")]
+    assert unchanged.closed == []
+
+
+def test_the_role_check_reads_authentik_not_the_shared_cache(monkeypatch):
+    calls = []
+
+    async def scope(user):
+        calls.append("scope")
+
+    async def identity(user):
+        return IdentityCheck(False, "active", frozenset({Role.ADMIN}))
+
+    monkeypatch.setattr(ws_session_guard, "check_identity", identity)
+    monkeypatch.setattr(ws_session_guard, "set_org_scope_for_ws", scope)
+    socket = _Socket()
+
+    async def run():
+        task = asyncio.create_task(reauthorize_while_open(socket, USER, lambda u: None, label="t", interval=0.01))
+        await asyncio.sleep(0.1)
+        task.cancel()
+
+    asyncio.run(run())
+
+    assert socket.closed == [(ACCESS_REVOKED, "Access revoked")]
+    assert calls == [], "scope is never resolved, so the frozen role is never cached, once roles differ"
