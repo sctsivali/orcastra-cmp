@@ -42,8 +42,11 @@ services:
     image: redis:8-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-redis
     restart: always
+    # important: loopback only. Redis runs without a password and the backend reaches it over
+    # the compose network; publishing it on every interface let anyone on the LAN read and
+    # write sessions, tickets and cached authorization state.
     ports:
-      - "${REDIS_PORT:-6381}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6381}:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - orcastra-dashboard
