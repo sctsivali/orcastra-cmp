@@ -15,7 +15,10 @@ open to whichever key names the organization next.
 Nothing used to move an owner. Revoking or deleting the owner key left its organizations bound to
 a key that can never authenticate again, so their sync, member updates and provisioning stopped
 for good, and the only way out was SQL against production. `transfer_owner` is that way out, as
-an audited Administrator action.
+an audited Administrator action, and `refuse_if_key_owns_organizations` stops the key routes from
+creating the state in the first place: a key that owns an active OrcaHub organization is not
+revoked, deleted or stripped of org.sync, for any caller, an Administrator included. Rotating its
+secret keeps the key id, so it is the way to stop a leaked secret without freezing anything.
 
 Concurrency: a decision about one key's ownership runs inside `serialize_key_ownership` for that
 key, and the key is read and judged inside it, so two decisions about the same key never
@@ -27,8 +30,9 @@ import hashlib
 import logging
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +48,21 @@ TRANSFER_ACTION = "integration.organization.owner.transfer"
 # The words an owner key's state is reported in. `unclaimed` is an organization with no owner,
 # `missing` a key Vault says does not exist, `unknown` a key whose record could not be read.
 OWNER_KEY_STATES = ("active", "expiring", "expired", "revoked", "inactive", "missing", "unknown", "unclaimed")
+
+# What a refusal lists. The message names a few, the answer up to the cap, the count all of them.
+MAX_LISTED_SLUGS = 20
+MAX_NAMED_SLUGS = 5
+
+OWNERSHIP_UNKNOWN_DETAIL = (
+    "The organizations this key owns could not be checked, so nothing was changed. Try again."
+)
+
+_ENDING = {
+    "revoke": "Revoking it",
+    "delete": "Deleting it",
+    "capabilities": "Withdrawing its org.sync capability",
+    "uninstall": "Uninstalling the add-on",
+}
 
 _local_locks_guard = threading.Lock()
 _local_locks: Dict[Tuple[int, str], asyncio.Lock] = {}
@@ -104,6 +123,119 @@ def key_state(metadata: Optional[Mapping[str, Any]], *, missing: bool = False, u
     if state == "active" and expiry_state(metadata.get("expires_at")) == "expiring":
         return "expiring"
     return state
+
+
+class KeyOwnsOrganizations(HTTPException):
+    """409: the key still owns active OrcaHub organizations. Carries the fields its audit record adds."""
+
+    def __init__(self, detail: Dict[str, Any], audit_details: Dict[str, Any]) -> None:
+        super().__init__(status_code=409, detail=detail)
+        self.audit_details = audit_details
+
+
+def _is_admin(user: Any) -> bool:
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+
+    return get_highest_role(resolve_roles(user)) == Role.ADMIN
+
+
+async def visible_organization_ids(db: AsyncSession, user: Any) -> Optional[Set[int]]:
+    """The organizations this caller may see named, or None for an Administrator, who sees all."""
+    from app.core.org_scope import get_user_org_ids
+
+    if _is_admin(user):
+        return None
+    return set(await get_user_org_ids(user, db))
+
+
+def _named(slugs: List[str], hidden: int) -> str:
+    shown = ", ".join(slugs[:MAX_NAMED_SLUGS])
+    rest = []
+    if len(slugs) > MAX_NAMED_SLUGS:
+        rest.append(f"{len(slugs) - MAX_NAMED_SLUGS} more")
+    if hidden:
+        rest.append(f"{hidden} you cannot see")
+    if not rest:
+        return shown
+    return f"{shown} and {' and '.join(rest)}" if shown else " and ".join(rest)
+
+
+def _owned_message(action: str, total: int, slugs: List[str], hidden: int, *, admin: bool, add_on: bool) -> str:
+    one = total == 1
+    them, their = ("it", "its") if one else ("them", "their")
+    noun = "organization" if one else "organizations"
+    if action == "capabilities":
+        effect = (
+            f"{_ENDING[action]} would leave {them} with an owner that can no longer sync {them}, so "
+            f"{their} sync and member updates would stop."
+        )
+    else:
+        effect = (
+            f"{_ENDING.get(action, 'Ending it')} would leave {them} with an owner no other key can "
+            f"replace, so {their} sync, member updates and provisioning would stop."
+        )
+    if admin:
+        remedy = f"Transfer {them} to another active key first, or delete {them}."
+    else:
+        remedy = f"Ask an administrator to transfer {them} to another active key first, or to delete {them}."
+    parts = [f"This key owns {total} OrcaHub {noun} ({_named(slugs, hidden)}).", effect, remedy]
+    if add_on:
+        parts.append("Suspend the add-on to stop it now.")
+    elif action in ("revoke", "delete"):
+        parts.append(
+            "To stop a leaked secret now, rotate the secret instead: the key ID and its organizations stay."
+        )
+    return " ".join(parts)
+
+
+async def refuse_if_key_owns_organizations(
+    db: AsyncSession, key_id: str, *, action: str, user: Any, metadata: Mapping[str, Any]
+) -> None:
+    """409 when the key owns an active OrcaHub organization, 503 when that cannot be read.
+
+    The caller has already authorized the key (so an id outside the caller's reach is still 404),
+    holds serialize_key_ownership(key_id), and has written nothing yet. There is no Administrator
+    bypass: the remedy is to transfer the organizations or delete them, which an Administrator can.
+
+    note: a caller who is not an Administrator sees only the slugs of organizations they belong to;
+    the rest are counted. The audit record names them all, up to the cap.
+
+    important: the 503 detail is a fixed sentence. The exception text of a database failure names
+    the database, and this answer reaches the browser.
+    """
+    try:
+        owned = await owned_organizations(db, key_id)
+        visible = await visible_organization_ids(db, user) if owned else None
+    except Exception as exc:  # noqa: BLE001 - unknown ownership refuses, it never allows
+        logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
+        raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+    if not owned:
+        return
+    admin = visible is None
+    slugs = [org.slug for org in owned if admin or org.id in visible]
+    hidden = len(owned) - len(slugs)
+    add_on = is_add_on_credential(metadata)
+    if add_on:
+        remedies = ["transfer_owner", "delete_organization", "suspend_add_on"]
+    elif action in ("revoke", "delete"):
+        remedies = ["transfer_owner", "delete_organization", "rotate_secret"]
+    else:
+        remedies = ["transfer_owner", "delete_organization"]
+    detail = {
+        "error": "key_owns_organizations",
+        "action": action,
+        "message": _owned_message(action, len(owned), slugs, hidden, admin=admin, add_on=add_on),
+        "api_key_id": key_id,
+        "organization_count": len(owned),
+        "organization_slugs": slugs[:MAX_LISTED_SLUGS],
+        "hidden_organization_count": hidden,
+        "remedies": remedies,
+    }
+    audit = {
+        "owned_organization_slugs": [org.slug for org in owned][:MAX_LISTED_SLUGS],
+        "owned_organization_count": len(owned),
+    }
+    raise KeyOwnsOrganizations(detail, audit)
 
 
 def owner_key_refusal(

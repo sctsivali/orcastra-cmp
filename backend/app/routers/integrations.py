@@ -96,6 +96,7 @@ from app.core.api_key_capabilities import (
     assert_proxy_path_allowed,
     default_capabilities_for,
     granted_capabilities,
+    has_capability,
     has_explicit_capability,
 )
 from app.core import build_identity
@@ -134,12 +135,17 @@ from app.services.integration_cluster_rebind import (
     rebind_creator_clusters,
 )
 from app.services.integration_key_ownership import (
+    MAX_LISTED_SLUGS,
     TRANSFER_ACTION as OWNER_TRANSFER_ACTION,
+    KeyOwnsOrganizations,
     key_state,
+    owned_by_keys,
     owner_key_refusal,
+    refuse_if_key_owns_organizations,
     serialize_key_ownership,
     transfer_owner,
     uncovered_clusters,
+    visible_organization_ids,
 )
 from app.services.add_on_credential_edits import (
     is_add_on_credential,
@@ -329,6 +335,18 @@ class APIKeyInfo(BaseModel):
     # credential and rotates it itself, so the key card does not offer a secret rotation for one.
     is_add_on_credential: bool = Field(
         False, description="Whether an add-on installation issued this key and owns its grant"
+    )
+    # note: filled from the database after the list cache, because what a key owns changes without
+    # the key changing. None means it could not be read, which is not the same as owning nothing.
+    owned_organization_count: Optional[int] = Field(
+        None, description="Active OrcaHub organizations this key owns, or null when it could not be read"
+    )
+    owned_organization_slugs: List[str] = Field(
+        default_factory=list,
+        description=f"Slugs of the owned organizations the caller may see, at most {MAX_LISTED_SLUGS}",
+    )
+    owned_organization_hidden_count: int = Field(
+        0, description="Owned organizations the caller may not see, counted but not named"
     )
 
 
@@ -2154,6 +2172,51 @@ def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
     return metadata
 
 
+async def _refuse_ending_an_owner(
+    db: AsyncSession,
+    key_id: str,
+    *,
+    action: str,
+    audit_action: str,
+    user: AuthenticatedUser,
+    metadata: Dict[str, Any],
+) -> None:
+    """refuse_if_key_owns_organizations, with the refusal recorded on the action it refused."""
+    try:
+        await refuse_if_key_owns_organizations(db, key_id, action=action, user=user, metadata=metadata)
+    except KeyOwnsOrganizations as refusal:
+        _audit_credential_lifecycle(
+            action=audit_action, key_id=key_id, metadata=metadata, result="denied",
+            error_code="key_owns_organizations", extra_details=refusal.audit_details,
+        )
+        raise
+
+
+async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[APIKeyInfo]) -> List[APIKeyInfo]:
+    """Fill in which organizations each key owns, as this caller may see them.
+
+    note: after the list cache, never inside it. The cached list is shared by everyone with the same
+    cluster scope, while the slugs a caller may see depend on the caller, and ownership moves without
+    the key changing. A database that cannot answer leaves the counts null rather than failing the
+    list, because the refusal on revoke and delete is what enforces the rule.
+    """
+    if not keys:
+        return keys
+    try:
+        owned = await owned_by_keys(db, [info.id for info in keys])
+        visible = await visible_organization_ids(db, user) if owned else None
+    except Exception as exc:  # noqa: BLE001 - the list still renders, without ownership
+        logger.warning("Could not read which organizations the listed keys own: %s", type(exc).__name__)
+        return keys
+    for info in keys:
+        rows = owned.get(info.id, [])
+        shown = [slug for org_id, slug in rows if visible is None or org_id in visible]
+        info.owned_organization_count = len(rows)
+        info.owned_organization_slugs = shown[:MAX_LISTED_SLUGS]
+        info.owned_organization_hidden_count = len(rows) - len(shown)
+    return keys
+
+
 @router.get(
     "/api-keys",
     response_model=APIKeyListResponse,
@@ -2162,7 +2225,11 @@ def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
     # important: the router admits tenants, and a key's grants and mappings are partner data.
     dependencies=[Depends(require_partner())],
 )
-async def list_api_keys(fresh: bool = False):
+async def list_api_keys(
+    fresh: bool = False,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
     """List API keys visible to the current user (admin sees all, others see org-scoped)."""
     vault_client = get_vault_integrations_client()
     
@@ -2228,6 +2295,7 @@ async def list_api_keys(fresh: bool = False):
             _key_info(metadata, user_counts.get(metadata.get("id"), 0))
             for metadata in records
         ]
+        keys = await _with_ownership(db, user, keys)
 
         return APIKeyListResponse(
             total=len(keys),
@@ -2251,7 +2319,11 @@ async def list_api_keys(fresh: bool = False):
     description="Get details of a specific API key.",
     dependencies=[Depends(require_partner())],
 )
-async def get_api_key(key_id: str):
+async def get_api_key(
+    key_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
     """Get API key details."""
     _authorize_api_key(get_vault_integrations_client(), key_id)
     vault_client = get_vault_integrations_client()
@@ -2260,7 +2332,8 @@ async def get_api_key(key_id: str):
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         
-        return _key_info(metadata, len(user_mappings))
+        (info,) = await _with_ownership(db, user, [_key_info(metadata, len(user_mappings))])
+        return info
         
     except HTTPException:
         raise
@@ -2358,6 +2431,7 @@ async def update_api_key_capabilities(
     request: APIKeyCapabilitiesRequest,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Give a key a capability set it can be narrowed with.
 
@@ -2380,10 +2454,19 @@ async def update_api_key_capabilities(
         previous = dict(metadata)
         was_legacy = "capabilities" not in metadata
         metadata["capabilities"] = sorted(set(request.capabilities))
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-            metadata,
-        )
+        # important: org.sync is what lets the owner sync its organizations, so withdrawing it from
+        # an owner freezes them like a revoke would. A legacy key holds it without naming it.
+        withdraws_sync = has_capability(previous, "org.sync") and not has_capability(metadata, "org.sync")
+        async with serialize_key_ownership(db, key_id):
+            if withdraws_sync:
+                await _refuse_ending_an_owner(
+                    db, key_id, action="capabilities", audit_action=CAPABILITIES_UPDATE_ACTION,
+                    user=_rbac, metadata=previous,
+                )
+            vault_client.vault_kv_put(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+                metadata,
+            )
         logger.info(
             "Set capabilities on API key %s to %s (was %s)",
             key_id, metadata["capabilities"], "legacy/unrestricted" if was_legacy else "a set",
@@ -2415,6 +2498,7 @@ async def revoke_api_key(
     key_id: str,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Revoke an API key (immediate revocation)."""
     _authorize_api_key(get_vault_integrations_client(), key_id)
@@ -2422,17 +2506,26 @@ async def revoke_api_key(
     
     try:
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        
-        # Mark as revoked
-        metadata["is_revoked"] = True
-        metadata["is_active"] = False
-        metadata["revoked_at"] = datetime.utcnow().isoformat()
-        
-        # Save updated metadata
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-            metadata
-        )
+
+        # important: after the authorization above, so an id outside the caller's reach is still
+        # 404, and inside the key's ownership lock, so a transfer to this key cannot land between
+        # the check and the write. A revoked owner freezes every organization it owns.
+        async with serialize_key_ownership(db, key_id):
+            await _refuse_ending_an_owner(
+                db, key_id, action="revoke", audit_action="integration.api_key.revoke",
+                user=_rbac, metadata=metadata,
+            )
+
+            # Mark as revoked
+            metadata["is_revoked"] = True
+            metadata["is_active"] = False
+            metadata["revoked_at"] = datetime.utcnow().isoformat()
+
+            # Save updated metadata
+            vault_client.vault_kv_put(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+                metadata
+            )
         
         # Clear all scoped cache variants for real-time revocation
         cache = get_cache_manager()
@@ -2564,10 +2657,17 @@ async def delete_api_key(
     try:
         # Read before the delete: afterwards there is nothing left to describe what was removed.
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        await refuse_delete(db, key_id, metadata)
+        # note: ownership first, so an add-on credential that owns organizations is answered with
+        # the remedy for that (transfer them, or suspend the add-on), not with the installation's.
+        async with serialize_key_ownership(db, key_id):
+            await _refuse_ending_an_owner(
+                db, key_id, action="delete", audit_action="integration.api_key.delete",
+                user=_rbac, metadata=metadata,
+            )
+            await refuse_delete(db, key_id, metadata)
 
-        # Delete from Vault
-        delete_api_key_from_vault(vault_client, key_id)
+            # Delete from Vault
+            delete_api_key_from_vault(vault_client, key_id)
 
         # Clear all scoped cache variants
         cache = get_cache_manager()
@@ -3198,6 +3298,7 @@ def _audit_credential_lifecycle(
     error_message: Optional[str] = None,
     previous: Optional[Dict[str, Any]] = None,
     error_code: Optional[str] = None,
+    extra_details: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record an operator creating, revoking or deleting an integration credential.
 
@@ -3236,6 +3337,7 @@ def _audit_credential_lifecycle(
                     if isinstance(grant, dict)
                 ],
                 "expires_at": metadata.get("expires_at"),
+                **(extra_details or {}),
             },
         )
     except Exception:  # pragma: no cover - a failed audit write must not fail the request

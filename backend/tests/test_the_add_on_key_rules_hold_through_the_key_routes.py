@@ -23,7 +23,9 @@ from app.core.database import get_db
 from app.core.org_scope import org_scope_dependency
 from app.routers import integrations
 from app.services.add_on_credential_edits import CLAIM_UNKNOWN_DETAIL, DELETE_DETAIL, GRANT_EDIT_DETAIL
+from app.services.integration_key_ownership import OWNERSHIP_UNKNOWN_DETAIL
 from app.services.lxd_service import get_lxd_service
+from tests._sqlite_session import org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER, SECRETS, _FakeVault, _RecordingLogger
 from tests.test_an_add_on_credential_refuses_grant_edits import (
     ADDON,
@@ -185,12 +187,16 @@ class _Down:
         raise ConnectionError("database is down: postgresql://user:pw@db/app")
 
 
+# note: claim_unreadable holds the organization tables and no installations table, so the ownership
+# read answers (nothing owned) and the claim read is the one that fails. ownership_unreadable fails
+# the first read, which is the ownership check.
 DELETES = [
     ("claimed_current", lambda: installations(("oak_other", None), (ADDON, None)), 409, DELETE_DETAIL),
     ("claimed_previous", lambda: installations(("oak_next", ADDON)), 409, DELETE_DETAIL),
     ("unclaimed", lambda: installations(("oak_next", "oak_between")), 200, None),
     ("no_installation_at_all", lambda: installations(), 200, None),
-    ("claim_unreadable", lambda: _Down(), 503, CLAIM_UNKNOWN_DETAIL),
+    ("claim_unreadable", lambda: sqlite_session(*org_tables()), 503, CLAIM_UNKNOWN_DETAIL),
+    ("ownership_unreadable", lambda: _Down(), 503, OWNERSHIP_UNKNOWN_DETAIL),
 ]
 
 
@@ -217,7 +223,8 @@ async def test_an_ordinary_key_delete_never_reads_the_installations(keys: Dict[s
     keys["scope"](PARTNER)
     db = installations((PLAIN, None))
     response = await send(PARTNER, db, "DELETE", f"{KEYS}/{PLAIN}")
-    assert response.status_code == 200 and db.statements == []
+    assert response.status_code == 200
+    assert not any("extension_installations" in str(statement) for statement in db.statements)
     assert keys["vault"].deletes == [_FakeVault._path(PLAIN, "metadata"), _FakeVault._path(PLAIN, "secret")]
 
 
