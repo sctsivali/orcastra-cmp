@@ -6,6 +6,7 @@ operator at the exact moment they are being asked to approve something.
 """
 
 import logging
+from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -34,6 +35,12 @@ from app.services.extension_scope import (
     evict_install_cache,
 )
 from app.services.extension_teardown import teardown_install
+from app.services.integration_key_ownership import (
+    carry_owned_organizations,
+    record_carried_organizations,
+    refuse_if_key_owns_organizations,
+    serialize_key_ownership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -491,22 +498,47 @@ async def rotate_credential(
     )
     install.api_key_id = new_key_id
     install.credential_generation += 1
-    await db.commit()
+    # important: the organizations the old credential owns move to the new one in the same commit
+    # as the row. Only the owner key may sync an organization, so leaving them on a credential this
+    # rotation retires would freeze them, and the add-on's next sync with its new key would be
+    # refused for every one of them.
+    async with serialize_key_ownership(db, old_key_id):
+        carried = await carry_owned_organizations(db, from_key_id=old_key_id, to_key_id=new_key_id)
+        await db.commit()
     await db.refresh(install)
     evict_install_cache(old_key_id)
+    record_carried_organizations(
+        carried, from_key_id=old_key_id, to_key_id=new_key_id, trigger="extension.install.credential.rotate"
+    )
     return install, new_key_id, new_secret
 
 
 async def uninstall(
-    db: AsyncSession, vault_client, *, install: ExtensionInstallation
+    db: AsyncSession, vault_client, *, install: ExtensionInstallation, user: Any
 ) -> List[str]:
-    removed = await teardown_install(
-        db, vault_client,
-        install_id=install.id,
-        api_key_id=install.api_key_id,
-        previous_api_key_id=install.previous_api_key_id,
-    )
-    await db.commit()
+    """Remove an installation and everything it created.
+
+    important: refused (409 key_owns_organizations) while either of its credentials owns an active
+    OrcaHub organization. Destroying the owner key freezes those organizations, and suspending the
+    add-on stops it at once without that, so the refusal names suspension as the stop and a
+    transfer or a delete of the organizations as the way forward.
+    """
+    keys = sorted(filter(None, {install.api_key_id, install.previous_api_key_id}))
+    async with AsyncExitStack() as held:
+        # note: sorted, so two requests that lock the same pair always take them in one order
+        for key_id in keys:
+            await held.enter_async_context(serialize_key_ownership(db, key_id))
+        for key_id in keys:
+            await refuse_if_key_owns_organizations(
+                db, key_id, action="uninstall", user=user, metadata={"extension_install_id": install.id}
+            )
+        removed = await teardown_install(
+            db, vault_client,
+            install_id=install.id,
+            api_key_id=install.api_key_id,
+            previous_api_key_id=install.previous_api_key_id,
+        )
+        await db.commit()
     return removed
 
 

@@ -127,6 +127,14 @@ def _run_scope_pass(db: ScopeDB, monkeypatch, store: Optional[CredentialStore] =
     monkeypatch.setattr(sweep.activity_logger, "log_activity", lambda **_kw: None)
     monkeypatch.setattr(sweep, "_rewrite_key_grant", store.rewrite)
     monkeypatch.setattr(sweep, "revoke_install_credential", store.revoke)
+
+    # note: ScopeDB answers every statement with installation rows, so the read of what a revoked
+    # credential owns is answered here instead: nothing. test_an_add_on_credential_keeps_its_
+    # organizations covers the record when it does own some.
+    async def _owns_nothing(_db, _key_id):
+        return []
+
+    monkeypatch.setattr(sweep, "_owned_by", _owns_nothing)
     changed = asyncio.run(sweep._narrow_drifted_scope(db, object()))
     return changed, store
 

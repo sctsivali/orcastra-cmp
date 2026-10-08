@@ -8,9 +8,16 @@ pushes or provisions it. That binding is what stops one integration rewriting an
 organizations, and it holds only while the owner key keeps working.
 
 The writers of `api_key_id` are the three claim paths (the sync upsert, provisioning and the
-dashboard's refresh from a key's callback) and the Administrator transfer below. There is no
+dashboard's refresh from a key's callback), the Administrator transfer below, and the carry an
+add-on credential's rotation makes to its new key (carry_owned_organizations). There is no
 release: an owner is replaced by another key, never set back to NULL, because a NULL owner is
 open to whichever key names the organization next.
+
+An add-on credential may hold org.sync, so it can own organizations too. Its rotation carries
+them to the new credential in the same commit as the installation row, uninstalling it is refused
+while it owns any (suspending the add-on is the way to stop it at once), and the reconcile sweep,
+which still revokes a credential that must stop, records the organizations that revocation
+leaves frozen.
 
 Nothing used to move an owner. Revoking or deleting the owner key left its organizations bound to
 a key that can never authenticate again, so their sync, member updates and provisioning stopped
@@ -236,6 +243,63 @@ async def refuse_if_key_owns_organizations(
         "owned_organization_count": len(owned),
     }
     raise KeyOwnsOrganizations(detail, audit)
+
+
+async def carry_owned_organizations(
+    db: AsyncSession, *, from_key_id: str, to_key_id: str
+) -> List[Tuple[int, str, Optional[str]]]:
+    """Move every organization one key owns to another. The caller holds the lock and commits.
+
+    For an add-on credential's rotation: the new key takes the old one's organizations in the same
+    commit as the installation row, so the add-on keeps syncing them. Every organization carrying
+    the old key moves, active or not, because the old key is being retired and one left on it could
+    never be synced again. Returns (id, slug, external_id) of each one moved.
+
+    important: an ORM assignment, like transfer_owner. The claim-path ratchet finds every writer of
+    organizations.api_key_id by that shape.
+    """
+    if not from_key_id or not to_key_id or from_key_id == to_key_id:
+        return []
+    rows = await db.execute(
+        select(Organization)
+        .where(Organization.api_key_id == from_key_id)
+        .order_by(Organization.slug)
+        .with_for_update()
+    )
+    carried: List[Tuple[int, str, Optional[str]]] = []
+    for org in rows.scalars().all():
+        org.api_key_id = to_key_id
+        carried.append((org.id, org.slug, org.external_id))
+    return carried
+
+
+def record_carried_organizations(
+    carried: List[Tuple[int, str, Optional[str]]], *, from_key_id: str, to_key_id: str, trigger: str
+) -> None:
+    """One transfer record per organization a carry moved, after the commit that moved them."""
+    from app.services.activity_logger import get_activity_logger
+
+    activity_logger = get_activity_logger()
+    for org_id, slug, external_id in carried:
+        try:
+            activity_logger.log_activity(
+                action=TRANSFER_ACTION,
+                target_type="organization",
+                target_id=str(org_id),
+                target_organization_id=org_id,
+                target_organization_slug=slug,
+                details={
+                    "organization_slug": slug,
+                    "external_id": external_id,
+                    "from_key_id": from_key_id,
+                    "to_key_id": to_key_id,
+                    "trigger": trigger,
+                },
+                before_state={"owner_key_id": from_key_id},
+                after_state={"owner_key_id": to_key_id},
+            )
+        except Exception:  # pragma: no cover - a failed audit write must not fail the rotation
+            logger.warning("Could not write the audit record for %s", TRANSFER_ACTION, exc_info=True)
 
 
 def owner_key_refusal(

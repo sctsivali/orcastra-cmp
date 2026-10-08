@@ -28,6 +28,11 @@ Two passes, both idempotent, so every worker can run them without a leader lock:
 2. Revoke a credential whose installation is gone. Vault is written before the row is deleted on
    purpose (`extension_teardown`), so a teardown interrupted between the two leaves a key that
    still authenticates with nothing left to say whose it is. This is what reclaims it.
+
+note: both passes revoke even a credential that owns OrcaHub organizations, because a credential
+no installation claims, or one whose organization reaches nothing, must stop. The record then
+names the organizations the revocation freezes (services/integration_key_ownership.py), so an
+administrator can transfer them.
 """
 
 import asyncio
@@ -42,6 +47,7 @@ from app.services.activity_logger import get_activity_logger
 from app.services.extension_credentials import revoke_install_credential
 from app.services.extension_install import _rewrite_key_grant
 from app.services.extension_scope import evict_install_cache
+from app.services.integration_key_ownership import owned_organizations
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -56,6 +62,37 @@ async def _bound_clusters(db, organization_id: int) -> Set[str]:
         )
     )
     return {row[0] for row in rows.all() if row[0]}
+
+
+FROZEN_WARNING = (
+    "This credential owned OrcaHub organizations. They stop syncing until an administrator "
+    "transfers them to another key."
+)
+
+
+async def _owned_by(db, key_id: str) -> Optional[List[str]]:
+    """Slugs of the active OrcaHub organizations a credential owns, or None when unreadable.
+
+    note: a failed read is rolled back here, so the session stays usable for the rest of the pass.
+    """
+    try:
+        return [org.slug for org in await owned_organizations(db, key_id)]
+    except Exception as exc:  # noqa: BLE001 - the record is best effort, the revocation is not
+        logger.warning("Reconcile could not read which organizations %s owns: %s", key_id, type(exc).__name__)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+def _frozen_fields(owned: Optional[List[str]]) -> Dict[str, Any]:
+    if owned is None:
+        return {"owned_organization_count": None}
+    fields: Dict[str, Any] = {"owned_organization_slugs": owned[:20], "owned_organization_count": len(owned)}
+    if owned:
+        fields["warning"] = FROZEN_WARNING
+    return fields
 
 
 async def _narrow_drifted_scope(db, vault_client) -> int:
@@ -147,6 +184,14 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
         evict_install_cache(install.api_key_id)
         changed += 1
 
+        frozen: Dict[str, Any] = {}
+        if total_loss:
+            frozen = _frozen_fields(await _owned_by(db, install.api_key_id))
+            if frozen.get("warning"):
+                logger.warning(
+                    "Reconcile revoked credential %s of installation %s, which owns OrcaHub organizations",
+                    install.api_key_id, install.id,
+                )
         activity_logger.log_activity(
             action="extension.install.scope_narrowed",
             target_type="extension_installation",
@@ -157,6 +202,7 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
                 "suspended": not kept,
                 "api_key_id": install.api_key_id,
                 **key_change,
+                **frozen,
             },
         )
         logger.info(
@@ -204,11 +250,12 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
             logger.warning("Reconcile could not revoke orphan %s: %s", key_id, exc)
             continue
         revoked += 1
+        frozen = _frozen_fields(await _owned_by(db, key_id))
         activity_logger.log_activity(
             action="extension.credential.orphan_revoked",
             target_type="extension_installation",
             target_id=str(install_id),
-            details={"key_id": key_id, "reason": "no installation claims this credential"},
+            details={"key_id": key_id, "reason": "no installation claims this credential", **frozen},
         )
         logger.warning(
             "Reconcile revoked orphaned credential %s for installation %s", key_id, install_id
