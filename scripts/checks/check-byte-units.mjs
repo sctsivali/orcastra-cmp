@@ -200,6 +200,8 @@ const backendByteFiles = [
   "backend/app/routers/monitoring.py",
   "backend/app/services/monitoring_history.py",
   "backend/app/services/monitoring_usage.py",
+  "backend/app/services/monitoring_sweep.py",
+  "backend/app/core/host_detail.py",
   "backend/app/services/lxd/node_resources.py",
   "backend/app/services/lxd/resources.py",
 ];

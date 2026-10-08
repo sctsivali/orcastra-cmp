@@ -81,8 +81,11 @@ class _Service:
     async def list_all_vms(self):
         return [], []
 
-    async def check_nodes_status_async(self):
-        return _nodes()
+    def get_node_names(self):
+        return [node.name for node in _nodes()]
+
+    def check_node_status(self, name):
+        return next(node for node in _nodes() if node.name == name)
 
 
 @pytest.fixture

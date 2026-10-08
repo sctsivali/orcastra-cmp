@@ -10,14 +10,12 @@ import logging
 import time
 import asyncio
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
     ClusterMonitoringMetrics,
     StoragePoolMetrics,
     MonitoringDashboardResponse,
     MetricsHistoryPoint,
-    WarningsSummary,
 )
 from app.services.monitoring_history import (
     append_point,
@@ -26,6 +24,7 @@ from app.services.monitoring_history import (
     history_key as _monitoring_history_key,
     read_window,
 )
+from app.services.monitoring_sweep import SweepTimer, count_warnings, log_sweep, read_fleet
 from app.services.monitoring_usage import (
     legacy_top_lists,
     read_instance_usage,
@@ -72,9 +71,6 @@ ws_router = APIRouter(
     prefix="/monitoring",
     tags=["Monitoring"],
 )
-
-# Thread pool for the per-cluster warnings fan-out
-_executor = ThreadPoolExecutor(max_workers=10)
 
 # Per-process history slots, used only while Redis is unavailable (see claim_history_slot).
 _last_history_store_times: Dict[str, float] = {}
@@ -170,15 +166,13 @@ async def get_monitoring_dashboard(
 
     try:
         start_time = time.time()
-        
-        # Get all VMs/instances and node statuses IN PARALLEL
-        all_vms_task = lxd_service.list_all_vms()
-        node_statuses_task = lxd_service.check_nodes_status_async()
-        
-        # Wait for both to complete
-        (all_vms, connected_nodes), node_statuses_list = await asyncio.gather(
-            all_vms_task, node_statuses_task
-        )
+        timer = SweepTimer()
+
+        # The fleet's instances and every cluster's status, in parallel, each status read
+        # bounded on its own (services/monitoring_sweep.py).
+        fleet = await read_fleet(lxd_service, timer)
+        all_vms, connected_nodes = fleet.vms, fleet.connected
+        node_statuses_list = fleet.statuses
         
         # apply tenant ACL filtering
         all_vms = [
@@ -376,7 +370,7 @@ async def get_monitoring_dashboard(
             for node in node_statuses_list
             if node.connected and node.resources and node.resources.cpu_total > 0
         }
-        usages = await read_instance_usage(running_vms, host_threads)
+        usages = await timer.timed("rates", read_instance_usage(running_vms, host_threads))
         fleet_cpu = rollup(nodes_metrics, usages)
         consumers = [usage_summary(usage) for usage in select_consumers(usages)]
         top_cpu_consumers, top_memory_consumers = legacy_top_lists(usages)
@@ -386,50 +380,11 @@ async def get_monitoring_dashboard(
             (realtime_memory_bytes / total_memory * 100) if total_memory > 0 else 0, 2
         )
         
-        # Get warnings summary
-        warnings_summary = WarningsSummary(
-            total=0,
-            critical=0,
-            warning=0,
-            info=0,
+        connected_node_names = [n.name for n in node_statuses_list if n.connected]
+        warnings_summary, warnings_skipped = await timer.timed(
+            "warnings", count_warnings(lxd_service, connected_node_names)
         )
-        
-        try:
-            # fetch warnings from all connected nodes in parallel
-            def _fetch_node_warnings(node_name: str) -> List[Dict[str, Any]]:
-                """Fetch warnings for a single node (runs in thread pool)."""
-                try:
-                    client = lxd_service.get_client_with_reconnect(node_name)
-                    if client:
-                        warnings_response = client.api.warnings.get(params={'recursion': '1'})
-                        return warnings_response.json().get("metadata", [])
-                except Exception as warn_err:
-                    logger.debug(f"Could not get warnings for node {node_name}: {warn_err}")
-                return []
 
-            connected_node_names = [n.name for n in node_statuses_list if n.connected]
-            if connected_node_names:
-                loop = asyncio.get_event_loop()
-                warning_tasks = [
-                    loop.run_in_executor(_executor, _fetch_node_warnings, name)
-                    for name in connected_node_names
-                ]
-                warning_results = await asyncio.gather(*warning_tasks, return_exceptions=True)
-                for result in warning_results:
-                    if isinstance(result, list):
-                        for warning in result:
-                            if isinstance(warning, dict):
-                                warnings_summary.total += 1
-                                severity = warning.get("severity", "").lower()
-                                if severity in ["critical", "error"]:
-                                    warnings_summary.critical += 1
-                                elif severity == "warning":
-                                    warnings_summary.warning += 1
-                                else:
-                                    warnings_summary.info += 1
-        except Exception as e:
-            logger.debug(f"Could not fetch warnings: {e}")
-        
         elapsed_time = time.time() - start_time
         
         response = MonitoringDashboardResponse(
@@ -497,6 +452,8 @@ async def get_monitoring_dashboard(
         # note: not when no cluster answered. That dashboard is all zeros, the same misreading
         # the cache below refuses to keep, and as a point it drew the fleet idling at zero.
         history_key = _monitoring_history_key(scope_key)
+        history_started = time.monotonic()
+        history_written = False
         if (
             connected_nodes
             and _resource_generation(cache, _MONITORING_CACHE_KIND) == monitoring_generation
@@ -516,6 +473,7 @@ async def get_monitoring_dashboard(
                 )
                 history = append_point(history, new_point)
                 cache.set("monitoring_history", history_key, history, ttl=86400)  # 24 hour TTL
+                history_written = True
                 
                 if scope_key == COLLECTED_SCOPE_KEY and new_point["cpu_usage_percent"] is not None:
                     asyncio.create_task(_persist_snapshot(new_point))
@@ -523,7 +481,15 @@ async def get_monitoring_dashboard(
             except Exception as hist_err:
                 logger.debug(f"Could not update history: {hist_err}")
         
-        logger.debug(f"Monitoring dashboard collected in {elapsed_time*1000:.0f}ms")
+        timer.record("history", history_started)
+        log_sweep(
+            collected=scope_key == COLLECTED_SCOPE_KEY,
+            timer=timer,
+            fleet=fleet,
+            running=running_instances,
+            history_written=history_written,
+            warnings_skipped=warnings_skipped,
+        )
         
         # important: a dashboard built while no cluster answered is all zeros, and
         # zeros on a monitoring surface read as a healthy idle fleet rather than an
