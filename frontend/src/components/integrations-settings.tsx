@@ -68,12 +68,14 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { VaultUnavailableNotice } from "@/components/ui/vault-unavailable-notice";
 import { EditAPIKeyPermissionsDialog } from "@/components/integrations/edit-api-key-permissions-dialog";
+import { EditAPIKeyCapabilitiesDialog } from "@/components/integrations/edit-api-key-capabilities-dialog";
 import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
 import { ApiKeyConnectionGuide } from "@/components/integrations/api-key-connection-guide";
 import { RotateSecretButton } from "@/components/integrations/rotate-secret-button";
 import { KeyOwnershipSummary, TransferOwnershipFirst } from "@/components/integrations/key-ownership-summary";
 import { usePermissions } from "@/hooks/use-permissions";
-import { keyOwnsOrganizationsDetail } from "@/lib/key-ownership-display";
+import { keyOwnsOrganizationsDetail, provisioningWouldStopDetail } from "@/lib/key-ownership-display";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -380,6 +382,22 @@ function IntegrationsSettingsContent() {
         description: error.message,
         variant: "destructive",
       });
+    },
+  });
+
+  // Capability edits. Withdrawing tenant.provision from a key that owns organizations answers 409
+  // with what would stop, and withdrawing org.sync or inventory.read from one is refused; the
+  // dialog shows both, and resends the first with force when the operator confirms.
+  const updateCapabilitiesMutation = useMutation({
+    mutationFn: ({ keyId, capabilities, force }: { keyId: string; capabilities: string[]; force: boolean }) =>
+      api.integrations.updateAPIKeyCapabilities(keyId, { capabilities, force }),
+    onSuccess: () => {
+      void reconcileMutationImpact(queryClient, "integration.write").catch(() => undefined);
+      toast({ title: "Capabilities Updated" });
+    },
+    onError: (error: Error) => {
+      if (provisioningWouldStopDetail(error) || keyOwnsOrganizationsDetail(error)) return;
+      toast({ title: "Failed to update capabilities", description: error.message, variant: "destructive" });
     },
   });
 
@@ -738,6 +756,17 @@ function IntegrationsSettingsContent() {
                         keyId={apiKey.id}
                         keyName={String(apiKey.name || "this key")}
                         onRotated={(response) => setRotatedKeys((queue) => [...queue, response])}
+                      />
+                    )}
+                    {/* An add-on's installation owns its grant, so the server refuses this edit. */}
+                    {!apiKey.is_revoked && !apiKey.is_add_on_credential && (
+                      <EditAPIKeyCapabilitiesDialog
+                        apiKey={apiKey}
+                        capabilities={capabilityData?.capabilities ?? []}
+                        onSubmit={(keyId, capabilities, force) =>
+                          updateCapabilitiesMutation.mutateAsync({ keyId, capabilities, force })
+                        }
+                        isSubmitting={updateCapabilitiesMutation.isPending}
                       />
                     )}
                     {!apiKey.is_revoked && (

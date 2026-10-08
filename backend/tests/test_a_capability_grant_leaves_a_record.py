@@ -172,12 +172,14 @@ async def test_widening_a_key_to_org_sync_is_recorded(surface: Dict[str, Any]) -
 
 async def test_narrowing_a_key_is_recorded_too(surface: Dict[str, Any]) -> None:
     surface["use"](_key(capabilities=["inventory.read", "tenant.provision"]))
+    # note: a database, because withdrawing tenant.provision first reads which organizations the key
+    # owns, to ask before provisioning for them stops. It owns none.
     await integrations.update_api_key_capabilities(
         "oak_edit",
         integrations.APIKeyCapabilitiesRequest(capabilities=["inventory.read"]),
         None,
         PARTNER,
-        None,
+        sqlite_session(*org_tables()),
     )
     (call,) = surface["log"].calls
     assert call["details"]["capabilities_withdrawn"] == ["tenant.provision"]

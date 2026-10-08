@@ -2287,6 +2287,7 @@ export const certificateAPI = {
 // Integrations API (External Apps - Orcahub)
 import type {
   APIKeyInfo,
+  APIKeyCapabilitiesRequest,
   APIKeyCreateRequest,
   APIKeyCreateResponse,
   APIKeyListResponse,
@@ -2323,6 +2324,15 @@ export const integrationsAPI = {
     return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/permissions`, {
       method: "PUT",
       body: JSON.stringify(permissions),
+    });
+  },
+
+  // note: withdrawing tenant.provision from a key that owns organizations answers 409 with what would
+  // stop; the same request with force set goes through.
+  updateAPIKeyCapabilities: async (keyId: string, request: APIKeyCapabilitiesRequest): Promise<APIKeyInfo> => {
+    return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/capabilities`, {
+      method: "PUT",
+      body: JSON.stringify(request),
     });
   },
 

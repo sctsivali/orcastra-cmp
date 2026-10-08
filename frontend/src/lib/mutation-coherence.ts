@@ -284,6 +284,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     queryFamilies: ["integrations", "organizations"],
     apiCalls: [
       "api.integrations.createAPIKey", "api.integrations.updateAPIKeyPermissions",
+      "api.integrations.updateAPIKeyCapabilities",
       "api.integrations.revokeAPIKey", "api.integrations.deleteAPIKey",
       "api.integrations.rotateAPIKeySecret",
       "api.integrations.addUserMapping", "api.integrations.deleteUserMapping",

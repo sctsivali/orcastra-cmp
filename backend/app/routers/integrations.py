@@ -142,6 +142,7 @@ from app.services.integration_cluster_rebind import (
     rebind_creator_clusters,
 )
 from app.services.integration_callback_url import APP_URL_SECRET_TAG, bound_callback_url, callback_url_tag
+from app.services.integration_key_provisioning import PROVISIONING_CAPABILITY, confirm_provisioning_withdrawal
 from app.services.integration_key_ownership import (
     MAX_LISTED_SLUGS,
     TRANSFER_ACTION as OWNER_TRANSFER_ACTION,
@@ -2601,6 +2602,13 @@ async def update_api_key_permissions(
 class APIKeyCapabilitiesRequest(BaseModel):
     """Request to replace an API key's capability set."""
     capabilities: List[str] = Field(..., min_length=1)
+    force: bool = Field(
+        False,
+        description=(
+            "Withdraw tenant.provision from a key that owns OrcaHub organizations anyway. Without it "
+            "such an edit answers 409 with what would stop."
+        ),
+    )
 
     @field_validator("capabilities")
     @classmethod
@@ -2664,6 +2672,11 @@ async def update_api_key_capabilities(
                     db, key_id, action="capabilities", audit_action=CAPABILITIES_UPDATE_ACTION,
                     user=_rbac, metadata=previous, withdrawn=withdrawn,
                 )
+            # important: asked about rather than refused (services/integration_key_provisioning.py).
+            # An owner without tenant.provision stops provisioning for its organizations.
+            forced = None
+            if has_capability(previous, PROVISIONING_CAPABILITY) and not has_capability(metadata, PROVISIONING_CAPABILITY):
+                forced = await confirm_provisioning_withdrawal(db, key_id, user=_rbac, force=request.force)
             vault_client.vault_kv_put(
                 f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
                 metadata,
@@ -2677,7 +2690,8 @@ async def update_api_key_capabilities(
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         evict_api_key_cache(key_id)
         _audit_credential_lifecycle(
-            action=CAPABILITIES_UPDATE_ACTION, key_id=key_id, metadata=metadata, previous=previous
+            action=CAPABILITIES_UPDATE_ACTION, key_id=key_id, metadata=metadata, previous=previous,
+            extra_details=forced,
         )
 
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)

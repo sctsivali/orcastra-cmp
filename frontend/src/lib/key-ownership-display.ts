@@ -1,5 +1,11 @@
 import { getAPIKeyStatus } from "@/lib/integration-display";
-import type { APIKeyInfo, IntegrationOrganization, KeyOwnsOrganizationsDetail, OwnerKeyState } from "@/types/api";
+import type {
+  APIKeyInfo,
+  IntegrationOrganization,
+  KeyOwnsOrganizationsDetail,
+  OwnerKeyState,
+  ProvisioningWouldStopDetail,
+} from "@/types/api";
 
 /**
  * An owner key's state as the list shows it. "hidden" is a state the list does not show: the
@@ -82,6 +88,15 @@ export function keyOwnsOrganizationsDetail(error: unknown): KeyOwnsOrganizations
   const detail = (error as { detail?: unknown } | null)?.detail;
   if (detail && typeof detail === "object" && (detail as { error?: unknown }).error === "key_owns_organizations") {
     return detail as KeyOwnsOrganizationsDetail;
+  }
+  return null;
+}
+
+/** The 409 a capability edit asks with before provisioning stops for owned organizations, if this is one. */
+export function provisioningWouldStopDetail(error: unknown): ProvisioningWouldStopDetail | null {
+  const detail = (error as { detail?: unknown } | null)?.detail;
+  if (detail && typeof detail === "object" && (detail as { error?: unknown }).error === "provisioning_would_stop") {
+    return detail as ProvisioningWouldStopDetail;
   }
   return null;
 }

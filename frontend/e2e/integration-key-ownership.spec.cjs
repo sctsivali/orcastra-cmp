@@ -30,10 +30,30 @@ function org(id, slug, owner, ownerName, state, over = {}) {
   };
 }
 
+const VOCABULARY = {
+  capabilities: [
+    { name: "inventory.read", description: "Read clusters, projects and instances.", elevated: false },
+    { name: "org.sync", description: "Sync organizations and members.", elevated: true, elevated_reason: "Writes access control" },
+    { name: "tenant.provision", description: "Provision buyer dashboard access.", elevated: true, elevated_reason: "Writes access control" },
+  ],
+  application_types: [],
+};
+
+const PROVISIONING_WOULD_STOP = {
+  error: "provisioning_would_stop", action: "capabilities", capability: "tenant.provision",
+  message: "This key owns 2 OrcaHub organizations (fossgo and 1 you cannot see). Withdrawing its tenant.provision "
+    + "capability stops provisioning buyer dashboard access for them: an order completed in OrcaHub no longer gives "
+    + "its buyer access here. Their sync and member updates continue. Confirm to withdraw it anyway.",
+  consequence: "Provisioning buyer dashboard access for these organizations stops. Their sync and member updates continue.",
+  api_key_id: "oak_hub_new", organization_count: 2, organization_slugs: ["fossgo"], hidden_organization_count: 1,
+  proceed: "Send the same request with force set to true to withdraw it anyway.",
+};
+
 function world(role) {
   const admin = role === "admin";
   return {
     puts: [],
+    capabilityPuts: [],
     keys: [
       key("oak_hub_old", "Hub Old", {
         is_active: false, is_revoked: true,
@@ -80,6 +100,21 @@ async function installOwnership(page, role) {
     }
     if (request.method() === "GET" && path === "/integrations/organizations") {
       return route.fulfill({ json: state.orgs });
+    }
+    if (request.method() === "GET" && path === "/integrations/capabilities") {
+      return route.fulfill({ json: VOCABULARY });
+    }
+    const capabilities = path.match(/^\/integrations\/api-keys\/([^/]+)\/capabilities$/);
+    if (request.method() === "PUT" && capabilities) {
+      const body = JSON.parse(request.postData() || "{}");
+      state.capabilityPuts.push({ keyId: capabilities[1], body });
+      const target = state.keys.find((k) => k.id === capabilities[1]);
+      const withdraws = target.capabilities.includes("tenant.provision") && !body.capabilities.includes("tenant.provision");
+      if (withdraws && target.owned_organization_count > 0 && !body.force) {
+        return route.fulfill({ status: 409, json: { detail: PROVISIONING_WOULD_STOP } });
+      }
+      Object.assign(target, { capabilities: body.capabilities });
+      return route.fulfill({ json: target });
     }
     const transfer = path.match(/^\/integrations\/organizations\/(\d+)\/owner-key$/);
     if (request.method() === "PUT" && transfer) {
@@ -191,5 +226,43 @@ test("a partner reads ownership and cannot transfer", async ({ page }, testInfo)
   await expectNoHorizontalOverflow(page);
   await capture(page, testInfo, "partner-synced-organizations");
   expect(state.puts).toEqual([]);
+  await expectCleanSettingsHarness(settings);
+});
+
+
+test("withdrawing tenant.provision from an owner key says what stops and goes through on confirmation", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const { settings, state } = await installOwnership(page, "partner");
+  await page.goto("/settings/integrations");
+
+  const hub = card(page, "Hub Connection");
+  await hub.getByRole("button", { name: "Edit Capabilities" }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit Capabilities" });
+  await dialog.getByRole("checkbox", { name: /tenant\.provision/ }).uncheck();
+  await dialog.getByRole("button", { name: "Save Capabilities" }).click();
+
+  const warning = dialog.getByRole("alert");
+  await expect(warning).toContainText(
+    "Provisioning buyer dashboard access for these organizations stops. Their sync and member updates continue.",
+  );
+  await expect(warning).toContainText("(fossgo and 1 you cannot see)");
+  await expect(dialog.getByRole("button", { name: "Save Capabilities" })).toHaveCount(0);
+  expect(state.capabilityPuts).toEqual([
+    { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: false } },
+  ]);
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "partner-provisioning-warning");
+
+  const confirm = dialog.getByRole("button", { name: "Withdraw Anyway" });
+  await confirm.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await expect(page.getByText("Capabilities Updated", { exact: true })).toBeVisible();
+  await expect(dialog).toHaveCount(0);
+  expect(state.capabilityPuts).toEqual([
+    { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: false } },
+    { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: true } },
+  ]);
   await expectCleanSettingsHarness(settings);
 });
