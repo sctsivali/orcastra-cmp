@@ -13,6 +13,7 @@ import pytest
 
 from app.core.cache import CacheManager
 from app.routers import cluster_members, monitoring
+from app.services.lxd.instance import FleetInventory
 from app.services.monitoring_history import HISTORY_MAX_POINTS, history_key
 from app.services.monitoring_history_store import history_body
 
@@ -91,6 +92,10 @@ class _DashboardService:
         if self.advance:
             self.cache.advance("monitoring")
         return [], [CLUSTER]
+
+    async def read_fleet_inventory(self) -> FleetInventory:
+        vms, connected = await self.list_all_vms()
+        return FleetInventory(vms, connected, [], {})
 
     def get_node_names(self) -> list[str]:
         return []

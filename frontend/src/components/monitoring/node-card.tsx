@@ -66,8 +66,9 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
           </div>
           {/* status_message is the backend exception reflected back (monitoring.py builds it
               from node.error, which is str(e)), so it carries the endpoint, port and TLS
-              detail. The badge already says the node is not answering. */}
-          {isPartner && node.status_message && !node.is_online ? (
+              detail. The badge already says the node is not answering. An online Cluster whose
+              instance list ran out of time carries its note here too. */}
+          {isPartner && node.status_message && (!node.is_online || node.collection_timed_out) ? (
             <UITooltip>
               <TooltipTrigger asChild>
                 <div className="cursor-help">
@@ -83,7 +84,10 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
           )}
         </div>
         <CardDescription>
-          {formatHypervisorType(node.node_type)} • {node.instance_count} instances
+          {formatHypervisorType(node.node_type)} •{" "}
+          {node.is_online && node.collection_timed_out
+            ? "instances not counted in this collection"
+            : `${node.instance_count} instances`}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

@@ -1491,6 +1491,14 @@ class ClusterMonitoringMetrics(BaseModel):
     is_online: bool = Field(..., description="Whether the Cluster is online")
     cluster_status: Optional[str] = Field(None, description="Cluster status, a ClusterStatus value. This endpoint derives it from a reachability probe, so it emits online, not_authorized or offline; pending and error are reserved for the registration flow")
     status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
+    collection_timed_out: bool = Field(
+        False,
+        description=(
+            "True when this collection ran out of time reading the Cluster's status or its "
+            "instance list. Its figures are then partial for this collection only; the Cluster is "
+            "never cached as offline for it"
+        ),
+    )
     
     # CPU Metrics
     cpu_total: int = Field(0, description="Hardware threads")

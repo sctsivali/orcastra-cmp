@@ -8,7 +8,7 @@ import asyncio
 import time
 import secrets
 import socket
-from typing import Callable, List, Tuple, Optional, Dict, Any
+from typing import Callable, List, NamedTuple, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed, NotFound
@@ -614,6 +614,14 @@ def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
 # stalled or overloaded upstream promptly.
 _INSTANCE_REGISTRY_TIMEOUT_SECONDS = 15.0
 _INSTANCE_NODE_TIMEOUT_SECONDS = 30.0
+
+
+class FleetInventory(NamedTuple):
+    vms: List[VMInfo]
+    connected: List[str]
+    incomplete: List[str]
+    # cluster -> "inventory" (its read ran past the wall) or "busy" (the pool was full)
+    timed_out: Dict[str, str]
 _INSTANCE_DETAIL_TIMEOUT_SECONDS = 30.0
 _INSTANCE_INVENTORY_WORKERS = 20
 _INSTANCE_DETAIL_WORKERS = 8
@@ -983,16 +991,9 @@ class InstanceManager:
         incomplete_nodes = [node_name] if not connected or not complete else []
         return vms if connected else [], connected_nodes, incomplete_nodes
 
-    async def list_all_vms_with_failures(
-        self,
-    ) -> Tuple[List[VMInfo], List[str], List[str]]:
-        """
-        List all VMs across all configured LXD nodes and all projects.
-        Returns (vm_list, connected_nodes, incomplete_nodes). ``incomplete_nodes`` names every
-        registered cluster that did not produce a complete upstream answer, including
-        unreachable clusters, so callers do not need a second synchronous Vault read. Local
-        executor timeout or saturation is raised as service unavailability instead.
-        """
+    async def _inventory_registry(self) -> List[str]:
+        """The registered clusters this caller's scope may read. Raises when the registry itself
+        cannot be read in time, which no partial answer can stand in for."""
         try:
             node_names = await run_blocking(
                 self._inventory_node_names_blocking,
@@ -1007,17 +1008,16 @@ class InstanceManager:
             ) from exc
 
         from app.core.org_scope import apply_cluster_filter
-        node_names = apply_cluster_filter(node_names)
-        
-        if not node_names:
-            logger.warning("No nodes found in Vault or connection manager")
-            return [], [], []
+        return apply_cluster_filter(node_names)
 
-        # Aggregate results
+    async def _inventory_fan_out(
+        self, node_names: List[str]
+    ) -> Tuple[List[VMInfo], List[str], List[str], Dict[str, Exception]]:
+        """Every cluster's instances, plus the clusters whose read hit the wall or a full pool."""
         all_vms: List[VMInfo] = []
         connected_nodes: List[str] = []
         incomplete_nodes: List[str] = []
-        capacity_errors: List[Exception] = []
+        capacity_errors: Dict[str, Exception] = {}
 
         # One request must not saturate its own executor when the fleet has more clusters than
         # workers. Batches retain parallel fan-out while leaving the global in-flight cap honest
@@ -1033,7 +1033,7 @@ class InstanceManager:
                     logger.warning("Error fetching VMs from %s: %s", node_name, result)
                     incomplete_nodes.append(node_name)
                     if isinstance(result, (BlockingTimeout, BlockingPoolFull)):
-                        capacity_errors.append(result)
+                        capacity_errors[node_name] = result
                     continue
 
                 vms, connected, complete = result
@@ -1042,6 +1042,26 @@ class InstanceManager:
                     all_vms.extend(vms)
                 if not connected or not complete:
                     incomplete_nodes.append(node_name)
+        return all_vms, connected_nodes, incomplete_nodes, capacity_errors
+
+    async def list_all_vms_with_failures(
+        self,
+    ) -> Tuple[List[VMInfo], List[str], List[str]]:
+        """
+        List all VMs across all configured LXD nodes and all projects.
+        Returns (vm_list, connected_nodes, incomplete_nodes). ``incomplete_nodes`` names every
+        registered cluster that did not produce a complete upstream answer, including
+        unreachable clusters, so callers do not need a second synchronous Vault read. Local
+        executor timeout or saturation is raised as service unavailability instead.
+        """
+        node_names = await self._inventory_registry()
+        if not node_names:
+            logger.warning("No nodes found in Vault or connection manager")
+            return [], [], []
+
+        all_vms, connected_nodes, incomplete_nodes, capacity_errors = await self._inventory_fan_out(
+            node_names
+        )
 
         # Ordinary cluster failures return (connected=False) and remain a useful partial answer.
         # A wall timeout or saturated executor means this backend could not finish the bounded
@@ -1049,10 +1069,30 @@ class InstanceManager:
         if capacity_errors:
             raise LXDConnectionError(
                 "Instance inventory is temporarily unavailable"
-            ) from capacity_errors[0]
+            ) from next(iter(capacity_errors.values()))
 
         logger.info(f"Fetched {len(all_vms)} VMs from {len(connected_nodes)} nodes")
         return all_vms, connected_nodes, incomplete_nodes
+
+    async def read_fleet_inventory(self) -> FleetInventory:
+        """The fleet's instances for the monitoring sweep, which reports rather than raises.
+
+        important: a cluster whose read ran past the wall, or found the pool full, is named in
+        ``timed_out`` and the other clusters' answer stands. One hung cluster used to make the
+        list above raise for the whole fleet, so the dashboard answered 503 and wrote no history
+        point. Only a registry that cannot be read still raises.
+        """
+        node_names = await self._inventory_registry()
+        if not node_names:
+            return FleetInventory([], [], [], {})
+        all_vms, connected_nodes, incomplete_nodes, capacity_errors = await self._inventory_fan_out(
+            node_names
+        )
+        timed_out = {
+            name: "busy" if isinstance(error, BlockingPoolFull) else "inventory"
+            for name, error in capacity_errors.items()
+        }
+        return FleetInventory(all_vms, connected_nodes, incomplete_nodes, timed_out)
     
     def fetch_node_instances(
         self, node_name: str, node_endpoint: str = ""

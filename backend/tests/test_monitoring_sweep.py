@@ -12,6 +12,7 @@ import threading
 import pytest
 
 from app.models.schemas import NodeStatus
+from app.services.lxd.instance import FleetInventory
 from app.services import monitoring_sweep
 from app.services.monitoring_sweep import (
     FleetRead,
@@ -39,8 +40,8 @@ class _Service:
     def get_node_names(self):
         return list(self.names)
 
-    async def list_all_vms(self):
-        return [], [name for name in self.names if name not in self.slow]
+    async def read_fleet_inventory(self):
+        return FleetInventory([], [name for name in self.names if name not in self.slow], [], {})
 
     def check_node_status(self, name):
         self.status_threads.append(threading.current_thread().name)

@@ -1596,6 +1596,8 @@ export interface ClusterMonitoringMetrics {
   is_online: boolean;
   cluster_status?: string; // online, pending_trust, offline, error
   status_message?: string; // Status message for troubleshooting
+  /** This collection ran out of time on the Cluster; its figures are partial until the next one. */
+  collection_timed_out?: boolean;
   cpu_total: number;
   cpu_used: number;
   cpu_usage_percent: number;
