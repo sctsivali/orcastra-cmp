@@ -198,13 +198,14 @@ const defaultRetryConfig = {
 // VMs Hooks
 export function useVMs(host?: string, status?: string) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useQuery({
     queryKey: queryKeys.vmsFor(scopeKey, host, status),
     queryFn: ({ signal }) => vmAPI.list(host, status, undefined, undefined, { signal }),
     enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...STATIC_DATA_CONFIG, // Cache for 3min; manual refresh via button
   });
@@ -352,6 +353,7 @@ export function useInstanceMetrics(
 // Images Hooks
 export function useImages(host?: string, opts?: { enabled?: boolean }) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: host
       ? queryKeys.imagesByHost(scopeKey, host)
@@ -367,7 +369,7 @@ export function useImages(host?: string, opts?: { enabled?: boolean }) {
     // Always enabled - fetches all images when host is undefined, or filtered when host is provided
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1046,6 +1048,7 @@ export function useStoragePools(
   opts?: { enabled?: boolean; requestEpoch?: number },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryKey: ["storagePools", scopeKey, host, opts?.requestEpoch ?? 0],
@@ -1071,7 +1074,7 @@ export function useStoragePools(
     // Always enabled - fetches all pools when host is undefined
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1121,13 +1124,14 @@ export function useStorageVolumes(
   opts?: { enabled?: boolean; requestEpoch?: number },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: ["storageVolumes", scopeKey, pool, host, opts?.requestEpoch ?? 0],
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.storageVolumes.list(host, pool, read),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     // Always enabled - fetches all volumes when pool/host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1212,6 +1216,7 @@ export function useNetworks(
   opts?: { enabled?: boolean; requestEpoch?: number },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     // important: the project belongs in the key. Without it React Query serves one project's
     // rows to another project's caller from cache.
@@ -1226,7 +1231,7 @@ export function useNetworks(
     queryFn: (read) => api.networks.list(host, project, read),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     // Always enabled - fetches all networks when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1898,12 +1903,13 @@ export function useDeleteGroup() {
 
 // Cluster Members Hooks
 export function useClusterMembers(node: string) {
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: ["clusterMembers", node],
     queryFn: (read) => api.clusterMembers.list(node, read),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     enabled: !!node,
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1943,6 +1949,7 @@ export function useMemberResources(
 // Clusters Hooks
 export function useClusters(fresh: boolean = false) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: queryKeys.clustersFor(scopeKey, fresh),
     queryFn: ({ fresh: manual, signal }) =>
@@ -1950,7 +1957,7 @@ export function useClusters(fresh: boolean = false) {
     enabled: isAuthenticated,
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
-    refetchInterval: jitter(POLL_MS.fleet),
+    refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
     staleTime: 0, // Always consider stale to ensure fresh data after deletion
