@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -17,6 +16,12 @@ from app.services.lxd import health, instance as instance_module
 from app.services.lxd.connection import LXDConnectionManager
 from app.services.lxd.exceptions import LXDConnectionError, LXDLocalUnavailableError
 from app.services.lxd.instance import InstanceManager
+from tests._loop_probes import (
+    SAFETY_TIMEOUT,
+    WorkerGate,
+    assert_loop_runs_callbacks,
+    wait_for_thread_event,
+)
 
 
 HOST = "shared-cluster"
@@ -67,6 +72,7 @@ async def _thread_offload(fn, *args, **_kwargs):
 async def test_detail_reconnect_lookup_and_projection_run_off_the_event_loop(monkeypatch):
     manager = InstanceManager.__new__(InstanceManager)
     loop_thread = threading.get_ident()
+    gate = WorkerGate(loop_thread)
     worker_threads = []
     record = SimpleNamespace(project="default")
     projected = SimpleNamespace(project="default")
@@ -77,7 +83,7 @@ async def test_detail_reconnect_lookup_and_projection_run_off_the_event_loop(mon
 
     def _connect(_host):
         _record(None)
-        time.sleep(0.10)
+        gate.hold()
         return object()
 
     monkeypatch.setattr(manager, "_get_client_with_reconnect", _connect)
@@ -98,14 +104,14 @@ async def test_detail_reconnect_lookup_and_projection_run_off_the_event_loop(mon
     monkeypatch.setattr(instance_module, "run_blocking", _thread_offload)
 
     task = asyncio.create_task(manager.get_vm("mine", HOST, "default"))
-    heartbeats = 0
-    for _ in range(5):
-        await asyncio.sleep(0.01)
-        heartbeats += 1
-
-    assert heartbeats == 5
-    assert not task.done(), "the blocking detail read ran on the event loop"
-    assert await task is projected
+    try:
+        await wait_for_thread_event(gate.entered, task=task, what="the detail read")
+        assert gate.thread_id != loop_thread, "the blocking detail read ran on the event loop"
+        await assert_loop_runs_callbacks()
+        assert not task.done()
+    finally:
+        gate.release.set()
+    assert await asyncio.wait_for(task, SAFETY_TIMEOUT) is projected
     assert worker_threads
     assert all(thread != loop_thread for thread in worker_threads)
 
@@ -338,9 +344,10 @@ def test_scoped_inventory_reuses_the_cached_client_without_a_validation_probe(mo
 @pytest.mark.asyncio
 async def test_inventory_registry_read_keeps_the_event_loop_alive(monkeypatch):
     manager = InstanceManager.__new__(InstanceManager)
+    gate = WorkerGate(threading.get_ident())
 
     def _slow_registry():
-        time.sleep(0.10)
+        gate.hold()
         return [HOST]
 
     manager.cert_manager = SimpleNamespace(list_clusters=_slow_registry)
@@ -355,13 +362,14 @@ async def test_inventory_registry_read_keeps_the_event_loop_alive(monkeypatch):
     org_scope.set_allowed_clusters({HOST})
     try:
         task = asyncio.create_task(manager.list_all_vms_with_failures())
-        heartbeats = 0
-        for _ in range(5):
-            await asyncio.sleep(0.01)
-            heartbeats += 1
-        assert heartbeats == 5
-        assert not task.done(), "the Vault registry read ran on the event loop"
-        assert await task == (["vm"], [HOST], [])
+        try:
+            await wait_for_thread_event(gate.entered, task=task, what="the registry read")
+            assert gate.thread_id != gate.loop_thread, "the Vault registry read ran on the event loop"
+            await assert_loop_runs_callbacks()
+            assert not task.done()
+        finally:
+            gate.release.set()
+        assert await asyncio.wait_for(task, SAFETY_TIMEOUT) == (["vm"], [HOST], [])
     finally:
         org_scope.set_allowed_clusters(None)
 
