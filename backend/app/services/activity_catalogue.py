@@ -121,6 +121,9 @@ ACTION_CATEGORIES = {
     "integration.api_key.delete": EventCategory.ADMIN,
     # An integration push moving its creator's unbound cluster into an organization.
     "integration.cluster.rebind": EventCategory.ADMIN,
+    # An Administrator moving a synced organization to another owner key. The owner is the only
+    # key that may sync the organization, write its members and policies and provision for it.
+    "integration.organization.owner.transfer": EventCategory.ADMIN,
     # Add-ons. Installing one hands a third party a credential into an organization, so the
     # grant-shaped actions are high severity and the descriptive ones are not.
     "extension.register": EventCategory.SETTINGS,
@@ -246,6 +249,7 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.api_key.secret.rotate",
     "integration.api_key.delete",
     "integration.cluster.rebind",
+    "integration.organization.owner.transfer",
     "extension.install",
     "extension.install.rescope",
     "extension.install.resume",

@@ -5,8 +5,10 @@ every buyer org with a PROCESSING or COMPLETED order on its plans, with each org
 action field, name null for some users, roles PARTNER, TENANT and USER). provisioning.order.js
 calls provision-tenant-access at purchase with the buyer org's id, name and slug, which creates
 the buyer org under the seller's key before any push names it. The dashboard's
-refresh-organizations pulls orgs from the key's callback. Those three paths, and nothing else,
-write organizations.api_key_id, so they are the count's only inputs.
+refresh-organizations pulls orgs from the key's callback. Those three paths claim an org for a key.
+The only other writer of organizations.api_key_id is an Administrator's owner transfer
+(PUT /integrations/organizations/{id}/owner-key), which moves an org between keys and never
+releases one, so these are the count's only inputs.
 
 A buyer org's PARTNER can add any existing user, the seller's creator included, as PARTNER
 (routes/organizations/members.js invite). Decision 19 says a buyer naming the creator PARTNER can
@@ -341,7 +343,7 @@ def _functions() -> List[Tuple[str, ast.AST]]:
     return found
 
 
-def test_only_three_routes_write_a_claim() -> None:
+def test_only_these_paths_write_a_claim() -> None:
     constructs, assigns, upserts = set(), set(), set()
     for where, fn in _functions():
         for node in ast.walk(fn):
@@ -357,8 +359,11 @@ def test_only_three_routes_write_a_claim() -> None:
     assert constructs == {"routers/integrations.py:_upsert_synced_organizations",
                           "routers/integrations.py:provision_tenant_access"}
     # note: install is an ExtensionInstallation row, not an organization
+    # note: transfer_owner is the Administrator's owner transfer, the one writer outside the three
+    # claim routes. It moves an org from one key to another and never sets the owner back to NULL.
     assert assigns == {("routers/integrations.py:_upsert_synced_organizations", "existing"),
                        ("routers/integrations.py:_upsert_synced_organizations", "slug_owner"),
+                       ("services/integration_key_ownership.py:transfer_owner", "org"),
                        ("services/extension_install.py:install_extension", "install"),
                        ("services/extension_install.py:rotate_credential", "install")}
     assert upserts == {"routers/integrations.py:sync_data", "routers/integrations.py:refresh_organizations"}
@@ -375,7 +380,8 @@ def test_mcp_and_proxy_reach_no_claim_writer() -> None:
                 mcp_imports |= {a.name for a in node.names}
     assert mcp_imports == {"ProxyRequest", "proxy_operation", "validate_api_key"}
     writers = {"_upsert_synced_organizations", "provision_tenant_access", "refresh_organizations", "sync_data",
-               "_upsert_synced_members", "rebind_creator_clusters"}
+               "_upsert_synced_members", "rebind_creator_clusters", "transfer_organization_owner",
+               "transfer_owner"}
     for where, fn in _functions():
         if where.startswith("mcp/") or where in ("routers/integrations.py:proxy_operation",
                                                   "routers/integrations.py:raw_proxy"):

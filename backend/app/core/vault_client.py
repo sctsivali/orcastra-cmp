@@ -100,8 +100,15 @@ def _audit_vault_operation(
 
 
 class VaultClientError(Exception):
-    """Base exception for Vault client errors."""
-    pass
+    """Base exception for Vault client errors.
+
+    `status_code` is Vault's HTTP status when one came back, and None when Vault was never reached.
+    It is what lets a caller tell a document that is not there (404) from a store it could not read.
+    """
+
+    def __init__(self, message: str = "", status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _unique_vault_json_pairs(pairs):
@@ -271,7 +278,7 @@ class VaultClient:
                 logger.info(f"No secret at Vault path {path}")
             else:
                 logger.error(f"Failed to read from Vault path {path}: {e}")
-            raise VaultClientError(f"Vault read failed: {str(e)}")
+            raise VaultClientError(f"Vault read failed: {str(e)}", status_code=status)
     
     def _get_cache_ttl(self, path: str) -> int:
         """
