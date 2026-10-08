@@ -116,7 +116,10 @@ for (const file of walk(ROOT)) {
 // pill: the same value was already a Badge while the list was a feed, and converting the markup
 // is not a reason to start spelling it differently.
 // 17 to 15: the dead components/vm-table.tsx was deleted with its two status pills.
-const BADGE_BASELINE = 15;
+// 15 to 16: the Synced Organizations table (components/integrations/synced-organizations-panel.tsx)
+// has an Owner State column, the owner key's status, so it is the Status exception. The badge is
+// what an administrator scans the list for: which organizations sit behind a key that stopped working.
+const BADGE_BASELINE = 16;
 // A ratchet, not a ban. The remaining occurrences live on chart, console and dialog-form
 // surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
 // fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those

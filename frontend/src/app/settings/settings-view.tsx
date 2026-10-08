@@ -11,6 +11,7 @@ import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
 import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
 import { PersonalizationSettings } from "@/components/personalization-settings";
 import { IntegrationsSettings } from "@/components/integrations-settings";
+import { SyncedOrganizationsPanel } from "@/components/integrations/synced-organizations-panel";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
@@ -188,6 +189,9 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         {isPartner && (
         <TabsContent value="integrations" className="space-y-6">
           <IntegrationsSettings />
+          {/* Which key owns each synced organization. Only the owner syncs it, so an owner that
+              stopped working freezes it, and this is where an administrator moves it. */}
+          <SyncedOrganizationsPanel />
           {/* The consent that decides whether the desktop and guest-access capabilities on those
               keys do anything. It stays a card of its own rather than a switch inside the create
               dialog: it is one standing decision per organization, read on every call and shared
