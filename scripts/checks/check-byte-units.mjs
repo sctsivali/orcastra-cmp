@@ -199,6 +199,7 @@ const backendByteFiles = [
   "backend/app/routers/cluster_members.py",
   "backend/app/routers/monitoring.py",
   "backend/app/services/monitoring_history.py",
+  "backend/app/services/monitoring_history_store.py",
   "backend/app/services/monitoring_usage.py",
   "backend/app/services/monitoring_sweep.py",
   "backend/app/core/host_detail.py",

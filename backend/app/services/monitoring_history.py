@@ -8,6 +8,8 @@ note: network is a rate. A point used to carry the sum of every sampled instance
 counters, and an instance entering the sample added its whole history to that sum, which the
 chart drew as a spike. Points now carry the fleet's bytes per second, and their per-Cluster
 entries carry the same so a Postgres reload can rebuild the fleet figure.
+
+The points themselves are stored and read by services/monitoring_history_store.py.
 """
 
 import logging
@@ -112,7 +114,8 @@ def build_point(
     }
 
 
-def _parse(timestamp: Any) -> Optional[datetime]:
+def parse_timestamp(timestamp: Any) -> Optional[datetime]:
+    """A point's timestamp as an aware datetime (naive reads as UTC), or None when unreadable."""
     if isinstance(timestamp, datetime):
         parsed = timestamp
     elif isinstance(timestamp, str):
@@ -123,43 +126,6 @@ def _parse(timestamp: Any) -> Optional[datetime]:
     else:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _first_at_or_after(history: Sequence[Dict[str, Any]], cutoff: datetime) -> int:
-    for index, point in enumerate(history):
-        stamp = _parse(point.get("timestamp"))
-        if stamp is not None and stamp >= cutoff:
-            return index
-    return len(history)
-
-
-def append_point(
-    history: List[Dict[str, Any]], point: Dict[str, Any], *, now: Optional[datetime] = None
-) -> List[Dict[str, Any]]:
-    """Append and drop what fell out of the 24-hour window; the count cap stays as a backstop."""
-    history.append(point)
-    cutoff = (now or datetime.now(timezone.utc)) - HISTORY_RETENTION
-    start = _first_at_or_after(history, cutoff)
-    if start:
-        history = history[start:]
-    if len(history) > HISTORY_MAX_POINTS:
-        history = history[-HISTORY_MAX_POINTS:]
-    return history
-
-
-def read_window(
-    history: Sequence[Dict[str, Any]],
-    *,
-    window_seconds: Optional[int],
-    points: Optional[int],
-    now: Optional[datetime] = None,
-) -> List[Dict[str, Any]]:
-    """The points inside the window, or the last `points` for the legacy count parameter."""
-    if window_seconds is None and points is not None:
-        return list(history[-points:])
-    seconds = window_seconds or DEFAULT_WINDOW_SECONDS
-    cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=seconds)
-    return list(history[_first_at_or_after(history, cutoff):])
 
 
 def node_rates(nodes: Any) -> Tuple[Optional[float], Optional[float]]:

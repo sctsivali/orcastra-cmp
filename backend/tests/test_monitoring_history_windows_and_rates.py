@@ -1,54 +1,20 @@
-"""The monitoring chart's history: time windows, network as a rate, unknown CPU as a gap."""
+"""The monitoring chart's history: network as a rate, unknown CPU as a gap.
+
+Window selection and the 24-hour retention live in the store; test_monitoring_history_store.py
+pins them.
+"""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.models.schemas import MetricsHistoryPoint, VMInfo
 from app.services import metrics_history_service
 from app.services.lxd.instance import _vm_info_from_row
-from app.services.monitoring_history import (
-    append_point,
-    build_point,
-    node_rates,
-    read_window,
-)
+from app.services.monitoring_history import build_point, node_rates
 from app.services.monitoring_usage import read_instance_usage
 from tests._monitoring_usage_fakes import node, row
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
-
-
-def _points(spacing_s: int, count: int):
-    return [
-        {"timestamp": (NOW - timedelta(seconds=spacing_s * (count - 1 - i))).isoformat(), "i": i}
-        for i in range(count)
-    ]
-
-
-def test_a_window_selects_by_time_whatever_the_cadence():
-    """At one point per 30 s, "5m" is ten points, not sixty."""
-    history = _points(30, 200)
-
-    selection = read_window(history, window_seconds=300, points=None, now=NOW)
-
-    assert len(selection) == 11
-    assert selection[-1] is history[-1]
-
-
-def test_the_legacy_points_parameter_still_counts():
-    history = _points(30, 200)
-
-    assert len(read_window(history, window_seconds=None, points=60, now=NOW)) == 60
-
-
-def test_append_keeps_24_hours_and_drops_the_rest():
-    history = _points(60, 60 * 30)  # 30 hours at one a minute
-
-    kept = append_point(history, {"timestamp": NOW.isoformat()}, now=NOW)
-
-    oldest = datetime.fromisoformat(kept[0]["timestamp"])
-    assert NOW - oldest <= timedelta(hours=24)
-    assert kept[-1]["timestamp"] == NOW.isoformat()
 
 
 def _usages(vms):

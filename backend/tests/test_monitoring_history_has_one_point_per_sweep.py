@@ -9,13 +9,13 @@ import asyncio
 from typing import Any
 
 from app.routers import monitoring
-from app.services import monitoring_history
 from app.services.monitoring_history import HISTORY_SLOT_SECONDS, claim_history_slot
 from tests.test_monitoring_member_cache_generation_fences import (
     _DashboardService,
     _GenerationCache,
     _MetadataStore,
     _scoped,
+    _stored_points,
 )
 
 
@@ -77,10 +77,6 @@ def _dashboard(monkeypatch, cache: _GenerationCache, service: Any) -> None:
     asyncio.run(monitoring.get_monitoring_dashboard(lxd_service=service, fresh=True))
 
 
-def _history_writes(cache: _GenerationCache) -> list:
-    return [write for write in cache.writes if write[0] == monitoring_history.HISTORY_NAMESPACE]
-
-
 def test_two_sweeps_inside_one_slot_write_one_point(monkeypatch):
     monkeypatch.setattr(monitoring, "_last_history_store_times", {})
     cache = _GenerationCache()
@@ -88,7 +84,7 @@ def test_two_sweeps_inside_one_slot_write_one_point(monkeypatch):
     _dashboard(monkeypatch, cache, _DashboardService(cache, advance=False))
     _dashboard(monkeypatch, cache, _DashboardService(cache, advance=False))
 
-    assert len(_history_writes(cache)) == 1
+    assert _stored_points(cache) == 1
 
 
 def test_a_sweep_no_cluster_answered_writes_no_point(monkeypatch):
@@ -101,4 +97,4 @@ def test_a_sweep_no_cluster_answered_writes_no_point(monkeypatch):
 
     _dashboard(monkeypatch, cache, _Silent(cache, advance=False))
 
-    assert _history_writes(cache) == [], "an all-zero point reads as an idle fleet"
+    assert _stored_points(cache) == 0, "an all-zero point reads as an idle fleet"

@@ -506,17 +506,21 @@ async def lifespan(app: FastAPI):
     except Exception as journal_err:
         logger.error("Could not start the task journal follower: %s", journal_err, exc_info=True)
 
-    # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
+    # Fill the admin chart's history before the first read: the previous release's string key
+    # once, then what Postgres holds that the store lacks. Both merge by timestamp, so neither
+    # can overwrite a point the collector already wrote.
     try:
-        from app.services.metrics_history_service import load_metrics_history
         from app.core.cache import get_cache_manager
-        history = await load_metrics_history(points=8640, scope="all")
-        if history:
-            cache = get_cache_manager()
-            cache.set("monitoring_history", "monitoring:history:scope=all", history, ttl=86400)
-            logger.info(f"Hydrated metrics cache from DB ({len(history)} points)")
+        from app.routers.monitoring import COLLECTED_SCOPE_KEY
+        from app.services.monitoring_history import history_key
+        from app.services.monitoring_history_store import hydrate_from_postgres, import_previous_history
+
+        cache = get_cache_manager()
+        admin_history = history_key(COLLECTED_SCOPE_KEY)
+        await import_previous_history(cache, admin_history)
+        await hydrate_from_postgres(cache, admin_history)
     except Exception as hydrate_err:
-        logger.debug(f"Metrics cache hydration skipped: {hydrate_err}")
+        logger.warning("Monitoring history refill skipped at startup: %s", hydrate_err)
     
     # Start session tracker cleanup loop
     try:

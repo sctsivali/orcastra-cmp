@@ -12,7 +12,7 @@ cleanup task that runs alongside the collector.
 import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, delete, func
 
@@ -89,9 +89,11 @@ async def persist_metrics_snapshot(
 async def load_metrics_history(
     points: int = 60,
     scope: str = "all",
+    since: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Load the most recent *points* snapshots from PostgreSQL.
+    Load the most recent *points* snapshots from PostgreSQL, collected at or after *since*
+    when given.
 
     Returns dicts matching the MetricsHistoryPoint schema so the
     endpoint can wrap them in Pydantic models directly.
@@ -102,12 +104,10 @@ async def load_metrics_history(
     try:
         async with async_session_maker() as db:
             # subquery: pick the N most recent rows (DESC), then re-order ASC
-            stmt = (
-                select(MetricsSnapshot)
-                .where(MetricsSnapshot.scope == scope)
-                .order_by(MetricsSnapshot.collected_at.desc())
-                .limit(points)
-            )
+            stmt = select(MetricsSnapshot).where(MetricsSnapshot.scope == scope)
+            if since is not None:
+                stmt = stmt.where(MetricsSnapshot.collected_at >= since)
+            stmt = stmt.order_by(MetricsSnapshot.collected_at.desc()).limit(points)
             result = await db.execute(stmt)
             rows = list(result.scalars().all())
 
