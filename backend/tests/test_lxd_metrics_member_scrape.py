@@ -156,3 +156,16 @@ def test_an_unrecognisable_member_is_never_read(cache):
 
     assert member_metrics(_client(metrics), "c", "../etc", deadline=_deadline()) is None
     assert metrics.calls == [] and cache.entries == {}
+
+
+def test_a_member_that_times_out_is_not_asked_again_for_two_sweeps(cache):
+    from requests import exceptions as requests_exc
+
+    metrics = _Metrics(error=requests_exc.ReadTimeout("read timed out"))
+
+    assert member_metrics(_client(metrics), "c", "none", deadline=_deadline()) is None
+    assert member_metrics(_client(metrics), "c", "none", deadline=_deadline()) is None
+
+    assert len(metrics.calls) == 1
+    assert cache.ttls[(MEMBER_CACHE_NAMESPACE, "c:none")] == 120
+    assert metrics_scrape.NEGATIVE_TTL_SECONDS["timeout"] == 30, "a project read keeps its 30 s"
