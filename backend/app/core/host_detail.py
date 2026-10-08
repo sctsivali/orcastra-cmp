@@ -24,12 +24,17 @@ from app.core.task_scope import Tier
 HOST_DETAIL_TIERS = frozenset({"admin", "partner"})
 # Pool config a Tenant may read: sizes, never a device, a path or a remote pool name.
 TENANT_POOL_CONFIG_KEYS = frozenset({"size", "volume.size"})
-# Instance and profile config a Tenant may read: limits, the image, boot and snapshot settings, the
-# base image and the instance's own MAC addresses. Everything else is dropped: raw.*, idmap and other
-# volatile host state describe the host, and cloud-init, user.* and environment can carry another
-# party's secrets.
-TENANT_CONFIG_PREFIXES = ("limits.", "image.", "boot.", "snapshots.")
-TENANT_CONFIG_KEYS = frozenset({"security.secureboot", "volatile.base_image"})
+# Instance and profile config a Tenant may read: limits, the image's identity, boot and snapshot
+# settings, the base image and the instance's own MAC addresses. Everything else is dropped: raw.*,
+# idmap and other volatile host state describe the host, and cloud-init, user.* and environment can
+# carry another party's secrets. note: image.* is free-form like user.*, so only the properties an
+# image itself carries pass, never a prefix; limits., boot. and snapshots. are keys LXD validates.
+TENANT_CONFIG_PREFIXES = ("limits.", "boot.", "snapshots.")
+TENANT_CONFIG_KEYS = frozenset({
+    "security.secureboot", "volatile.base_image",
+    "image.architecture", "image.description", "image.label", "image.os", "image.release",
+    "image.serial", "image.type", "image.variant", "image.version",
+})
 _INSTANCE_MAC = re.compile(r"volatile\.[^.]+\.hwaddr")
 # Device fields a Tenant may read, by device type; any other type keeps only its type. A device keeps
 # its name either way, since the UI tells an instance's own devices from inherited ones by name.
@@ -62,9 +67,11 @@ def tenant_config(config: Mapping[str, Any]) -> dict:
 def tenant_device(device: Mapping[str, Any]) -> dict:
     kind = device.get("type")
     kept = {key: value for key, value in device.items() if key in TENANT_DEVICE_FIELDS.get(kind, _TYPE_ONLY)}
-    # note: a disk's source names a volume when the disk sits on a pool, and a host path otherwise.
-    if kind == "disk" and device.get("pool") and "source" in device:
-        kept["source"] = device["source"]
+    # note: a disk's source names a volume when the disk sits on a pool, and a host path otherwise;
+    # an absolute source is dropped even beside a pool, whatever LXD would make of it.
+    source = device.get("source")
+    if kind == "disk" and device.get("pool") and isinstance(source, str) and not source.startswith("/"):
+        kept["source"] = source
     return kept
 
 
