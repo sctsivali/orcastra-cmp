@@ -1390,6 +1390,9 @@ async def update_cluster_location(
             logger.warning(f"No existing metadata for cluster {cluster_id}, creating fresh")
             existing_metadata = {"endpoint": "", "display_name": cluster_id, "type": "LXD"}
         
+        # note: copied before the update below, so the audit event can say what it replaced.
+        previous = existing_metadata.get("location")
+        previous_location = dict(previous) if isinstance(previous, dict) else {}
         # Update location in metadata. A catalogue region is stored as the catalogue has it,
         # whatever name or coordinates the request carried.
         location_data = get_region_catalog().canonical_location(request.location.model_dump(exclude_none=True))
@@ -1431,7 +1434,9 @@ async def update_cluster_location(
                 "region_name": location_data["region_name"],
                 "city": location_data["city"],
                 "zone_updated_to": new_zone,
-            }
+            },
+            before_state=previous_location,
+            after_state=location_data,
         )
         
         logger.info(f"Updated location for cluster {cluster_id}: {location_data['region_name']}, {location_data['city']} (zone set to: {new_zone})")
