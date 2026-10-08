@@ -17,7 +17,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.core import dependencies, rbac, rbac_cache
+from app.core import dependencies, rbac
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.database import get_db
 from app.core.org_scope import org_scope_dependency
@@ -80,11 +80,6 @@ def keys(surface: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[str, 
     vault.store[_FakeVault._path(PLAIN, "secret")] = {"hash": SECRETS[1], "raw": SECRETS[0]}
     surface["denials"] = _RecordingLogger()
     monkeypatch.setattr(rbac, "activity_logger", surface["denials"])
-
-    def _no_cache() -> None:
-        raise RuntimeError("no rbac cache in this test")
-
-    monkeypatch.setattr(rbac_cache, "get_rbac_cache", _no_cache)
 
     def scope(user: AuthenticatedUser, clusters: Optional[set] = None) -> None:
         allowed = None if user in (ADMIN, ALIAS_ADMIN) else (clusters or {"nuc1"})

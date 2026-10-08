@@ -25,7 +25,7 @@ network_acls.py is absent on purpose. It caches nothing, so it has nothing to in
 EXEMPT = {
     # Pulls the organization roster from OrcaHub. The only thing this module caches in
     # api_responses is the API-key list (`integrations:api_keys:list*`), which a roster
-    # refresh does not touch. Organization scope has its own cache in core/rbac_cache.py.
+    # refresh does not touch.
     "refresh_organizations",
     # POST only because it takes a key id and secret in the body. It validates and returns,
     # it does not mutate anything.

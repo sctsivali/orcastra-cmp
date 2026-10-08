@@ -7,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import JSON, MetaData, select
 
-from app.core import rbac_cache
 from app.core.auth import AuthenticatedUser
 from app.models.db_models import (
     Organization,
@@ -19,17 +18,6 @@ from app.models.db_models import (
 )
 from app.routers import tenant_access
 from tests._sqlite_session import AsyncSessionFacade, sqlite_session
-
-
-class MemoryRoleCache:
-    def __init__(self) -> None:
-        self.roles: dict[str, dict] = {}
-
-    def get_user_roles(self, user_id: str) -> dict | None:
-        return self.roles.get(user_id)
-
-    def set_user_roles(self, user_id: str, roles: dict) -> None:
-        self.roles[user_id] = roles
 
 
 @dataclass
@@ -50,8 +38,6 @@ def actor(email: str, *roles: str) -> AuthenticatedUser:
 
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch):
-    cache = MemoryRoleCache()
-    monkeypatch.setattr(rbac_cache, "get_rbac_cache", lambda: cache)
     db = sqlite_session(
         Organization, OrganizationMember, OrganizationCluster,
         TenantAccessPolicy, TenantPolicyAssignment,

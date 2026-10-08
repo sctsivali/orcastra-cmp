@@ -13,10 +13,8 @@ Authentik group naming convention:
 """
 
 import logging
-from contextlib import contextmanager
-from contextvars import ContextVar
 from enum import Enum
-from typing import Iterator, Optional
+from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -177,48 +175,15 @@ def roles_for_group_names(group_names: list[str]) -> list[Role]:
     return _resolve_roles_uncached(AuthenticatedUser(user_id="", groups=list(group_names)))
 
 
-# important: REST trusts the shared per-user role cache over a token's groups. A long-lived socket
-# re-checking its scope with the groups its ticket was minted with must neither read that cache
-# (another writer's roles are not this session's) nor write it (stale groups would then outrank a
-# fresh token on REST), so inside this block roles come from the groups alone.
-# note: the flag follows tasks and asyncio.to_thread, which copy the context, but not
-# loop.run_in_executor; keep that path off executors, or copy the context into them.
-_ROLES_FROM_GROUPS_ONLY: ContextVar[bool] = ContextVar("rbac_roles_from_groups_only", default=False)
-
-
-@contextmanager
-def roles_from_groups_only() -> Iterator[None]:
-    """Resolve roles from the caller's groups only, bypassing the shared cache, for this context."""
-    token = _ROLES_FROM_GROUPS_ONLY.set(True)
-    try:
-        yield
-    finally:
-        _ROLES_FROM_GROUPS_ONLY.reset(token)
-
-
 def resolve_roles(user: AuthenticatedUser) -> list[Role]:
-    """Map Authentik groups to internal Role values with caching."""
-    if _ROLES_FROM_GROUPS_ONLY.get():
-        return _resolve_roles_uncached(user)
-    try:
-        from app.core.rbac_cache import get_rbac_cache
-        cache = get_rbac_cache()
-        cached = cache.get_user_roles(user.user_id)
-        if cached is not None:
-            return [Role(r) for r in cached.get("roles", [])]
-    except Exception:
-        pass
+    """Map the caller's Authentik groups to roles.
 
-    roles = _resolve_roles_uncached(user)
-
-    try:
-        from app.core.rbac_cache import get_rbac_cache
-        cache = get_rbac_cache()
-        cache.set_user_roles(user.user_id, {"roles": [r.value for r in roles]})
-    except Exception:
-        pass
-
-    return roles
+    important: computed from the token's own groups on every call, never cached. A per-user cache in
+    Redis used to outrank the token for a minute: its entries were unsigned, so anyone able to write
+    to Redis could give themselves Admin, and a demoted user kept the old role until it expired. The
+    mapping is a few dictionary lookups, so there is nothing to save by caching it.
+    """
+    return _resolve_roles_uncached(user)
 
 
 def get_highest_role(roles: list[Role]) -> Role:

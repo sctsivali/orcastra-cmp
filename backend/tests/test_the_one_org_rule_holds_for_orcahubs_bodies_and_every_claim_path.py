@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from sqlalchemy import JSON, MetaData, select
 from sqlalchemy.dialects.postgresql import JSONB
 
-from app.core import rbac, rbac_cache
+from app.core import rbac
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.org_scope import org_scope_dependency
@@ -286,10 +286,6 @@ def refresh_app(db: Any) -> FastAPI:
     return app
 
 
-def _no_rbac_cache() -> None:
-    raise RuntimeError("no rbac cache in this test")
-
-
 CALLBACKS = [
     ("a_flat_organizations_list", 200, {"organizations": [{"id": BUYER1, "name": "Buyer Co", "slug": "buyer-co"}]},
      200, [("acme-cloud", K_PARTNER), ("buyer-co", K_PARTNER)], None, ("count", 2)),
@@ -315,7 +311,6 @@ async def test_a_refresh_counts_only_what_it_claimed(
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
     monkeypatch.setattr(integrations, "get_current_allowed_clusters", lambda: {SALE})
     monkeypatch.setattr(rbac, "activity_logger", _RecordingLogger())
-    monkeypatch.setattr(rbac_cache, "get_rbac_cache", _no_rbac_cache)
     asked: List[str] = []
 
     def _callback(request: httpx.Request) -> httpx.Response:
