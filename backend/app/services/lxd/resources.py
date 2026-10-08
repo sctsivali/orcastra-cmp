@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 import pylxd
 
 from app.models.schemas import (
+    NodeResources,
     ResourceUsage,
     NodeStatus,
 )
@@ -22,7 +23,7 @@ from .storage_model import PoolReading, summarise_cluster_storage
 from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .exceptions import LXDOperationError
-from .freshness import LiveRead, read_resources
+from .freshness import LiveRead, read_resources, resources_failure
 from app.services.lxd.project_scope import list_instance_records
 from app.services.lxd.cpu_allocation import allocated_cpu, allocation_ratio, clamp_available
 from app.core.lxd_path import safe_segment
@@ -167,12 +168,14 @@ class ResourceManager:
         client: pylxd.Client,
         node_name: str,
         resources: Optional[LiveRead] = None,
+        instances: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """Get available (unused) resources for a specific node.
 
         Pass `resources` when the caller has already read the body this request. That is what
         keeps a node-status check at one round trip instead of three: CPU/memory, the hardware
-        profile and the GPU inventory all want the same body.
+        profile and the GPU inventory all want the same body. `instances` does the same for the
+        instance list the CPU allocation is counted from.
         """
         try:
             # get system resources
@@ -199,7 +202,8 @@ class ResourceManager:
             cpu_used = 0
             try:
                 # recursion=1: .status and .config below are lazily synced otherwise.
-                instances, _ = list_instance_records(client)
+                if instances is None:
+                    instances, _ = list_instance_records(client)
                 cpu_used = allocated_cpu(instances, member=member).cores
                 logger.debug(f"CPU on {node_name}: {cpu_total} threads, {cpu_used} allocated")
             except Exception as e:
@@ -311,7 +315,8 @@ class ResourceManager:
             host_info = client.host_info
             # The host answered. Everything below can still fail, but from here on a failure
             # means "answered and refused us", not "never answered", and that is the whole
-            # difference between Pending Trust and Offline.
+            # difference between Pending Trust and Offline. The one exception is the resources
+            # read, whose failure resources_failure names: only a refusal stays a refusal.
             status.reachable = True
             
             # Don't set connected=True yet, need to verify we can actually access resources
@@ -387,18 +392,29 @@ class ResourceManager:
                 # would double the fan-out cost per cluster and let the memory figure and the
                 # GPU inventory come from two different samples of the same host.
                 live = read_resources(client, node_name)
-                resources_data = self.get_node_resources(client, node_name, resources=live)
 
-                # GPU capacity, usage and card detail, all from the canonical inventory.
-                gpu_inv = GpuInventory.empty()
-                try:
-                    gpu_inv = build_gpu_inventory(
-                        live.body, list_instance_records(client)[0]
+                def single_host() -> NodeResources:
+                    # note: one instance list for the CPU allocation and the GPU inventory, and
+                    # none at all for a cluster whose members aggregate: that answer replaced
+                    # this one, so its two cluster-wide lists were read and thrown away.
+                    records: Optional[List[Any]] = None
+                    try:
+                        records = list_instance_records(client)[0]
+                    except Exception as list_err:
+                        logger.debug(f"Could not list instances on {node_name}: {list_err}")
+                    resources_data = self.get_node_resources(
+                        client, node_name, resources=live, instances=records
                     )
-                except Exception as gpu_err:
-                    # A GPU read failure must not zero the node's CPU and memory.
-                    logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
-                
+                    gpu_inv = GpuInventory.empty()
+                    try:
+                        gpu_inv = build_gpu_inventory(
+                            live.body, records if records is not None else list_instance_records(client)[0]
+                        )
+                    except Exception as gpu_err:
+                        # A GPU read failure must not zero the node's CPU and memory.
+                        logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
+                    return build_node_resources(resources_data, gpu_inv)
+
                 # Aggregate across members whenever the host is clustered. Gating this on the
                 # "microcloud" label under-reported every plain LXD cluster's capacity, since
                 # member resources are a property of clustering, not of the distribution.
@@ -408,7 +424,7 @@ class ResourceManager:
                         aggregated_resources = aggregate_microcloud_resources(
                             client=client,
                             node_name=node_name,
-                            base_resources=resources_data,
+                            base_resources={},
                         )
                         if aggregated_resources:
                             status.resources = aggregated_resources
@@ -419,21 +435,20 @@ class ResourceManager:
                                       f"of {aggregated_resources.gpu_cards_total} cards")
                         else:
                             # Fallback to single node resources if aggregation fails
-                            status.resources = build_node_resources(resources_data, gpu_inv)
+                            status.resources = single_host()
                     except Exception as agg_err:
                         logger.warning(f"Failed to aggregate MicroCloud resources: {agg_err}")
                         # Fallback to single node resources
-                        status.resources = build_node_resources(resources_data, gpu_inv)
+                        status.resources = single_host()
                 else:
                     # Standard LXD node - use single node resources
-                    status.resources = build_node_resources(resources_data, gpu_inv)
+                    status.resources = single_host()
                 # Only set connected=True if we successfully got resources (authenticated)
                 status.connected = True
             except Exception as res_err:
-                # Failed to get resources, likely not authenticated (Forbidden)
                 logger.warning(f"Could not get resources for {node_name}: {res_err}")
                 status.connected = False
-                status.error = f"Not authorized: {str(res_err)}"
+                status.reachable, status.error = resources_failure(res_err)
         
         except Exception as e:
             status.error = str(e)

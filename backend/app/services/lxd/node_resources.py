@@ -6,7 +6,6 @@ built here so a new field can never be added to one path and forgotten on anothe
 """
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pylxd
@@ -16,7 +15,7 @@ from app.services.lxd.cpu_allocation import allocated_cpu, allocation_ratio, cla
 
 from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile, merge_hardware_profiles
-from .member_resources import list_member_pools, read_pool_space
+from .member_reads import members_read_failed, read_members, read_members_list
 from .storage_model import PoolReading, summarise_cluster_storage
 from app.services.lxd.project_scope import list_instance_records
 
@@ -89,55 +88,6 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         # datetime.now() at this line would stamp a 60s-old body as current.
         collected_at=resources_data.get("collected_at"),
     )
-
-
-def _read_member_pools(
-    client: pylxd.Client,
-    node_name: str,
-    member_name: str,
-    degraded_parts: List[str],
-) -> List[PoolReading]:
-    """Every pool on one member, with its space, through the leaves the member panel uses.
-
-    important: a pool that cannot be read is recorded, not skipped. A swallowed failure here
-    answers 200 with a smaller number, and a capacity figure that is quietly a floor is worse
-    than one that says so. Same rule, same words, as services/lxd/member_resources.py.
-    """
-    readings: List[PoolReading] = []
-    try:
-        raw = list_member_pools(client, member_name)
-    except Exception as err:
-        logger.warning("Could not list pools on %s/%s: %s", node_name, member_name, err)
-        degraded_parts.append("storage")
-        return readings
-
-    for entry in raw:
-        if isinstance(entry, dict):
-            name, driver = entry.get("name"), entry.get("driver") or "unknown"
-        elif isinstance(entry, str) and entry:
-            name, driver = entry.rstrip("/").split("/")[-1], "unknown"
-        else:
-            continue
-        if not name:
-            continue
-        try:
-            space = read_pool_space(client, member_name, name)
-        except Exception as err:
-            logger.warning(
-                "Could not read pool %s on %s/%s: %s", name, node_name, member_name, err
-            )
-            degraded_parts.append(f"storage:{name}")
-            continue
-        readings.append(
-            PoolReading(
-                member=member_name,
-                name=name,
-                driver=driver,
-                space_total=space["total"],
-                space_used=space["used"],
-            )
-        )
-    return readings
 
 
 def resources_for_host(
@@ -227,8 +177,12 @@ def aggregate_microcloud_resources(
         
         # Get cluster members using LXD API
         try:
-            response = client.api.cluster.members.get(params={"recursion": 1})
-            response_data = response.json()
+            if members_read_failed(cache, node_name):
+                logger.debug(f"Members of {node_name} failed to answer recently; using the connected member")
+                return None
+            response_data = read_members_list(cache, client, node_name)
+            if response_data is None:
+                return None
             
             # Handle different response formats
             if isinstance(response_data, dict):
@@ -300,99 +254,90 @@ def aggregate_microcloud_resources(
             # Get current server name to identify which member we're connected to
             _current_server = environment.get("server_name", "")
             
-            # Iterate through each online member and aggregate resources
-            for member_data in online_members:
-                member_name = member_data.get("server_name", "unknown")
-                _member_url = member_data.get("url", "")
-                
-                try:
-                    # Query member-specific resources via cluster API
-                    # In LXD clusters, we need to target specific members using `?target=parameter`
-                    # Or we can use `/1.0/resources?target=<member_name>`
-                    try:
-                        # Get resources for this specific member by targeting it
-                        # The LXD API allows targeting specific cluster members
-                        member_resources_response = client.api.resources.get(params={"target": member_name})
-                        member_read_times.append(datetime.now(timezone.utc))
-                        member_resources = member_resources_response.json().get("metadata", {})
-                        
-                        # Extract CPU resources
-                        cpu_info = member_resources.get("cpu", {})
-                        member_cpu_total = cpu_info.get("total", 0)
-                        
-                        # Extract memory resources
-                        memory_info = member_resources.get("memory", {})
-                        member_memory_total = memory_info.get("total", 0)
-                        member_memory_used = memory_info.get("used", 0)
-                        
-                        # GPU capacity and allocation for this member, scoped by
-                        # instance.location so one member's consumers are never counted
-                        # against another member's cards.
-                        member_gpu_inv = build_gpu_inventory(
-                            member_resources, cluster_instances, member=member_name
-                        )
-                        member_hardware.append(
-                            build_hardware_profile(member_resources, member=member_name)
-                        )
-                        member_gpu_total = member_gpu_inv.gpu_total
-                        member_gpu_used = member_gpu_inv.gpu_used
-                        # Card indices stay unique across the cluster
-                        base_index = len(cluster_gpu.cards)
-                        for card in member_gpu_inv.cards:
-                            card.index = base_index + card.index
-                        
-                        # important: pool space is NOT in the /1.0/resources body. This used to
-                        # read `storage.pools`, a key LXD does not send, so every clustered host
-                        # reported zero storage and no test looked. The real block is
-                        # `storage.disks`, which is physical media: raw device capacity double
-                        # counts a mirror and counts disks belonging to no pool. Space exists
-                        # only at /1.0/storage-pools/<pool>/resources?target=<member>, so it is
-                        # read here, per member, through the same leaves the member panel uses.
-                        pool_readings.extend(
-                            _read_member_pools(client, node_name, member_name, degraded_parts)
-                        )
-                        
-                        # For CPU sockets, we'll sum them up (each member has its own sockets)
-                        cpu_sockets_data = cpu_info.get("sockets", [])
-                        cpu_sockets = len(cpu_sockets_data) if isinstance(cpu_sockets_data, list) else 0
-                        
-                        # CPU allocation of the running instances placed on this member, from
-                        # the cluster-wide list fetched once above (one counter for every
-                        # read: cpu_allocation; the inline parser here read the instance-local
-                        # config and counted a profile-inherited limit as one core).
-                        member_cpu_used = 0
-                        try:
-                            member_cpu_used = allocated_cpu(cluster_instances, member=member_name).cores
-                        except Exception as usage_err:
-                            logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
-                        
-                        # Aggregate totals
-                        cluster_gpu = cluster_gpu.merge(member_gpu_inv)
-                        total_cpu_threads += member_cpu_total
-                        total_cpu_used += member_cpu_used
-                        total_cpu_sockets += cpu_sockets
-                        total_memory += member_memory_total
-                        total_memory_used += member_memory_used
-                        
-                        successful_members += 1
-                        logger.debug(
-                            f"Member {member_name}: "
-                            f"CPU capacity={member_cpu_total} hardware threads "
-                            f"({member_cpu_used} vCPUs allocated), "
-                            f"Memory={member_memory_total / 1024 / 1024 / 1024:.1f} GiB "
-                            f"({member_memory_used / 1024 / 1024 / 1024:.1f} GiB used), "
-                            f"GPU={member_gpu_total} compute "
-                            f"of {member_gpu_inv.gpu_cards_total} cards (used={member_gpu_used})"
-                        )
-                        
-                    except Exception as member_api_err:
-                        logger.warning(f"Could not get state for member {member_name}: {member_api_err}")
-                        continue
-                    
-                except Exception as member_err:
-                    logger.warning(f"Failed to process member {member_name}: {member_err}")
+            # important: read side by side and folded here in the members' order, so the totals
+            # and card indices match the one-at-a-time loop this replaced (see member_reads.py).
+            member_names = [member.get("server_name", "unknown") for member in online_members]
+            for read in read_members(client, node_name, member_names):
+                member_name = read.name
+                if read.error is not None:
+                    logger.warning(f"Could not get state for member {member_name}: {read.error}")
                     continue
-            
+                try:
+                    member_read_times.append(read.read_at)
+                    member_resources = read.resources
+
+                    # Extract CPU resources
+                    cpu_info = member_resources.get("cpu", {})
+                    member_cpu_total = cpu_info.get("total", 0)
+
+                    # Extract memory resources
+                    memory_info = member_resources.get("memory", {})
+                    member_memory_total = memory_info.get("total", 0)
+                    member_memory_used = memory_info.get("used", 0)
+
+                    # GPU capacity and allocation for this member, scoped by
+                    # instance.location so one member's consumers are never counted
+                    # against another member's cards.
+                    member_gpu_inv = build_gpu_inventory(
+                        member_resources, cluster_instances, member=member_name
+                    )
+                    member_hardware.append(
+                        build_hardware_profile(member_resources, member=member_name)
+                    )
+                    member_gpu_total = member_gpu_inv.gpu_total
+                    member_gpu_used = member_gpu_inv.gpu_used
+                    # Card indices stay unique across the cluster
+                    base_index = len(cluster_gpu.cards)
+                    for card in member_gpu_inv.cards:
+                        card.index = base_index + card.index
+
+                    # important: pool space is NOT in the /1.0/resources body. This used to
+                    # read `storage.pools`, a key LXD does not send, so every clustered host
+                    # reported zero storage and no test looked. The real block is
+                    # `storage.disks`, which is physical media: raw device capacity double
+                    # counts a mirror and counts disks belonging to no pool. Space exists
+                    # only at /1.0/storage-pools/<pool>/resources?target=<member>, so it is
+                    # read per member, through the same leaves the member panel uses.
+                    pool_readings.extend(read.pools)
+                    degraded_parts.extend(read.degraded)
+
+                    # For CPU sockets, we'll sum them up (each member has its own sockets)
+                    cpu_sockets_data = cpu_info.get("sockets", [])
+                    cpu_sockets = len(cpu_sockets_data) if isinstance(cpu_sockets_data, list) else 0
+
+                    # CPU allocation of the running instances placed on this member, from
+                    # the cluster-wide list fetched once above (one counter for every
+                    # read: cpu_allocation; the inline parser here read the instance-local
+                    # config and counted a profile-inherited limit as one core).
+                    member_cpu_used = 0
+                    try:
+                        member_cpu_used = allocated_cpu(cluster_instances, member=member_name).cores
+                    except Exception as usage_err:
+                        logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
+
+                    # Aggregate totals
+                    cluster_gpu = cluster_gpu.merge(member_gpu_inv)
+                    total_cpu_threads += member_cpu_total
+                    total_cpu_used += member_cpu_used
+                    total_cpu_sockets += cpu_sockets
+                    total_memory += member_memory_total
+                    total_memory_used += member_memory_used
+
+                    successful_members += 1
+                    logger.debug(
+                        f"Member {member_name}: "
+                        f"CPU capacity={member_cpu_total} hardware threads "
+                        f"({member_cpu_used} vCPUs allocated), "
+                        f"Memory={member_memory_total / 1024 / 1024 / 1024:.1f} GiB "
+                        f"({member_memory_used / 1024 / 1024 / 1024:.1f} GiB used), "
+                        f"GPU={member_gpu_total} compute "
+                        f"of {member_gpu_inv.gpu_cards_total} cards (used={member_gpu_used})"
+                    )
+
+                except Exception as member_api_err:
+                    logger.warning(f"Could not get state for member {member_name}: {member_api_err}")
+                    continue
+
             if successful_members == 0:
                 logger.warning(f"No member resources could be aggregated for {node_name}")
                 return None

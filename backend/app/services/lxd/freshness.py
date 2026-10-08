@@ -30,9 +30,10 @@ the client timeout, and connection.py mounts a TimeoutHTTPAdapter that backstops
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import pylxd
+from requests import exceptions as requests_exc
 
 
 @dataclass(frozen=True)
@@ -58,3 +59,22 @@ def read_resources(client: pylxd.Client, cluster_id: str) -> LiveRead:
             f"Resources read for {cluster_id} returned HTTP {response.status_code}"
         )
     return LiveRead(body=response.json()["metadata"], collected_at=collected_at)
+
+
+def resources_failure(error: BaseException) -> Tuple[bool, str]:
+    """(reachable, message) for a resources read that failed after host_info answered.
+
+    important: only a refusal is an authorization problem. Every failure here used to read as
+    "Not authorized", and derive_status turns an answering host without resources into
+    NOT_AUTHORIZED with the trust-add hint, so a busy cluster that let one read time out sent
+    its operator to re-trust a certificate that was fine. A transport failure means the host
+    did not answer this read; any other error means it answered without its resources. Neither
+    is cached as untrusted.
+    """
+    if isinstance(error, (requests_exc.Timeout, requests_exc.ConnectionError)):
+        return False, "Did not answer the resources read in time. It is asked again on the next check."
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    if status in (401, 403):
+        return True, f"Not authorized: {error}"
+    detail = f"HTTP {status}" if status else type(error).__name__
+    return False, f"Answered without its resources ({detail}). It is asked again on the next check."
