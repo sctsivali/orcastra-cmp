@@ -31,14 +31,28 @@ class _Cache:
         return None
 
 
+async def _returns_metadata(_key_id: str, _user: Any, _db: Any) -> Dict[str, Any]:
+    return dict(METADATA)
+
+
+async def _keeps_every_key(_db: Any, _user: Any, keys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return keys
+
+
+async def _owns_nothing(_db: Any, _user: Any, keys: List[Any]) -> List[Any]:
+    return keys
+
+
 @pytest.fixture(autouse=True)
 def vault(monkeypatch):
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
-    monkeypatch.setattr(integrations, "_authorize_api_key", lambda _v, _k: dict(METADATA))
+    monkeypatch.setattr(integrations, "_authorize_api_key", _returns_metadata)
     monkeypatch.setattr(integrations, "get_api_key_from_vault", lambda _v, _k: (dict(METADATA), "h"))
     monkeypatch.setattr(integrations, "list_api_keys_from_vault", lambda _v: [dict(METADATA)])
     monkeypatch.setattr(integrations, "get_user_mappings_from_vault", lambda _v, _k: [])
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: _Cache())
+    monkeypatch.setattr(integrations, "_keys_the_caller_manages", _keeps_every_key)
+    monkeypatch.setattr(integrations, "_with_ownership", _owns_nothing)
 
 
 def _client(groups: List[str]) -> TestClient:

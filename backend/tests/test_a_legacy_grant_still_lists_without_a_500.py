@@ -93,7 +93,12 @@ def test_one_bad_key_does_not_hide_every_other_key(monkeypatch):
     monkeypatch.setattr(mod, "get_current_allowed_clusters", lambda: None)
     monkeypatch.setattr(mod, "get_user_mappings_from_vault", lambda client, key_id: [])
 
-    response = asyncio.run(mod.list_api_keys())
+    from app.core.auth import AuthenticatedUser
+
+    # note: an Admin, so which side manages a key never needs the database. Ownership is not read
+    # either (no session), which leaves its counts null and the list itself untouched.
+    admin = AuthenticatedUser(user_id="a1", email="admin@example.test", groups=["role_admin"])
+    response = asyncio.run(mod.list_api_keys(user=admin, db=None))
 
     assert response.total == 3
     assert [key.id for key in response.keys] == ["oak_good_1", "oak_legacy", "oak_good_2"]

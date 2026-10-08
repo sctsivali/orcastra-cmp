@@ -133,13 +133,13 @@ async def delete(key_id: str, db: Any) -> Any:
 
 async def edit_capabilities(key_id: str, capabilities: List[str]) -> Any:
     return await integrations.update_api_key_capabilities(
-        key_id, integrations.APIKeyCapabilitiesRequest(capabilities=capabilities), None, PARTNER
+        key_id, integrations.APIKeyCapabilitiesRequest(capabilities=capabilities), None, PARTNER, installations()
     )
 
 
 async def edit_permissions(key_id: str, clusters: List[str]) -> Any:
     grants = [integrations.ClusterPermissionRequest(cluster_id=c, permissions=["read"]) for c in clusters]
-    return await integrations.update_api_key_permissions(key_id, grants, None, PARTNER, None)
+    return await integrations.update_api_key_permissions(key_id, grants, None, PARTNER, None, installations())
 
 
 # ── refused ────────────────────────────────────────────────────────────────────────────────────
@@ -360,7 +360,7 @@ async def test_a_user_mapping_on_an_add_on_credential_is_allowed(
         ADDON,
         integrations.UserMappingRequest(external_user_id="u1", external_email="u1@example.test",
                                         cluster_permissions=[]),
-        None, PARTNER,
+        None, PARTNER, installations(),
     )
     assert saved == [(ADDON, mapping)]
 

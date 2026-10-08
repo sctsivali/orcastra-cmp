@@ -74,7 +74,7 @@ from app.core.api_key_expiry import (
     tally_keys,
     utc_isoformat,
 )
-from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
+from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, granted_level
 from app.core.api_key_capabilities import (
     policy_keys_in_config,
     policy_keys_in_raw_body,
@@ -119,7 +119,13 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
+from app.core.org_scope import (
+    get_current_allowed_clusters,
+    get_scope_cache_key,
+    org_scope_dependency,
+    project_is_visible,
+    reconcile_personal_clusters,
+)
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
@@ -128,6 +134,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+from app.services import cluster_parties
 from app.services.integration_roles import apply_upsert_role, may_reconcile, stored_member_role
 from app.services.integration_cluster_rebind import (
     claimed_organization_count,
@@ -2149,27 +2156,144 @@ async def create_api_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
-    """Return an API key's metadata only if it overlaps the caller's clusters.
-
-    important: `list_api_keys` already filters by `cluster_permissions` overlap, but every
-    single-key handler took `key_id` straight from the path and looked it up in Vault with no
-    such check. A caller who learned any key id could read its permissions and user mappings,
-    or revoke and delete it, across organisations. The overlap rule here is the same one the
-    list endpoint uses, so the two surfaces agree.
-    """
-    metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+def _assert_key_in_scope(metadata: Dict[str, Any], allowed: Optional[set[str]]) -> None:
+    """The overlap rule list_api_keys uses. 404 so an out-of-scope id reads as a missing one."""
     if not metadata:
         raise HTTPException(status_code=404, detail="API key not found")
-    allowed = get_current_allowed_clusters()
-    if allowed is not None:
-        perms = metadata.get("cluster_permissions", []) or []
-        key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
-        if not (key_clusters & allowed):
-            # Same shape as a missing key, so an out-of-scope id cannot be probed apart from a
-            # non-existent one.
-            raise HTTPException(status_code=404, detail="API key not found")
+    if allowed is None:
+        return
+    perms = metadata.get("cluster_permissions", []) or []
+    key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
+    if not (key_clusters & allowed):
+        raise HTTPException(status_code=404, detail="API key not found")
+
+
+def _read_api_key_metadata_blocking(key_id: str) -> Dict[str, Any]:
+    """A key's metadata document, or {} when it cannot be read. The cached /metadata path only."""
+    try:
+        return get_vault_integrations_client().vault_read(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+        ) or {}
+    except Exception:
+        return {}
+
+
+async def _run_org_keys(db: AsyncSession, email: str) -> set[str]:
+    """The integration keys on this user's side (cluster_parties.side_keys).
+
+    note: not "every key an organization they run carries". A buyer's founder holds a partner row
+    in a buyer organization that carries the seller's key, so that reading would hand the founder
+    the seller's key. A key counts through an organization the user created, or through the key's
+    home organization when the user is a partner there.
+    """
+    return await cluster_parties.run_org_keys(db, email)
+
+
+def _key_clusters(metadata: Dict[str, Any]) -> set[str]:
+    return {
+        str(p.get("cluster_id") or "")
+        for p in metadata.get("cluster_permissions", []) or []
+        if isinstance(p, dict)
+    }
+
+
+async def _keys_the_caller_manages(
+    db: AsyncSession, user: AuthenticatedUser, keys: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """The keys, out of ones already in the caller's cluster scope, that this user may manage.
+
+    important: cluster overlap alone let a Partner on a cluster bound to another organization read,
+    revoke and delete that organization's keys, which breaks its OrcaHub sync and provisioning. A
+    key granting a cluster another party holds is managed only by its creator, or by a caller the
+    key is on the side of (_run_org_keys). An Admin, and a key whose clusters are all the caller's
+    own, keep the old rule.
+
+    note: "another party" is services/cluster_parties.py, decided by party. The partner project
+    bound in core/org_scope.py counts bindings instead; the module docstring says why the two differ.
+    """
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+
+    if not keys or get_highest_role(resolve_roles(user)) == Role.ADMIN:
+        return keys
+    email = (user.email or "").lower()
+    mine = [k for k in keys if str(k.get("created_by") or "").lower() == email]
+    rest = [k for k in keys if str(k.get("created_by") or "").lower() != email]
+    if not rest:
+        return keys
+    held = await _clusters_held_by_another_party(
+        db, user.email, set().union(*(_key_clusters(k) for k in rest))
+    )
+    linked = await _run_org_keys(db, user.email) if held else set()
+    kept = [k for k in rest if not (_key_clusters(k) & held) or str(k.get("id") or "") in linked]
+    return [k for k in keys if k in mine or k in kept]
+
+
+async def _authorize_api_key(key_id: str, user: AuthenticatedUser, db: AsyncSession) -> Dict[str, Any]:
+    """Return an API key's metadata only if the caller may manage it, else 404.
+
+    important: `list_api_keys` filters by cluster overlap and by who manages the key, and every
+    single-key handler takes `key_id` straight from the path, so both apply here too and the two
+    surfaces agree. The read runs in a thread (asyncio.to_thread keeps the request's org scope)
+    because Vault answers synchronously.
+    """
+    metadata = await asyncio.to_thread(_read_api_key_metadata_blocking, key_id)
+    _assert_key_in_scope(metadata, get_current_allowed_clusters())
+    if not await _keys_the_caller_manages(db, user, [metadata]):
+        raise HTTPException(status_code=404, detail="API key not found")
     return metadata
+
+
+async def _clusters_held_by_another_party(
+    db: AsyncSession, email: str, cluster_ids: set[str]
+) -> set[str]:
+    """Clusters some holder of which is not on the caller's side. See services.cluster_parties."""
+    return await cluster_parties.clusters_held_by_another_party(db, email, cluster_ids)
+
+
+async def _refuse_a_grant_past_the_project_bound(
+    db: AsyncSession,
+    caller_email: str,
+    grants: List[ClusterPermission],
+    already_granted: Optional[Dict[str, Tuple[set[str], int]]] = None,
+) -> None:
+    """A Partner may not hold a key reaching more of a cluster than they can see there.
+
+    important: on this line only a secret rotation asks it, of a caller who did not mint the key.
+    On a cluster another party also holds, a non-minting Partner who manages a key could otherwise
+    take the secret of one that names that party's project, or '*'. A cluster held only by the
+    caller's side is unchanged, so the '*' grant an OrcaHub connection carries still rotates there.
+    What a key already holds on a cluster (its projects and its permission level) is carried over
+    when given. Admin is not bound.
+    """
+    if get_current_allowed_clusters() is None:
+        return
+    held_elsewhere = await _clusters_held_by_another_party(
+        db, caller_email, {grant.cluster_id for grant in grants}
+    )
+    kept = already_granted or {}
+
+    def carried_over(grant: ClusterPermission, project: str) -> bool:
+        projects, level = kept.get(grant.cluster_id, (set(), -1))
+        return project in projects and granted_level(grant.permissions) <= level
+
+    refused = sorted({
+        f"{grant.cluster_id}/{project}"
+        for grant in grants
+        if grant.cluster_id in held_elsewhere
+        for project in grant.projects
+        if not carried_over(grant, project)
+        and (project == "*" or not project_is_visible(grant.cluster_id, project))
+    })
+    if refused:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Not permitted to grant these projects: {refused}. Another organization also "
+                "holds that cluster, so a key may name only the projects you can see there. "
+                "A project the key already holds is kept at its current permission level. "
+                "An administrator can issue a wider key."
+            ),
+        )
 
 
 async def _refuse_ending_an_owner(
@@ -2244,7 +2368,7 @@ async def list_api_keys(
         cached_data = None if fresh else cache.get("api_responses", cache_key)
 
         if cached_data is None:
-            all_metadata = list_api_keys_from_vault(vault_client)
+            all_metadata = await asyncio.to_thread(list_api_keys_from_vault, vault_client)
             
             # Filter by org scope: non-admin users only see keys
             # whose cluster_permissions overlap with their allowed clusters
@@ -2264,11 +2388,13 @@ async def list_api_keys(
             # below the cache, so every request paid a Vault LIST plus one read per mapping
             # for every visible key even on a cache hit. The cache covered the metadata and
             # nothing else, which is why the endpoint stayed slow no matter how warm it was.
-            user_counts = {
-                meta["id"]: len(get_user_mappings_from_vault(vault_client, meta["id"]))
-                for meta in all_metadata
-                if isinstance(meta, dict) and meta.get("id")
-            }
+            user_counts = await asyncio.to_thread(
+                lambda: {
+                    meta["id"]: len(get_user_mappings_from_vault(vault_client, meta["id"]))
+                    for meta in all_metadata
+                    if isinstance(meta, dict) and meta.get("id")
+                }
+            )
 
             cache.set(
                 "api_responses",
@@ -2279,6 +2405,11 @@ async def list_api_keys(
         else:
             all_metadata = cached_data.get("metadata", [])
             user_counts = cached_data.get("user_counts", {})
+        # note: after the cache, because the cached list is shared by everyone with the same
+        # cluster scope while who manages a key depends on the caller.
+        all_metadata = await _keys_the_caller_manages(
+            db, user, [m for m in all_metadata if isinstance(m, dict)]
+        )
         
         # Process and count
         # important: an expired key is not active. It was counted here, so the dashboard
@@ -2325,12 +2456,11 @@ async def get_api_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Get API key details."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    metadata = await _authorize_api_key(key_id, user, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         
         (info,) = await _with_ownership(db, user, [_key_info(metadata, len(user_mappings))])
         return info
@@ -2354,10 +2484,11 @@ async def update_api_key_permissions(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update API key cluster permissions."""
     # important: before the cluster reads below. An add-on installation owns its grant.
-    refuse_grant_edit(_authorize_api_key(get_vault_integrations_client(), key_id))
+    refuse_grant_edit(await _authorize_api_key(key_id, _rbac, db))
 
     # important: creation validates the requested clusters against the caller's own set
     # (see create_api_key), and this path did not, so a partner could create a key scoped to
@@ -2377,7 +2508,7 @@ async def update_api_key_permissions(
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
+        metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Update permissions
         metadata["cluster_permissions"] = [p.model_dump() for p in permissions]
@@ -2395,7 +2526,7 @@ async def update_api_key_permissions(
         # cluster_permissions keep authorising proxy calls until its TTL expires.
         evict_api_key_cache(key_id)
 
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         return _key_info(metadata, len(user_mappings))
 
     except HTTPException:
@@ -2445,11 +2576,11 @@ async def update_api_key_capabilities(
     one that changes. The cache is evicted because the old capability set would otherwise keep
     authorising requests until its TTL expired.
     """
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
-    _authorize_api_key(vault_client, key_id)
 
     try:
-        metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+        metadata, _secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         refuse_grant_edit(metadata)
         previous = dict(metadata)
         was_legacy = "capabilities" not in metadata
@@ -2479,7 +2610,7 @@ async def update_api_key_capabilities(
             action=CAPABILITIES_UPDATE_ACTION, key_id=key_id, metadata=metadata, previous=previous
         )
 
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         return _key_info(metadata, len(user_mappings))
     except HTTPException:
         raise
@@ -2501,11 +2632,11 @@ async def revoke_api_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke an API key (immediate revocation)."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
+        metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
 
         # important: after the authorization above, so an id outside the caller's reach is still
         # 404, and inside the key's ownership lock, so a transfer to this key cannot land between
@@ -2540,7 +2671,7 @@ async def revoke_api_key(
             action="integration.api_key.revoke", key_id=key_id, metadata=metadata
         )
 
-        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         return _key_info(metadata, len(user_mappings))
         
     except HTTPException:
@@ -2551,21 +2682,6 @@ async def revoke_api_key(
 
 
 API_KEY_ROTATE = "integration.api_key.secret.rotate"
-
-
-def _may_take_a_rotated_secret(user: AuthenticatedUser, metadata: Dict[str, Any]) -> bool:
-    """An Admin, or whoever minted the key, compared without case.
-
-    important: revoking, deleting or narrowing a key hands its caller nothing, but a rotation hands
-    over a working secret. Cluster overlap is what lets a partner manage a key here, and on a
-    cluster another party also holds, overlap would hand one party the other's credential.
-    """
-    from app.core.rbac import Role, get_highest_role, resolve_roles
-
-    if get_highest_role(resolve_roles(user)) == Role.ADMIN:
-        return True
-    creator = str(metadata.get("created_by") or "").strip().lower()
-    return bool(creator) and creator == (user.email or "").strip().lower()
 
 
 @router.post(
@@ -2581,6 +2697,7 @@ async def rotate_api_key_secret(
     key_id: str,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Rotate a key's secret in place.
 
@@ -2588,8 +2705,8 @@ async def rotate_api_key_secret(
     minting a new key left all of them refusing the new one and stopped their sync. Keeping the
     id keeps the organizations, the member push and provisioning exactly as they were.
     """
+    metadata = await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
-    metadata = await asyncio.to_thread(_authorize_api_key, vault_client, key_id)
     refuse_secret_rotation(metadata)
     if classify_key(metadata) != "active":
         raise HTTPException(
@@ -2606,15 +2723,31 @@ async def rotate_api_key_secret(
             status_code=409,
             detail="This key's stored record no longer validates. Update its permissions, then rotate it.",
         ) from None
-    if not _may_take_a_rotated_secret(_rbac, metadata):
-        _audit_credential_lifecycle(
-            action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
-            result="denied", error_code="not_key_creator",
-        )
-        raise HTTPException(
-            status_code=403,
-            detail="Only the key's creator or an administrator can rotate its secret.",
-        )
+    # important: revoking, deleting or narrowing a key someone else minted hands the caller nothing,
+    # but a rotation hands them a working secret. A non-admin gets one only for a key they minted
+    # (they held its secret already) or a key whose every cluster is inside their scope and every
+    # project inside their bound. Managing the key at all already needed its side (_authorize_api_key).
+    allowed = get_current_allowed_clusters()
+    if allowed is not None and str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
+        outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
+        if outside:
+            _audit_credential_lifecycle(
+                action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
+                result="denied", error_code="cluster_out_of_scope",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=f"This key also grants {outside}, which you cannot reach. An administrator can rotate it.",
+            )
+        try:
+            await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                _audit_credential_lifecycle(
+                    action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
+                    result="denied", error_code="project_out_of_bound",
+                )
+            raise
     key_secret, secret_hash = generate_api_key_secret()
     try:
         await asyncio.to_thread(save_api_key_secret_to_vault, vault_client, key_id, secret_hash, key_secret)
@@ -2651,12 +2784,12 @@ async def delete_api_key(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete an API key permanently."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
         # Read before the delete: afterwards there is nothing left to describe what was removed.
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
+        metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         # note: ownership first, so an add-on credential that owns organizations is answered with
         # the remedy for that (transfer them, or suspend the add-on), not with the installation's.
         async with serialize_key_ownership(db, key_id):
@@ -2702,14 +2835,15 @@ async def add_user_mapping(
     request: UserMappingRequest,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Add or update a user mapping for an API key."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
     
     try:
         # Verify API key exists
-        get_api_key_from_vault(vault_client, key_id)
+        await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
         
         # Create user mapping
         now = datetime.utcnow().isoformat()
@@ -2744,17 +2878,17 @@ async def add_user_mapping(
     description="Get all user mappings for an API key.",
     dependencies=[Depends(require_partner())],
 )
-async def list_user_mappings(key_id: str):
+async def list_user_mappings(
+    key_id: str,
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
     """List all user mappings for an API key."""
-    _authorize_api_key(get_vault_integrations_client(), key_id)
+    await _authorize_api_key(key_id, user, db)
     vault_client = get_vault_integrations_client()
     
     try:
-        # Verify API key exists
-        get_api_key_from_vault(vault_client, key_id)
-        
-        # Get mappings
-        return get_user_mappings_from_vault(vault_client, key_id)
+        return await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         
     except HTTPException:
         raise
@@ -2804,7 +2938,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, secret_hash = get_api_key_from_vault(vault_client, request.api_key_id)
+        metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, request.api_key_id)
         
         # Verify secret
         if not verify_api_key_secret(request.api_key_secret, secret_hash):
@@ -5195,18 +5329,19 @@ async def list_synced_organizations(
 async def refresh_organizations(
     api_key_id: str = Query(..., description="API key ID of the external app to refresh from"),
     db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_partner()),
 ):
     """On-demand pull of organizations from external app via stored callback URL."""
     import httpx
-
-    vault_client = get_vault_integrations_client()
 
     # important: every other single-key handler here scopes through _authorize_api_key, and this
     # one took `api_key_id` straight from a query parameter. Any partner could therefore name any
     # key in any organisation and make this server issue an authenticated request to that key's
     # stored callback, then have the response upserted as organizations. Same overlap rule, same
-    # 404-for-out-of-scope shape, so an id cannot be probed apart from a nonexistent one.
-    metadata = _authorize_api_key(vault_client, api_key_id)
+    # side rule, same 404-for-out-of-scope shape, so an id cannot be probed apart from a
+    # nonexistent one.
+    metadata = await _authorize_api_key(api_key_id, user, db)
+    vault_client = get_vault_integrations_client()
     # important: after the scope check, so it never confirms an id the caller cannot see, and
     # before the secret is read. Refreshing such a key sent its stored credential hash to its
     # callback URL and wrote the answer under the dead key's ownership. The OrcaHub callbacks
@@ -5226,8 +5361,8 @@ async def refresh_organizations(
 
     # Retrieve API key secret for authenticating the callback
     try:
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret"
+        secret_data = await asyncio.to_thread(
+            vault_client.vault_read, f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret"
         )
         secret_hash = secret_data.get("hash", "")
     except Exception:
