@@ -150,7 +150,7 @@ from app.services.integration_key_ownership import (
     owned_by_keys,
     owner_key_refusal,
     refuse_if_key_owns_organizations,
-    runs_an_owned_organization,
+    partners_an_owned_organization,
     serialize_key_ownership,
     SYNC_CAPABILITIES,
     transfer_owner,
@@ -2761,11 +2761,14 @@ async def rotate_api_key_secret(
                 detail="This key's stored record no longer validates. Update its permissions, then rotate it.",
             ) from None
         # important: revoking, deleting or narrowing a key someone else minted hands the caller nothing,
-        # but a rotation hands them a working secret. A non-admin gets one only for a key they minted
-        # (they held its secret already) or a key whose every cluster is inside their scope and every
-        # project inside their bound. Managing the key at all already needed its side (_authorize_api_key).
+        # but a rotation hands them a working secret. So every caller but an Admin, the key's creator
+        # included, gets one only for a key whose every cluster is inside their scope: minting a key
+        # is a fact about the past, and a creator whose scope has shrunk since would take a secret
+        # reaching clusters they can no longer reach. A non-creator is also held to the project
+        # bound. The creator is not, the same as when the key was created, which this line does not
+        # bound. Managing the key at all already needed its side (_authorize_api_key).
         allowed = get_current_allowed_clusters()
-        if allowed is not None and str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
+        if allowed is not None:
             outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
             if outside:
                 _audit_credential_lifecycle(
@@ -2776,24 +2779,25 @@ async def rotate_api_key_secret(
                     status_code=403,
                     detail=f"This key also grants {outside}, which you cannot reach. An administrator can rotate it.",
                 )
+            if str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
+                try:
+                    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
+                except HTTPException as exc:
+                    if exc.status_code == 403:
+                        _audit_credential_lifecycle(
+                            action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
+                            result="denied", error_code="project_out_of_bound",
+                        )
+                    raise
+            # important: and for a key that owns organizations, only as a current partner of one of
+            # them, the creator too. A fresh secret for such a key is their sync, members and
+            # provisioning, and created_by is not a current role: see partners_an_owned_organization.
             try:
-                await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
-            except HTTPException as exc:
-                if exc.status_code == 403:
-                    _audit_credential_lifecycle(
-                        action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
-                        result="denied", error_code="project_out_of_bound",
-                    )
-                raise
-        if allowed is not None:
-            # important: the creator too. Minting a key is a fact about the past, and a fresh secret for a
-            # key that owns organizations is their sync, members and provisioning.
-            try:
-                runs_one = await runs_an_owned_organization(db, key_id, _rbac.email)
+                partners_one = await partners_an_owned_organization(db, key_id, _rbac.email)
             except Exception as exc:  # noqa: BLE001 - unknown refuses; the text names no database
                 logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
                 raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
-            if runs_one is False:
+            if partners_one is False:
                 _audit_credential_lifecycle(
                     action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
                     result="denied", error_code="outside_the_owning_organizations",
@@ -2801,8 +2805,8 @@ async def rotate_api_key_secret(
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        "This key owns OrcaHub organizations you do not run, so only an administrator can "
-                        "rotate its secret."
+                        "This key owns OrcaHub organizations you are not a partner of, so only an "
+                        "administrator can rotate its secret."
                     ),
                 )
         try:

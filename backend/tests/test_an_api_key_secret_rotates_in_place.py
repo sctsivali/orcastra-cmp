@@ -4,10 +4,11 @@ Rotating by minting a new key left every organization the old key synced refusin
 (a key may only update the orgs it owns), so org and member sync stopped. These run the real
 rotate handler and the real key validation against an in-memory Vault and cache.
 
-A rotation hands its caller a working secret, unlike a revoke or a delete. So a Partner who did not
-mint the key rotates it only when every cluster it grants is inside their scope and every project
-inside their bound; its creator and an Admin skip that check. An add-on credential is refused: its
-installation rotates it.
+A rotation hands its caller a working secret, unlike a revoke or a delete. So a Partner, the key's
+creator included, rotates it only when every cluster it grants is inside their scope, and one who
+did not mint it only when every project is inside their bound too. A key that owns organizations is
+rotated only by a current partner of one of them; created_by never counts. An Admin skips all of
+that. An add-on credential is refused: its installation rotates it.
 """
 
 from contextlib import asynccontextmanager
@@ -27,6 +28,7 @@ from tests._sqlite_session import org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import _RecordingLogger
 
 KEY = "oak_" + "a" * 32
+REAL_AUTHORIZE = integrations._authorize_api_key
 BASE = f"secret/data/{integrations.VAULT_INTEGRATIONS_PATH}/api_keys/{KEY}"
 OWNER = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["role_partner"])
 OTHER = AuthenticatedUser(user_id="q", email="teammate@example.test", groups=["role_partner"])
@@ -446,8 +448,9 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
         org_scope._allowed_clusters_var.reset(token)
 
 
-# note: a key that owns organizations is rotated only by someone running one of them. Minting it is
-# a fact about the past: a partner who left the organization still matches created_by.
+# note: a key that owns organizations is rotated only by a current partner of one of them. Minting
+# it is a fact about the past: a partner who left the organization still matches created_by, and so
+# do the buyer organizations provisioning created with the minter as created_by.
 
 async def test_a_creator_who_left_cannot_take_the_secret_of_a_key_that_owns_organizations(
     world, partner_scope
@@ -460,9 +463,61 @@ async def test_a_creator_who_left_cannot_take_the_secret_of_a_key_that_owns_orga
     assert _denied(world) == [("denied", "outside_the_owning_organizations")]
 
 
-async def test_the_creator_who_runs_an_owned_organization_rotates(world, partner_scope) -> None:
+async def test_the_creator_who_is_a_partner_of_an_owned_organization_rotates(world, partner_scope) -> None:
     db = _orgs(("acme", KEY, OWNER.email), ("buyer", KEY, None))
     assert (await _rotate(OWNER, db)).api_key_id == KEY
+
+
+async def test_a_minter_who_left_the_seller_cannot_rotate_through_the_buyers_it_provisioned(
+    world, monkeypatch
+) -> None:
+    """Provisioning stamps a buyer organization with the key's minter as created_by.
+
+    That kept the minter "running" the buyer and kept its cluster in their scope (org_scope counts
+    created_by), so after their partner row in the seller was removed they still rotated the
+    seller's owner key and took a working secret for every organization it owns.
+    """
+    from app.core import org_scope
+    from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
+
+    monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
+    _stored(world, created_by=OWNER.email)
+    db = sqlite_session(*org_tables())
+    db.add(Org(id=1, name="Acme", slug="acme", source="orcahub", external_id="ext-acme", api_key_id=KEY,
+               created_by="system", is_active=True))
+    db.add(Org(id=2, name="Buyer", slug="buyer", source="orcahub", external_id="ext-buyer", api_key_id=KEY,
+               created_by=OWNER.email, is_active=True))
+    await db.commit()
+    db.add_all([
+        OrganizationMember(organization_id=1, user_email="successor@example.test", role="partner"),
+        OrganizationMember(organization_id=2, user_email="buyer@example.test", role="tenant"),
+        OrganizationCluster(organization_id=1, cluster_id="c1", registered_by="successor@example.test"),
+        OrganizationCluster(organization_id=2, cluster_id="c1"),
+    ])
+    await db.commit()
+    allowed = await org_scope._query_owned_clusters(OWNER.email, db)
+    assert allowed == {"c1"}, "precondition: the provisioned buyer keeps c1 in the minter's scope"
+    token = org_scope._allowed_clusters_var.set(allowed)
+    try:
+        with pytest.raises(HTTPException) as caught:
+            await _rotate(OWNER, db)
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
+    assert caught.value.status_code == 403 and "administrator" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "outside_the_owning_organizations")]
+
+
+async def test_a_creator_whose_scope_shrank_cannot_rotate_a_key_reaching_past_it(world, partner_scope) -> None:
+    """Minting the key does not skip the cluster check: the secret reaches every cluster it grants."""
+    _stored(world, created_by=OWNER.email,
+            cluster_permissions=[{"cluster_id": "c1", "permissions": ["read"], "projects": ["*"]},
+                                 {"cluster_id": "c9", "permissions": ["read", "write"], "projects": ["*"]}])
+    with pytest.raises(HTTPException) as caught:
+        await _rotate(OWNER, _orgs())
+    assert caught.value.status_code == 403 and "c9" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "cluster_out_of_scope")]
 
 
 async def test_a_teammate_running_an_owned_organization_rotates(world, partner_scope, monkeypatch) -> None:
