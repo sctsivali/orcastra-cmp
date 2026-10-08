@@ -41,9 +41,11 @@ _BARE_TOKEN_PATTERNS = (
     re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
 )
 
+# note: "ticket" covers the single-use WebSocket tickets. They are worthless once redeemed, but a
+# line written before the socket connects would still hold a live one.
 SENSITIVE_PARAM_STEMS = (
     "token", "password", "secret", "api_key", "apikey", "api-key",
-    "authorization", "auth", "credential", "signature", "code", "key",
+    "authorization", "auth", "credential", "signature", "code", "key", "ticket",
 )
 _QUERY_PAIR = re.compile(r"([?&;])([^=&#\s\"']+)=([^&#;\s\"']*)")
 
