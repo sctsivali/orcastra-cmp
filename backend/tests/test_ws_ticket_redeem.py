@@ -113,6 +113,24 @@ def test_a_url_still_carrying_a_token_is_refused_even_with_a_good_ticket():
     assert _open("tasks", _socket({"ticket": ticket})) is None, "and the ticket is spent"
 
 
+def test_a_spent_ticket_written_back_after_its_lifetime_opens_nothing(monkeypatch):
+    """Someone who can read and write Redis replays a captured signed entry under its own key."""
+    from app.core.ws_ticket import ticket_digest
+    from app.core.ws_ticket_store import TICKET_PREFIX
+
+    store = get_ws_ticket_store()
+    ticket = _ticket("tasks")
+    key = f"{TICKET_PREFIX}:{ticket_digest(ticket)}"
+    captured = store._local[key][1]
+    assert _open("tasks", _socket({"ticket": ticket})) is not None
+
+    store._local[key] = (time.monotonic() + 30, captured)
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 40)
+
+    assert _open("tasks", _socket({"ticket": ticket})) is None, "minted 40 s ago, past 30 s and the skew"
+
+
 @pytest.fixture
 def monitoring_app(monkeypatch):
     from app.routers import monitoring

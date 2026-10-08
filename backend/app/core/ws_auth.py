@@ -18,10 +18,13 @@ from fastapi import Depends, WebSocket, WebSocketException, status
 
 from app.core.auth import AuthenticatedUser, get_ws_user
 from app.core.config import Settings, get_settings
-from app.core.ws_ticket import TicketClaims, socket_target
+from app.core.ws_ticket import TICKET_TTL_SECONDS, TicketClaims, socket_target
 from app.core.ws_ticket_store import get_ws_ticket_store
 
 logger = logging.getLogger(__name__)
+
+# Redis expires a ticket at its TTL; this bounds a signed entry written back after it was spent.
+_TICKET_CLOCK_SKEW_SECONDS = 5.0
 
 
 async def _redeemed(kind: str, websocket: WebSocket, ticket: str) -> Optional[AuthenticatedUser]:
@@ -33,6 +36,9 @@ async def _redeemed(kind: str, websocket: WebSocket, ticket: str) -> Optional[Au
         claims = TicketClaims.from_json(raw)
     except (KeyError, TypeError, ValueError):
         logger.warning("WebSocket refused: unreadable ticket for a %s socket", kind)
+        return None
+    if claims.minted_at + TICKET_TTL_SECONDS + _TICKET_CLOCK_SKEW_SECONDS < time.time():
+        logger.warning("WebSocket refused: a %s ticket minted more than %d s ago", kind, TICKET_TTL_SECONDS)
         return None
     if claims.kind != kind:
         logger.warning("WebSocket refused: a %s ticket presented to a %s socket", claims.kind, kind)

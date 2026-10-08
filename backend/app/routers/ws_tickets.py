@@ -67,6 +67,13 @@ async def _target(body: WsTicketRequest, user: Optional[AuthenticatedUser]) -> W
         verify_cluster_access(body.host)
         return WsTarget(host=body.host)
     if isinstance(body, (TerminalTicketRequest, ConsoleTicketRequest)):
+        if user is not None and not (user.email or "").strip():
+            # important: an open shell is re-checked against Authentik by email every minute; one
+            # opened without an email could never be, so it is refused here rather than cut later.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This session carries no email address, so a shell or console opened with it could not be re-checked",
+            )
         verify_instance_access(body.host, body.project, body.instance, "console")
         await _session_gate(user, body.host)
         console_type = body.console_type if isinstance(body, ConsoleTicketRequest) else None
