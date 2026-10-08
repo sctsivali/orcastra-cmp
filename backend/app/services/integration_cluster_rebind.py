@@ -13,7 +13,10 @@ Nothing else of the key reaches the record.
 
 The push's `organizations` list must name exactly one organization, and after the push the key
 must claim exactly that one: organizations.api_key_id is the key, active or not, for it and for
-no other. A seller's key also claims every buyer organization it syncs or provisions, and the
+no other. A key claims an organization through the three claim paths (the sync upsert,
+provisioning and the dashboard's refresh) or through an Administrator's owner transfer
+(services/integration_key_ownership.py), which moves an organization between keys and never
+releases one. A seller's key also claims every buyer organization it syncs or provisions, and the
 pushed role cannot tell the seller's organization from a buyer's. In OrcaHub a buyer
 organization's partner can add the seller's creator as PARTNER, and the seller's push carries
 every member of every buyer organization. The one organization a key claims can itself be a
@@ -113,6 +116,9 @@ async def claimed_organization_count(db: AsyncSession, api_key_id: str) -> int:
     makes it active again, and no dashboard path switches one off, so it is still a party the key
     serves. Leaving it out would make a buyer organization the key's only one whenever the seller's
     own organization is inactive, and the buyer could then name the creator into it.
+
+    note: deliberately wider than integration_key_ownership.owned_organizations, which counts only
+    the active OrcaHub organizations a key's end would freeze.
     """
     if not api_key_id:
         return 0

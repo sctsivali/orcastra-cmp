@@ -12,9 +12,9 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, NamedTuple, Tuple, Union
+from typing import Annotated, Optional, List, Dict, Any, NamedTuple, Tuple, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Response
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, StringConstraints, ValidationError, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -126,9 +126,21 @@ from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
-from app.models.db_models import Organization, OrganizationMember
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services.integration_roles import apply_upsert_role, may_reconcile, stored_member_role
-from app.services.integration_cluster_rebind import creator_of, rebind_creator_clusters
+from app.services.integration_cluster_rebind import (
+    claimed_organization_count,
+    creator_of,
+    rebind_creator_clusters,
+)
+from app.services.integration_key_ownership import (
+    TRANSFER_ACTION as OWNER_TRANSFER_ACTION,
+    key_state,
+    owner_key_refusal,
+    serialize_key_ownership,
+    transfer_owner,
+    uncovered_clusters,
+)
 from app.services.add_on_credential_edits import (
     is_add_on_credential,
     refuse_delete,
@@ -843,6 +855,30 @@ def get_api_key_from_vault(vault_client, key_id: str) -> tuple[Dict[str, Any], s
     except Exception as e:
         logger.error(f"Failed to get API key from Vault: {e}")
         raise HTTPException(status_code=404, detail="API key not found")
+
+
+def _read_key_metadata_blocking(vault_client, key_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """A key's metadata document, or None and why: "missing" when Vault has no such key, else "unknown".
+
+    note: the metadata path only. Nothing that reports or checks an owner key needs the secret
+    document, and get_api_key_from_vault reads both.
+
+    note: use_cache=False. The metadata path is mirrored in the shared Vault cache, and a copy from
+    before a revoke would let a transfer hand an organization to a key that no longer works.
+    """
+    from app.core.vault_client import VaultClientError
+
+    try:
+        metadata = vault_client.vault_read(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata", use_cache=False
+        )
+    except (VaultClientError, HTTPException) as exc:
+        return None, "missing" if getattr(exc, "status_code", None) == 404 else "unknown"
+    except Exception:  # noqa: BLE001 - an unreadable store is reported, never raised to the list
+        return None, "unknown"
+    if not isinstance(metadata, dict) or not metadata:
+        return None, "missing"
+    return metadata, None
 
 
 def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
@@ -4930,6 +4966,34 @@ class IntegrationOrgResponse(BaseModel):
     app_name: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    # The owner key as it stands now. Only the owner syncs an organization, updates its members
+    # and policies and provisions for it, so an owner that no longer works freezes all three.
+    owner_key_name: Optional[str] = None
+    owner_key_state: str = Field(
+        "unclaimed",
+        description="active, expiring, expired, revoked, inactive, missing, unknown or unclaimed",
+    )
+    owner_key_expires_at: Optional[str] = None
+    owner_key_expiry_state: Optional[str] = None
+    cluster_ids: List[str] = Field(default_factory=list)
+
+
+async def _owner_keys(key_ids: List[str]) -> Dict[str, Tuple[Optional[Dict[str, Any]], Optional[str]]]:
+    """Each owner key's metadata document, read once per key and off the event loop."""
+    if not key_ids:
+        return {}
+    vault_client = get_vault_integrations_client()
+    reads = await asyncio.gather(
+        *(asyncio.to_thread(_read_key_metadata_blocking, vault_client, key_id) for key_id in key_ids)
+    )
+    return dict(zip(key_ids, reads))
+
+
+def _owner_state(key_id: Optional[str], read: Tuple[Optional[Dict[str, Any]], Optional[str]]) -> str:
+    if not key_id:
+        return "unclaimed"
+    metadata, failure = read
+    return key_state(metadata, missing=failure == "missing", unknown=failure == "unknown")
 
 
 @router.get(
@@ -4976,22 +5040,24 @@ async def list_synced_organizations(
         result = await db.execute(stmt)
         orgs = result.scalars().all()
 
-        # enrich with app_name from Vault
-        vault_client = get_vault_integrations_client()
-        app_name_cache: Dict[str, str] = {}
+        clusters: Dict[int, List[str]] = {}
+        if orgs:
+            bound = await db.execute(
+                select(OrganizationCluster.organization_id, OrganizationCluster.cluster_id)
+                .where(OrganizationCluster.organization_id.in_([org.id for org in orgs]))
+            )
+            for org_id, cluster_id in bound.all():
+                if cluster_id:
+                    clusters.setdefault(org_id, []).append(cluster_id)
+
+        # note: the owner key's metadata only, never its secret, and read live: a cached copy from
+        # before a revoke would report a frozen organization as healthy.
+        owners = await _owner_keys(sorted({org.api_key_id for org in orgs if org.api_key_id}))
 
         response = []
         for org in orgs:
-            app_name = None
-            if org.api_key_id:
-                if org.api_key_id not in app_name_cache:
-                    try:
-                        meta, _ = get_api_key_from_vault(vault_client, org.api_key_id)
-                        app_name_cache[org.api_key_id] = meta.get("app_name", "")
-                    except Exception:
-                        app_name_cache[org.api_key_id] = ""
-                app_name = app_name_cache[org.api_key_id] or None
-
+            read = owners.get(org.api_key_id, (None, None)) if org.api_key_id else (None, None)
+            meta = read[0] or {}
             response.append(IntegrationOrgResponse(
                 id=org.id,
                 name=org.name,
@@ -5000,9 +5066,14 @@ async def list_synced_organizations(
                 source=org.source,
                 external_id=org.external_id,
                 api_key_id=org.api_key_id,
-                app_name=app_name,
+                app_name=meta.get("app_name") or None,
                 created_at=org.created_at.isoformat() if org.created_at else None,
                 updated_at=org.updated_at.isoformat() if org.updated_at else None,
+                owner_key_name=meta.get("name") or None,
+                owner_key_state=_owner_state(org.api_key_id, read),
+                owner_key_expires_at=meta.get("expires_at"),
+                owner_key_expiry_state=expiry_state(meta.get("expires_at")) if meta else None,
+                cluster_ids=sorted(set(clusters.get(org.id, []))),
             ))
 
         return response
@@ -5094,6 +5165,189 @@ async def refresh_organizations(
         "message": f"Refreshed {synced} organizations from external app",
         "organizations_synced": synced,
     }
+
+
+class OwnerKeyTransferRequest(BaseModel):
+    """The key that becomes an organization's owner, and why. There is no release to no owner."""
+
+    api_key_id: str = Field(
+        ..., pattern=r"^[A-Za-z0-9_-]{1,128}$", description="The integration key that becomes the owner"
+    )
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] = Field(
+        ..., description="Why the owner changes. Kept in the audit record."
+    )
+
+
+class OwnerKeyTransferResponse(BaseModel):
+    organization_id: int
+    organization_slug: str
+    external_id: Optional[str] = None
+    previous_api_key_id: Optional[str] = None
+    previous_key_state: str
+    api_key_id: str
+    api_key_name: Optional[str] = None
+    app_name: Optional[str] = None
+    changed: bool
+    # Clusters bound to the organization that the new owner's grant does not name. Its sync still
+    # works there, but provisioning tenant access on one of them is refused until the grant does.
+    uncovered_cluster_ids: List[str] = Field(default_factory=list)
+    # How many organizations the new owner claims after this. Anything but one stops its pushes
+    # rebinding the creator's personal clusters (services/integration_cluster_rebind.py).
+    claimed_organization_count: int = 0
+
+
+def _audit_owner_transfer(
+    org: Organization,
+    *,
+    details: Dict[str, Any],
+    result: str = "success",
+    error_code: Optional[str] = None,
+    before: Optional[Dict[str, Any]] = None,
+    after: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Record an owner transfer or its refusal.
+
+    note: the key ids travel as from_key_id and to_key_id. The audit sanitiser blanks any detail
+    whose name contains api_key, except exactly api_key_id.
+    """
+    try:
+        activity_logger.log_activity(
+            action=OWNER_TRANSFER_ACTION,
+            target_type="organization",
+            target_id=str(org.id),
+            target_organization_id=org.id,
+            target_organization_slug=org.slug,
+            result=result,
+            error_code=error_code,
+            details=details,
+            before_state=before,
+            after_state=after,
+        )
+    except Exception:  # pragma: no cover - a failed audit write must not fail the request
+        logger.warning("Could not write the audit record for %s", OWNER_TRANSFER_ACTION, exc_info=True)
+
+
+@router.put(
+    "/organizations/{org_id}/owner-key",
+    response_model=OwnerKeyTransferResponse,
+    summary="Move a synced organization to another owner key",
+    description=(
+        "Admin only. Make another active OrcaHub key the owner of a synced organization, so that key "
+        "can sync it, update its members and policies, and provision tenant access for it. The old "
+        "owner loses all of that. There is no release to no owner."
+    ),
+)
+async def transfer_organization_owner(
+    org_id: int,
+    body: OwnerKeyTransferRequest,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move one organization to another owner key.
+
+    important: before this existed an owner key that was revoked, deleted or left to expire froze
+    its organizations, because a key may sync only what it owns or what no key has claimed. The
+    only way out was SQL against production. See services/integration_key_ownership.py.
+    """
+    org = (await db.execute(select(Organization).where(Organization.id == org_id))).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    target = body.api_key_id
+    context = {
+        "organization_slug": org.slug,
+        "external_id": org.external_id,
+        "from_key_id": org.api_key_id,
+        "to_key_id": target,
+        "reason": body.reason,
+        "actor_email": _rbac.email,
+        "trigger": "admin",
+    }
+    if org.source != "orcahub":
+        _audit_owner_transfer(org, details=context, result="denied", error_code="organization_not_synced")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "organization_not_synced",
+                "message": (
+                    f"Organization '{org.slug}' was created in Orcastra, not synced from OrcaHub, "
+                    "so no integration key owns it."
+                ),
+            },
+        )
+
+    vault_client = get_vault_integrations_client()
+    previous: Optional[str] = org.api_key_id
+    changed = previous != target
+    async with serialize_key_ownership(db, target):
+        # important: the new owner is read and judged inside the lock, so a revoke of that key
+        # cannot land between the check and the write and leave the organization on a dead key.
+        metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, target)
+        if changed:
+            refused = owner_key_refusal(metadata, failure)
+            if refused is not None:
+                status, code, message = refused
+                _audit_owner_transfer(org, details=context, result="denied", error_code=code)
+                # note: a 503 detail is sanitised to a string by the app's error handler.
+                raise HTTPException(
+                    status_code=status,
+                    detail=message if status >= 500 else {"error": code, "message": message},
+                )
+            moved, previous = await transfer_owner(db, org_id, target)
+            if moved is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            org, changed = moved, previous != target
+            if changed:
+                await db.commit()
+
+    uncovered = await uncovered_clusters(db, org.id, metadata)
+    claimed = await claimed_organization_count(db, target)
+    previous_state = "unclaimed"
+    if previous == target:
+        previous_state = key_state(metadata, missing=failure == "missing", unknown=failure == "unknown")
+    elif previous:
+        previous_state = _owner_state(
+            previous, await asyncio.to_thread(_read_key_metadata_blocking, vault_client, previous)
+        )
+    answer = OwnerKeyTransferResponse(
+        organization_id=org.id,
+        organization_slug=org.slug,
+        external_id=org.external_id,
+        previous_api_key_id=previous,
+        previous_key_state=previous_state,
+        api_key_id=target,
+        api_key_name=(metadata or {}).get("name"),
+        app_name=(metadata or {}).get("app_name"),
+        changed=changed,
+        uncovered_cluster_ids=uncovered,
+        claimed_organization_count=claimed,
+    )
+    if not changed:
+        return answer
+
+    # note: here rather than in a helper, so the cache ratchet sees the handler clear the key list,
+    # which carries what each key owns.
+    get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
+    for key_id in (previous, target):
+        if key_id:
+            evict_api_key_cache(key_id)
+    _audit_owner_transfer(
+        org,
+        details={
+            **context,
+            "from_key_id": previous,
+            "from_key_state": previous_state,
+            "to_key_name": answer.api_key_name,
+            "to_key_app_name": answer.app_name,
+            "uncovered_cluster_ids": uncovered,
+        },
+        before={"owner_key_id": previous},
+        after={"owner_key_id": target},
+    )
+    logger.info(
+        "Organization %s moved from api key %s to %s by %s", org.slug, previous or "<none>", target, _rbac.email
+    )
+    return answer
 
 
 # ============================================
