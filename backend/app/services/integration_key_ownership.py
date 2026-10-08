@@ -187,7 +187,8 @@ async def visible_organization_ids(db: AsyncSession, user: Any) -> Optional[Set[
     return set(await get_user_org_ids(user, db))
 
 
-def _named(slugs: List[str], hidden: int) -> str:
+def name_organizations(slugs: List[str], hidden: int) -> str:
+    """The slugs a message names, the rest counted: "a, b and 3 more and 1 you cannot see"."""
     shown = ", ".join(slugs[:MAX_NAMED_SLUGS])
     rest = []
     if len(slugs) > MAX_NAMED_SLUGS:
@@ -236,7 +237,7 @@ def _owned_message(
         remedy = f"Transfer {them} to another active key first, or delete {them}."
     else:
         remedy = f"Ask an administrator to transfer {them} to another active key first, or to delete {them}."
-    parts = [f"This key owns {total} OrcaHub {noun} ({_named(slugs, hidden)}).", effect, remedy]
+    parts = [f"This key owns {total} OrcaHub {noun} ({name_organizations(slugs, hidden)}).", effect, remedy]
     if add_on:
         parts.append("Suspend the add-on to stop it now.")
     elif action in ("revoke", "delete"):

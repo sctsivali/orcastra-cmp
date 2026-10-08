@@ -2109,6 +2109,29 @@ export interface KeyOwnsOrganizationsDetail {
   remedies: string[];
 }
 
+/**
+ * The 409 a capability edit answers when it would withdraw tenant.provision from a key that owns
+ * organizations. Not a refusal: the same request with `force: true` goes through.
+ */
+export interface ProvisioningWouldStopDetail {
+  error: "provisioning_would_stop";
+  action: "capabilities";
+  capability: string;
+  message: string;
+  consequence: string;
+  api_key_id: string;
+  organization_count: number;
+  organization_slugs: string[];
+  hidden_organization_count: number;
+  proceed: string;
+}
+
+export interface APIKeyCapabilitiesRequest {
+  capabilities: string[];
+  // Withdraw tenant.provision from a key that owns organizations after the 409 asked.
+  force?: boolean;
+}
+
 export interface APIKeyCreateRequest {
   name: string;
   app_name: string;
