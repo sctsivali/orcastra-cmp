@@ -37,7 +37,7 @@ VM_CONFIG = {
     "security.secureboot": "false", "volatile.base_image": "abc123", "volatile.eth0.hwaddr": "00:16:3e:aa:bb:cc",
     "raw.lxc": "lxc.apparmor.profile=unconfined", "volatile.idmap.base": "1000000",
     "cloud-init.user-data": "#cloud-config\npassword: hunter2", "user.user-data": "secret",
-    "environment.API_TOKEN": "t0ken", "security.privileged": "true",
+    "environment.API_TOKEN": "t0ken", "security.privileged": "true", "image.secret_token": "s3cret",
 }
 TENANT_VM_CONFIG = {
     "limits.cpu": "2", "image.os": "Ubuntu", "boot.autostart": "true", "snapshots.schedule": "@daily",
@@ -52,6 +52,7 @@ VM_DEVICES = {
     "data": {"type": "disk", "pool": "default", "source": "data-vol", "path": "/data"},
     "logs": {"type": "disk", "source": "/srv/hostlogs", "path": "/var/log/host"},
     "gpu0": {"type": "gpu", "pci": "0000:01:00.0", "vendorid": "10de"},
+    "odd": {"type": "disk", "pool": "default", "source": "/etc", "path": "/mnt/odd"},
 }
 TENANT_VM_DEVICES = {
     "root": {"type": "disk", "path": "/", "pool": "default", "size": "10GiB"},
@@ -59,6 +60,7 @@ TENANT_VM_DEVICES = {
     "data": {"type": "disk", "pool": "default", "source": "data-vol", "path": "/data"},
     "logs": {"type": "disk", "path": "/var/log/host"},
     "gpu0": {"type": "gpu"},
+    "odd": {"type": "disk", "pool": "default", "path": "/mnt/odd"},
 }
 
 TIERS = {
