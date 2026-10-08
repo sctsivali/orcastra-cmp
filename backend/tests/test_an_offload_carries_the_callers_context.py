@@ -34,7 +34,6 @@ BASELINE: Dict[str, int] = {
     "routers/lxd_operations.py": 1,
     "routers/lxd_server.py": 1,
     "routers/lxd_warnings.py": 3,
-    "routers/monitoring.py": 1,
     "routers/network_acls.py": 1,
     "routers/networks.py": 1,
     "routers/permissions.py": 2,
