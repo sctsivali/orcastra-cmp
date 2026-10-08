@@ -174,6 +174,8 @@ def test_register_keeps_a_client_defined_region_as_sent(monkeypatch):
     ("city", ""),
     ("latitude", 91),
     ("facility_name", "f" * 201),
+    ("city", "Jkt\nFORGED LOG LINE"),
+    ("region_name", "\x1b[31mred"),
 ])
 def test_register_refuses_malformed_input_and_writes_nothing(monkeypatch, field, value):
     client, cert, db, events = _client(monkeypatch)
