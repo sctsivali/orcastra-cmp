@@ -131,7 +131,7 @@ class _FakeVault:
         self.secret_payload: Dict[str, Any] = {"hash": secret_hash}
         self.writes: List[Tuple[str, Dict[str, Any]]] = []
 
-    def vault_read(self, path: str) -> Dict[str, Any]:
+    def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         if path.endswith("/metadata"):
             return self.metadata
         return self.secret_payload

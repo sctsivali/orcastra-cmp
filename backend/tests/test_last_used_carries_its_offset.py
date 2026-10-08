@@ -23,7 +23,7 @@ class FakeVault:
     def __init__(self) -> None:
         self.written: dict = {}
 
-    def vault_read(self, path: str) -> dict:
+    def vault_read(self, path: str, use_cache: bool = True) -> dict:
         if path.endswith("/secret"):
             return {"hash": "irrelevant"}
         return {"id": "key-1", "is_active": True, "last_used_at": None}

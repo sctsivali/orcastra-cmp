@@ -33,7 +33,7 @@ class Vault(_FakeVault):
         super().__init__(metadata)
         self.deletes: List[str] = []
 
-    def vault_read(self, path: str) -> Dict[str, Any]:
+    def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         if path not in self.store:
             raise RuntimeError(f"404 {path}")
         return dict(self.store[path])

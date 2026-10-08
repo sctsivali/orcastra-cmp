@@ -48,7 +48,7 @@ class _Vault:
     def __init__(self) -> None:
         self.reads: List[str] = []
 
-    def vault_read(self, path: str) -> dict:
+    def vault_read(self, path: str, use_cache: bool = True) -> dict:
         self.reads.append(path)
         return {"endpoint": "https://10.9.9.9:8443"}
 

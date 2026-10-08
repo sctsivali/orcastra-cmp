@@ -102,7 +102,7 @@ class _FakeVault:
     def _path(key: str, leaf: str) -> str:
         return f"secret/data/{integrations.VAULT_INTEGRATIONS_PATH}/api_keys/{key}/{leaf}"
 
-    def vault_read(self, path: str) -> Dict[str, Any]:
+    def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         return dict(self.store[path])
 
     def vault_kv_put(self, path: str, data: Dict[str, Any]) -> None:
