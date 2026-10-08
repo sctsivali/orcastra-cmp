@@ -12,16 +12,18 @@
  * -> connected; paused once the tab has been hidden for 60 s (socket closed, reopened on
  * visible). Backoff 2 s doubling to 30 s, then one retry a minute once four handshakes in a row
  * never opened (a browser reports a refused handshake as 1006, the same as an outage). A 1008
- * close (authentication refused) stops every retry until the session token changes; a token
- * rotation while connected closes the socket for a silent reconnect that carries the new token
- * and counts as attempt 0.
+ * close (authentication refused), or a ticket the server refuses to mint (401, 403), stops every
+ * retry until the session token changes; a token rotation while connected closes the socket for
+ * a silent reconnect under the new session, and so does a 4401 (the session ended), both at
+ * attempt 0. Every connect mints its own single-use ticket first.
  */
 
 import { useEffect, useSyncExternalStore } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { getAccessToken } from "@/lib/api";
-import { getTasksWsUrl } from "@/lib/ws-url";
+import { WS_CLOSE, ticketedSocketUrl } from "@/lib/ws-url";
+import { APIError } from "@/types/api";
 import type { TaskFeedFrame } from "@/types/tasks";
 import { appendLogInCaches, logKeys, taskKeys, upsertTaskInCaches } from "./hooks/use-tasks";
 
@@ -41,7 +43,7 @@ const BACKOFF_MAX_MS = 30000;
 const POLLING_AFTER_ATTEMPTS = 3;
 const HIDDEN_CLOSE_MS = 60000;
 const HIDDEN_FLUSH_MS = 50;
-const CLOSE_POLICY_VIOLATION = 1008;
+const CLOSE_POLICY_VIOLATION = WS_CLOSE.POLICY_VIOLATION;
 const FRAME_TYPES: ReadonlySet<string> = new Set(["hello", "task", "log", "follower", "resync"]);
 
 const IDLE: TaskFeedSnapshot = {
@@ -80,6 +82,10 @@ const SLOW_RETRY_MS = 60000;
 let handshakeFailures = 0;
 let openedWithToken: string | null = null;
 let silentReconnect = false;
+// The socket lifetime a ticket mint in flight belongs to. Closing the socket or releasing the
+// feed moves `lifecycle` on, so a mint that resolves afterwards opens nothing.
+let mintingIn: number | null = null;
+let lifecycle = 0;
 let helloCount = 0;
 let buffer: TaskFeedFrame[] = [];
 let flushScheduled = false;
@@ -205,6 +211,7 @@ function parseFrame(raw: unknown): TaskFeedFrame | null {
 // ---------------------------------------------------------------------------------------------
 
 function closeSocket(): void {
+  lifecycle += 1;
   const ws = socket;
   socket = null;
   if (!ws) return;
@@ -244,7 +251,7 @@ function scheduleRetry(): void {
 }
 
 function connect(): void {
-  if (socket || !wanted()) return;
+  if (socket || mintingIn === lifecycle || !wanted()) return;
   clearRetry();
   if (!silentReconnect) {
     setSnapshot({
@@ -252,17 +259,44 @@ function connect(): void {
       nextRetryInSeconds: null,
     });
   }
+  const startedIn = lifecycle;
+  const mintedWithToken = getAccessToken();
+  mintingIn = startedIn;
+  ticketedSocketUrl({ kind: "tasks" }).then(
+    (url) => {
+      if (mintingIn === startedIn) mintingIn = null;
+      if (startedIn !== lifecycle || socket || !wanted()) return;
+      open(url, mintedWithToken);
+    },
+    (error: unknown) => {
+      if (mintingIn === startedIn) mintingIn = null;
+      if (startedIn !== lifecycle || !wanted()) return;
+      silentReconnect = false;
+      if (error instanceof APIError && (error.status === 401 || error.status === 403)) {
+        // Refused for this session: retrying with the same token only repeats the refusal.
+        handshakeFailures = 0;
+        halted = true;
+        haltedToken = mintedWithToken;
+        setSnapshot({ state: "polling", nextRetryInSeconds: null });
+        return;
+      }
+      handshakeFailures += 1;
+      scheduleRetry();
+    },
+  );
+}
 
+function open(url: string, mintedWithToken: string | null): void {
   let ws: WebSocket;
   try {
-    ws = new WebSocket(getTasksWsUrl());
+    ws = new WebSocket(url);
   } catch {
     silentReconnect = false;
     scheduleRetry();
     return;
   }
   socket = ws;
-  openedWithToken = getAccessToken();
+  openedWithToken = mintedWithToken;
 
   let opened = false;
   ws.onopen = () => {
@@ -297,9 +331,12 @@ function connect(): void {
       setSnapshot({ state: refs === 0 ? "idle" : snapshot.state, nextRetryInSeconds: null });
       return;
     }
-    if (silentReconnect) {
-      // The token rotated: reconnect at once with the new one, attempt 0, no visible flap.
+    if (silentReconnect || event.code === WS_CLOSE.SESSION_ENDED) {
+      // The token rotated or its session ended: reconnect at once under the current session,
+      // attempt 0, no visible flap.
       silentReconnect = false;
+      attempt = 0;
+      handshakeFailures = 0;
       connect();
       return;
     }

@@ -19,7 +19,7 @@ import {
   retainInstanceReconcileRateLimit,
   upsertExactInstance,
 } from "@/lib/instance-reconciliation";
-import { getEventsWsUrl } from "@/lib/ws-url";
+import { WS_CLOSE, ticketedSocketUrl } from "@/lib/ws-url";
 import {
   type PendingCreate,
   getPendingSnapshot,
@@ -32,12 +32,18 @@ import { APIError } from "@/types/api";
 
 const STATUS_SUCCESS = 200;
 const RECONNECT_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
 
 interface Conn {
   ws: WebSocket | null;
   stop: boolean;
   healthy: boolean;
+  /** Connects in a row that never opened or mint attempts that failed; reset on open. */
+  failures: number;
 }
+
+const reconnectDelay = (failures: number): number =>
+  Math.min(RECONNECT_MS * 2 ** Math.max(0, failures - 1), RECONNECT_MAX_MS);
 
 export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
   const { scopeKey } = useActorQueryScope();
@@ -267,19 +273,46 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
       else if (message.type === "lifecycle") handleLifecycle(host, message);
     };
 
-    const connect = (host: string) => {
+    const reconnectLater = (host: string, conn: Conn): void => {
+      if (!active || conn.stop) return;
+      const timer = setTimeout(() => {
+        reconnectTimers.delete(timer);
+        if (active) void connect(host);
+      }, reconnectDelay(conn.failures));
+      reconnectTimers.add(timer);
+    };
+
+    // note: every connect mints its own single-use ticket. A refused mint (403) is the same
+    // signal as a 1008; any other failed mint backs off like a failed handshake.
+    const connect = async (host: string): Promise<void> => {
       const conn = conns.get(host);
       if (!active || !conn || conn.stop) return;
-      const ws = new WebSocket(getEventsWsUrl(host));
+      let url: string;
+      try {
+        url = await ticketedSocketUrl({ kind: "events", host });
+      } catch (error) {
+        if (error instanceof APIError && error.status === 403) {
+          scheduleReconcile(true);
+          return;
+        }
+        conn.failures += 1;
+        reconnectLater(host, conn);
+        return;
+      }
+      // The host may have been closed, or the effect torn down, while the ticket was minted.
+      if (!active || conn.stop || conns.get(host) !== conn) return;
+      const ws = new WebSocket(url);
       conn.ws = ws;
       conn.healthy = false;
       ws.onopen = () => {
         conn.healthy = true;
+        conn.failures = 0;
         // Every initial-open/reconnect burst gets one actor-wide authoritative snapshot.
         freshness.streamOpened();
       };
       ws.onmessage = (event) => handleMessage(host, event.data as string);
       ws.onclose = (event) => {
+        const opened = conn.healthy;
         conn.ws = null;
         conn.healthy = false;
         if (event.code === 1008) {
@@ -288,13 +321,15 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
           scheduleReconcile(true);
           return;
         }
-        if (active && !conn.stop) {
-          const timer = setTimeout(() => {
-            reconnectTimers.delete(timer);
-            if (active) connect(host);
-          }, RECONNECT_MS);
-          reconnectTimers.add(timer);
+        if (event.code === WS_CLOSE.SESSION_ENDED) {
+          // The session the ticket was minted under ended. Catch up from the cached read and
+          // reopen under the current session; the open itself asks for an authoritative one.
+          scheduleReconcile(false);
+          conn.failures = 0;
+        } else if (!opened) {
+          conn.failures += 1;
         }
+        reconnectLater(host, conn);
       };
       ws.onerror = () => {
         try {
@@ -325,8 +360,8 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
 
     freshness.start();
     for (const host of hosts) {
-      conns.set(host, { ws: null, stop: false, healthy: false });
-      connect(host);
+      conns.set(host, { ws: null, stop: false, healthy: false, failures: 0 });
+      void connect(host);
     }
 
     const handleVisibility = freshness.visibilityChanged;

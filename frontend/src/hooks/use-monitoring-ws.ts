@@ -2,13 +2,16 @@
  * WebSocket-backed monitoring hook.
  * Receives real-time dashboard pushes from the backend metrics collector.
  * Falls back to REST polling when WS is unavailable.
+ *
+ * note: every connect mints its own single-use ticket. A failed mint backs off like a failed
+ * handshake, and a 4401 (the session ended) reconnects at the base delay under the new session.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSession } from "next-auth/react";
-import { getAccessToken } from "@/lib/api";
 import { getActorQueryScope } from "@/hooks/use-query-scope";
+import { WS_CLOSE, ticketedSocketUrl } from "@/lib/ws-url";
 import { Role, resolveRoles } from "@/types/rbac";
 import type { MonitoringDashboardResponse } from "@/types";
 
@@ -68,26 +71,17 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
       }, delay);
     };
 
-    const connect = () => {
+    const connect = async (): Promise<void> => {
       if (!active) return;
-
-      // Build WS URL from NEXT_PUBLIC_API_URL (direct backend connection for WebSocket)
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      // Append auth token as query param (browsers can't set Authorization headers on WS)
-      const token = getAccessToken();
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
       let wsUrl: string;
-      if (apiUrl) {
-        const isSecure = apiUrl.startsWith("https://");
-        const protocol = isSecure ? "wss:" : "ws:";
-        const host = apiUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-        wsUrl = `${protocol}//${host}/api/v1/monitoring/ws${tokenParam}`;
-      } else {
-        const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
-        const protocol = isHttps ? "wss:" : "ws:";
-        const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
-        wsUrl = `${protocol}//${hostname}:4050/api/v1/monitoring/ws${tokenParam}`;
+      try {
+        wsUrl = await ticketedSocketUrl({ kind: "monitoring" });
+      } catch {
+        scheduleReconnect();
+        return;
       }
+      // The effect may have been torn down while the ticket was minted.
+      if (!active) return;
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -111,11 +105,12 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
           }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
           if (!active || socket !== ws) return;
           socket = null;
           if (wsRef.current === ws) wsRef.current = null;
           setConnected(false);
+          if (event.code === WS_CLOSE.SESSION_ENDED) attempt = 0;
           scheduleReconnect();
         };
 
@@ -127,7 +122,7 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
       }
     };
 
-    connect();
+    void connect();
 
     return () => {
       active = false;

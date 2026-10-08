@@ -89,6 +89,9 @@ async function installApiFixtures(page, role, options = {}) {
     externalRequests: [],
     unexpectedWebSockets: [],
     webSocketAuthFailures: [],
+    // Single-use WebSocket tickets minted through POST /ws-tickets: ticket -> request body.
+    wsTickets: new Map(),
+    spentWsTickets: new Set(),
     monitoringSockets: [],
     instanceSockets: [],
     pageErrors: [],
@@ -144,9 +147,21 @@ async function installApiFixtures(page, role, options = {}) {
       return;
     }
 
-    if (url.searchParams.get("token") !== `e2e-${role}-access-token`) {
+    // A socket proves its caller with a ticket minted for exactly this socket, once; a URL that
+    // carries the access token is refused like a wrong ticket.
+    const ticket = url.searchParams.get("ticket");
+    const minted = ticket ? state.wsTickets.get(ticket) : undefined;
+    const ticketMatches =
+      minted !== undefined &&
+      !state.spentWsTickets.has(ticket) &&
+      ticket.startsWith(`e2e-${role}-ticket-`) &&
+      (isExpectedMonitoringSocket
+        ? minted.kind === "monitoring"
+        : minted.kind === "events" && minted.host === url.searchParams.get("host"));
+    if (ticket) state.spentWsTickets.add(ticket);
+    if (url.searchParams.has("token") || !ticketMatches) {
       state.webSocketAuthFailures.push(entry);
-      await webSocket.close({ code: 1008, reason: "Invalid E2E WebSocket token" });
+      await webSocket.close({ code: 1008, reason: "Invalid E2E WebSocket ticket" });
       return;
     }
 
@@ -199,6 +214,18 @@ async function installApiFixtures(page, role, options = {}) {
         status: 401,
         contentType: "application/json",
         body: JSON.stringify({ detail: "Missing role fixture bearer" }),
+      });
+      return;
+    }
+
+    if (method === "POST" && path === "/ws-tickets") {
+      const ticket = `e2e-${role}-ticket-${state.wsTickets.size + 1}`;
+      state.wsTickets.set(ticket, JSON.parse(request.postData() || "{}"));
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        headers: { "Cache-Control": "no-store" },
+        body: JSON.stringify({ ticket, tickets: null, expires_in: 30 }),
       });
       return;
     }
@@ -425,7 +452,7 @@ async function expectCleanHarness(state) {
     [],
   );
   expect(state.unexpectedWebSockets, "unexpected WebSocket connections").toEqual([]);
-  expect(state.webSocketAuthFailures, "WebSocket connections with the wrong role token").toEqual(
+  expect(state.webSocketAuthFailures, "WebSocket connections without a valid role ticket").toEqual(
     [],
   );
   expect(state.pageErrors, "uncaught browser errors").toEqual([]);

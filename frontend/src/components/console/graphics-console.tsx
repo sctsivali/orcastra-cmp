@@ -51,7 +51,7 @@ interface SpiceConnection {
 
 // WebSocket URL builder - uses NEXT_PUBLIC_API_URL so connections
 // work through reverse proxies / tunnels (not just localhost:4050)
-import { getGraphicsWsUrl } from "@/lib/ws-url";
+import { mintFailureMessage, spiceSocketUrls } from "@/lib/ws-url";
 
 // Correct script loading order for spice-html5
 // Based on spice-html5-rails.js manifest
@@ -187,6 +187,8 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
     // Connection attempt tracking
     const connectionAttemptRef = useRef(0);
     const isConnectingRef = useRef(false);
+    // Bumped by every connect and by disconnect, so a ticket that arrives late opens nothing.
+    const connectGenerationRef = useRef(0);
     // Track if connection is stabilized (after 500ms delay post-connect)
     const isStabilizedRef = useRef(false);
     const MAX_CONNECTION_ATTEMPTS = 3;
@@ -522,48 +524,13 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       };
     }, []);
 
-    // Connect to graphics console
-    const connect = useCallback(() => {
-      const screen = document.getElementById(screenId);
-      if (!scriptsReady || !screen) {
-        console.warn('[GraphicsConsole] Not ready - scriptsReady:', scriptsReady, 'screen:', !!screen);
+    // Opens SPICE with minted URLs, unless a disconnect came first.
+    const startSpice = useCallback((urls: { main: string; channels: string[] }, generation: number): void => {
+      if (generation !== connectGenerationRef.current) {
+        isConnectingRef.current = false;
         return;
       }
-      
-      // Prevent multiple simultaneous connection attempts
-      if (isConnectingRef.current) {
-        console.warn('[GraphicsConsole] Already connecting, skipping');
-        return;
-      }
-      
-      // Check connection attempt limit
-      if (connectionAttemptRef.current >= MAX_CONNECTION_ATTEMPTS) {
-        console.error('[GraphicsConsole] Max connection attempts reached');
-        setStatus('error');
-        setErrorMessage(`Connection failed after ${MAX_CONNECTION_ATTEMPTS} attempts. Click Reconnect to try again.`);
-        updateConnectionStatus(consoleId, 'error', 'Max connection attempts reached');
-        return;
-      }
-      
-      connectionAttemptRef.current += 1;
-      isConnectingRef.current = true;
-
-      // Disconnect any existing connection
-      if (spiceConnectionRef.current) {
-        try {
-          spiceConnectionRef.current.stop();
-        } catch (e) {
-          // Ignore
-        }
-        spiceConnectionRef.current = null;
-      }
-
-      setStatus('connecting');
-      updateConnectionStatus(consoleId, 'connecting');
-      setErrorMessage('');
-
       try {
-        const wsUrl = getGraphicsWsUrl(instanceName, host, project);
         const SpiceMainConn = (window as any).SpiceMainConn;
 
         if (!SpiceMainConn) {
@@ -577,7 +544,8 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         // Create SPICE connection
         // LXD console doesn't require password (auth is done via LXD)
         const sc = new SpiceMainConn({
-          uri: wsUrl,
+          uri: urls.main,
+          channel_uris: urls.channels,
           screen_id: screenId,
           password: '',  // LXD handles auth
           onerror: (e: Error | string) => {
@@ -631,10 +599,68 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         updateConnectionStatus(consoleId, 'error', msg);
         onError?.(msg);
       }
-    }, [consoleId, instanceName, host, project, scriptsReady, screenId, updateConnectionStatus, onReady, onError]);
+    }, [consoleId, screenId, updateConnectionStatus, onReady, onError]);
+
+    // Connect to graphics console
+    const connect = useCallback(() => {
+      const screen = document.getElementById(screenId);
+      if (!scriptsReady || !screen) {
+        console.warn('[GraphicsConsole] Not ready - scriptsReady:', scriptsReady, 'screen:', !!screen);
+        return;
+      }
+      
+      // Prevent multiple simultaneous connection attempts
+      if (isConnectingRef.current) {
+        console.warn('[GraphicsConsole] Already connecting, skipping');
+        return;
+      }
+      
+      // Check connection attempt limit
+      if (connectionAttemptRef.current >= MAX_CONNECTION_ATTEMPTS) {
+        console.error('[GraphicsConsole] Max connection attempts reached');
+        setStatus('error');
+        setErrorMessage(`Connection failed after ${MAX_CONNECTION_ATTEMPTS} attempts. Click Reconnect to try again.`);
+        updateConnectionStatus(consoleId, 'error', 'Max connection attempts reached');
+        return;
+      }
+      
+      connectionAttemptRef.current += 1;
+      isConnectingRef.current = true;
+
+      // Disconnect any existing connection
+      if (spiceConnectionRef.current) {
+        try {
+          spiceConnectionRef.current.stop();
+        } catch (e) {
+          // Ignore
+        }
+        spiceConnectionRef.current = null;
+      }
+
+      setStatus('connecting');
+      updateConnectionStatus(consoleId, 'connecting');
+      setErrorMessage('');
+
+      const generation = ++connectGenerationRef.current;
+      // note: one ticket per SPICE channel. The main channel opens with the first and hands the
+      // others to its display, inputs and cursor sockets (the vendored main.js channel_uris).
+      spiceSocketUrls(instanceName, host, project).then(
+        (urls) => startSpice(urls, generation),
+        (mintError: unknown) => {
+          isConnectingRef.current = false;
+          if (generation !== connectGenerationRef.current) return;
+          const msg = mintFailureMessage(mintError);
+          setStatus('error');
+          setErrorMessage(msg);
+          updateConnectionStatus(consoleId, 'error', msg);
+          onError?.(msg);
+        },
+      );
+    }, [consoleId, instanceName, host, project, scriptsReady, screenId, updateConnectionStatus, onError, startSpice]);
 
     // Disconnect
     const disconnect = useCallback(() => {
+      connectGenerationRef.current += 1;
       isConnectingRef.current = false;
       isStabilizedRef.current = false; // Reset stabilization on disconnect
       if (spiceConnectionRef.current) {
