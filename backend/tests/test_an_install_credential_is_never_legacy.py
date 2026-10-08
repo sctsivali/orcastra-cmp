@@ -37,7 +37,7 @@ class FakeVault:
     def vault_kv_put(self, path: str, data: Any) -> None:
         self.store[path] = data
 
-    def vault_read(self, path: str) -> Any:
+    def vault_read(self, path: str, use_cache: bool = True) -> Any:
         if path not in self.store:
             raise KeyError(path)
         return self.store[path]

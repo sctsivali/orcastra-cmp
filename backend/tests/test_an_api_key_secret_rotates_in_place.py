@@ -292,7 +292,7 @@ async def test_a_url_set_while_the_secret_is_written_is_cleared_again(world, mon
 
 async def test_a_callback_url_that_cannot_be_cleared_stops_the_rotation(world, monkeypatch) -> None:
     _stored(world, app_url=ATTACKER)
-    monkeypatch.setattr(integrations, "_store_app_url_in_vault", lambda _k, _u: False)
+    monkeypatch.setattr(integrations, "_store_app_url_in_vault", lambda _k, _u, **_kw: False)
     with pytest.raises(HTTPException) as caught:
         await _rotate()
     assert caught.value.status_code == 503 and "Nothing changed" in caught.value.detail
@@ -303,9 +303,9 @@ async def test_a_second_clear_that_fails_asks_for_another_rotation(world, monkey
     calls: List[str] = []
     real_store = integrations._store_app_url_in_vault
 
-    def first_works(key_id: str, url: Any) -> bool:
+    def first_works(key_id: str, url: Any, **kwargs: Any) -> bool:
         calls.append(key_id)
-        return real_store(key_id, url) if len(calls) == 1 else False
+        return real_store(key_id, url, **kwargs) if len(calls) == 1 else False
 
     _stored(world, app_url=ATTACKER)
     real_save = integrations.save_api_key_secret_to_vault

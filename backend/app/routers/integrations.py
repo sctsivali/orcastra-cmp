@@ -870,11 +870,17 @@ def save_api_key_secret_to_vault(vault_client, key_id: str, secret_hash: str, ra
     )
 
 
-def get_api_key_from_vault(vault_client, key_id: str) -> tuple[Dict[str, Any], str]:
-    """Get API key metadata and secret hash from Vault."""
+def get_api_key_from_vault(vault_client, key_id: str, *, use_cache: bool = True) -> tuple[Dict[str, Any], str]:
+    """Get API key metadata and secret hash from Vault.
+
+    important: use_cache=False for every read a write is built from. The metadata path is mirrored
+    in the shared Redis cache, and a reader can refill the mirror with a copy from before a write,
+    so a read-modify-write from the mirror can put a revoked key back. The secret path is never
+    mirrored.
+    """
     try:
         metadata = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata", use_cache=use_cache
         )
         secret_data = vault_client.vault_read(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
@@ -1462,7 +1468,7 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     return metadata
 
 
-def _store_app_url_in_vault(api_key_id: str, app_url: Optional[str]) -> bool:
+def _store_app_url_in_vault(api_key_id: str, app_url: Optional[str], *, use_cache: bool = True) -> bool:
     """Store external app callback URL in Vault alongside API key metadata. None clears it.
 
     Returns whether the write landed. The sync ignores it (bookkeeping must not fail a sync); a
@@ -1470,7 +1476,7 @@ def _store_app_url_in_vault(api_key_id: str, app_url: Optional[str]) -> bool:
     """
     try:
         vault_client = get_vault_integrations_client()
-        metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
+        metadata, _ = get_api_key_from_vault(vault_client, api_key_id, use_cache=use_cache)
         metadata["app_url"] = app_url
         vault_client.vault_kv_put(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/metadata",
@@ -1491,10 +1497,10 @@ def _forget_callback_url_blocking(key_id: str) -> Optional[bool]:
     secret would receive the secret the rotation issues to replace it. The connection sets the URL
     again on its next sync, with the new secret.
     """
-    metadata, _ = get_api_key_from_vault(get_vault_integrations_client(), key_id)
+    metadata, _ = get_api_key_from_vault(get_vault_integrations_client(), key_id, use_cache=False)
     if not metadata.get("app_url"):
         return None
-    return _store_app_url_in_vault(key_id, None)
+    return _store_app_url_in_vault(key_id, None, use_cache=False)
 
 
 async def _upsert_synced_organizations(
@@ -2537,7 +2543,9 @@ async def update_api_key_permissions(
         # note: read and written under the key's lock, like revoke and the capability edit, so a
         # revoke landing in between is not written back over
         async with serialize_key_ownership(db, key_id):
-            metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+            metadata, secret_hash = await asyncio.to_thread(
+                get_api_key_from_vault, vault_client, key_id, use_cache=False
+            )
 
             # Update permissions
             metadata["cluster_permissions"] = [p.model_dump() for p in permissions]
@@ -2612,7 +2620,9 @@ async def update_api_key_capabilities(
         # important: read inside the key's lock, which revoke, delete, the permission edit and a
         # rotation take too. Read before it, this write could put back a revoke that landed between.
         async with serialize_key_ownership(db, key_id):
-            metadata, _secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+            metadata, _secret_hash = await asyncio.to_thread(
+                get_api_key_from_vault, vault_client, key_id, use_cache=False
+            )
             refuse_grant_edit(metadata)
             previous = dict(metadata)
             was_legacy = "capabilities" not in metadata
@@ -2675,7 +2685,7 @@ async def revoke_api_key(
         # the check and the write. A revoked owner freezes every organization it owns. The key is
         # read under the lock too, so this write does not undo an edit that held it before.
         async with serialize_key_ownership(db, key_id):
-            metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+            metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
             await _refuse_ending_an_owner(
                 db, key_id, action="revoke", audit_action="integration.api_key.revoke",
                 user=_rbac, metadata=metadata,
@@ -2746,7 +2756,7 @@ async def rotate_api_key_secret(
     # edits take too. A read from before the lock can predate a revoke or a grant edit that landed
     # since, and the callback URL writes below would then put a revoked key back.
     async with serialize_key_ownership(db, key_id):
-        metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+        metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
         refuse_secret_rotation(metadata)
         if classify_key(metadata) != "active":
             raise HTTPException(status_code=409, detail=_ROTATE_A_DEAD_KEY)
@@ -2885,7 +2895,7 @@ async def delete_api_key(
         # the remedy for that (transfer them, or suspend the add-on), not with the installation's.
         async with serialize_key_ownership(db, key_id):
             # Read before the delete: afterwards there is nothing left to describe what was removed.
-            metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+            metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
             await _refuse_ending_an_owner(
                 db, key_id, action="delete", audit_action="integration.api_key.delete",
                 user=_rbac, metadata=metadata,
