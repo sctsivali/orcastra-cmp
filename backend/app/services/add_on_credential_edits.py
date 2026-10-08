@@ -25,7 +25,10 @@ Per route, for a key carrying extension_install_id:
                                         one, at once or after the grace window the operator chose.
   POST   /api-keys/{id}/revoke          allowed. The kill switch, for whoever may revoke today.
                                         Rescope keeps the revocation (it rewrites two fields) and
-                                        rotation issues a working key again.
+                                        rotation issues a working key again. Like any key's, it is
+                                        refused while the key owns an active OrcaHub organization
+                                        (services/integration_key_ownership.py), and the refusal
+                                        names suspending the add-on as the way to stop it now.
   GET    /api-keys, /api-keys/{id}      allowed, reads.
   POST   /api-keys/{id}/users           allowed. A user mapping is only listed and counted, and
                                         nothing that authorizes a request reads it.
@@ -34,7 +37,9 @@ Per route, for a key carrying extension_install_id:
   POST   /api-keys                      not keyed. It cannot write extension_install_id.
 
 important: each check runs after _authorize_api_key, so a key outside the caller's clusters still
-answers 404 and the 409 never tells anyone an id they cannot see exists.
+answers 404 and the 409 never tells anyone an id they cannot see exists. On DELETE the ownership
+check runs before the installation claim, so an add-on credential that owns organizations is told
+how to move them first.
 """
 
 import logging

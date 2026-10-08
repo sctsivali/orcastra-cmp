@@ -19,7 +19,7 @@ from sqlalchemy import text
 from app.services import add_on_credential_edits, extension_install
 from app.services.add_on_credential_edits import CLAIM_UNKNOWN_DETAIL, DELETE_DETAIL, GRANT_EDIT_DETAIL
 from app.services.extension_credentials import build_install_metadata, rotate_install_credential
-from tests._sqlite_session import AsyncSessionFacade, sqlite_session
+from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER, SECRETS, _FakeVault, _RecordingLogger
 
 ADDON = "oak_addon"
@@ -110,8 +110,10 @@ def installations(*claims: Tuple[str, Optional[str]]) -> AsyncSessionFacade:
     """Real rows of the two columns the claim reads, one (api_key_id, previous_api_key_id) each.
 
     note: the full model has Postgres-only columns, so SQLite holds only the ones the query names.
+    The organization tables are there too, empty, because revoke and delete first read which
+    organizations the key owns (services/integration_key_ownership.py).
     """
-    db = sqlite_session()
+    db = sqlite_session(*org_tables())
     db.sync.execute(text(
         "CREATE TABLE extension_installations "
         "(id INTEGER PRIMARY KEY, api_key_id TEXT NOT NULL UNIQUE, previous_api_key_id TEXT)"
@@ -228,16 +230,40 @@ async def test_a_credential_the_reconcile_sweep_reclaimed_is_deletable(surface: 
     assert not any(ADDON in path for path in vault.store)
 
 
+class _ClaimDown:
+    """Answers the ownership read from real (empty) organization tables, then fails the claim read."""
+
+    def __init__(self) -> None:
+        self.db = sqlite_session(*org_tables())
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        if "extension_installations" in str(statement):
+            raise ConnectionError("database is down: postgresql://user:pw@db/app")
+        return await self.db.execute(statement, *args, **kwargs)
+
+
+class _Down:
+    async def execute(self, *_a: Any, **_k: Any) -> Any:
+        raise ConnectionError("database is down: postgresql://user:pw@db/app")
+
+
 async def test_a_claim_that_cannot_be_read_deletes_nothing(surface: Dict[str, Any]) -> None:
     vault = surface["use"](addon_metadata())
+    with pytest.raises(HTTPException) as refused:
+        await delete(ADDON, _ClaimDown())
+    assert refused.value.status_code == 503 and refused.value.detail == CLAIM_UNKNOWN_DETAIL
+    assert "postgresql" not in refused.value.detail
+    assert vault.deletes == [] and surface["log"].calls == [] and surface["evicted"] == []
 
-    class _Down:
-        async def execute(self, *_a: Any, **_k: Any) -> Any:
-            raise ConnectionError("database is down: postgresql://user:pw@db/app")
 
+async def test_ownership_that_cannot_be_read_deletes_nothing(surface: Dict[str, Any]) -> None:
+    """The ownership read comes first, so a database that answers nothing stops the delete there."""
+    from app.services.integration_key_ownership import OWNERSHIP_UNKNOWN_DETAIL
+
+    vault = surface["use"](addon_metadata())
     with pytest.raises(HTTPException) as refused:
         await delete(ADDON, _Down())
-    assert refused.value.status_code == 503 and refused.value.detail == CLAIM_UNKNOWN_DETAIL
+    assert refused.value.status_code == 503 and refused.value.detail == OWNERSHIP_UNKNOWN_DETAIL
     assert "postgresql" not in refused.value.detail
     assert vault.deletes == [] and surface["log"].calls == [] and surface["evicted"] == []
 
@@ -278,13 +304,15 @@ async def test_an_ordinary_key_still_takes_all_three(surface: Dict[str, Any]) ->
     assert surface["reached"] and len(vault.writes) == 2
     db = installations((PLAIN, None))
     assert await delete(PLAIN, db) == {"success": True, "message": f"API key {PLAIN} deleted"}
-    assert db.statements == [], "an ordinary key never reads the installations"
+    assert not any("extension_installations" in str(statement) for statement in db.statements), (
+        "an ordinary key never reads the installations"
+    )
     assert vault.deletes == [_FakeVault._path(PLAIN, "metadata"), _FakeVault._path(PLAIN, "secret")]
 
 
 async def test_revoke_stays_available_as_the_kill_switch(surface: Dict[str, Any]) -> None:
     vault = surface["use"](addon_metadata())
-    info = await integrations.revoke_api_key(ADDON, None, PARTNER)
+    info = await integrations.revoke_api_key(ADDON, None, PARTNER, installations())
     assert info.is_revoked is True
     assert metadata_of(vault, ADDON)["is_revoked"] is True
     assert metadata_of(vault, ADDON)["extension_install_id"] == 7
@@ -298,7 +326,7 @@ async def test_the_installation_still_rescopes_and_rotates_after_a_revoke(
     """Rescope keeps the revocation, and rotation issues a working key again."""
     monkeypatch.setenv("SECRET_KEY", "a-test-secret-key-for-hmac")
     vault = surface["use"](addon_metadata())
-    await integrations.revoke_api_key(ADDON, None, PARTNER)
+    await integrations.revoke_api_key(ADDON, None, PARTNER, installations())
 
     class _Install:
         id, api_key_id = 7, ADDON
