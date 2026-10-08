@@ -46,7 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import has_capability
 from app.core.api_key_expiry import classify_key, expiry_state
-from app.models.db_models import Organization, OrganizationCluster
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services.add_on_credential_edits import is_add_on_credential
 
 logger = logging.getLogger(__name__)
@@ -102,23 +102,32 @@ async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organizatio
     return list(rows.scalars().all())
 
 
-async def runs_an_owned_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:
-    """None when the key owns no active OrcaHub organization, else whether this user runs one of them.
+async def partners_an_owned_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:
+    """None when the key owns no active OrcaHub organization, else whether this user holds a current
+    partner row (cluster_parties.RUNNING_ROLES) in one of them.
 
-    "Runs" is cluster_parties.run_orgs: created it, or holds a partner row in it.
-
-    important: a secret rotation asks this of every caller but an Administrator. Who minted a key
-    is a fact about the past: a partner who minted an organization's connection key and has since
-    left that organization still matches created_by, and a fresh secret would let them sync the
-    organization and rewrite its members again.
+    important: a secret rotation asks this of every caller but an Administrator, and created_by never
+    counts. Minting a key is a fact about the past, and provisioning stamps every buyer organization
+    it creates with the key's minter as created_by, so a minter who has since left the seller would
+    still match the buyers it provisioned and take a working secret for all of them.
     """
-    from app.services.cluster_parties import run_orgs
+    from app.services.cluster_parties import RUNNING_ROLES
 
     owned = await owned_organizations(db, key_id)
     if not owned:
         return None
-    runs = await run_orgs(db, email)
-    return any(org.id in runs for org in owned)
+    if not email:
+        return False
+    found = await db.execute(
+        select(OrganizationMember.organization_id)
+        .where(
+            OrganizationMember.organization_id.in_([org.id for org in owned]),
+            OrganizationMember.user_email == email,
+            OrganizationMember.role.in_(RUNNING_ROLES),
+        )
+        .limit(1)
+    )
+    return found.first() is not None
 
 
 async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, List[Tuple[int, str]]]:
