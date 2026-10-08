@@ -10,6 +10,7 @@ Here each of these is an explicit unknown (roles None, with a reason):
   * the user search or the detail read failing, timing out or answering anything but 200
   * a body that is not the expected shape, or a result page that does not hold every match
   * an email no account carries, or one that two accounts carry
+  * an account Authentik has disabled
 Otherwise the account's groups go through rbac.roles_for_group_names, the resolver a request's
 groups claim goes through, so an Admin through any alias group is an Admin.
 
@@ -98,6 +99,9 @@ async def _read(
     if detail.status_code != 200:
         return unknown_role("user_detail_failed")
     record = _json_object(detail)
+    if record and record.get("is_active") is False:
+        # note: a disabled account keeps its groups; it holds no role while disabled.
+        return unknown_role("user_inactive")
     groups = record.get("groups_obj") if record else None
     if not isinstance(groups, list):
         return unknown_role("user_detail_unreadable")

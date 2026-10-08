@@ -471,6 +471,14 @@ class Settings(BaseSettings):
         alias="AUTH_JWKS_CACHE_TTL",
         description="JWKS cache TTL in seconds (default: 1 hour)"
     )
+    ws_query_token_enabled: bool = Field(
+        default=True,
+        alias="WS_QUERY_TOKEN_ENABLED",
+        description=(
+            "Accept an access token in a WebSocket's ?token= query. Sockets open with single-use "
+            "tickets from POST /ws-tickets; this only keeps tabs opened before that switch working"
+        ),
+    )
 
     # Authentik Admin API (for pushing user group updates from Orcastra)
     authentik_api_url: str = Field(

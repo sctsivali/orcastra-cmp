@@ -27,6 +27,7 @@ import pytest
 from fastapi import HTTPException, WebSocketException
 
 from app.core import auth as auth_module
+from app.core import ws_auth as ws_auth_module
 
 ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 
@@ -39,7 +40,14 @@ AUTH_ENTRY_POINTS = (
     "get_current_user",
     "get_ws_user",
     "validate_jwt",
+    # ws_auth.py: ws_user builds the ticket dependency every socket uses ("dependency"), which
+    # runs the redeem step only after its own issuer refusal; the tests at the end cover them.
+    "ws_user",
+    "dependency",
+    "_redeemed",
 )
+# Every module that turns a credential into a principal.
+AUTH_MODULES = (auth_module, ws_auth_module)
 
 
 def _code_only(src: str) -> str:
@@ -80,7 +88,8 @@ def test_every_auth_entry_point_is_covered_by_this_file() -> None:
     # dependency however it is named.
     found = {
         node.name
-        for node in ast.walk(ast.parse(Path(auth_module.__file__).read_text()))
+        for module in AUTH_MODULES
+        for node in ast.walk(ast.parse(Path(module.__file__).read_text()))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.returns is not None
         and "AuthenticatedUser" in ast.unparse(node.returns)
@@ -192,3 +201,43 @@ async def test_auth_disabled_still_returns_none_on_both_paths() -> None:
 
     assert await auth_module.get_ws_user(_Socket(), _Settings()) is None
     assert await auth_module.get_current_user(_Req(), None, _Settings()) is None
+
+
+def test_the_ticket_dependency_refuses_before_redeeming() -> None:
+    """ws_user's issuer refusal comes first, so _redeemed never runs on an unverifiable server."""
+    dependency = ws_auth_module.ws_user("terminal")
+    branch = _issuer_branch(dependency)
+    assert branch and "raise" in branch and "return None" not in branch
+    source = _code_only(inspect.getsource(dependency))
+    assert source.index("authentik_issuer") < source.index("_redeemed(")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["monitoring", "events", "tasks", "terminal", "console"])
+async def test_every_ticketed_socket_refuses_an_unverifiable_server(kind: str) -> None:
+    class _Settings:
+        auth_enabled = True
+        authentik_issuer = ""
+        ws_query_token_enabled = False
+
+    class _Socket:
+        query_params: dict = {"ticket": "anything"}
+        path_params: dict = {}
+
+    with pytest.raises(WebSocketException) as exc:
+        await ws_auth_module.ws_user(kind)(_Socket(), _Settings())
+    assert exc.value.code == 1011
+
+
+@pytest.mark.asyncio
+async def test_the_ticket_dependency_is_off_when_auth_is() -> None:
+    class _Settings:
+        auth_enabled = False
+        authentik_issuer = ""
+        ws_query_token_enabled = False
+
+    class _Socket:
+        query_params: dict = {}
+        path_params: dict = {}
+
+    assert await ws_auth_module.ws_user("tasks")(_Socket(), _Settings()) is None

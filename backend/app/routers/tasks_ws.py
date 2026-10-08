@@ -23,7 +23,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_settings
-from app.core.dependencies import AuthenticatedUser, get_ws_user
+from app.core.dependencies import AuthenticatedUser
+from app.core.ws_auth import ws_user
+from app.services.ws_session_guard import close_when_session_ends
 from app.core.org_scope import set_org_scope_for_ws
 from app.core.task_scope import caller_tier, log_is_visible, task_is_visible
 from app.models.task_schemas import ClusterLogEntry, TaskRecord
@@ -74,12 +76,12 @@ async def _follower_active() -> bool:
 @router.websocket("/ws")
 async def tasks_websocket(
     websocket: WebSocket,
-    user: Optional[AuthenticatedUser] = Depends(get_ws_user),
+    user: Optional[AuthenticatedUser] = Depends(ws_user("tasks")),
 ):
-    """Stream task and cluster-log deltas in the caller's scope. Auth token is the ``token``
-    query parameter."""
+    """Stream task and cluster-log deltas in the caller's scope. Opened with a ticket from
+    POST /ws-tickets; closes with 4401 when the session ends."""
     settings = get_settings()
-    # important: gated on auth_enabled ALONE; get_ws_user refuses a misconfigured server itself.
+    # important: gated on auth_enabled ALONE; ws_user refuses a misconfigured server itself.
     if settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -141,9 +143,10 @@ async def tasks_websocket(
 
     sender = asyncio.create_task(_sender())
     receiver = asyncio.create_task(_receiver())
+    session = asyncio.create_task(close_when_session_ends(websocket, user))
     try:
         _, pending = await asyncio.wait(
-            {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
+            {sender, receiver, session}, return_when=asyncio.FIRST_COMPLETED
         )
         for task in pending:
             task.cancel()
@@ -154,5 +157,6 @@ async def tasks_websocket(
     finally:
         sender.cancel()
         receiver.cancel()
+        session.cancel()
         await tailer.unsubscribe(queue)
         logger.info(f"[tasks] feed disconnected user={user_id}")

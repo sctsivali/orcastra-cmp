@@ -225,6 +225,7 @@ class AuthenticatedUser:
         groups: Optional[list[str]] = None,
         roles: Optional[list[str]] = None,
         raw_claims: Optional[dict] = None,
+        session_exp: Optional[float] = None,
     ):
         self.user_id = user_id
         self.email = email
@@ -232,6 +233,9 @@ class AuthenticatedUser:
         self.groups = groups or []
         self.roles = roles or []
         self.raw_claims = raw_claims or {}
+        # The access token's expiry, epoch seconds. A long-lived socket outlives its token, and
+        # this is when the session it was opened under ends.
+        self.session_exp = session_exp
 
     def has_group(self, group: str) -> bool:
         return group in self.groups
@@ -293,6 +297,7 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
         groups = payload.get("groups", [])
         roles = [g for g in groups if g.startswith("role_")]
 
+        exp = payload.get("exp")
         return AuthenticatedUser(
             user_id=user_id,
             email=email,
@@ -300,6 +305,7 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
             groups=groups,
             roles=roles,
             raw_claims=payload,
+            session_exp=float(exp) if isinstance(exp, (int, float)) and not isinstance(exp, bool) else None,
         )
 
     except jwt.ExpiredSignatureError:
