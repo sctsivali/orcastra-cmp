@@ -62,8 +62,15 @@ async def apply_member_memory(
     """The rows with memory from their metrics where a member answered, and what was read."""
     groups = _groups(usages)
     phase_end = time.monotonic() + PHASE_SECONDS
+    # important: run_blocking's per-cluster bound refuses a call past it rather than queueing
+    # it, so a third member of one Cluster was refused on every sweep. The gate queues them.
+    gates = {cluster: asyncio.Semaphore(_PER_CLUSTER) for cluster, _ in groups}
 
     async def one(cluster: str, member: str) -> Optional[MemberScrape]:
+        async with gates[cluster]:
+            return await read(cluster, member)
+
+    async def read(cluster: str, member: str) -> Optional[MemberScrape]:
         budget = min(SCRAPE_SECONDS, phase_end - time.monotonic())
         if budget < _MIN_SCRAPE_SECONDS:
             return None

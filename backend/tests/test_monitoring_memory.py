@@ -178,3 +178,19 @@ def test_the_dashboard_runs_the_memory_phase_and_logs_its_counts():
     assert 'timer.timed("scrapes", apply_member_memory(lxd_service, usages))' in source
     assert "memory=memory_counts" in source
     assert source.index("apply_member_memory") < source.index("select_consumers(usages)")
+
+
+def test_every_member_of_a_large_cluster_is_read_two_at_a_time(scrapes):
+    """run_blocking refuses past its per-Cluster bound; the phase queues instead."""
+    answers, calls = scrapes
+    members = ("m1", "m2", "m3", "m4", "m5")
+    rows = [row(f"ct-{m}", host="c2").model_copy(update={"location": m}) for m in members]
+    for member in members:
+        answers[("c2", member)] = MemberScrape(
+            collected_at=1.0, series={("default", f"ct-{member}"): _series("container")}
+        )
+
+    shown, counts = asyncio.run(apply_member_memory(_Service(), _usages(*rows)))
+
+    assert sorted(member for _, _, member in calls) == list(members)
+    assert counts["members_read"] == 5 and all(not usage.memory_includes_cache for usage in shown)
