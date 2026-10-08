@@ -4,8 +4,8 @@ Provides endpoints for real-time cluster and instance metrics monitoring.
 Based on LXD metrics API specification: CPU, memory, disk, network, processes.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect
-from typing import Annotated, Optional, List, Dict, Any, Tuple
+from fastapi import APIRouter, HTTPException, Depends, Query, Response, WebSocket, WebSocketDisconnect
+from typing import Annotated, Optional, List, Dict, Any
 import logging
 import time
 import asyncio
@@ -17,12 +17,19 @@ from app.models.schemas import (
     MonitoringDashboardResponse,
     MetricsHistoryPoint,
 )
+from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.services.monitoring_history import (
-    append_point,
     build_point,
     claim_history_slot,
     history_key as _monitoring_history_key,
-    read_window,
+)
+from app.services.monitoring_history_store import (
+    HistoryRead,
+    history_body,
+    hydrate_from_postgres,
+    import_previous_history,
+    needs_hydrate,
+    record_point,
 )
 from app.services.monitoring_sweep import SweepTimer, count_warnings, log_sweep, read_fleet
 from app.services.monitoring_usage import (
@@ -451,6 +458,8 @@ async def get_monitoring_dashboard(
         # without exposing global/background collector data.
         # note: not when no cluster answered. That dashboard is all zeros, the same misreading
         # the cache below refuses to keep, and as a point it drew the fleet idling at zero.
+        # note: the slot id differs from the previous string store's, so a release still writing
+        # that store during a rolling deploy never takes this store's slot.
         history_key = _monitoring_history_key(scope_key)
         history_started = time.monotonic()
         history_written = False
@@ -458,11 +467,10 @@ async def get_monitoring_dashboard(
             connected_nodes
             and _resource_generation(cache, _MONITORING_CACHE_KIND) == monitoring_generation
             and claim_history_slot(
-                cache, history_key, now=time.time(), local=_last_history_store_times
+                cache, f"points:{history_key}", now=time.time(), local=_last_history_store_times
             )
         ):
             try:
-                history = cache.get("monitoring_history", history_key) or []
                 new_point = build_point(
                     nodes_metrics,
                     usages,
@@ -471,15 +479,15 @@ async def get_monitoring_dashboard(
                     storage_usage_percent=storage_usage_percent,
                     running_instances=running_instances,
                 )
-                history = append_point(history, new_point)
-                cache.set("monitoring_history", history_key, history, ttl=86400)  # 24 hour TTL
-                history_written = True
-                
-                if scope_key == COLLECTED_SCOPE_KEY and new_point["cpu_usage_percent"] is not None:
+                history_written = await record_point(cache, history_key, new_point)
+                if (
+                    history_written
+                    and scope_key == COLLECTED_SCOPE_KEY
+                    and new_point["cpu_usage_percent"] is not None
+                ):
                     asyncio.create_task(_persist_snapshot(new_point))
-                
             except Exception as hist_err:
-                logger.debug(f"Could not update history: {hist_err}")
+                logger.warning("Could not update history for %s: %s", history_key, hist_err)
         
         timer.record("history", history_started)
         log_sweep(
@@ -663,26 +671,6 @@ async def _persist_snapshot(point: Dict[str, Any]) -> None:
         logger.debug(f"Snapshot DB write failed (cache still has the data): {e}")
 
 
-# Cache for history endpoint responses to avoid repeated Pydantic model creation
-# Key: (scope_key, points) -> Value: (version token, list of MetricsHistoryPoint)
-# Bounded to 50 entries to prevent unbounded memory growth
-#
-# important: the token must identify the newest point, not count the points. This used to be
-# len(history), which stops changing the moment the ring buffer saturates at 8640 (see the cap
-# in _store_history_point below). From that moment every request matched the cached entry and
-# the chart froze permanently, with no TTL able to release it - only a restart. At the 4s
-# minimum store interval that is roughly 9.6 hours of uptime before the graph dies.
-_history_response_cache: Dict[str, Tuple[str, List[MetricsHistoryPoint]]] = {}
-_HISTORY_CACHE_MAX_SIZE = 50
-
-
-def _history_version(history: List[Dict[str, Any]]) -> str:
-    """Identify a history buffer by its newest point, so a saturated ring still versions."""
-    if not history:
-        return "0:"
-    return f"{len(history)}:{history[-1].get('timestamp', '')}"
-
-
 @router.get(
     "/history",
     response_model=List[MetricsHistoryPoint],
@@ -707,9 +695,11 @@ async def get_metrics_history(
     Get historical metrics for graphing.
 
     Data flow (hot -> cold):
-      1. Redis, appended by every dashboard collection and trimmed to 24 hours
-      2. PostgreSQL (survives restarts, 7-day retention)
-      3. Empty list (first startup, dashboard will populate on next cycle)
+      1. Redis sorted set per scope, one member per dashboard collection, trimmed to 24 hours
+      2. The previous release's string key, merged in once per scope
+      3. PostgreSQL (admin scope only, 7-day retention), merged in whenever the stored
+         history starts well inside the 24 hours, such as after a Redis restart
+      4. One scoped collection when the scope has no point at all yet
 
     Each org/tenant ACL reads its own scoped stream. Admin/background history
     is still persisted to PostgreSQL as the durable global stream.
@@ -717,53 +707,33 @@ async def get_metrics_history(
     cache = get_cache_manager()
     scope_key = get_scope_cache_key("dashboard")
     history_key = _monitoring_history_key(scope_key)
-    history = cache.get("monitoring_history", history_key) or []
-    
-    if not history and scope_key == "dashboard:scope=all":
-        # Cache empty (backend just restarted?) - hydrate from PostgreSQL
-        try:
-            from app.services.metrics_history_service import load_metrics_history
-            # note: 2880 rows is 24 hours at the collector's 30 s cadence, the longest window.
-            history = await load_metrics_history(points=2880, scope="all")
-            if history:
-                # Re-populate the in-memory cache so subsequent requests are instant
-                cache.set("monitoring_history", history_key, history, ttl=86400)
-                logger.info(f"Hydrated metrics cache from DB ({len(history)} points)")
-        except Exception as db_err:
-            logger.warning(f"DB history fallback failed: {db_err}")
 
-    if not history:
-        # First scoped request after startup: collect one scoped dashboard sample
-        # so the chart starts filling without reading the global history stream.
-        try:
-            await get_monitoring_dashboard(lxd_service=lxd_service, fresh=False)
-            history = cache.get("monitoring_history", history_key) or []
-        except Exception as collect_err:
-            logger.debug(f"Scoped history warm-up failed: {collect_err}")
-    
-    if not history:
-        return []
-    
-    selection = read_window(history, window_seconds=window, points=points)
+    async def read() -> HistoryRead:
+        return await history_body(cache, history_key, window_seconds=window, points=points)
+
     try:
-        # Check response cache: avoid re-creating Pydantic models if the selection hasn't changed
-        cache_key = f"{history_key}:{'p' if window is None and points is not None else 'w'}:{window or points}"
-        version = _history_version(selection)
-        cached_entry = _history_response_cache.get(cache_key)
-        if cached_entry and cached_entry[0] == version:
-            return cached_entry[1]
-
-        # Create Pydantic models and cache the result
-        result = [MetricsHistoryPoint(**p) for p in selection]
-        # Evict oldest entries if cache exceeds max size
-        if len(_history_response_cache) >= _HISTORY_CACHE_MAX_SIZE:
-            oldest_key = next(iter(_history_response_cache))
-            del _history_response_cache[oldest_key]
-        _history_response_cache[cache_key] = (version, result)
-        return result
-    except Exception as e:
-        logger.error(f"Error parsing metrics history: {e}")
-        return []
+        stored = await read()
+        if stored.store_ok:
+            refilled = await import_previous_history(cache, history_key)
+            if scope_key == COLLECTED_SCOPE_KEY and needs_hydrate(stored):
+                refilled += await hydrate_from_postgres(cache, history_key)
+            if refilled:
+                stored = await read()
+        if stored.total == 0:
+            # First scoped request after startup: collect one scoped dashboard sample
+            # so the chart starts filling without reading the global history stream.
+            try:
+                await get_monitoring_dashboard(lxd_service=lxd_service, fresh=False)
+            except Exception as collect_err:
+                logger.debug(f"Scoped history warm-up failed: {collect_err}")
+            stored = await read()
+    except (BlockingTimeout, BlockingPoolFull) as busy:
+        logger.warning("Monitoring history read refused for %s: %s", history_key, busy)
+        raise HTTPException(
+            status_code=503, detail="Monitoring history is busy. The chart retries on its next refresh."
+        )
+    # note: the body is already the List[MetricsHistoryPoint] JSON, encoded off the event loop.
+    return Response(content=stored.body, media_type="application/json")
 
 
 @ws_router.websocket("/ws")

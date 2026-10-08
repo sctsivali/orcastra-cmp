@@ -13,6 +13,8 @@ import pytest
 
 from app.core.cache import CacheManager
 from app.routers import cluster_members, monitoring
+from app.services.monitoring_history import HISTORY_MAX_POINTS, history_key
+from app.services.monitoring_history_store import history_body
 
 
 CLUSTER = "cluster-a"
@@ -45,6 +47,12 @@ def _scoped(key: str) -> str:
 
 def _api_keys(cache: _GenerationCache) -> list[str]:
     return [key for namespace, key, _value, _ttl in cache.writes if namespace == "api_responses"]
+
+
+def _stored_points(cache: _GenerationCache) -> int:
+    """History points the scope holds, read back through the store like the chart reads them."""
+    key = history_key(_scoped("dashboard"))
+    return asyncio.run(history_body(cache, key, window_seconds=None, points=HISTORY_MAX_POINTS)).total
 
 
 def test_instance_invalidation_advances_the_monitoring_generation() -> None:
@@ -110,8 +118,7 @@ def test_dashboard_only_caches_the_generation_it_read(monkeypatch, advance: bool
     assert result.total_nodes == 0
     expected_key = _scoped(monitoring.MONITORING_DASHBOARD_CACHE_KEY)
     assert (expected_key in _api_keys(cache)) is (not advance)
-    history_writes = [write for write in cache.writes if write[0] == "monitoring_history"]
-    assert bool(history_writes) is (not advance)
+    assert (_stored_points(cache) > 0) is (not advance)
 
 
 def _node_resources() -> SimpleNamespace:

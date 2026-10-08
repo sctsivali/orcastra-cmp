@@ -84,3 +84,17 @@ def _isolate_rate_sampler(monkeypatch):
     rate_sampler.reset_all_samplers()
     yield
     rate_sampler.reset_all_samplers()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_monitoring_history_store():
+    """Start every test with an empty history fallback buffer, body memo and import marks.
+
+    The store keeps them as module state, so a point written by one test would otherwise answer
+    another test's read.
+    """
+    from app.services import monitoring_history_store
+
+    monitoring_history_store.reset_local_state()
+    yield
+    monitoring_history_store.reset_local_state()
