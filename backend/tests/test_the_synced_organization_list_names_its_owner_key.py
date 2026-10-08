@@ -5,7 +5,8 @@ provisions for it, so an organization whose owner is revoked, expired, deleted o
 frozen. The list could not say so: it named the key id and the application, read through a helper
 that also loaded the key's secret document. It now reads each owner's metadata only, live rather
 than from the shared cache, and reports the owner's name, state, expiry and the organization's
-clusters. Membership still scopes what a Partner sees.
+clusters. Membership still scopes what a Partner sees, and only an Admin or one of the
+organization's partners reads its owner key's name, state and expiry.
 """
 
 from datetime import timedelta
@@ -152,3 +153,26 @@ async def test_an_empty_list_reads_no_key(listing: Dict[str, Any]) -> None:
     outsider = AuthenticatedUser(user_id="p2", email="nobody@example.test", groups=["role_partner"])
     assert await get(listing, outsider) == []
     assert listing["vault"].reads == []
+
+
+async def test_only_an_organizations_partners_see_its_owner_key(listing: Dict[str, Any]) -> None:
+    """A tenant row lists the organization, and created_by is the minter on a provisioned buyer.
+
+    Neither is a current partner of it, so neither reads its owner key's name, state or expiry.
+    """
+    from sqlalchemy import update
+
+    db, ids = listing["db"], listing["ids"]
+    db.add(OrganizationMember(organization_id=ids["org-active"], user_email=PARTNER.email, role="tenant"))
+    db.sync.execute(update(Organization).where(Organization.id == ids["org-expiring"]).values(
+        created_by=PARTNER.email))
+    db.sync.commit()
+    rows = {row["slug"]: row for row in await get(listing, PARTNER)}
+    assert set(rows) == {"org-active", "org-expiring", "org-revoked"}
+    assert rows["org-revoked"]["owner_key_state"] == "revoked", "a partner row still shows it"
+    for slug in ("org-active", "org-expiring"):
+        row = rows[slug]
+        assert (row["owner_key_name"], row["owner_key_state"], row["owner_key_expires_at"],
+                row["owner_key_expiry_state"]) == (None, None, None, None), slug
+    admin = {row["slug"]: row for row in await get(listing, ADMIN)}
+    assert (admin["org-active"]["owner_key_state"], admin["org-expiring"]["owner_key_state"]) == ("active", "expiring")

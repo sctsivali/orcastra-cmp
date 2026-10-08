@@ -2596,9 +2596,10 @@ export interface IntegrationOrganization {
   created_at: string | null;
   updated_at: string | null;
   // The owner key as it stands now. Only the owner syncs the organization, updates its members
-  // and policies, and provisions tenant access for it.
+  // and policies, and provisions tenant access for it. Null for a caller who is neither an
+  // administrator nor one of the organization's partners.
   owner_key_name?: string | null;
-  owner_key_state?: OwnerKeyState;
+  owner_key_state?: OwnerKeyState | null;
   owner_key_expires_at?: string | null;
   owner_key_expiry_state?: "never" | "active" | "expiring" | "expired" | null;
   cluster_ids?: string[];

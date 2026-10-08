@@ -5328,10 +5328,14 @@ class IntegrationOrgResponse(BaseModel):
     updated_at: Optional[str] = None
     # The owner key as it stands now. Only the owner syncs an organization, updates its members
     # and policies and provisions for it, so an owner that no longer works freezes all three.
+    # Null for a caller who is not an Admin and holds no partner row in the organization.
     owner_key_name: Optional[str] = None
-    owner_key_state: str = Field(
+    owner_key_state: Optional[str] = Field(
         "unclaimed",
-        description="active, expiring, expired, revoked, inactive, missing, unknown or unclaimed",
+        description=(
+            "active, expiring, expired, revoked, inactive, missing, unknown or unclaimed; null when "
+            "the caller is not an administrator or one of the organization's partners"
+        ),
     )
     owner_key_expires_at: Optional[str] = None
     owner_key_expiry_state: Optional[str] = None
@@ -5410,6 +5414,21 @@ async def list_synced_organizations(
                 if cluster_id:
                     clusters.setdefault(org_id, []).append(cluster_id)
 
+        # important: the owner key's name, state and expiry only for an Admin or a current partner
+        # of the organization (cluster_parties.RUNNING_ROLES). Membership lists the organization for
+        # a tenant too, and created_by is the key's minter on a buyer organization provisioning made.
+        running: Optional[set] = None
+        if highest != Role.ADMIN:
+            from app.services.cluster_parties import RUNNING_ROLES
+
+            partner_rows = await db.execute(
+                select(OrganizationMember.organization_id).where(
+                    OrganizationMember.user_email == user.email,
+                    OrganizationMember.role.in_(RUNNING_ROLES),
+                )
+            )
+            running = {org_id for (org_id,) in partner_rows.all()}
+
         # note: the owner key's metadata only, never its secret, and read live: a cached copy from
         # before a revoke would report a frozen organization as healthy.
         owners = await _owner_keys(sorted({org.api_key_id for org in orgs if org.api_key_id}))
@@ -5418,6 +5437,7 @@ async def list_synced_organizations(
         for org in orgs:
             read = owners.get(org.api_key_id, (None, None)) if org.api_key_id else (None, None)
             meta = read[0] or {}
+            shown = running is None or org.id in running
             response.append(IntegrationOrgResponse(
                 id=org.id,
                 name=org.name,
@@ -5429,10 +5449,10 @@ async def list_synced_organizations(
                 app_name=meta.get("app_name") or None,
                 created_at=org.created_at.isoformat() if org.created_at else None,
                 updated_at=org.updated_at.isoformat() if org.updated_at else None,
-                owner_key_name=meta.get("name") or None,
-                owner_key_state=_owner_state(org.api_key_id, read),
-                owner_key_expires_at=meta.get("expires_at"),
-                owner_key_expiry_state=expiry_state(meta.get("expires_at")) if meta else None,
+                owner_key_name=(meta.get("name") or None) if shown else None,
+                owner_key_state=_owner_state(org.api_key_id, read) if shown else None,
+                owner_key_expires_at=meta.get("expires_at") if shown else None,
+                owner_key_expiry_state=expiry_state(meta.get("expires_at")) if meta and shown else None,
                 cluster_ids=sorted(set(clusters.get(org.id, []))),
             ))
 
