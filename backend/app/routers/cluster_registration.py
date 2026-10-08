@@ -629,7 +629,12 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=None if connected else (error_msg or derived_message or None),
-            location=info["metadata"].get("location")
+            # important: `or None`. A cluster registered without a location stores {} for it,
+            # and an empty dict is not a valid GeoLocation (all nine fields are required), so
+            # building ClusterInfo raised. That answered 500 on GET /clusters/{id} and degraded
+            # the list row to endpoint "unknown". The form always sends a region, so only API
+            # callers reached it.
+            location=info["metadata"].get("location") or None
         )
         
     except LXDLocalStorageError:
@@ -801,7 +806,8 @@ async def get_cluster(
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=error_msg if not connected else None,
-            location=info["metadata"].get("location")
+            # note: `or None` for the same reason as the list row above.
+            location=info["metadata"].get("location") or None
         )
         
     except LXDLocalStorageError:
