@@ -151,6 +151,7 @@ async def test_widening_a_key_to_org_sync_is_recorded(surface: Dict[str, Any]) -
         integrations.APIKeyCapabilitiesRequest(capabilities=["inventory.read", "org.sync"]),
         None,
         PARTNER,
+        None,
     )
     assert vault.store[_FakeVault._path("oak_edit", "metadata")]["capabilities"] == [
         "inventory.read", "org.sync",
@@ -175,6 +176,7 @@ async def test_narrowing_a_key_is_recorded_too(surface: Dict[str, Any]) -> None:
         integrations.APIKeyCapabilitiesRequest(capabilities=["inventory.read"]),
         None,
         PARTNER,
+        None,
     )
     (call,) = surface["log"].calls
     assert call["details"]["capabilities_withdrawn"] == ["tenant.provision"]
@@ -195,6 +197,7 @@ async def test_a_failed_audit_write_does_not_fail_the_edit(
         integrations.APIKeyCapabilitiesRequest(capabilities=["org.sync"]),
         None,
         PARTNER,
+        None,
     )
     assert info.capabilities == ["org.sync"]
     assert vault.writes

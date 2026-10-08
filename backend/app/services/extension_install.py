@@ -537,10 +537,10 @@ async def get_install_or_404(
 ) -> ExtensionInstallation:
     """Subset semantics, deliberately.
 
-    `_authorize_api_key` uses overlap: a key is manageable if its clusters intersect the
-    caller's. That is pre-existing and out of scope to change, but the new surface does not
-    inherit it, because overlap would let a partner sharing one cluster enumerate and delete
-    another partner's installations.
+    `_authorize_api_key` starts from overlap: a key is manageable if its clusters intersect the
+    caller's, narrowed by party only where another party also holds one of them
+    (services/cluster_parties.py). This surface does not inherit that, because overlap would let
+    a partner sharing one cluster enumerate and delete another partner's installations.
     """
     result = await db.execute(
         select(ExtensionInstallation).where(ExtensionInstallation.id == install_id)

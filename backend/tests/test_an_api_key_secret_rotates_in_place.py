@@ -4,9 +4,10 @@ Rotating by minting a new key left every organization the old key synced refusin
 (a key may only update the orgs it owns), so org and member sync stopped. These run the real
 rotate handler and the real key validation against an in-memory Vault and cache.
 
-A rotation hands its caller a working secret, unlike a revoke or a delete, so on this line only
-the key's creator or an Admin may rotate. An add-on credential is refused: its installation
-rotates it.
+A rotation hands its caller a working secret, unlike a revoke or a delete. So a Partner who did not
+mint the key rotates it only when every cluster it grants is inside their scope and every project
+inside their bound; its creator and an Admin skip that check. An add-on credential is refused: its
+installation rotates it.
 """
 
 from pathlib import Path
@@ -77,7 +78,7 @@ def world(monkeypatch):
     cache = _Cache()
     log = _RecordingLogger()
 
-    def authorize(_vault: Any, _key: str) -> Dict[str, Any]:
+    async def authorize(_key: str, _user: Any, _db: Any) -> Dict[str, Any]:
         return dict(metadata)
 
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
@@ -107,7 +108,7 @@ async def _valid(secret: str) -> bool:
 
 
 async def _rotate(user: AuthenticatedUser = OWNER) -> Any:
-    return await integrations.rotate_api_key_secret(KEY, None, user)
+    return await integrations.rotate_api_key_secret(KEY, None, user, None)
 
 
 def _rotations(world: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -233,39 +234,98 @@ def test_the_raw_backfill_still_fills_the_hash_it_verified(world, monkeypatch) -
     assert world["vault"].docs[f"{BASE}/secret"] == {"hash": old_hash, "raw": world["old"]}
 
 
-# note: who may rotate. A rotation returns a working secret, so overlap with the key's clusters is
-# not enough on this line: the key's creator, compared without case, or an Admin.
+# note: who may rotate. Managing a key needs its side (_authorize_api_key), and a rotation hands
+# over a working secret, so a Partner who did not mint the key is also held to the key's reach.
 
-async def test_a_partner_who_did_not_mint_the_key_cannot_take_its_secret(world) -> None:
+@pytest.fixture
+def partner_scope():
+    from app.core import org_scope
+
+    token = org_scope._allowed_clusters_var.set({"c1"})
+    yield
+    org_scope._allowed_clusters_var.reset(token)
+
+
+def _denied(world: Dict[str, Any]) -> List[tuple]:
+    return [(r.get("result"), r.get("error_code")) for r in _rotations(world)]
+
+
+async def test_a_partner_cannot_take_the_secret_of_a_key_reaching_past_their_scope(world, partner_scope) -> None:
+    """An admin-minted key granting the partner's cluster and one they cannot reach."""
+    _stored(world, created_by="ops@example.test",
+            cluster_permissions=[{"cluster_id": "c1", "permissions": ["read"], "projects": ["*"]},
+                                 {"cluster_id": "c9", "permissions": ["read", "write"], "projects": ["*"]}])
+    with pytest.raises(HTTPException) as caught:
+        await _rotate(OTHER)
+    assert caught.value.status_code == 403 and "c9" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "cluster_out_of_scope")], "a refused rotation left no audit record"
+
+
+async def test_a_non_creator_rotation_is_held_to_the_grant_bound(world, partner_scope, monkeypatch) -> None:
+    seen: List[str] = []
+
+    async def bound(_db: Any, email: str, grants: Any, *_a: Any) -> None:
+        seen.append(email)
+        raise HTTPException(status_code=403, detail="Not permitted to grant these projects")
+
+    monkeypatch.setattr(integrations, "_refuse_a_grant_past_the_project_bound", bound)
     _stored(world, created_by="ops@example.test")
     with pytest.raises(HTTPException) as caught:
         await _rotate(OTHER)
-    assert caught.value.status_code == 403
-    assert world["vault"].writes == [] and await _valid(world["old"])
-    (record,) = _rotations(world)
-    assert (record["result"], record["error_code"], record["target_id"]) == ("denied", "not_key_creator", KEY)
-    assert world["old"] not in repr(record)
+    assert caught.value.status_code == 403 and seen == [OTHER.email]
+    assert world["vault"].writes == []
+    assert _denied(world) == [("denied", "project_out_of_bound")], "a refused rotation left no audit record"
 
 
-async def test_a_key_with_no_recorded_creator_is_rotated_only_by_an_admin(world) -> None:
-    _stored(world, created_by=None)
-    with pytest.raises(HTTPException) as caught:
-        await _rotate(OWNER)
-    assert caught.value.status_code == 403
-    assert (await _rotate(ADMIN)).api_key_id == KEY
+async def test_the_bound_refuses_a_project_another_party_holds(world, partner_scope, monkeypatch) -> None:
+    """The real bound: c1 is held by another party too, and the key names a project the partner cannot see."""
+    from app.core import org_scope
+
+    async def held(_db: Any, _email: str, clusters: set) -> set:
+        return set(clusters)
+
+    monkeypatch.setattr(integrations, "_clusters_held_by_another_party", held)
+    _stored(world, created_by="ops@example.test",
+            cluster_permissions=[{"cluster_id": "c1", "permissions": ["read"], "projects": ["their-shop"]}])
+    token = org_scope._visible_projects_var.set({"c1": {"default", "my-shop"}})
+    try:
+        with pytest.raises(HTTPException) as caught:
+            await _rotate(OTHER)
+    finally:
+        org_scope._visible_projects_var.reset(token)
+    assert caught.value.status_code == 403 and "c1/their-shop" in caught.value.detail
+    assert world["vault"].writes == []
+    assert _denied(world) == [("denied", "project_out_of_bound")]
 
 
-async def test_the_creator_rotates_whatever_the_case_of_the_email(world) -> None:
-    _stored(world, created_by=OWNER.email.upper())
-    assert (await _rotate(OWNER)).api_key_id == KEY
+async def test_a_non_creator_on_their_own_sides_cluster_may_rotate(world, partner_scope, monkeypatch) -> None:
+    """A teammate rotating the connection key of a cluster only their side holds."""
+    async def nobody_else(_db: Any, _email: str, _clusters: set) -> set:
+        return set()
 
-
-@pytest.mark.parametrize("admin", [ADMIN, ALIAS_ADMIN], ids=["role_admin", "alias_admin"])
-async def test_an_admin_rotates_a_key_someone_else_minted(world, admin: AuthenticatedUser) -> None:
-    _stored(world, created_by="someone-else@example.test")
-    answer = await _rotate(admin)
+    monkeypatch.setattr(integrations, "_clusters_held_by_another_party", nobody_else)
+    _stored(world, created_by="teammate-who-left@example.test")
+    answer = await _rotate(OTHER)
     assert answer.api_key_id == KEY and await _valid(answer.api_key_secret)
-    assert [r["result"] for r in _rotations(world)] == ["success"]
+    assert _denied(world) == [("success", None)]
+
+
+async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, partner_scope, monkeypatch) -> None:
+    async def refuse(*_a: Any, **_k: Any) -> None:
+        raise AssertionError("the mint check ran for a caller who already held the secret")
+
+    monkeypatch.setattr(integrations, "_refuse_a_grant_past_the_project_bound", refuse)
+    _stored(world, created_by=OWNER.email.upper())
+    assert (await _rotate(OWNER)).api_key_id == KEY, "the creator is compared without case"
+    from app.core import org_scope
+
+    token = org_scope._allowed_clusters_var.set(None)
+    try:
+        for admin in (ADMIN, ALIAS_ADMIN):
+            assert (await _rotate(admin)).api_key_id == KEY
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
 
 
 # note: the organizations the key owns stay with it, which is the reason rotation exists
