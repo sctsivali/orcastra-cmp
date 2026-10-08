@@ -19,8 +19,6 @@ from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-STANDALONE_LOCATIONS = frozenset({"", "none"})
-
 
 # A CPU id above this is not a CPU set, it is a value built to make the parser allocate.
 _MAX_CPU_ID = 65535

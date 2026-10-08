@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 from app.core.blocking import run_blocking
 from app.core.rate_sampler import RateReading, Sample
 from app.models.schemas import ClusterMonitoringMetrics, InstanceMonitoringSummary, VMInfo
-from app.services.lxd.cpu_allocation import STANDALONE_LOCATIONS, effective_vcpus
+from app.core.member_names import is_standalone_location
+from app.services.lxd.cpu_allocation import effective_vcpus
 from app.services.lxd.instance_metrics import STATE_SAMPLER, build_state_sample
 from app.services.lxd.instance_metrics_sections import state_mapping
 
@@ -92,7 +93,7 @@ def _state_totals(state: Mapping[str, Any]) -> Tuple[int, int, int, int, int]:
 
 def _vcpus(vm: VMInfo, host_threads: Mapping[str, int]) -> Optional[int]:
     expanded = {"limits.cpu": vm.effective_cpu_limit} if vm.effective_limits_known else None
-    standalone = (vm.location or "") in STANDALONE_LOCATIONS
+    standalone = is_standalone_location(vm.location)
     return effective_vcpus(
         {"type": vm.type, "expanded_config": expanded, "config": vm.config or {}},
         host_threads=host_threads.get(vm.host) if standalone else None,

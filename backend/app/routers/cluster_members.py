@@ -49,6 +49,7 @@ from app.core.org_scope import (
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.services.lxd.lazy_client import client_for
 from app.core.lxd_path import safe_segment
+from app.core.member_names import member_name_path
 from app.services.lxd.node_resources import PoolReading
 from app.services.lxd.storage_model import summarise_cluster_storage
 
@@ -275,7 +276,7 @@ async def list_cluster_members(
     description="Get detailed information about a specific cluster member.",
 )
 async def get_cluster_member(
-    member_name: str,
+    member_name: str = Depends(member_name_path),
     node: str = Query(..., description="Registered Cluster identifier to query"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
@@ -324,7 +325,7 @@ Additional endpoint for cluster members resources
 )
 @single_flight("member_resources")
 async def get_member_resources(
-    member_name: str,
+    member_name: str = Depends(member_name_path),
     node: str = Query(..., description="Registered Cluster identifier to query"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
