@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.vault_client import VaultCasMismatch
 from app.services import region_location_backfill as backfill
 from app.services.region_catalog import get_region_catalog
 
@@ -32,9 +33,14 @@ CUSTOM = {
 
 
 class _Vault:
+    """A KV v2 store: every record has a version, and a check-and-set write must name it."""
+
     def __init__(self, store, broken):
         self.store, self.broken = store, broken
+        self.versions = {cid: 1 for cid in store}
         self.cached_reads = 0
+        self.puts = []
+        self.before_put = None  # a hook to land a concurrent edit between a read and a write
 
     def vault_read(self, path, use_cache=True):
         if use_cache:
@@ -44,6 +50,23 @@ class _Vault:
             raise RuntimeError("permission denied")
         return dict(self.store.get(cluster_id, {}))
 
+    def vault_read_versioned(self, path):
+        cluster_id = path.split("/")[-2]
+        if cluster_id not in self.store:
+            return None, self.versions.get(cluster_id, 0)
+        return dict(self.store[cluster_id]), self.versions[cluster_id]
+
+    def vault_kv_put(self, path, data, cas=None):
+        cluster_id = path.split("/")[-2]
+        if self.before_put:
+            self.before_put(cluster_id)
+        if cas is not None and cas != self.versions.get(cluster_id, 0):
+            raise VaultCasMismatch(f"{path} changed after version {cas}")
+        self.store[cluster_id] = dict(data)
+        self.versions[cluster_id] = self.versions.get(cluster_id, 0) + 1
+        self.puts.append(cluster_id)
+        return {}
+
 
 class _CertManager:
     clusters_path = "secret/data/clusters"
@@ -51,18 +74,13 @@ class _CertManager:
     def __init__(self, store, broken=()):
         self.store = store
         self.vault = _Vault(store, set(broken))
-        self.writes = []
+
+    @property
+    def writes(self):
+        return self.vault.puts
 
     def read_registry(self, use_cache=True):
         return SimpleNamespace(source="vault", cluster_ids=list(self.store) + list(self.vault.broken))
-
-    def save_cluster_metadata(self, cluster_id, endpoint, display_name, zone=None, cluster_type=None,
-                              merchant_id=None, location=None, clustered=None):
-        # the real one merges over what is stored, so keys it is not given survive
-        self.store[cluster_id] = {**self.store[cluster_id], "endpoint": endpoint, "display_name": display_name,
-                                  "zone": zone, "type": cluster_type, "merchant_id": merchant_id,
-                                  "location": location or {}}
-        self.writes.append(cluster_id)
 
 
 class _Recorder:
@@ -116,6 +134,9 @@ def test_apply_rewrites_the_drifted_and_keeps_what_the_operator_owns():
     assert drifted["location"]["facility_name"] == "Main DC" and drifted["location"]["facility_provider"] == "Acme"
     assert drifted["zone"] == drifted["location"]["city"], "a zone that tracked the city should follow it"
     assert drifted["clustered"] is True and drifted["type"] == "LXD", "unrelated metadata was lost"
+    assert drifted["display_name"] == "drifted" and "endpoint" not in drifted, (
+        "only the location and the zone are written; nothing the record lacked is added"
+    )
 
     moved = store["custom-zone"]
     assert moved["zone"] == "Rack 7", "an operator's own zone was overwritten"
@@ -157,3 +178,97 @@ def test_an_unreadable_registry_stops_the_run_instead_of_judging_an_empty_fleet(
     manager.read_registry = lambda use_cache=True: SimpleNamespace(source=None, cluster_ids=[])
     with pytest.raises(RuntimeError):
         backfill.plan(manager)
+
+
+def _edit_once(manager, cluster_id, change):
+    """Land one concurrent edit between the backfill's read and its write."""
+    done = []
+
+    def hook(target):
+        if target == cluster_id and not done:
+            done.append(True)
+            change(manager.store[cluster_id])
+            manager.vault.versions[cluster_id] += 1
+    manager.vault.before_put = hook
+
+
+def test_an_edit_racing_the_write_is_kept_and_judged_again():
+    store = _fleet()
+    manager = _CertManager(store)
+    _edit_once(manager, "drifted", lambda rec: rec.update(display_name="renamed in the UI"))
+
+    written = backfill.apply(manager, backfill.plan(manager))
+
+    assert "drifted" in written
+    assert store["drifted"]["display_name"] == "renamed in the UI", "the concurrent rename was reverted"
+    assert store["drifted"]["location"]["region_id"] == "id-3174"
+
+
+def test_a_race_that_already_fixed_the_location_writes_nothing():
+    store = _fleet()
+    manager = _CertManager(store)
+    canonical = get_region_catalog().canonical_location(OLD_JAKARTA_SELATAN)
+    _edit_once(manager, "drifted", lambda rec: rec.update(location=canonical))
+
+    written = backfill.apply(manager, backfill.plan(manager))
+
+    assert written == ["custom-zone"]
+
+
+def test_a_failed_write_is_audited_and_the_others_still_run():
+    store = _fleet()
+    manager, recorder = _CertManager(store), _Recorder()
+
+    def refuse(cluster_id):
+        if cluster_id == "custom-zone":
+            raise RuntimeError("permission denied on write")
+    manager.vault.before_put = refuse
+    plan = backfill.plan(manager)
+
+    written = backfill.apply(manager, plan, cache=recorder, activity=recorder, operator="ops@vm")
+
+    assert written == ["drifted"]
+    assert [cid for cid, _ in plan.failed] == ["custom-zone"]
+    failure = next(e for e in recorder.events if e["target_id"] == "custom-zone")
+    assert failure["result"] == "failure" and failure["error_code"] == "BACKFILL_WRITE_FAILED"
+    assert failure["details"]["operator"] == "ops@vm"
+    assert recorder.list_drops == [("clusters", "regions")], "a failure skipped the list invalidation"
+
+
+def test_a_record_deleted_after_the_plan_is_never_recreated():
+    store = _fleet()
+    manager = _CertManager(store)
+    plan = backfill.plan(manager)
+    del store["drifted"]
+
+    written = backfill.apply(manager, plan)
+
+    assert "drifted" not in written and "drifted" not in store
+    assert [cid for cid, _ in plan.failed] == ["drifted"]
+
+
+def test_every_rewrite_names_its_operator():
+    store = _fleet()
+    manager, recorder = _CertManager(store), _Recorder()
+    backfill.apply(manager, backfill.plan(manager), cache=recorder, activity=recorder, operator="root@partner-vm")
+    assert {e["details"]["operator"] for e in recorder.events} == {"root@partner-vm"}
+
+
+def test_apply_refuses_when_audit_records_would_reach_no_log(monkeypatch, capsys):
+    store = _fleet()
+    manager = _CertManager(store)
+    monkeypatch.setattr("app.services.lxd_service.get_lxd_service", lambda: SimpleNamespace(cert_manager=manager))
+    monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: None)
+    monkeypatch.setattr(backfill, "_route_audit_to_the_container_log", lambda: False)
+
+    assert backfill.main(["--apply", "--operator", "qa"]) == 2
+    assert manager.writes == []
+    assert "Nothing was written" in capsys.readouterr().out
+
+
+def test_stored_names_print_without_control_characters():
+    store = _fleet()
+    store["drifted"]["location"]["region_name"] = "\x1b[2J\x1b[31mspoofed\nline"
+    plan = backfill.plan(_CertManager(store))
+    row = backfill._describe(next(c for c in plan.changes if c.cluster_id == "drifted"))
+    assert not any(ch in "".join(map(str, row)) for ch in "\x1b\n"), row

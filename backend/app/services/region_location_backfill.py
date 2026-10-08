@@ -11,7 +11,10 @@ Deployment data, not schema, so it is not a migration. Run inside the backend co
 dry-run by default:
 
     python -m app.services.region_location_backfill            # list what would change
-    python -m app.services.region_location_backfill --apply    # rewrite
+    python -m app.services.region_location_backfill --apply --operator "<who runs it>"
+
+Each rewrite is a check-and-set on the record version it judged, and touches only the location
+and the zone, so an edit that lands between the read and the write is never reverted.
 
 Idempotent: once applied, a second run finds nothing to change. Locations whose region id the
 catalogue does not know (an API client's own) are listed and left alone.
@@ -20,6 +23,8 @@ catalogue does not know (an API client's own) are listed and left alone.
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -27,6 +32,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from app.services.region_catalog import RegionCatalog, get_region_catalog
 
 AUDIT_ACTION = "cluster.location.update"
+SOURCE = "region catalogue backfill"
+# note: a stored name may predate input validation, and the table below goes to a terminal.
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _printable(value: object) -> str:
+    return _CONTROL.sub("?", str(value))
 
 
 @dataclass
@@ -46,6 +58,7 @@ class BackfillPlan:
     no_location: List[str] = field(default_factory=list)
     unknown_region: List[Tuple[str, str]] = field(default_factory=list)
     unreadable: List[Tuple[str, str]] = field(default_factory=list)
+    failed: List[Tuple[str, str]] = field(default_factory=list)  # filled by apply
 
 
 def _metadata_path(cert_manager: Any, cluster_id: str) -> str:
@@ -96,31 +109,59 @@ def plan(cert_manager: Any, catalog: Optional[RegionCatalog] = None) -> Backfill
     return result
 
 
-def apply(cert_manager: Any, backfill: BackfillPlan, catalog: Optional[RegionCatalog] = None,
-          cache: Any = None, activity: Any = None) -> List[str]:
-    """Write every planned change. Returns the ids actually rewritten.
+def _rewrite(cert_manager: Any, cluster_id: str, catalog: RegionCatalog) -> Optional[LocationChange]:
+    """Rewrite one record with check-and-set. Returns the change written, or None when the record
+    no longer needs one.
 
-    Each cluster is re-read and re-judged just before its write, so a location an operator
-    changed after the plan was printed is judged on what is stored now, not overwritten with
-    a stale decision.
+    important: the write carries the record exactly as it was read with its version, location and
+    zone replaced. A PATCH, a rename or a type update landing in between makes the write fail
+    instead of being reverted, and the record is judged again once.
+    """
+    from app.core.vault_client import VaultCasMismatch
+
+    path = _metadata_path(cert_manager, cluster_id)
+    for _attempt in range(2):
+        metadata, version = cert_manager.vault.vault_read_versioned(path)
+        if metadata is None:
+            raise RuntimeError("the record is gone; a deleted cluster is never recreated")
+        change = _change_for(cluster_id, metadata, catalog)
+        if change is None:
+            return None
+        record = {**metadata, "location": change.after}
+        if change.zone is not None:
+            record["zone"] = change.zone
+        try:
+            cert_manager.vault.vault_kv_put(path, record, cas=version)
+            return change
+        except VaultCasMismatch:
+            continue
+    raise RuntimeError("the record kept changing while it was being rewritten; run the backfill again")
+
+
+def apply(cert_manager: Any, backfill: BackfillPlan, catalog: Optional[RegionCatalog] = None,
+          cache: Any = None, activity: Any = None, operator: Optional[str] = None) -> List[str]:
+    """Write every planned change. Returns the ids actually rewritten; failures go to backfill.failed.
+
+    Each cluster is re-read and re-judged at its write, so a location an operator changed after the
+    plan was printed is judged on what is stored now. One failed write is audited and the rest still
+    run, and the list caches are dropped for whatever was written.
     """
     catalog = catalog or get_region_catalog()
     written: List[str] = []
     for planned in backfill.changes:
-        metadata = _read_metadata(cert_manager, planned.cluster_id)
-        change = _change_for(planned.cluster_id, metadata, catalog)
+        try:
+            change = _rewrite(cert_manager, planned.cluster_id, catalog)
+        except Exception as exc:  # noqa: BLE001 - one failed write must not stop the others
+            backfill.failed.append((planned.cluster_id, str(exc)))
+            if activity is not None:
+                activity.log_activity(
+                    action=AUDIT_ACTION, target_type="cluster", target_id=planned.cluster_id,
+                    result="failure", error_code="BACKFILL_WRITE_FAILED", error_message=str(exc)[:300],
+                    details={"source": SOURCE, "catalog_version": backfill.catalog_version, "operator": operator},
+                )
+            continue
         if change is None:
             continue
-        cert_manager.save_cluster_metadata(
-            cluster_id=change.cluster_id,
-            endpoint=metadata.get("endpoint", ""),
-            display_name=metadata.get("display_name", change.cluster_id),
-            zone=change.zone if change.zone is not None else metadata.get("zone", ""),
-            # Preserve whatever is stored, including "not determined yet", as the PATCH does.
-            cluster_type=metadata.get("type"),
-            merchant_id=metadata.get("merchant_id"),
-            location=change.after,
-        )
         written.append(change.cluster_id)
         if cache is not None:
             cache.invalidate_cluster_cache(change.cluster_id)
@@ -130,10 +171,11 @@ def apply(cert_manager: Any, backfill: BackfillPlan, catalog: Optional[RegionCat
                 target_type="cluster",
                 target_id=change.cluster_id,
                 details={
-                    "source": "region catalogue backfill",
+                    "source": SOURCE,
                     "catalog_version": backfill.catalog_version,
                     "fields": change.fields,
                     "zone_updated_to": change.zone,
+                    "operator": operator,
                 },
                 before_state=change.before,
                 after_state=change.after,
@@ -159,20 +201,20 @@ def _describe(change: LocationChange) -> List[object]:
     moved = ""
     if "latitude" in change.fields or "longitude" in change.fields:
         moved = f"({b.get('latitude')}, {b.get('longitude')}) -> ({a['latitude']}, {a['longitude']})"
-    return [
+    return [_printable(cell) for cell in (
         change.cluster_id,
         f"{b.get('region_id')} -> {a['region_id']}" if b.get("region_id") != a["region_id"] else a["region_id"],
         f"{b.get('region_name')} -> {a['region_name']}" if b.get("region_name") != a["region_name"] else a["region_name"],
         moved,
         ",".join(change.fields),
         change.zone if change.zone is not None else "(kept)",
-    ]
+    )]
 
 
 CONTAINER_STDOUT = "/proc/1/fd/1"
 
 
-def _route_audit_to_the_container_log() -> None:
+def _route_audit_to_the_container_log() -> bool:
     """Make this process's audit records land where the server's do.
 
     important: run through `docker compose exec`, this is a second process. Without
@@ -192,18 +234,21 @@ def _route_audit_to_the_container_log() -> None:
     try:
         stream = open(CONTAINER_STDOUT, "w", buffering=1)  # noqa: SIM115 - lives for the process
     except OSError:
-        print(f"warning: {CONTAINER_STDOUT} is not writable; audit records go to this terminal only")
-        return
+        return False
     root = logging.getLogger()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(root.handlers[0].formatter if root.handlers else None)
     logging.getLogger("orcastra.audit").addHandler(handler)
+    return True
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Align stored cluster locations with the region catalogue.")
     parser.add_argument("--apply", action="store_true", help="rewrite the locations listed (default: dry run)")
+    parser.add_argument("--operator", default=os.environ.get("SUDO_USER") or os.environ.get("USER") or "",
+                        help="who runs the rewrite, recorded in every audit event")
     args = parser.parse_args(argv)
+    operator = _printable(args.operator).strip()[:120] or "unknown"
 
     from app.core.cache import get_cache_manager
     from app.services.activity_logger import get_activity_logger
@@ -219,17 +264,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"\n{len(backfill.changes)} to change, {len(backfill.up_to_date)} up to date, "
           f"{len(backfill.no_location)} without a location")
     for cluster_id, region_id in backfill.unknown_region:
-        print(f"left alone: {cluster_id} uses region id {region_id!r}, which the catalogue does not know")
+        print(f"left alone: {_printable(cluster_id)} uses region id {_printable(repr(region_id))}, "
+              "which the catalogue does not know")
     for cluster_id, error in backfill.unreadable:
-        print(f"UNREADABLE: {cluster_id}: {error}")
+        print(f"UNREADABLE: {_printable(cluster_id)}: {_printable(error)}")
 
     if not args.apply:
         print("\ndry run, nothing written" if backfill.changes else "")
         return 1 if backfill.unreadable else 0
-    _route_audit_to_the_container_log()
-    written = apply(cert_manager, backfill, catalog, get_cache_manager(), get_activity_logger())
+    if not _route_audit_to_the_container_log():
+        print(f"\nrefusing --apply: {CONTAINER_STDOUT} is not writable, so the audit records would reach this "
+              "terminal only. Nothing was written.")
+        return 2
+    written = apply(cert_manager, backfill, catalog, get_cache_manager(), get_activity_logger(), operator=operator)
     print(f"\nrewrote {len(written)} location(s): {', '.join(written) or 'none'}")
-    return 1 if backfill.unreadable else 0
+    for cluster_id, error in backfill.failed:
+        print(f"NOT REWRITTEN: {_printable(cluster_id)}: {_printable(error)}")
+    return 1 if backfill.unreadable or backfill.failed else 0
 
 
 if __name__ == "__main__":
