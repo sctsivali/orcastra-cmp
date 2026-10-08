@@ -48,7 +48,9 @@ async def _read(email: str) -> RoleReading:
 async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
     email = (user.email or "").strip().lower()
     if not email:
-        return IdentityCheck(False, "email_missing")
+        # important: no email, no way to ask Authentik about this account, ever; a session that
+        # can never be re-checked ends instead of running unchecked (the mint refuses these too).
+        return IdentityCheck(True, "email_missing")
     now = time.monotonic()
     cached = _readings.get(email)
     if cached is not None and now - cached[0] < IDENTITY_CACHE_SECONDS:

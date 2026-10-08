@@ -128,6 +128,21 @@ def test_a_tenant_console_without_break_glass_hears_why(mint, monkeypatch):
     assert response.json()["detail"]["error"] == "break_glass_required"
 
 
+def test_a_shell_needs_an_email_to_be_rechecked_by(mint):
+    named = _user("mint-noemail", "admin")
+    nameless = AuthenticatedUser(
+        user_id="sub-mint-noemail", email=None, groups=named.groups, roles=named.roles,
+        raw_claims={**named.raw_claims, "email": None}, session_exp=named.session_exp,
+    )
+    terminal = {"kind": "terminal", "host": "c1", "project": "default", "instance": "web-1"}
+    console = {"kind": "console", "host": "c1", "project": "default", "instance": "vm-1", "console_type": "vga"}
+
+    assert mint(nameless, terminal).status_code == 403
+    assert mint(nameless, console).status_code == 403
+    assert mint(nameless, {"kind": "tasks"}).status_code == 201, "a feed is not re-checked; it ends with its session"
+    assert mint(named, terminal).status_code == 201
+
+
 def test_a_feed_ticket_is_refused_for_a_session_about_to_end(mint):
     ending = _user("mint-end", "admin", lifetime=10)
     terminal = {"kind": "terminal", "host": "c1", "project": "default", "instance": "web-1"}

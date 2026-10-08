@@ -186,6 +186,62 @@ def test_a_demoted_caller_is_closed_and_an_unchanged_one_kept(monkeypatch):
     assert unchanged.closed == []
 
 
+class _RoleCache:
+    """The shared per-user role cache, already holding Admin for this caller (a stale or forged entry)."""
+
+    def __init__(self):
+        self.reads, self.writes = [], []
+
+    def get_user_roles(self, user_id):
+        self.reads.append(user_id)
+        return {"roles": ["admin"]}
+
+    def set_user_roles(self, user_id, data):
+        self.writes.append((user_id, data))
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [IdentityCheck(False, "user_search_failed"), IdentityCheck(False, "active", frozenset({Role.PARTNER}))],
+    ids=["authentik-could-not-say", "roles-unchanged"],
+)
+def test_a_round_resolves_scope_from_the_ticket_groups_and_never_touches_the_role_cache(monkeypatch, identity):
+    from app.core import rbac, rbac_cache
+
+    cache = _RoleCache()
+    monkeypatch.setattr(rbac_cache, "get_rbac_cache", lambda: cache)
+    seen = []
+
+    async def identity_check(user):
+        return identity
+
+    async def scope(user):
+        seen.append(rbac.get_highest_role(rbac.resolve_roles(user)))
+
+    monkeypatch.setattr(ws_session_guard, "check_identity", identity_check)
+    monkeypatch.setattr(ws_session_guard, "set_org_scope_for_ws", scope)
+
+    async def check(user):
+        seen.append(rbac.get_highest_role(rbac.resolve_roles(user)))
+
+    async def run():
+        task = asyncio.create_task(reauthorize_while_open(_Socket(), USER, check, label="t", interval=0.01))
+        await asyncio.sleep(0.1)
+        task.cancel()
+
+    asyncio.run(run())
+
+    assert seen and set(seen) == {Role.PARTNER}, "the ticket's own groups, not the cache's Admin"
+    assert cache.reads == [] and cache.writes == [], "a stale shell must not write its role for REST to read"
+    assert rbac.resolve_roles(USER) == [Role.ADMIN], "outside a round the cache still serves REST as before"
+
+
+def test_a_session_without_an_email_cannot_be_rechecked_and_ends():
+    nameless = AuthenticatedUser(user_id="sub-without-email", email=None, groups=["role_admin"])
+
+    assert asyncio.run(check_identity(nameless)) == IdentityCheck(True, "email_missing")
+
+
 def test_the_role_check_reads_authentik_not_the_shared_cache(monkeypatch):
     calls = []
 
