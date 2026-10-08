@@ -55,6 +55,10 @@ _flight_guard = threading.Lock()
 
 # A member-wide read refused for these reasons may still be allowed one project at a time.
 PROJECT_FALLBACK = frozenset({"refused", "too_large"})
+# note: a member whose metrics take longer than the read cap does so for any filter (one lab
+# member answers in 5.3 s whole or per project), so its timeout is remembered across two sweeps
+# rather than paid again on each.
+MEMBER_NEGATIVE_TTL_SECONDS = {**NEGATIVE_TTL_SECONDS, "timeout": 120}
 
 
 @dataclass(frozen=True)
@@ -148,14 +152,9 @@ def _store(cache: Any, namespace: str, key: str, value: Dict[str, Any], ttl: int
 
 
 def _fail(cache: Any, namespace: str, key: str, kind: str, detail: object) -> str:
-    logger.info(
-        "Skipping LXD metrics for %s for %ss: %s (%s)",
-        key[:160],
-        NEGATIVE_TTL_SECONDS[kind],
-        kind,
-        str(detail)[:200],
-    )
-    _store(cache, namespace, key, {"failed": kind}, NEGATIVE_TTL_SECONDS[kind])
+    ttl = (MEMBER_NEGATIVE_TTL_SECONDS if namespace == MEMBER_CACHE_NAMESPACE else NEGATIVE_TTL_SECONDS)[kind]
+    logger.info("Skipping LXD metrics for %s for %ss: %s (%s)", key[:160], ttl, kind, str(detail)[:200])
+    _store(cache, namespace, key, {"failed": kind}, ttl)
     return kind
 
 
