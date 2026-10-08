@@ -146,9 +146,11 @@ from app.services.integration_key_ownership import (
     TRANSFER_ACTION as OWNER_TRANSFER_ACTION,
     KeyOwnsOrganizations,
     key_state,
+    OWNERSHIP_UNKNOWN_DETAIL,
     owned_by_keys,
     owner_key_refusal,
     refuse_if_key_owns_organizations,
+    runs_an_owned_organization,
     serialize_key_ownership,
     transfer_owner,
     uncovered_clusters,
@@ -2768,6 +2770,26 @@ async def rotate_api_key_secret(
                     result="denied", error_code="project_out_of_bound",
                 )
             raise
+    if allowed is not None:
+        # important: the creator too. Minting a key is a fact about the past, and a fresh secret for a
+        # key that owns organizations is their sync, members and provisioning.
+        try:
+            runs_one = await runs_an_owned_organization(db, key_id, _rbac.email)
+        except Exception as exc:  # noqa: BLE001 - unknown refuses; the text names no database
+            logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
+            raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+        if runs_one is False:
+            _audit_credential_lifecycle(
+                action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
+                result="denied", error_code="outside_the_owning_organizations",
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This key owns OrcaHub organizations you do not run, so only an administrator can "
+                    "rotate its secret."
+                ),
+            )
     try:
         forgot = await asyncio.to_thread(_forget_callback_url_blocking, key_id)
     except Exception:  # noqa: BLE001 - reported below as a refusal, with nothing changed

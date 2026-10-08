@@ -107,8 +107,24 @@ async def _valid(secret: str) -> bool:
         return False
 
 
-async def _rotate(user: AuthenticatedUser = OWNER) -> Any:
-    return await integrations.rotate_api_key_secret(KEY, None, user, None)
+async def _rotate(user: AuthenticatedUser = OWNER, db: Any = None) -> Any:
+    return await integrations.rotate_api_key_secret(KEY, None, user, db)
+
+
+def _orgs(*rows: tuple) -> Any:
+    """Organization rows, (slug, owner key, partner email or None), on SQLite."""
+    from app.models.db_models import Organization as Org, OrganizationMember
+
+    db = sqlite_session(*org_tables())
+    for slug, key_id, partner in rows:
+        db.add(Org(name=slug.title(), slug=slug, source="orcahub", external_id=f"ext-{slug}", api_key_id=key_id,
+                   created_by="system", is_active=True))
+        db.sync.commit()
+        if partner:
+            org_id = db.sync.query(Org.id).filter(Org.slug == slug).scalar()
+            db.add(OrganizationMember(organization_id=org_id, user_email=partner, role="partner"))
+            db.sync.commit()
+    return db
 
 
 def _rotations(world: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -382,7 +398,7 @@ async def test_a_non_creator_on_their_own_sides_cluster_may_rotate(world, partne
 
     monkeypatch.setattr(integrations, "_clusters_held_by_another_party", nobody_else)
     _stored(world, created_by="teammate-who-left@example.test")
-    answer = await _rotate(OTHER)
+    answer = await _rotate(OTHER, _orgs())
     assert answer.api_key_id == KEY and await _valid(answer.api_key_secret)
     assert _denied(world) == [("success", None)]
 
@@ -393,7 +409,7 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
 
     monkeypatch.setattr(integrations, "_refuse_a_grant_past_the_project_bound", refuse)
     _stored(world, created_by=OWNER.email.upper())
-    assert (await _rotate(OWNER)).api_key_id == KEY, "the creator is compared without case"
+    assert (await _rotate(OWNER, _orgs())).api_key_id == KEY, "the creator is compared without case"
     from app.core import org_scope
 
     token = org_scope._allowed_clusters_var.set(None)
@@ -402,6 +418,50 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
             assert (await _rotate(admin)).api_key_id == KEY
     finally:
         org_scope._allowed_clusters_var.reset(token)
+
+
+# note: a key that owns organizations is rotated only by someone running one of them. Minting it is
+# a fact about the past: a partner who left the organization still matches created_by.
+
+async def test_a_creator_who_left_cannot_take_the_secret_of_a_key_that_owns_organizations(
+    world, partner_scope
+) -> None:
+    db = _orgs(("acme", KEY, "successor@example.test"))
+    with pytest.raises(HTTPException) as caught:
+        await _rotate(OWNER, db)
+    assert caught.value.status_code == 403 and "administrator" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "outside_the_owning_organizations")]
+
+
+async def test_the_creator_who_runs_an_owned_organization_rotates(world, partner_scope) -> None:
+    db = _orgs(("acme", KEY, OWNER.email), ("buyer", KEY, None))
+    assert (await _rotate(OWNER, db)).api_key_id == KEY
+
+
+async def test_a_teammate_running_an_owned_organization_rotates(world, partner_scope, monkeypatch) -> None:
+    async def nobody_else(_db: Any, _email: str, _clusters: set) -> set:
+        return set()
+
+    monkeypatch.setattr(integrations, "_clusters_held_by_another_party", nobody_else)
+    db = _orgs(("acme", KEY, OTHER.email))
+    assert (await _rotate(OTHER, db)).api_key_id == KEY
+
+
+async def test_an_admin_rotates_whatever_the_key_owns(world) -> None:
+    db = _orgs(("acme", KEY, "successor@example.test"))
+    assert (await _rotate(ADMIN, db)).api_key_id == KEY
+
+
+async def test_ownership_that_cannot_be_read_rotates_nothing(world, partner_scope) -> None:
+    class _Down:
+        async def execute(self, *_a: Any, **_k: Any) -> Any:
+            raise ConnectionError("database is down: postgresql://user:pw@db/app")
+
+    with pytest.raises(HTTPException) as caught:
+        await _rotate(OWNER, _Down())
+    assert caught.value.status_code == 503 and "postgresql" not in caught.value.detail
+    assert world["vault"].writes == []
 
 
 # note: the organizations the key owns stay with it, which is the reason rotation exists

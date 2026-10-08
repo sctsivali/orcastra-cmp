@@ -98,6 +98,25 @@ async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organizatio
     return list(rows.scalars().all())
 
 
+async def runs_an_owned_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:
+    """None when the key owns no active OrcaHub organization, else whether this user runs one of them.
+
+    "Runs" is cluster_parties.run_orgs: created it, or holds a partner row in it.
+
+    important: a secret rotation asks this of every caller but an Administrator. Who minted a key
+    is a fact about the past: a partner who minted an organization's connection key and has since
+    left that organization still matches created_by, and a fresh secret would let them sync the
+    organization and rewrite its members again.
+    """
+    from app.services.cluster_parties import run_orgs
+
+    owned = await owned_organizations(db, key_id)
+    if not owned:
+        return None
+    runs = await run_orgs(db, email)
+    return any(org.id in runs for org in owned)
+
+
 async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, List[Tuple[int, str]]]:
     """For each key, the (id, slug) of every active OrcaHub organization it owns, by slug. One query."""
     wanted = {key_id for key_id in key_ids if key_id}
