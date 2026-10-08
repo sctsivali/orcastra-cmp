@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from app.core.lxd_path import safe_segment
 from app.models.migration_models import MigrationJob
+from app.services.lxd.root_disk import root_pool
 
 from . import executor, preflight, repository
 from .completion import target_completion_events
@@ -489,20 +490,6 @@ def _exact_instance(
     return expected_status is None or (
         str(instance.get("status") or "").lower() == expected_status
     )
-
-
-def _instance_root_pool(instance: dict[str, Any]) -> str | None:
-    devices = instance.get("expanded_devices") or instance.get("devices") or {}
-    roots = [
-        device
-        for device in devices.values()
-        if isinstance(device, dict)
-        and device.get("type") == "disk"
-        and device.get("path") == "/"
-    ] if isinstance(devices, dict) else []
-    if len(roots) != 1 or not isinstance(roots[0].get("pool"), str):
-        return None
-    return str(roots[0].get("pool") or "") or None
 
 
 async def _mark_reconciliation_unknown(
@@ -1302,7 +1289,7 @@ async def _reconcile(
             exact_root_pool = (
                 isinstance(state.get("source_root_pool"), str)
                 and state.get("source_root_pool")
-                and _instance_root_pool(source) == state.get("source_root_pool")
+                and root_pool(source) == state.get("source_root_pool")
             )
             evidence_allows_adoption = not evidence.failed and (
                 not evidence.seen or evidence.settled
