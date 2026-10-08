@@ -33,7 +33,6 @@ from app.core.dependencies import check_read_only_mode, require_partner, require
 from app.core.cache import (
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
-    REGIONS_OVERVIEW_CACHE_KEY,
 )
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
@@ -1194,12 +1193,11 @@ async def update_cluster_location(
         from app.core.cache import get_cache_manager
         cache = get_cache_manager()
         if cache:
-            # CRITICAL: Invalidate clusters list cache (scoped + admin)
-            cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
-            cache.delete("api_responses", "clusters:list:all:scope=all")
-            cache.delete("api_responses", get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY))
-            cache.delete("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}:scope=all")
-            # Also invalidate individual cluster cache if exists
+            # important: every scope, not only the caller's. Each partner and tenant whose
+            # cluster set holds this cluster caches the list and the regions map under its own
+            # scope key, and clearing the caller's alone left them on the old place for the
+            # TTL (180 s for the list, 120 s for the map).
+            cache.invalidate_resource_cache("clusters", "regions")
             cache.invalidate_cluster_cache(cluster_id)
         
         # Log activity
