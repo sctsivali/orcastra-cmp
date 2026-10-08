@@ -20,6 +20,12 @@ from app.services.lxd.exceptions import LXDOperationError
 from app.services.lxd.instance import InstanceManager
 from app.services.lxd.lxd_service import LXDService
 from app.services.instance_security_policy import ClusterOwnership, ClusterWritePolicy
+from tests._loop_probes import (
+    SAFETY_TIMEOUT,
+    WorkerGate,
+    assert_loop_runs_callbacks,
+    wait_for_thread_event,
+)
 
 
 HOST = "shared-cluster"
@@ -305,28 +311,21 @@ async def test_manager_never_falls_back_to_default_for_a_named_project(monkeypat
 @pytest.mark.asyncio
 async def test_slow_create_does_not_block_the_event_loop(monkeypatch):
     connection = _Connection()
-    activity = _ActivityRecorder()
-    manager = _manager(connection, monkeypatch, activity)
-    entered = threading.Event()
-    release = threading.Event()
-    create_returned = threading.Event()
-    readback_done = threading.Event()
+    manager = _manager(connection, monkeypatch, _ActivityRecorder())
+    gate = WorkerGate(threading.get_ident())
+    readback_threads = []
     original_create = connection.scoped.virtual_machines.create
     original_readback = manager._instance_to_vm_info
 
-    def slow_create(definition, wait):
-        entered.set()
-        assert release.wait(timeout=1), "test never released the fake LXD create"
-        result = original_create(definition, wait)
-        create_returned.set()
-        return result
+    def held_create(definition, wait):
+        gate.hold()
+        return original_create(definition, wait)
 
     def observed_readback(*args, **kwargs):
-        result = original_readback(*args, **kwargs)
-        readback_done.set()
-        return result
+        readback_threads.append(threading.get_ident())
+        return original_readback(*args, **kwargs)
 
-    connection.scoped.virtual_machines.create = slow_create
+    connection.scoped.virtual_machines.create = held_create
     monkeypatch.setattr(manager, "_instance_to_vm_info", observed_readback)
     task = asyncio.create_task(
         manager.create_vm(
@@ -338,30 +337,52 @@ async def test_slow_create_does_not_block_the_event_loop(monkeypatch):
         )
     )
     try:
-        for _ in range(100):
-            if entered.is_set():
-                break
-            await asyncio.sleep(0.002)
-        assert entered.is_set(), "fake create never entered its worker"
-
-        heartbeats = 0
-        for _ in range(5):
-            await asyncio.sleep(0.005)
-            heartbeats += 1
-
-        assert heartbeats == 5
-        assert not task.done(), "slow blocking create unexpectedly ran on the event loop"
+        await wait_for_thread_event(gate.entered, task=task, what="the create worker")
+        assert gate.thread_id != gate.loop_thread, "the blocking create ran on the event loop thread"
+        assert (gate.thread_name or "").startswith("test_lxd_create"), gate.thread_name
+        await assert_loop_runs_callbacks()
+        assert not task.done()
+        assert connection.scoped_creates == []
     finally:
-        release.set()
+        gate.release.set()
 
-    for _ in range(100):
-        if readback_done.is_set():
-            break
-        await asyncio.sleep(0.002)
-    assert create_returned.is_set()
-    assert readback_done.is_set()
-    result = await asyncio.wait_for(task, timeout=1)
+    result = await asyncio.wait_for(task, SAFETY_TIMEOUT)
     assert result.project == PROJECT
+    assert len(connection.scoped_creates) == 1
+    assert readback_threads == [gate.thread_id], "the readback must stay in the create worker"
+
+
+@pytest.mark.asyncio
+async def test_create_vm_hands_its_whole_transaction_to_the_bounded_create_pool(monkeypatch):
+    connection = _Connection()
+    manager = _manager(connection, monkeypatch, _ActivityRecorder())
+    calls = []
+    sentinel = _vm(PROJECT)
+
+    async def recorder(fn, *args, **options):
+        calls.append((fn, args, options))
+        return sentinel
+
+    monkeypatch.setattr(instance_module, "run_blocking", recorder)
+
+    result = await manager.create_vm(
+        name=NAME, host=HOST, image="ubuntu", project=PROJECT, start_on_create=False
+    )
+
+    assert result is sentinel
+    ((fn, args, options),) = calls
+    assert fn == manager._create_vm_blocking
+    assert args == (NAME, HOST, "ubuntu", "virtual-machine", None, None, None, None, False, PROJECT)
+    assert options["executor"] is instance_module._create_executor
+    assert options == {
+        "timeout": instance_module._CREATE_WALL_TIMEOUT_SECONDS,
+        "label": f"create-vm[{HOST}/{PROJECT}/{NAME}]",
+        "executor": instance_module._create_executor,
+        "max_in_flight": instance_module._CREATE_MAX_IN_FLIGHT,
+        "concurrency_key": HOST,
+        "max_in_flight_per_key": instance_module._CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
+    }
+    assert connection.scoped_creates == [] and connection.pooled_creates == []
 
 
 @pytest.mark.parametrize(
@@ -406,7 +427,7 @@ async def test_create_times_out_without_waiting_for_the_blocked_worker(monkeypat
 
     def blocked_create(definition, wait):
         entered.set()
-        assert release.wait(timeout=1), "test never released the fake LXD create"
+        assert release.wait(timeout=SAFETY_TIMEOUT), "test never released the fake LXD create"
         return original_create(definition, wait)
 
     connection.scoped.virtual_machines.create = blocked_create
@@ -424,7 +445,8 @@ async def test_create_times_out_without_waiting_for_the_blocked_worker(monkeypat
     finally:
         release.set()
 
-    assert entered.is_set()
+    # The wall timeout can fire before a busy host starts the worker; it still runs, released.
+    await wait_for_thread_event(entered, what="the timed-out create worker")
     assert isinstance(caught.value.__cause__, BlockingTimeout)
 
 
@@ -439,7 +461,7 @@ async def test_create_sheds_load_when_its_pool_is_full(monkeypatch):
 
     def blocked_create(definition, wait):
         entered.set()
-        assert release.wait(timeout=1), "test never released the fake LXD create"
+        assert release.wait(timeout=SAFETY_TIMEOUT), "test never released the fake LXD create"
         return original_create(definition, wait)
 
     connection.scoped.virtual_machines.create = blocked_create
@@ -454,11 +476,7 @@ async def test_create_sheds_load_when_its_pool_is_full(monkeypatch):
         )
     )
     try:
-        for _ in range(100):
-            if entered.is_set():
-                break
-            await asyncio.sleep(0.002)
-        assert entered.is_set()
+        await wait_for_thread_event(entered, task=first, what="the first create worker")
 
         with pytest.raises(LXDOperationError, match="Too many VM creations") as caught:
             await manager.create_vm(
@@ -472,12 +490,7 @@ async def test_create_sheds_load_when_its_pool_is_full(monkeypatch):
     finally:
         release.set()
 
-    for _ in range(500):
-        if first.done():
-            break
-        await asyncio.sleep(0.002)
-    assert first.done()
-    await first
+    await asyncio.wait_for(first, SAFETY_TIMEOUT)
 
 
 @pytest.mark.parametrize(
