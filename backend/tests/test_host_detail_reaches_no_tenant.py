@@ -32,6 +32,34 @@ NAME = "web-1"
 ENDPOINT = "https://cluster.invalid:8443"
 MEMBER = "member-2"
 POOL_CONFIG = {"source": "/dev/disk/by-id/lab-disk", "size": "100GiB", "zfs.pool_name": "tank"}
+VM_CONFIG = {
+    "limits.cpu": "2", "image.os": "Ubuntu", "boot.autostart": "true", "snapshots.schedule": "@daily",
+    "security.secureboot": "false", "volatile.base_image": "abc123", "volatile.eth0.hwaddr": "00:16:3e:aa:bb:cc",
+    "raw.lxc": "lxc.apparmor.profile=unconfined", "volatile.idmap.base": "1000000",
+    "cloud-init.user-data": "#cloud-config\npassword: hunter2", "user.user-data": "secret",
+    "environment.API_TOKEN": "t0ken", "security.privileged": "true",
+}
+TENANT_VM_CONFIG = {
+    "limits.cpu": "2", "image.os": "Ubuntu", "boot.autostart": "true", "snapshots.schedule": "@daily",
+    "security.secureboot": "false", "volatile.base_image": "abc123", "volatile.eth0.hwaddr": "00:16:3e:aa:bb:cc",
+}
+VM_DEVICES = {
+    "root": {"type": "disk", "path": "/", "pool": "default", "size": "10GiB"},
+    "eth0": {
+        "type": "nic", "nictype": "bridged", "parent": "br-host0", "host_name": "veth9f2",
+        "hwaddr": "00:16:3e:aa:bb:cc", "ipv4.address": "10.0.0.5",
+    },
+    "data": {"type": "disk", "pool": "default", "source": "data-vol", "path": "/data"},
+    "logs": {"type": "disk", "source": "/srv/hostlogs", "path": "/var/log/host"},
+    "gpu0": {"type": "gpu", "pci": "0000:01:00.0", "vendorid": "10de"},
+}
+TENANT_VM_DEVICES = {
+    "root": {"type": "disk", "path": "/", "pool": "default", "size": "10GiB"},
+    "eth0": {"type": "nic", "nictype": "bridged", "hwaddr": "00:16:3e:aa:bb:cc", "ipv4.address": "10.0.0.5"},
+    "data": {"type": "disk", "pool": "default", "source": "data-vol", "path": "/data"},
+    "logs": {"type": "disk", "path": "/var/log/host"},
+    "gpu0": {"type": "gpu"},
+}
 
 TIERS = {
     "admin": (None, None),
@@ -44,6 +72,8 @@ def _vm() -> VMInfo:
     return VMInfo(
         name=NAME, status=VMStatus.RUNNING, status_code=103, host=HOST, host_endpoint=ENDPOINT,
         location=MEMBER, project="default", type="container", architecture="x86_64",
+        config=dict(VM_CONFIG), devices={"eth0": dict(VM_DEVICES["eth0"])},
+        expanded_devices={name: dict(device) for name, device in VM_DEVICES.items()},
     )
 
 
@@ -98,8 +128,11 @@ def test_the_policy_returns_copies_and_never_mutates(tier):
     shown_metrics = host_detail.metrics_for_tier(metrics, tier)
 
     assert (vm.host_endpoint, vm.location, metrics.pid) == (ENDPOINT, MEMBER, 7), "input untouched"
+    assert vm.config == VM_CONFIG and vm.expanded_devices == VM_DEVICES, "input untouched"
     if tier == "tenant":
         assert (shown_vm.host_endpoint, shown_vm.location, shown_metrics.pid) == (None, None, None)
+        assert shown_vm.config == TENANT_VM_CONFIG and shown_vm.expanded_devices == TENANT_VM_DEVICES
+        assert shown_vm.devices == {"eth0": TENANT_VM_DEVICES["eth0"]}
         assert shown_vm is not vm and shown_metrics is not metrics
     else:
         assert shown_vm is vm and shown_metrics is metrics
@@ -131,8 +164,11 @@ def test_the_instance_list_hides_host_detail_from_a_tenant_only(monkeypatch, tie
         (row,) = response.json()["vms"]
         expected = (None, None) if tier == "tenant" else (ENDPOINT, MEMBER)
         assert (row["host_endpoint"], row["location"]) == expected
+        assert row["config"] == (TENANT_VM_CONFIG if tier == "tenant" else VM_CONFIG)
+        assert row["expanded_devices"] == (TENANT_VM_DEVICES if tier == "tenant" else VM_DEVICES)
     stored = [value for key, (value, _) in manager.memory_cache.cache.items() if "instances:list" in key]
     assert stored and stored[0]["vms"][0]["host_endpoint"] == ENDPOINT, "the cache keeps the full body"
+    assert stored[0]["vms"][0]["config"] == VM_CONFIG
 
 
 @pytest.mark.parametrize(
@@ -203,7 +239,7 @@ def test_a_cached_pool_list_reaches_a_tenant_without_its_backing_path(monkeypatc
 
 HOST_DETAIL_MODELS = {
     "VMInfo", "VMListResponse", "InstanceMetrics", "ClusterInfo", "ClusterListResponse",
-    "StoragePoolInfo", "StoragePoolListResponse",
+    "StoragePoolInfo", "StoragePoolListResponse", "ProfileListResponse", "ProfileDetail",
 }
 
 
@@ -239,4 +275,50 @@ def test_every_route_returning_host_detail_applies_the_tier_policy():
             assert "org_scope_dependency" in source.split("def ", 1)[0] or (
                 "Depends(org_scope_dependency)" in source
             ), f"{path.name} must run org_scope_dependency, or an unset scope reads as Admin"
-    assert len(checked) == 10, checked
+    assert len(checked) == 12, checked
+
+
+def test_a_tenant_device_keeps_its_name_and_loses_the_host_side():
+    shown = host_detail.tenant_devices(VM_DEVICES)
+
+    assert shown == TENANT_VM_DEVICES
+    assert set(shown) == set(VM_DEVICES), "every device keeps its name, so own and inherited still match"
+    assert host_detail.tenant_devices(None) is None
+
+
+@pytest.mark.parametrize("tier", ["admin", "partner", "tenant"])
+def test_a_cached_profile_list_reaches_a_tenant_without_the_host_side(monkeypatch, tier):
+    from app.routers import profiles as profiles_module
+
+    manager = CacheManager(redis_url=None)
+    monkeypatch.setattr(cache_mod, "get_cache_manager", lambda: manager)
+    monkeypatch.setattr(profiles_module, "get_cache_manager", lambda: manager)
+    app = FastAPI()
+    app.include_router(profiles_module.router)
+    app.dependency_overrides[get_lxd_service] = lambda: _Service()
+    app.dependency_overrides[get_current_user] = lambda: None
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    app.dependency_overrides[require_tenant()] = lambda: None
+    client = TestClient(app, raise_server_exceptions=False)
+    body = {
+        "total": 1,
+        "profiles": [{
+            "name": "default", "config": dict(VM_CONFIG),
+            "devices": {name: dict(device) for name, device in VM_DEVICES.items()},
+            "used_by": [], "node": HOST, "project": "default",
+        }],
+        "nodes": [HOST],
+    }
+
+    def read():
+        manager.set("api_responses", get_scope_cache_key("profiles:list:host=None:project=*"), body, ttl=60)
+        return client.get("/profiles")
+
+    response = _as(tier, read)
+
+    assert response.status_code == 200, response.text[:200]
+    profile = response.json()["profiles"][0]
+    assert profile["config"] == (TENANT_VM_CONFIG if tier == "tenant" else VM_CONFIG)
+    assert profile["devices"] == (TENANT_VM_DEVICES if tier == "tenant" else VM_DEVICES)
+    assert body["profiles"][0]["config"] == VM_CONFIG, "the cached body is never redacted in place"
+

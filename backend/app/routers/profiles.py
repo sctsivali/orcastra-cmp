@@ -35,6 +35,8 @@ from app.core.blocking import (
     in_flight_for_key,
     run_blocking,
 )
+from app.core.host_detail import profile_for_tier, profile_list_for_tier
+from app.core.task_scope import caller_tier
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -414,7 +416,7 @@ async def list_profiles(
     if cached_data is not None:
         logger.debug(f"Returning cached profiles for host={host}")
         # Reconstruct Pydantic model from cached dict
-        return ProfileListResponse(**cached_data)
+        return profile_list_for_tier(ProfileListResponse(**cached_data), caller_tier())
     list_generation = get_resource_list_generation(cache, "profiles")
     
     try:
@@ -494,7 +496,7 @@ async def list_profiles(
         else:
             logger.warning("Not caching profiles list: no node answered")
 
-        return response
+        return profile_list_for_tier(response, caller_tier())
     except Exception as e:
         logger.error(f"Error listing profiles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -537,7 +539,7 @@ async def get_profile(
             raise HTTPException(status_code=403, detail="Access denied to this profile")
         if etag:
             http_response.headers["ETag"] = etag
-        return _detail_of(profile_name, data, host, owner, etag)
+        return profile_for_tier(_detail_of(profile_name, data, host, owner, etag), caller_tier())
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
         # itself, and the broad handler below rewrote it, so an unreachable cluster
