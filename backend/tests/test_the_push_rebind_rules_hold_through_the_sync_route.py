@@ -74,10 +74,14 @@ def sync_app(api_key: Dict[str, Any], db: Any) -> FastAPI:
     return app
 
 
-async def send(app: FastAPI, method: str, path: str, body: Any = None) -> httpx.Response:
+async def send(
+    app: FastAPI, method: str, path: str, body: Any = None, headers: Optional[Dict[str, str]] = None
+) -> httpx.Response:
     content = None if method in ("GET", "HEAD", "OPTIONS") else json.dumps(body).encode()
     async with _HTTP(transport=httpx.ASGITransport(app=app), base_url="http://orcastra.test") as client:
-        return await client.request(method, path, content=content, headers={"content-type": "application/json"})
+        return await client.request(
+            method, path, content=content, headers={"content-type": "application/json", **(headers or {})}
+        )
 
 
 def m(email: str, ext: str, role: str, action: Optional[str] = None) -> Dict[str, Any]:

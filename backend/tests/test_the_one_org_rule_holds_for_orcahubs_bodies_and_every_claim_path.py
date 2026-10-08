@@ -40,12 +40,13 @@ from app.models.db_models import (
     TenantPolicyRule,
 )
 from app.routers import integrations
+from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_url_tag
 from app.services.lxd import registry as cluster_registry
 from app.services.lxd.proxy_operations import PROXY_OPERATION_LEVELS
 from app.services.lxd_service import get_lxd_service
 from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER as PARTNER_LOGIN
-from tests.test_a_capability_grant_leaves_a_record import _FakeVault, _RecordingLogger
+from tests.test_a_capability_grant_leaves_a_record import SECRETS, _FakeVault, _RecordingLogger
 from tests.test_a_push_rebinds_only_into_the_org_its_key_claimed import K_ATTACKER, K_PARTNER, key, personal_cluster
 from tests.test_the_one_org_rule_holds_through_the_sync_route import (
     C,
@@ -310,7 +311,9 @@ async def test_a_refresh_counts_only_what_it_claimed(
     db = world_db()
     await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
     await personal_cluster(db, "c-cluster", C)
-    vault = _FakeVault({**seller_key(), "app_url": "https://hub.example.test"})
+    # note: the URL as a sync with the key's secret stores it, bound to that secret
+    vault = _FakeVault({**seller_key(), "app_url": "https://hub.example.test",
+                        APP_URL_SECRET_TAG: callback_url_tag(SECRETS[1])})
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
     monkeypatch.setattr(integrations, "get_current_allowed_clusters", lambda: {SALE})
     monkeypatch.setattr(rbac, "activity_logger", _RecordingLogger())

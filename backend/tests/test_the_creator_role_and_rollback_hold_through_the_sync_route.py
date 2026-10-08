@@ -286,6 +286,10 @@ def hub(email: str, ext: str, role: str) -> Dict[str, Any]:
 def onboarding(world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:  # noqa: F811
     vault = _FakeVault({k: v for k, v in key(K_PARTNER, C).items() if k not in ("raw", "hash")})
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
+    # note: a real secret, because the sync stores app_url only for the key's current secret
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    secret, secret_hash = integrations.generate_api_key_secret()
+    vault.store[_FakeVault._path(K_PARTNER, "secret")] = {"hash": secret_hash, "raw": secret}
     lookups: List[str] = []
 
     def _resolve(host: str, *_a: Any, **_k: Any) -> List[Any]:
@@ -293,7 +297,7 @@ def onboarding(world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Dict[s
         return [(2, 1, 6, "", ("93.184.216.34", 0))]
 
     monkeypatch.setattr(url_safety.socket, "getaddrinfo", _resolve)
-    return {**world, "vault": vault, "lookups": lookups}
+    return {**world, "vault": vault, "lookups": lookups, "as_the_key": {"X-API-Key-Secret": secret}}
 
 
 def assert_nothing_bound_and_warned(caplog: pytest.LogCaptureFixture, onboarding: Dict[str, Any],
@@ -325,7 +329,7 @@ async def test_orcahubs_sync_body_with_a_buyer_org_binds_nothing(
     await personal_cluster(db, "c-cluster", C)
     await personal_cluster(db, "founder-cluster", FOUNDER)
     sent = orcahub_body(members, app_url)
-    response = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)
+    response = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent, onboarding["as_the_key"])
     assert response.status_code == 200, response.text
     assert (response.json()["organizations_synced"], response.json()["members_synced"]) == (2, len(members))
     assert_nothing_bound_and_warned(caplog, onboarding, await bound(db))
@@ -353,7 +357,7 @@ async def test_orcahubs_sync_body_with_the_seller_org_alone_binds_into_it(
     db = sqlite_session(*org_tables())
     await personal_cluster(db, "c-cluster", C)
     sent = orcahub_body(members, app_url, orgs=(SELLER,))
-    response = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent)
+    response = await send(sync_app(key(K_PARTNER, C), db), "POST", SYNC, sent, onboarding["as_the_key"])
     assert response.status_code == 200, response.text
     assert (response.json()["organizations_synced"], response.json()["members_synced"]) == (1, len(members))
     await assert_bound_to(db, onboarding, "acme-cloud")

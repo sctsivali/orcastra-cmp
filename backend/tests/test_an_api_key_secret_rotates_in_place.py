@@ -276,18 +276,31 @@ async def test_a_callback_url_planted_with_the_old_secret_never_receives_the_new
     assert answer.api_key_secret not in repr(record)
 
 
-async def test_a_url_set_while_the_secret_is_written_is_cleared_again(world, monkeypatch) -> None:
-    """A sync authenticated with the old secret just before the write sets the URL meanwhile."""
+async def test_a_url_set_while_the_secret_is_written_never_receives_the_new_one(world, monkeypatch) -> None:
+    """A write that lands meanwhile carries the old secret's tag, so no callback uses it.
+
+    note: the sync's own write cannot land here (it takes the key's lock and checks its secret,
+    see test_a_callback_url_belongs_to_the_secret_that_set_it). This is the last layer: the binding.
+    """
+    from app.models.db_models import Organization as Org
+    from app.services import orcahub_sync
+    from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_url_tag
+
+    old_hash = world["vault"].docs[f"{BASE}/secret"]["hash"]
     real_save = integrations.save_api_key_secret_to_vault
 
-    def save_while_a_sync_lands(vault: Any, key_id: str, secret_hash: str, raw: str) -> None:
-        world["vault"].docs[f"{BASE}/metadata"]["app_url"] = ATTACKER
+    def save_while_a_write_lands(vault: Any, key_id: str, secret_hash: str, raw: str) -> None:
+        world["vault"].docs[f"{BASE}/metadata"].update(
+            app_url=ATTACKER, **{APP_URL_SECRET_TAG: callback_url_tag(old_hash)}
+        )
         real_save(vault, key_id, secret_hash, raw)
 
-    monkeypatch.setattr(integrations, "save_api_key_secret_to_vault", save_while_a_sync_lands)
-    await _rotate()
-    assert world["vault"].docs[f"{BASE}/metadata"]["app_url"] is None
-    assert _rotations(world)[0]["details"]["callback_url_cleared"] is True
+    monkeypatch.setattr(integrations, "save_api_key_secret_to_vault", save_while_a_write_lands)
+    answer = await _rotate()
+    org = Org(id=1, name="Own", slug="own", source="orcahub", external_id="ext-own", api_key_id=KEY,
+              created_by="system", is_active=True)
+    assert await orcahub_sync._get_orcahub_credentials(org) is None, "a callback would carry the new secret"
+    assert answer.api_key_secret not in repr(_rotations(world))
 
 
 async def test_a_callback_url_that_cannot_be_cleared_stops_the_rotation(world, monkeypatch) -> None:
@@ -297,30 +310,6 @@ async def test_a_callback_url_that_cannot_be_cleared_stops_the_rotation(world, m
         await _rotate()
     assert caught.value.status_code == 503 and "Nothing changed" in caught.value.detail
     assert f"{BASE}/secret" not in world["vault"].writes and await _valid(world["old"])
-
-
-async def test_a_second_clear_that_fails_asks_for_another_rotation(world, monkeypatch) -> None:
-    calls: List[str] = []
-    real_store = integrations._store_app_url_in_vault
-
-    def first_works(key_id: str, url: Any, **kwargs: Any) -> bool:
-        calls.append(key_id)
-        return real_store(key_id, url, **kwargs) if len(calls) == 1 else False
-
-    _stored(world, app_url=ATTACKER)
-    real_save = integrations.save_api_key_secret_to_vault
-
-    def save_while_a_sync_lands(vault: Any, key_id: str, secret_hash: str, raw: str) -> None:
-        real_save(vault, key_id, secret_hash, raw)
-        world["vault"].docs[f"{BASE}/metadata"]["app_url"] = ATTACKER
-
-    monkeypatch.setattr(integrations, "_store_app_url_in_vault", first_works)
-    monkeypatch.setattr(integrations, "save_api_key_secret_to_vault", save_while_a_sync_lands)
-    with pytest.raises(HTTPException) as caught:
-        await _rotate()
-    assert caught.value.status_code == 503 and "Rotate again" in caught.value.detail
-    (record,) = _rotations(world)
-    assert (record["result"], record["error_code"]) == ("failure", "callback_url_not_cleared")
 
 
 async def test_a_key_without_a_callback_url_is_rotated_without_touching_its_metadata(world) -> None:
