@@ -145,3 +145,10 @@ def test_a_replayed_feed_ticket_is_refused_at_the_handshake(monitoring_app):
             socket.receive_text()
 
     assert refused.value.code == 1008
+
+
+def test_the_token_query_is_refused_unless_an_operator_turns_it_back_on():
+    from app.core.config import Settings
+
+    assert Settings.model_fields["ws_query_token_enabled"].default is False
+    assert Settings.model_fields["ws_query_token_enabled"].alias == "WS_QUERY_TOKEN_ENABLED"

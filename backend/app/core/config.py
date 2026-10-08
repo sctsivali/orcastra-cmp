@@ -472,11 +472,12 @@ class Settings(BaseSettings):
         description="JWKS cache TTL in seconds (default: 1 hour)"
     )
     ws_query_token_enabled: bool = Field(
-        default=True,
+        default=False,
         alias="WS_QUERY_TOKEN_ENABLED",
         description=(
-            "Accept an access token in a WebSocket's ?token= query. Sockets open with single-use "
-            "tickets from POST /ws-tickets; this only keeps tabs opened before that switch working"
+            "Accept an access token in a WebSocket's ?token= query again. Off: sockets open only "
+            "with single-use tickets from POST /ws-tickets. On only to roll back to a frontend "
+            "that predates them"
         ),
     )
 
