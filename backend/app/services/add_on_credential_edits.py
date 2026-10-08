@@ -19,6 +19,10 @@ Per route, for a key carrying extension_install_id:
                                         with the signing secret and settings. A key no installation
                                         claims (superseded by a rotation without grace, rotated out
                                         twice, or reclaimed by the reconcile sweep) is deletable.
+  POST   /api-keys/{id}/rotate-secret   refused, 409. The installation rotates its own credential
+                                        (POST /extensions/installations/{id}/credential/rotate),
+                                        which issues a new key with the same grant and retires this
+                                        one, at once or after the grace window the operator chose.
   POST   /api-keys/{id}/revoke          allowed. The kill switch, for whoever may revoke today.
                                         Rescope keeps the revocation (it rewrites two fields) and
                                         rotation issues a working key again.
@@ -52,6 +56,10 @@ DELETE_DETAIL = (
     "This key is the credential an add-on installation is using, either its current key or the "
     "one a rotation is phasing out. Revoke it to stop it now, or uninstall the add-on to remove it."
 )
+ROTATE_DETAIL = (
+    "This key is an add-on credential. Its installation owns it, so rotate it from its installation, "
+    "which issues a new credential and retires this one."
+)
 CLAIM_UNKNOWN_DETAIL = (
     "This key is an add-on credential and its installation could not be checked, so it was not "
     "deleted. Try again, or revoke it to stop it now."
@@ -66,6 +74,12 @@ def refuse_grant_edit(metadata: Mapping[str, Any]) -> None:
     """409 for a capability or cluster permission edit of an add-on credential."""
     if is_add_on_credential(metadata):
         raise HTTPException(status_code=409, detail=GRANT_EDIT_DETAIL)
+
+
+def refuse_secret_rotation(metadata: Mapping[str, Any]) -> None:
+    """409 for an in-place secret rotation of an add-on credential."""
+    if is_add_on_credential(metadata):
+        raise HTTPException(status_code=409, detail=ROTATE_DETAIL)
 
 
 async def installation_claims(db: AsyncSession, key_id: str) -> bool:

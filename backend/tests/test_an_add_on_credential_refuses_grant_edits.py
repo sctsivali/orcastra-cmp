@@ -343,6 +343,7 @@ DECIDED: Dict[Tuple[str, str], str] = {
     ("PUT", "/api-keys/{key_id}/capabilities"): "refused",
     ("PUT", "/api-keys/{key_id}/permissions"): "refused",
     ("DELETE", "/api-keys/{key_id}"): "refused",
+    ("POST", "/api-keys/{key_id}/rotate-secret"): "refused",
     ("POST", "/api-keys/{key_id}/revoke"): "allowed",
     ("GET", "/api-keys/{key_id}"): "allowed",
     ("POST", "/api-keys/{key_id}/users"): "allowed",

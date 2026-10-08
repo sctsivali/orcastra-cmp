@@ -2330,6 +2330,14 @@ export const integrationsAPI = {
     });
   },
 
+  // note: a new secret for the same key id. The organizations the key owns record that id, so
+  // they keep syncing once the integration is given the new secret.
+  rotateAPIKeySecret: async (keyId: string): Promise<APIKeyCreateResponse> => {
+    return fetchAPI<APIKeyCreateResponse>(`/integrations/api-keys/${encodeURIComponent(keyId)}/rotate-secret`, {
+      method: "POST",
+    });
+  },
+
   deleteAPIKey: async (keyId: string): Promise<{ success: boolean; message: string }> => {
     return fetchAPI(`/integrations/api-keys/${encodeURIComponent(keyId)}`, {
       method: "DELETE",

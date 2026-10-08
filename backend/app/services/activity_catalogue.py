@@ -115,6 +115,9 @@ ACTION_CATEGORIES = {
     "integration.api_key.create": EventCategory.ADMIN,
     "integration.api_key.capabilities.update": EventCategory.ADMIN,
     "integration.api_key.revoke": EventCategory.ADMIN,
+    # A new secret for the same key id. It hands the caller a working credential, so it ranks
+    # with the grant-shaped actions beside it.
+    "integration.api_key.secret.rotate": EventCategory.ADMIN,
     "integration.api_key.delete": EventCategory.ADMIN,
     # An integration push moving its creator's unbound cluster into an organization.
     "integration.cluster.rebind": EventCategory.ADMIN,
@@ -240,6 +243,7 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.api_key.create",
     "integration.api_key.capabilities.update",
     "integration.api_key.revoke",
+    "integration.api_key.secret.rotate",
     "integration.api_key.delete",
     "integration.cluster.rebind",
     "extension.install",
