@@ -15,7 +15,6 @@ they were authorized for.
 """
 
 import logging
-import re
 import threading
 import time
 from contextlib import contextmanager
@@ -27,7 +26,8 @@ from pylxd.exceptions import LXDAPIException
 from requests import exceptions as requests_exc
 from urllib3 import exceptions as urllib3_exc
 
-from .cpu_allocation import STANDALONE_LOCATIONS
+from app.core.member_names import is_member_name, is_standalone_location
+
 from .metrics_text import InstanceSeries, parse_instance_series
 
 logger = logging.getLogger(__name__)
@@ -44,9 +44,6 @@ NEGATIVE_TTL_SECONDS = {
 MIN_BUDGET_SECONDS = 3.0
 MAX_BODY_BYTES = 8 * 1024 * 1024
 _CHUNK_BYTES = 64 * 1024
-# A cluster member name as LXD allows it. Anything else came from an endpoint that is not
-# behaving like LXD and must not reach a cache key, a log line or a target parameter.
-_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 
 _flight_locks: Dict[str, threading.Lock] = {}
 _flight_users: Dict[str, int] = {}
@@ -145,7 +142,7 @@ def _scrape(
         _fail(cache, key, "unsupported", "no metrics API extension")
         return None
     params: Dict[str, str] = {"project": project}
-    if (member or "") not in STANDALONE_LOCATIONS:
+    if not is_standalone_location(member):
         # important: a clustered member reports only its own instances, so the read must be
         # forwarded to the member the instance runs on.
         params["target"] = member or ""
@@ -249,11 +246,14 @@ def project_metrics(
     """
     if deadline - time.monotonic() < MIN_BUDGET_SECONDS:
         return None
-    if (member or "") not in STANDALONE_LOCATIONS and not _MEMBER.match(member or ""):
+    standalone = is_standalone_location(member)
+    if not standalone and not is_member_name(member):
+        # An endpoint that is not behaving like LXD; the name must not reach a key, a log line or
+        # a target parameter.
         logger.debug("Not scraping metrics for an unrecognisable member on %s", cluster)
         return None
     cache = _cache()
-    key = _key(cluster, member, project)
+    key = _key(cluster, "none" if standalone else member, project)
     hit = _cached(cache, key)
     if hit is not None:
         return hit if isinstance(hit, ProjectScrape) else None

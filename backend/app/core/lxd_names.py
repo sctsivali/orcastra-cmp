@@ -77,3 +77,10 @@ LXD_VOLUME_NAME_DESCRIPTION = (
     "Letters, digits, dots, underscores and dashes, starting with a letter or digit, "
     "at most 128 characters"
 )
+
+
+# A cluster member (server) name as it reaches a ?target=, a cache key or a log line. LXD itself only
+# refuses an empty name, "none" and the "@group" target prefix, and members are named after their
+# hosts, so this is a hostname-shaped allowlist: letters, digits, dots, underscores and dashes,
+# starting with a letter or digit, at most 253 characters.
+LXD_MEMBER_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$"

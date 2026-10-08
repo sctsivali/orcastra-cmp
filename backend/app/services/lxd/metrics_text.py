@@ -134,7 +134,7 @@ def parse_instance_series(text: str, *, project: str) -> Dict[str, InstanceSerie
             continue
         labels = {key: _unescape(val) for key, val in _LABEL.findall(match.group("labels") or "")}
         name = labels.get("name")
-        if not name or labels.get("project", project) != project or not _INSTANCE_NAME.match(name):
+        if not name or labels.get("project", project) != project or not _INSTANCE_NAME.fullmatch(name):
             continue
         if name not in found and len(found) >= _MAX_SERIES:
             malformed += 1

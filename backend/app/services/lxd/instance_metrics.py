@@ -13,7 +13,6 @@ surfaces stuck on "calculating".
 import hashlib
 import logging
 import math
-import re
 import threading
 import time
 from collections import OrderedDict
@@ -26,7 +25,9 @@ from requests import exceptions as requests_exc
 
 from app.core.rate_sampler import RateReading, RateSampler, Sample, SamplerPolicy
 from app.models.instance_metrics import GuestAgentStatus, InstanceMetrics
-from .cpu_allocation import STANDALONE_LOCATIONS, effective_vcpus
+from app.core.member_names import is_member_name, is_standalone_location
+
+from .cpu_allocation import effective_vcpus
 from .exceptions import LXDConnectionError, LXDOperationError
 from .metrics_scrape import ProjectScrape, project_metrics
 from .metrics_text import InstanceSeries, honest_memory
@@ -56,7 +57,6 @@ _HOST_THREADS_TTL_SECONDS = 1800.0
 _HOST_THREADS_MAX_ENTRIES = 512
 _host_threads_cache: "OrderedDict[str, Tuple[float, int]]" = OrderedDict()
 _host_threads_lock = threading.Lock()
-_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 # note: bounds on what an LXD response can put into a Redis key or a stored sample.
 _IDENTITY_PART_MAX = 200
 _MAX_INTERFACES = 64
@@ -147,10 +147,10 @@ def build_state_sample(
 
 def host_threads(client: Any, cluster: str, member: Optional[str]) -> Optional[int]:
     """Hardware threads of the host an unlimited container runs on, cached for 30 minutes."""
-    standalone = (member or "") in STANDALONE_LOCATIONS
-    if not standalone and not _MEMBER.match(member or ""):
+    standalone = is_standalone_location(member)
+    if not standalone and not is_member_name(member):
         return None
-    key = f"{cluster}\x00{member or ''}"
+    key = f"{cluster}\x00{'' if standalone else member}"
     now = time.monotonic()
     with _host_threads_lock:
         hit = _host_threads_cache.get(key)

@@ -13,6 +13,7 @@ from requests import exceptions as requests_exceptions
 from app.models.schemas import VMStatus
 from app.core.lxd_path import safe_segment
 from app.core.lxd_segment import lxd_segment
+from app.core.member_names import is_standalone_location
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,9 @@ def normalize_cluster_member(value: Any) -> Optional[str]:
     as null, so callers that compare locations must treat "none" and "" as "no cluster
     member" or they silently drop every instance on a standalone host.
     """
-    text = (value or "").strip()
-    if not text or text.lower() == "none":
+    if is_standalone_location(value):
         return None
-    return text
+    return str(value).strip()
 
 
 def parse_vm_status(status: str, status_code: int) -> VMStatus:
