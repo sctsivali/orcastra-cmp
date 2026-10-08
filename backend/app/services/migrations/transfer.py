@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from app.models.migration_models import MigrationJob, MigrationResource
 from app.models.migration_schemas import MigrationPlanCreateRequest
+from app.services.lxd.root_disk import root_pool
 
 from . import executor, repository
 from .billing import (
@@ -31,20 +32,6 @@ from .preparation import (
     _restart_source_best_effort,
 )
 from .security import sanitize_payload
-
-
-def _root_pool(instance: dict[str, Any]) -> str | None:
-    devices = instance.get("expanded_devices") or instance.get("devices") or {}
-    roots = [
-        device
-        for device in devices.values()
-        if isinstance(device, dict)
-        and device.get("type") == "disk"
-        and device.get("path") == "/"
-    ] if isinstance(devices, dict) else []
-    if len(roots) != 1 or not isinstance(roots[0].get("pool"), str):
-        return None
-    return str(roots[0].get("pool") or "") or None
 
 
 async def _verify_copy_snapshots(
@@ -346,7 +333,7 @@ async def _transfer_resources(
                 raise MigrationUnknown(
                     f"Member relocation settled but '{target_name}' is not on the approved member."
                 )
-            if _root_pool(target_record) != state.get("source_root_pool"):
+            if root_pool(target_record) != state.get("source_root_pool"):
                 raise MigrationUnknown(
                     f"Member relocation changed the root pool for '{target_name}'."
                 )
@@ -438,7 +425,7 @@ async def _transfer_resources(
                 raise MigrationUnknown(
                     f"Target '{target_name}' left the approved cluster member before activation."
                 )
-            if _root_pool(target_record) != state.get("source_root_pool"):
+            if root_pool(target_record) != state.get("source_root_pool"):
                 raise MigrationUnknown(
                     f"Target '{target_name}' changed root pool before activation."
                 )
@@ -613,7 +600,7 @@ async def _transfer_resources(
                 raise MigrationUnknown(
                     f"Target '{target_name}' left the approved member before completion."
                 )
-            if _root_pool(final_target) != state.get("source_root_pool"):
+            if root_pool(final_target) != state.get("source_root_pool"):
                 raise MigrationUnknown(
                     f"Target '{target_name}' changed root pool before completion."
                 )
