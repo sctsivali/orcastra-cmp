@@ -54,6 +54,7 @@ function world(role) {
   return {
     puts: [],
     capabilityPuts: [],
+    rotations: [],
     keys: [
       key("oak_hub_old", "Hub Old", {
         is_active: false, is_revoked: true,
@@ -103,6 +104,12 @@ async function installOwnership(page, role) {
     }
     if (request.method() === "GET" && path === "/integrations/capabilities") {
       return route.fulfill({ json: VOCABULARY });
+    }
+    const rotation = path.match(/^\/integrations\/api-keys\/([^/]+)\/rotate-secret$/);
+    if (request.method() === "POST" && rotation) {
+      state.rotations.push(rotation[1]);
+      const target = state.keys.find((k) => k.id === rotation[1]);
+      return route.fulfill({ json: { api_key: target, api_key_id: target.id, api_key_secret: "oas_e2e_rotated_secret" } });
     }
     const capabilities = path.match(/^\/integrations\/api-keys\/([^/]+)\/capabilities$/);
     if (request.method() === "PUT" && capabilities) {
@@ -264,5 +271,30 @@ test("withdrawing tenant.provision from an owner key says what stops and goes th
     { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: false } },
     { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: true } },
   ]);
+  await expectCleanSettingsHarness(settings);
+});
+
+
+test("rotating a secret needs the key's name typed first", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "admin");
+  const { settings, state } = await installOwnership(page, "admin");
+  await page.goto("/settings/integrations");
+
+  await card(page, "Hub Connection").getByRole("button", { name: "Rotate Secret" }).click();
+  const confirm = page.getByRole("alertdialog");
+  const rotate = confirm.getByRole("button", { name: "Rotate Secret" });
+  const typed = confirm.getByLabel("Type the key's name to confirm");
+  await expect(rotate).toBeDisabled();
+  await typed.fill("Hub Connectio");
+  await expect(rotate).toBeDisabled();
+  await typed.fill("Hub Connection");
+  await expect(rotate).toBeEnabled();
+  await capture(page, testInfo, "rotate-secret-confirmation");
+  await rotate.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await expect(page.getByRole("dialog", { name: "Secret Rotated" })).toBeVisible();
+  expect(state.rotations).toEqual(["oak_hub_new"]);
   await expectCleanSettingsHarness(settings);
 });

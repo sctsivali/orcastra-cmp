@@ -754,7 +754,7 @@ function IntegrationsSettingsContent() {
                     {keyStatus === "Active" && !apiKey.is_add_on_credential && (
                       <RotateSecretButton
                         keyId={apiKey.id}
-                        keyName={String(apiKey.name || "this key")}
+                        keyName={String(apiKey.name || apiKey.id)}
                         onRotated={(response) => setRotatedKeys((queue) => [...queue, response])}
                       />
                     )}
