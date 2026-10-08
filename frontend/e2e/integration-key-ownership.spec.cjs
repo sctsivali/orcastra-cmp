@@ -57,6 +57,8 @@ function world(role) {
       : [
           org(1, "acme-cloud", "oak_hub_old", "Hub Old", "revoked"),
           org(3, "fossgo", "oak_hub_new", "Hub Connection", "active"),
+          // A tenant row lists the organization; its owner key is shown only to its partners.
+          org(4, "buyer-two", "oak_hub_new", null, null, { owner_key_expiry_state: null }),
         ],
   };
 }
@@ -181,6 +183,9 @@ test("a partner reads ownership and cannot transfer", async ({ page }, testInfo)
 
   const panel = page.locator("#synced-organizations");
   await expect(panel.getByText("Ask an administrator to transfer this organization to an active key.")).toBeVisible();
+  const tenantOnly = panel.getByRole("row").filter({ hasText: "buyer-two" });
+  await expect(tenantOnly.getByText("Not Shown", { exact: true })).toBeVisible();
+  await expect(tenantOnly.getByText("Only this organization's partners see its owner key.")).toBeVisible();
   await expect(panel.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
   await expect(panel.getByText("no longer works", { exact: false })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);

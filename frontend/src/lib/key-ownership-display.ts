@@ -2,6 +2,12 @@ import { getAPIKeyStatus } from "@/lib/integration-display";
 import type { APIKeyInfo, IntegrationOrganization, KeyOwnsOrganizationsDetail, OwnerKeyState } from "@/types/api";
 
 /**
+ * An owner key's state as the list shows it. "hidden" is a state the list does not show: the
+ * caller is neither an administrator nor one of the organization's partners.
+ */
+export type OwnerStateShown = OwnerKeyState | "hidden";
+
+/**
  * How an organization's owner key stands, as the synced-organization list reports it.
  *
  * The owner is the only key that may sync an OrcaHub organization, update its members and
@@ -9,7 +15,7 @@ import type { APIKeyInfo, IntegrationOrganization, KeyOwnsOrganizationsDetail, O
  * badge and the filter facet cannot disagree.
  */
 export const OWNER_KEY_STATE: Record<
-  OwnerKeyState,
+  OwnerStateShown,
   { label: string; tone: "positive" | "caution" | "negative" | "destructive" | "secondary" | "muted" | "outline" }
 > = {
   active: { label: "Active", tone: "positive" },
@@ -20,14 +26,16 @@ export const OWNER_KEY_STATE: Record<
   missing: { label: "Missing", tone: "negative" },
   unknown: { label: "Unknown", tone: "muted" },
   unclaimed: { label: "Unclaimed", tone: "outline" },
+  hidden: { label: "Not Shown", tone: "muted" },
 };
 
 /** Working first, then the ways an owner stops working, then the two that are not a key's state. */
 export const OWNER_KEY_STATE_ORDER: readonly string[] = [
-  "Active", "Expiring", "Expired", "Revoked", "Inactive", "Missing", "Unknown", "Unclaimed",
+  "Active", "Expiring", "Expired", "Revoked", "Inactive", "Missing", "Unknown", "Unclaimed", "Not Shown",
 ];
 
-export function ownerKeyState(org: Pick<IntegrationOrganization, "owner_key_state">): OwnerKeyState {
+export function ownerKeyState(org: Pick<IntegrationOrganization, "owner_key_state">): OwnerStateShown {
+  if (org.owner_key_state === null) return "hidden";
   return org.owner_key_state ?? "unknown";
 }
 
@@ -37,7 +45,7 @@ export function ownerKeyState(org: Pick<IntegrationOrganization, "owner_key_stat
  * note: unknown is not frozen. It means the key's record could not be read, which is a
  * question to retry, not a verdict. Unclaimed is not frozen either: any key may claim it.
  */
-export function ownerKeyIsFrozen(state: OwnerKeyState): boolean {
+export function ownerKeyIsFrozen(state: OwnerStateShown): boolean {
   return state === "expired" || state === "revoked" || state === "inactive" || state === "missing";
 }
 

@@ -204,6 +204,9 @@ function SyncedOrganizationsContent() {
                       {!isAdmin && ownerKeyIsFrozen(state) && (
                         <TableSubText wrap>Ask an administrator to transfer this organization to an active key.</TableSubText>
                       )}
+                      {state === "hidden" && (
+                        <TableSubText wrap>Only this organization&apos;s partners see its owner key.</TableSubText>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       {isAdmin && (
