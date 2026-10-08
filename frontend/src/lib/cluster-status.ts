@@ -198,7 +198,7 @@ export function clusterStatusMeta(
 export function clusterSublabel(
   id: string,
   displayName: string | undefined,
-  endpoint: string | undefined,
+  endpoint: string | null | undefined,
 ): string | undefined {
   const shownEndpoint = endpoint && endpoint !== "unknown" ? endpoint : undefined;
   const label = displayName || id;

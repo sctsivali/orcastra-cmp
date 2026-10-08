@@ -275,6 +275,11 @@ const checks = [
       /allSectionsUnavailable/.test(bodies.metrics),
     "partial and fully unavailable metric sections must remain distinct and name the missing readings",
   ],
+  [
+    /const \{ isPartner \} = usePermissions\(\);/.test(bodies.metrics) &&
+      /isPartner \? <DetailField label="PID" value=\{metrics\.pid\} \/> : null/.test(bodies.metrics),
+    "the host PID is Partner and Admin detail; a Tenant's Metrics tab must not offer the field",
+  ],
 ];
 
 const failures = checks.filter(([passed]) => !passed).map(([, reason]) => reason);

@@ -36,6 +36,8 @@ from app.core.cache import (
     get_resource_list_generation,
 )
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
+from app.core.host_detail import cluster_for_tier, cluster_list_for_tier
+from app.core.task_scope import caller_tier
 from app.core.url_safety import normalize_endpoint
 from app.core.type_utils import (
     detect_cluster_type_from_metadata,
@@ -847,7 +849,7 @@ async def list_clusters(
         cached_response = cache.get("api_responses", cache_key)
         if cached_response is not None:
             logger.debug("Returning cached clusters list")
-            return ClusterListResponse(**cached_response)
+            return cluster_list_for_tier(ClusterListResponse(**cached_response), caller_tier())
     list_generation = get_resource_list_generation(cache, "clusters") if cache else None
     
     try:
@@ -878,7 +880,7 @@ async def list_clusters(
         elif cache:
             logger.info("Not caching clusters list: cluster metadata changed during the read")
         
-        return response
+        return cluster_list_for_tier(response, caller_tier())
         
     except Exception as e:
         logger.error(f"Failed to list clusters: {e}")
@@ -997,7 +999,7 @@ async def get_cluster(
             cluster_type = resolve_cluster_type(info["metadata"].get("type"), live_client)
         clustered = resolve_clustered(stored_clustered, live_client)
 
-        return ClusterInfo(
+        return cluster_for_tier(ClusterInfo(
             cluster_id=cluster_id,
             display_name=info["metadata"].get("display_name", cluster_id),
             endpoint=info["metadata"]["endpoint"],
@@ -1017,7 +1019,7 @@ async def get_cluster(
             # endpoint="unknown" by the handler's own fallback. The UI always sends a region,
             # so only API callers hit it, which is why it went unseen.
             location=info["metadata"].get("location") or None
-        )
+        ), caller_tier())
         
     except LXDLocalStorageError:
         # important: above LXDCertManagerError and the generic handler. probe_connection

@@ -58,9 +58,12 @@ export function ClusterDetailDialog({
       recordId={cluster.cluster_id}
       recordIdLabel="Cluster"
       subtitle={
-        <TableLink href={cluster.endpoint} external title="Open the hypervisor endpoint">
-          {cluster.endpoint}
-        </TableLink>
+        // A Tenant receives no endpoint; the cluster id above already names the record.
+        cluster.endpoint ? (
+          <TableLink href={cluster.endpoint} external title="Open the hypervisor endpoint">
+            {cluster.endpoint}
+          </TableLink>
+        ) : undefined
       }
       status={
         <Badge variant={statusMeta.tone}>{statusMeta.label}</Badge>

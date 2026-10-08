@@ -20,6 +20,8 @@ from app.models.schemas import FanoutReachability
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
+from app.core.host_detail import pool_for_tier, pool_list_for_tier
+from app.core.task_scope import caller_tier
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, Field
@@ -162,7 +164,7 @@ async def list_storage_pools(
     cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached storage pools for host={host}")
-        return StoragePoolListResponse(**cached_data)
+        return pool_list_for_tier(StoragePoolListResponse(**cached_data), caller_tier())
     list_generation = get_resource_list_generation(cache, "storage_pools")
     
     try:
@@ -227,7 +229,7 @@ async def list_storage_pools(
         else:
             logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
 
-        return response
+        return pool_list_for_tier(response, caller_tier())
     except Exception as e:
         logger.error(f"Error listing storage pools: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -348,7 +350,7 @@ async def get_storage_pool(
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this storage pool")
 
-        return StoragePoolInfo(
+        return pool_for_tier(StoragePoolInfo(
             name=pool.name,
             description=getattr(pool, 'description', '') or "",
             driver=pool.driver,
@@ -356,7 +358,7 @@ async def get_storage_pool(
             used_by=used_by,
             status=getattr(pool, 'status', ''),
             node=host,
-        )
+        ), caller_tier())
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
         # itself, and the broad handler below rewrote it, so an unreachable cluster

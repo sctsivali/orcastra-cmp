@@ -94,13 +94,19 @@ class VMInfo(BaseModel):
     status_code: int = Field(..., description="LXD status code")
     ip_addresses: List[str] = Field(default_factory=list, description="List of IP addresses")
     host: str = Field(..., description="Registered Cluster identifier")
-    host_endpoint: str = Field(..., description="LXD host endpoint URL")
+    host_endpoint: Optional[str] = Field(
+        None, description="LXD endpoint of the instance's cluster; null for Tenant callers"
+    )
     # note: LXD reports which cluster member an instance sits on, and this model dropped it, so
     # the members page could count instances per member and never list them. That is why its
     # per-member drill-down rendered "Instance Details Unavailable" for everyone, and why the
     # comment there blamed a missing API that was in fact already being read server-side.
     location: Optional[str] = Field(
-        None, description="Cluster member the instance runs on, when the target is clustered"
+        None,
+        description=(
+            "Cluster member the instance runs on, when the target is clustered; null for Tenant "
+            "callers"
+        ),
     )
     project: Optional[str] = Field(None, description="LXD project name")
     architecture: Optional[str] = Field(None, description="VM architecture")
@@ -1288,7 +1294,7 @@ class ClusterInfo(BaseModel):
     """Complete cluster information."""
     cluster_id: str = Field(..., description="Unique cluster identifier")
     display_name: str = Field(..., description="Human-readable display name")
-    endpoint: str = Field(..., description="LXD API endpoint")
+    endpoint: Optional[str] = Field(None, description="LXD API endpoint; null for Tenant callers")
     zone: Optional[str] = Field(None, description="Zone/location (legacy)")
     cluster_type: Optional[str] = Field(None, description="Hypervisor family (auto-detected after authentication)")
     clustered: Optional[bool] = Field(

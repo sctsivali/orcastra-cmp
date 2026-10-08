@@ -7,6 +7,7 @@ import { LoadingLottieMedium } from "@/components/loading-lottie";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { Badge } from "@/components/ui/badge";
 import type { InstanceMetricSection, InstanceMetrics, VMInfo } from "@/types/api";
+import { usePermissions } from "@/hooks/use-permissions";
 import { GuestAgentNotice } from "./metrics/guest-agent-notice";
 import { CpuCard, DiskCard, MemoryCard, NetworkCard } from "./metrics/metric-cards";
 import {
@@ -47,6 +48,9 @@ export function InstanceMetricsTab({
   onRefresh: () => Promise<unknown> | unknown;
   updatedAt: number | null;
 }) {
+  // note: before any early return (rules of hooks). The host PID is Partner and Admin detail; a
+  // Tenant's metrics arrive without it.
+  const { isPartner } = usePermissions();
   const errorState = isError ? describeMetricsError(error) : null;
 
   if (instance.status !== "Running") {
@@ -159,7 +163,7 @@ export function InstanceMetricsTab({
             value={processesUnavailable ? undefined : metrics.processes}
           />
           <DetailField label="Uptime" value={formatUptime(metrics.uptime_seconds)} />
-          <DetailField label="PID" value={metrics.pid} />
+          {isPartner ? <DetailField label="PID" value={metrics.pid} /> : null}
           <DetailField label="Base Image" value={metrics.base_image} mono span="full" />
         </DetailGrid>
       </DetailSection>

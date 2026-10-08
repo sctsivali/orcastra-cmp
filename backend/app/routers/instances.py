@@ -46,6 +46,8 @@ from app.core.database import get_db
 from app.core.error_sanitizer import sanitize_error
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.api_key_capabilities import is_valid_project_name
+from app.core.host_detail import metrics_for_tier, vm_for_tier, vm_list_for_tier
+from app.core.task_scope import caller_tier
 from app.core.org_scope import (
     can_view_instance,
     check_tenant_permission,
@@ -304,7 +306,7 @@ async def list_instances(
     cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug(f"Returning cached instances list for {cache_key}")
-        return VMListResponse(**cached_response)
+        return vm_list_for_tier(VMListResponse(**cached_response), caller_tier())
     
     try:
         generation = cache.instance_list_generation()
@@ -408,7 +410,7 @@ async def list_instances(
         else:
             logger.warning("Not caching instances list: no cluster answered")
         
-        return response
+        return vm_list_for_tier(response, caller_tier())
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
@@ -531,7 +533,7 @@ async def get_instance(
                 detail=f"Instance {instance_name} not found in cluster '{host}'",
             )
         verify_instance_view_access(host, vm.project or "default", vm.name)
-        return vm
+        return vm_for_tier(vm, caller_tier())
     except HTTPException:
         # 404 (not found) / 403 (ACL). Don't let the generic handler mask these.
         raise
@@ -1427,7 +1429,7 @@ async def get_instance_metrics(
                 status_code=404,
                 detail=f"Instance {instance_name} not found in cluster '{host}'",
             )
-        return metrics
+        return metrics_for_tier(metrics, caller_tier())
     except LXDConnectionError as e:
         # The cluster did not answer. Without this the retyped exception falls to
         # `except Exception` below and answers 500, which pages an engineer for an
