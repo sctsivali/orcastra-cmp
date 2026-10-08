@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from app.models.cluster_status import ClusterStatus
 from app.models.schemas import NodeResources, NodeStatus
+from app.services.lxd.instance import FleetInventory
 
 DEAD = "blitzkrieg"
 UNTRUSTED = "central1-argon"
@@ -78,8 +79,8 @@ class _Cache:
 
 
 class _Service:
-    async def list_all_vms(self):
-        return [], []
+    async def read_fleet_inventory(self):
+        return FleetInventory([], [], [], {})
 
     def get_node_names(self):
         return [node.name for node in _nodes()]

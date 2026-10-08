@@ -26,7 +26,7 @@ from .project_usage import ProjectUsage, read_project_usage
 from .freshness import read_resources
 from .resources import ResourceManager
 from .instance_metrics import read_instance_metrics
-from .instance import InstanceManager
+from .instance import FleetInventory, InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager, ImageStoreListing
 from app.core.type_utils import normalize_node_type, resolve_clustered
@@ -442,6 +442,10 @@ class LXDService:
     ) -> Tuple[List[VMInfo], List[str], List[str]]:
         """List instances and identify clusters whose project inventory was incomplete."""
         return await self.instance_manager.list_all_vms_with_failures()
+
+    async def read_fleet_inventory(self) -> FleetInventory:
+        """The monitoring sweep's fleet read: clusters out of time are named, not raised."""
+        return await self.instance_manager.read_fleet_inventory()
 
     async def list_vms_in_project_with_failures(
         self,

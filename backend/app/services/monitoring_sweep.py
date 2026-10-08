@@ -3,7 +3,8 @@
 important: the dashboard reads cluster status through this module, one bounded read per cluster
 on its own executor, instead of check_nodes_status_async. A cluster whose read runs past the wall
 is reported as not answering for this sweep only: it is never cached as offline here and never
-recorded on the breaker, and a slow cluster can no longer hold the whole sweep.
+recorded on the breaker, and a slow cluster can no longer hold the whole sweep. The same goes for
+a cluster whose instance list runs out of time: the sweep names it and keeps the others' answer.
 
 note: the line carries the phase timings in its message, so the logging dedup filter (identical
 messages within 60 s are folded) never swallows a sweep.
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-STATUS_WALL_SECONDS = float(os.environ.get("ORCASTRA_MONITORING_STATUS_WALL_SECONDS", "120"))
+STATUS_WALL_SECONDS = float(os.environ.get("ORCASTRA_MONITORING_STATUS_WALL_SECONDS", "45"))
 WARNINGS_WALL_SECONDS = 8.0
 _STATUS_PER_CLUSTER = 3
 _STATUS_IN_FLIGHT = 16
@@ -61,8 +62,22 @@ class FleetRead:
     connected: List[str]
     statuses: List[NodeStatus]
     status_ms: Dict[str, int] = field(default_factory=dict)
-    # cluster -> why this sweep has no answer from it ("status" timed out, "busy" pool full)
+    # cluster -> why this sweep has no full answer from it: "status" or "inventory" ran past the
+    # wall, "busy" found the pool full
     timed_out: Dict[str, str] = field(default_factory=dict)
+
+
+def inventory_note(reason: str) -> str:
+    """The status line of a Cluster that answered while its instance list did not."""
+    if reason == "busy":
+        return (
+            "Connected. Its instance list is still being read by an earlier collection, so its "
+            "instances are not counted in this one."
+        )
+    return (
+        "Connected. Its instance list did not answer in time during this collection, so its "
+        "instances are not counted until the next one."
+    )
 
 
 def _not_answering(name: str, reason: str) -> NodeStatus:
@@ -114,10 +129,11 @@ async def read_statuses(
 async def read_fleet(lxd_service: Any, timer: SweepTimer) -> FleetRead:
     """The fleet's instances and every cluster's status, read concurrently and timed."""
     names = list(lxd_service.get_node_names())
-    inventory = timer.timed("inventory", lxd_service.list_all_vms())
+    inventory = timer.timed("inventory", lxd_service.read_fleet_inventory())
     status = timer.timed("status", read_statuses(lxd_service, names))
-    (vms, connected), (statuses, status_ms, timed_out) = await asyncio.gather(inventory, status)
-    return FleetRead(list(vms), list(connected), statuses, status_ms, timed_out)
+    fleet, (statuses, status_ms, status_timed_out) = await asyncio.gather(inventory, status)
+    timed_out = {**fleet.timed_out, **status_timed_out}
+    return FleetRead(list(fleet.vms), list(fleet.connected), statuses, status_ms, timed_out)
 
 
 def _node_warnings(lxd_service: Any, name: str) -> List[Dict[str, Any]]:

@@ -32,7 +32,7 @@ from app.services.monitoring_history_store import (
     record_point,
 )
 from app.services.monitoring_memory import apply_member_memory
-from app.services.monitoring_sweep import SweepTimer, count_warnings, log_sweep, read_fleet
+from app.services.monitoring_sweep import SweepTimer, count_warnings, inventory_note, log_sweep, read_fleet
 from app.services.monitoring_usage import (
     legacy_top_lists,
     read_instance_usage,
@@ -269,12 +269,16 @@ async def get_monitoring_dashboard(
                         ))
                     
                     # Create node metrics
+                    inventory_missed = fleet.timed_out.get(node.name)
                     nodes_metrics.append(ClusterMonitoringMetrics(
                         node_name=node.name,
                         node_type=node.node_type or "lxd",
                         is_online=True,
                         cluster_status=ClusterStatus.ONLINE.value,
-                        status_message="Connected and authenticated",
+                        status_message=(
+                            inventory_note(inventory_missed) if inventory_missed else "Connected and authenticated"
+                        ),
+                        collection_timed_out=bool(inventory_missed),
                         cpu_total=resources.cpu_total,
                         cpu_used=resources.cpu_used,
                         cpu_usage_percent=round(
@@ -342,6 +346,7 @@ async def get_monitoring_dashboard(
                     is_online=False,
                     cluster_status=cluster_status,
                     status_message=status_message,
+                    collection_timed_out=node.name in fleet.timed_out,
                     cpu_total=0,
                     cpu_used=0,
                     cpu_usage_percent=0,
