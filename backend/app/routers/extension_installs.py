@@ -28,6 +28,7 @@ from app.models.extension_schemas import (
 from app.routers.integrations import get_vault_integrations_client
 from app.services import extension_install, extension_service
 from app.services.activity_logger import get_activity_logger
+from app.services.integration_key_ownership import KeyOwnsOrganizations
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -57,6 +58,8 @@ def _audit(
     organization_id: Optional[int] = None,
     organization_slug: Optional[str] = None,
     details: Optional[Dict[str, Any]] = None,
+    result: str = "success",
+    error_code: Optional[str] = None,
 ) -> None:
     """The operator is the actor; log_activity reads them from the request context.
 
@@ -71,6 +74,8 @@ def _audit(
             target_id=str(install_id),
             target_organization_id=organization_id,
             target_organization_slug=organization_slug,
+            result=result,
+            error_code=error_code,
             details=details or {},
         )
     except Exception:  # pragma: no cover
@@ -456,9 +461,18 @@ async def uninstall(
 ) -> None:
     record, extension, org_slug = await _load(db, install_id, user)
     organization_id, api_key_id = record.organization_id, record.api_key_id
-    removed = await extension_install.uninstall(
-        db, get_vault_integrations_client(), install=record
-    )
+    try:
+        removed = await extension_install.uninstall(
+            db, get_vault_integrations_client(), install=record, user=user
+        )
+    except KeyOwnsOrganizations as refusal:
+        _audit(
+            "extension.install.uninstall", install_id,
+            organization_id=organization_id, organization_slug=org_slug,
+            details={"extension_slug": extension.slug, "api_key_id": api_key_id, **refusal.audit_details},
+            result="denied", error_code="key_owns_organizations",
+        )
+        raise
     _audit(
         "extension.install.uninstall", install_id,
         organization_id=organization_id, organization_slug=org_slug,

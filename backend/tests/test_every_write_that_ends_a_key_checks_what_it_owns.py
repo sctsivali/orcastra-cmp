@@ -26,18 +26,28 @@ CHECKED: Dict[str, str] = {
     "routers/integrations.py:delete_api_key":
         "refuses a key that owns an active OrcaHub organization before the add-on claim check",
 }
-NOT_CHECKED_YET: Dict[str, str] = {
+# Ends an add-on credential. The decision about its organizations is made by the caller named in
+# ADD_ON_CALLERS, which the last test pins.
+ADD_ON_PATHS: Dict[str, str] = {
     "services/extension_credentials.py:_retire_key":
-        "retires an add-on credential for its rotation and for the reconcile sweep; organizations an "
-        "add-on credential owns are not moved or checked on this path",
+        "retires the old credential of a rotation, whose organizations rotate_credential carries to "
+        "the new one in the same commit, and stops a credential for the reconcile sweep",
     "services/extension_credentials.py:destroy_install_credential":
-        "uninstall removes the add-on's credentials; organizations they own are not checked first",
+        "uninstall only, and uninstall refuses first while either credential owns an organization",
     "services/extension_teardown.py:teardown_install":
-        "the uninstall teardown, through destroy_install_credential",
+        "the uninstall teardown, reached only after that refusal",
     "services/extension_reconcile.py:_narrow_drifted_scope":
-        "revokes an installation's credential once its organization reaches none of its clusters",
+        "revokes the credential of an installation that reaches nothing, which must stop, and "
+        "records the organizations it leaves frozen",
     "services/extension_reconcile.py:_revoke_orphaned_credentials":
-        "revokes an add-on credential no installation claims",
+        "revokes a credential no installation claims, which must stop, and records the "
+        "organizations it leaves frozen",
+}
+ADD_ON_CALLERS: Dict[str, str] = {
+    "services/extension_install.py:rotate_credential": "carry_owned_organizations",
+    "services/extension_install.py:uninstall": "refuse_if_key_owns_organizations",
+    "services/extension_reconcile.py:_narrow_drifted_scope": "_owned_by",
+    "services/extension_reconcile.py:_revoke_orphaned_credentials": "_owned_by",
 }
 
 
@@ -77,8 +87,8 @@ def _calls(fn: ast.AST) -> Set[str]:
 
 
 def test_every_function_that_ends_a_key_is_reviewed() -> None:
-    assert set(_enders()) == set(CHECKED) | set(NOT_CHECKED_YET)
-    assert not set(CHECKED) & set(NOT_CHECKED_YET)
+    assert set(_enders()) == set(CHECKED) | set(ADD_ON_PATHS)
+    assert not set(CHECKED) & set(ADD_ON_PATHS)
 
 
 def test_the_checked_ones_refuse_before_they_write() -> None:
@@ -93,3 +103,15 @@ def test_withdrawing_org_sync_is_checked_too() -> None:
     (fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "update_api_key_capabilities"]
     assert REFUSAL in _calls(fn)
     assert "has_capability" in _calls(fn)
+
+
+def _function(where: str) -> ast.AST:
+    rel, name = where.split(":")
+    tree = ast.parse((APP / rel).read_text())
+    (fn,) = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name]
+    return fn
+
+
+def test_the_add_on_paths_decide_about_the_organizations() -> None:
+    for where, call in ADD_ON_CALLERS.items():
+        assert call in _calls(_function(where)), f"{where} no longer calls {call}"

@@ -67,15 +67,31 @@ class _Result:
         return self.value
 
 
+class _Rows:
+    def __init__(self, rows: List[Any]) -> None:
+        self.rows = rows
+
+    def scalars(self) -> "_Rows":
+        return self
+
+    def all(self) -> List[Any]:
+        return self.rows
+
+
 class _DB:
-    """Answers the install path's lookups: no existing installation, none counted, one organization."""
+    """Answers the install path's lookups: no existing installation, none counted, one organization.
+
+    A rotation also reads, FOR UPDATE, the organizations the old credential owns: none here.
+    """
 
     def __init__(self) -> None:
         self.added: List[Any] = []
         self.commits = 0
 
-    async def execute(self, statement: Any) -> _Result:
+    async def execute(self, statement: Any) -> Any:
         text = str(statement)
+        if "FOR UPDATE" in text:
+            return _Rows([])
         if "count(" in text:
             return _Result(0)
         if "FROM organizations" in text:
