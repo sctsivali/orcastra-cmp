@@ -41,13 +41,17 @@ export function ownerKeyIsFrozen(state: OwnerKeyState): boolean {
   return state === "expired" || state === "revoked" || state === "inactive" || state === "missing";
 }
 
+/** What an owner syncs with, as the backend's SYNC_CAPABILITIES: /sync needs both. */
+const SYNC_CAPABILITIES = ["inventory.read", "org.sync"] as const;
+
 /** Whether a key could own an OrcaHub organization, as the transfer endpoint judges it. */
 export function canOwnOrganizations(key: APIKeyInfo): boolean {
   if (key.is_add_on_credential) return false;
   if (getAPIKeyStatus(key) !== "Active") return false;
   if (key.app_type && key.app_type !== "orcahub") return false;
+  const granted = key.capabilities;
   // null capabilities is a legacy key, which holds every capability it was issued with.
-  return key.capabilities == null || key.capabilities.includes("org.sync");
+  return granted == null || SYNC_CAPABILITIES.every((name) => granted.includes(name));
 }
 
 /** Clusters bound to the organization that the key's grant does not name. */

@@ -2097,7 +2097,7 @@ export interface APIKeyInfo {
   owned_organization_hidden_count?: number;
 }
 
-/** The structured refusal a revoke, delete or org.sync withdrawal of an owner key answers with. */
+/** The structured refusal a revoke, delete or sync capability withdrawal of an owner key answers with. */
 export interface KeyOwnsOrganizationsDetail {
   error: "key_owns_organizations";
   action: "revoke" | "delete" | "capabilities" | "uninstall";
