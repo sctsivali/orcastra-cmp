@@ -50,8 +50,24 @@ class VaultStorageMixin:
             cluster_type: Type of cluster (auto-detected from hypervisor)
             merchant_id: Merchant/organization identifier
             location: Geographic location information (region, country, coordinates)
+
+        important: this merges over whatever is already stored rather than replacing it. The
+        write is a whole-record `vault_kv_put`, so a key that is not a parameter here used to be
+        deleted by every save: a location edit, a rename, the region backfill. Records written
+        by newer builds carry keys this one does not name, and a rollback must not strip them.
         """
+        path = f"{self.clusters_path}/{cluster_id}/metadata"
+        try:
+            # note: uncached on purpose. This is the read half of a read-modify-write, and
+            # merging a cached body over a fresher one would drop the keys this merge keeps.
+            stored = self.vault.vault_read(path, use_cache=False) or {}
+        except VaultClientError:
+            # A first save has nothing to read back, and a Vault that cannot be read here will
+            # fail the write below anyway with a better message.
+            stored = {}
+
         metadata = {
+            **stored,
             "display_name": display_name,
             "endpoint": endpoint,
             "zone": zone,
@@ -59,9 +75,8 @@ class VaultStorageMixin:
             "merchant_id": merchant_id,
             "location": location or {}
         }
-        
+
         try:
-            path = f"{self.clusters_path}/{cluster_id}/metadata"
             self.vault.vault_kv_put(path, metadata)
             logger.info(f"Saved metadata for cluster {cluster_id}")
             return True
