@@ -181,6 +181,8 @@ def roles_for_group_names(group_names: list[str]) -> list[Role]:
 # re-checking its scope with the groups its ticket was minted with must neither read that cache
 # (another writer's roles are not this session's) nor write it (stale groups would then outrank a
 # fresh token on REST), so inside this block roles come from the groups alone.
+# note: the flag follows tasks and asyncio.to_thread, which copy the context, but not
+# loop.run_in_executor; keep that path off executors, or copy the context into them.
 _ROLES_FROM_GROUPS_ONLY: ContextVar[bool] = ContextVar("rbac_roles_from_groups_only", default=False)
 
 
