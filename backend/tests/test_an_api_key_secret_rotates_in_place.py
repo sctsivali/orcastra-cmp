@@ -234,6 +234,82 @@ def test_the_raw_backfill_still_fills_the_hash_it_verified(world, monkeypatch) -
     assert world["vault"].docs[f"{BASE}/secret"] == {"hash": old_hash, "raw": world["old"]}
 
 
+# note: the callback URL. Any /sync caller holding the key's secret sets app_url, and the OrcaHub
+# callbacks send the raw secret there, so a URL planted with a leaked secret would receive the new one.
+
+ATTACKER = "https://collector.example.test"
+
+
+async def test_a_callback_url_planted_with_the_old_secret_never_receives_the_new_one(world) -> None:
+    from app.models.db_models import Organization as Org
+    from app.services import orcahub_sync
+
+    _stored(world, app_url=ATTACKER)
+    answer = await _rotate()
+    assert world["vault"].docs[f"{BASE}/metadata"]["app_url"] is None, "the planted URL survived the rotation"
+    assert world["vault"].writes[0] == f"{BASE}/metadata", "the URL must be gone before the new secret exists"
+    assert f"{BASE}/secret" in world["vault"].writes
+    org = Org(id=1, name="Own", slug="own", source="orcahub", external_id="ext-own", api_key_id=KEY,
+              created_by="system", is_active=True)
+    assert await orcahub_sync._get_orcahub_credentials(org) is None, "a callback would still carry the new secret"
+    (record,) = _rotations(world)
+    assert record["details"]["callback_url_cleared"] is True and ATTACKER not in repr(record)
+    assert answer.api_key_secret not in repr(record)
+
+
+async def test_a_url_set_while_the_secret_is_written_is_cleared_again(world, monkeypatch) -> None:
+    """A sync authenticated with the old secret just before the write sets the URL meanwhile."""
+    real_save = integrations.save_api_key_secret_to_vault
+
+    def save_while_a_sync_lands(vault: Any, key_id: str, secret_hash: str, raw: str) -> None:
+        world["vault"].docs[f"{BASE}/metadata"]["app_url"] = ATTACKER
+        real_save(vault, key_id, secret_hash, raw)
+
+    monkeypatch.setattr(integrations, "save_api_key_secret_to_vault", save_while_a_sync_lands)
+    await _rotate()
+    assert world["vault"].docs[f"{BASE}/metadata"]["app_url"] is None
+    assert _rotations(world)[0]["details"]["callback_url_cleared"] is True
+
+
+async def test_a_callback_url_that_cannot_be_cleared_stops_the_rotation(world, monkeypatch) -> None:
+    _stored(world, app_url=ATTACKER)
+    monkeypatch.setattr(integrations, "_store_app_url_in_vault", lambda _k, _u: False)
+    with pytest.raises(HTTPException) as caught:
+        await _rotate()
+    assert caught.value.status_code == 503 and "Nothing changed" in caught.value.detail
+    assert f"{BASE}/secret" not in world["vault"].writes and await _valid(world["old"])
+
+
+async def test_a_second_clear_that_fails_asks_for_another_rotation(world, monkeypatch) -> None:
+    calls: List[str] = []
+    real_store = integrations._store_app_url_in_vault
+
+    def first_works(key_id: str, url: Any) -> bool:
+        calls.append(key_id)
+        return real_store(key_id, url) if len(calls) == 1 else False
+
+    _stored(world, app_url=ATTACKER)
+    real_save = integrations.save_api_key_secret_to_vault
+
+    def save_while_a_sync_lands(vault: Any, key_id: str, secret_hash: str, raw: str) -> None:
+        real_save(vault, key_id, secret_hash, raw)
+        world["vault"].docs[f"{BASE}/metadata"]["app_url"] = ATTACKER
+
+    monkeypatch.setattr(integrations, "_store_app_url_in_vault", first_works)
+    monkeypatch.setattr(integrations, "save_api_key_secret_to_vault", save_while_a_sync_lands)
+    with pytest.raises(HTTPException) as caught:
+        await _rotate()
+    assert caught.value.status_code == 503 and "Rotate again" in caught.value.detail
+    (record,) = _rotations(world)
+    assert (record["result"], record["error_code"]) == ("failure", "callback_url_not_cleared")
+
+
+async def test_a_key_without_a_callback_url_is_rotated_without_touching_its_metadata(world) -> None:
+    await _rotate()
+    assert world["vault"].writes == [f"{BASE}/secret"]
+    assert _rotations(world)[0]["details"]["callback_url_cleared"] is False
+
+
 # note: who may rotate. Managing a key needs its side (_authorize_api_key), and a rotation hands
 # over a working secret, so a Partner who did not mint the key is also held to the key's reach.
 

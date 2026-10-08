@@ -1459,8 +1459,12 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     return metadata
 
 
-def _store_app_url_in_vault(api_key_id: str, app_url: str):
-    """Store external app callback URL in Vault alongside API key metadata."""
+def _store_app_url_in_vault(api_key_id: str, app_url: Optional[str]) -> bool:
+    """Store external app callback URL in Vault alongside API key metadata. None clears it.
+
+    Returns whether the write landed. The sync ignores it (bookkeeping must not fail a sync); a
+    secret rotation does not, because it clears the URL before issuing a secret.
+    """
     try:
         vault_client = get_vault_integrations_client()
         metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
@@ -1470,8 +1474,24 @@ def _store_app_url_in_vault(api_key_id: str, app_url: str):
             metadata
         )
         logger.info(f"Stored app_url for API key {api_key_id}")
+        return True
     except Exception as e:
         logger.warning(f"Failed to store app_url in Vault: {e}")
+        return False
+
+
+def _forget_callback_url_blocking(key_id: str) -> Optional[bool]:
+    """Clear a key's stored callback URL. None when it had none, else whether the write landed.
+
+    important: a secret rotation runs this. `app_url` is set by any /sync caller holding the key's
+    secret, and the OrcaHub callbacks send the raw secret to it, so a URL planted with a leaked
+    secret would receive the secret the rotation issues to replace it. The connection sets the URL
+    again on its next sync, with the new secret.
+    """
+    metadata, _ = get_api_key_from_vault(get_vault_integrations_client(), key_id)
+    if not metadata.get("app_url"):
+        return None
+    return _store_app_url_in_vault(key_id, None)
 
 
 async def _upsert_synced_organizations(
@@ -2748,6 +2768,18 @@ async def rotate_api_key_secret(
                     result="denied", error_code="project_out_of_bound",
                 )
             raise
+    try:
+        forgot = await asyncio.to_thread(_forget_callback_url_blocking, key_id)
+    except Exception:  # noqa: BLE001 - reported below as a refusal, with nothing changed
+        forgot = False
+    if forgot is False:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The secret was not rotated because the key's callback URL could not be cleared. "
+                "Nothing changed. Try again."
+            ),
+        )
     key_secret, secret_hash = generate_api_key_secret()
     try:
         await asyncio.to_thread(save_api_key_secret_to_vault, vault_client, key_id, secret_hash, key_secret)
@@ -2767,7 +2799,24 @@ async def rotate_api_key_secret(
     cache = get_cache_manager()
     cache.delete_pattern("api_responses", "integrations:api_keys:list*")
     cache.delete("api_responses", f"integrations:api_key:{key_id}")
-    _audit_credential_lifecycle(action=API_KEY_ROTATE, key_id=key_id, metadata=metadata)
+    # important: once more after the write. A sync authenticated with the old secret before the
+    # write can still be setting a URL now, and the new secret must not be sent to it.
+    try:
+        refound = await asyncio.to_thread(_forget_callback_url_blocking, key_id)
+    except Exception:  # noqa: BLE001
+        refound = False
+    _audit_credential_lifecycle(
+        action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
+        result="success" if refound is not False else "failure",
+        error_code=None if refound is not False else "callback_url_not_cleared",
+        extra_details={"callback_url_cleared": bool(forgot) or bool(refound)},
+    )
+    if refound is False:
+        logger.error("API key %s secret rotated, but its callback URL could not be cleared afterwards", key_id)
+        raise HTTPException(
+            status_code=503,
+            detail="The secret rotation could not confirm the callback URL was cleared. Rotate again before using this key.",
+        )
     logger.info("API key %s secret rotated", key_id)
     return APIKeyCreateResponse(api_key=key_info, api_key_id=key_id, api_key_secret=key_secret)
 

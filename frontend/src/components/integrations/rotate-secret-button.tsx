@@ -76,9 +76,10 @@ export function RotateSecretButton({
           <AlertDialogTitle>Rotate API Key Secret?</AlertDialogTitle>
           <AlertDialogDescription>
             A new secret is issued for {keyName}, under the same key ID, and the current secret
-            stops working immediately. The organizations this key owns stay with it. Anything that
-            uses this key, such as the OrcaHub connection, fails until you update it with the new
-            secret.
+            stops working immediately. The organizations this key owns stay with it. The key&apos;s
+            callback URL is cleared too, so a secret that leaked cannot be sent to an address
+            someone else set; the connection sets it again on its next sync. Anything that uses
+            this key, such as the OrcaHub connection, fails until you update it with the new secret.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
