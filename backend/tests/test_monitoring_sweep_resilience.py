@@ -124,8 +124,9 @@ async def test_the_sweep_merges_inventory_and_status_timeouts():
     assert [status.name for status in fleet.statuses] == ["a", "b"]
 
 
-def test_the_status_wall_defaults_well_above_a_slow_cluster_and_below_the_old_two_minutes():
-    assert monitoring_sweep.STATUS_WALL_SECONDS == 45.0
+def test_the_status_wall_defaults_well_above_the_slowest_measured_cluster():
+    """The slowest cluster's status read measured 5.2 s once its members were read in parallel."""
+    assert monitoring_sweep.STATUS_WALL_SECONDS == 20.0
 
 
 def test_a_partial_cluster_explains_itself():
