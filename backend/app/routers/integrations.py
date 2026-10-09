@@ -2843,7 +2843,8 @@ async def rotate_api_key_secret(
             # important: and for a key that owns organizations, only as a current partner of the key's
             # home organization, the creator too. A fresh secret for such a key is the sync, members
             # and provisioning of every organization it owns. A partner row in a buyer organization
-            # does not count, nor does created_by: see keys_whose_home_the_user_partners.
+            # does not count, nor does created_by, and a home no sale proves leaves the rotation to an
+            # Administrator: see keys_whose_home_the_user_partners.
             try:
                 partners_home = await partners_the_home_organization(db, key_id, _rbac.email)
             except Exception as exc:  # noqa: BLE001 - unknown refuses; the text names no database
@@ -2857,8 +2858,10 @@ async def rotate_api_key_secret(
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        "This key owns OrcaHub organizations, and only an administrator or a partner of "
-                        "the key's own organization can rotate its secret."
+                        "This key owns OrcaHub organizations, so only an Orcastra administrator can rotate "
+                        "its secret, or a partner of the key's own organization once the key has "
+                        "provisioned a buyer on a cluster that organization registered. Ask an Orcastra "
+                        "administrator to rotate it."
                     ),
                 )
         try:

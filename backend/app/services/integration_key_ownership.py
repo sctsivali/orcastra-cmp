@@ -41,12 +41,12 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import has_capability
 from app.core.api_key_expiry import classify_key, expiry_state
-from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+from app.models.db_models import Organization, OrganizationCluster
 from app.services.add_on_credential_edits import is_add_on_credential
 
 logger = logging.getLogger(__name__)
@@ -107,55 +107,25 @@ async def keys_whose_home_the_user_partners(db: AsyncSession, email: str, key_id
 
     The home is the one cluster_parties proves by a sale (home_partner_keys): the oldest organization
     the key's sync created, holding a cluster one of its own partners registered that the key sold on.
-    A key nobody has bought through yet has no buyer organization to mistake for its home, so until
-    then the oldest organization its sync created is the home without that proof.
+    A key whose home cannot be proven that way, one nobody has bought through yet included, has no home
+    here, so only an Administrator acts for it.
 
     important: never a partner row in a buyer organization, and never created_by. OrcaHub makes every
     organization's founder a PARTNER, and provisioning stamps each buyer organization with the key's
     minter as created_by, so either would let a minter who left the seller and then bought from it act
     for the seller's key through their own buyer organization.
+
+    important: no grace before the first sale. "Not sold yet" could only be read from the provisioning
+    bindings that exist now, and deregistering a cluster deletes them, so a key whose seller
+    organization and sales were gone looked unsold again and handed its oldest remaining synced
+    organization, a buyer whose founder is a partner, the seller's key. This fails closed instead.
     """
-    from app.services.cluster_parties import RUNNING_ROLES, home_partner_keys
+    from app.services.cluster_parties import home_partner_keys
 
     wanted = {key_id for key_id in key_ids if key_id}
     if not wanted or not email:
         return set()
-    proven = await home_partner_keys(db, email) & wanted
-    unproven = sorted(wanted - proven)
-    if not unproven:
-        return proven
-    homes = dict((await db.execute(
-        select(Organization.api_key_id, func.min(Organization.id))
-        .where(
-            Organization.is_active.is_(True),
-            Organization.created_by == "system",
-            Organization.api_key_id.in_(unproven),
-        )
-        .group_by(Organization.api_key_id)
-    )).all())
-    if not homes:
-        return proven
-    # important: a binding provisioning made carries no registrant, so one on any organization of the
-    # key, the oldest one included, means someone bought through it, and from then on only the proof
-    # above names the home. The oldest synced organization is a buyer when the seller's home was
-    # deleted and synced again, and that buyer's partner must not inherit the key.
-    sold = set((await db.execute(
-        select(Organization.api_key_id)
-        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
-        .where(Organization.api_key_id.in_(sorted(homes)), OrganizationCluster.registered_by.is_(None))
-        .distinct()
-    )).scalars().all())
-    unsold = {key: org for key, org in homes.items() if key not in sold}
-    if not unsold:
-        return proven
-    partnered = set((await db.execute(
-        select(OrganizationMember.organization_id).where(
-            OrganizationMember.organization_id.in_(sorted(set(unsold.values()))),
-            OrganizationMember.user_email == email,
-            OrganizationMember.role.in_(RUNNING_ROLES),
-        )
-    )).scalars().all())
-    return proven | {key for key, org in unsold.items() if org in partnered}
+    return await home_partner_keys(db, email) & wanted
 
 
 async def partners_the_home_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:

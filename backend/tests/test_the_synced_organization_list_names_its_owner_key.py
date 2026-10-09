@@ -6,8 +6,9 @@ frozen. The list could not say so: it named the key id and the application, read
 that also loaded the key's secret document. It now reads each owner's metadata only, live rather
 than from the shared cache, and reports the owner's name, state, expiry and the organization's
 clusters. Membership still scopes what a Partner sees, and only an Admin or a partner of the owner
-key's home organization reads its owner key's name, state and expiry: a buyer's founder, whom OrcaHub
-makes a partner of the buyer, does not.
+key's home organization, as a sale proves it, reads its owner key's name, state and expiry: a buyer's
+founder, whom OrcaHub makes a partner of the buyer, does not, and before the key's first sale nobody
+but an Admin does.
 """
 
 from datetime import timedelta
@@ -89,6 +90,22 @@ def listing(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
     return {"db": db, "vault": vault, "ids": ids}
 
 
+def sold(listing: Dict[str, Any], home: str, partner: str, cluster: str) -> None:
+    """Prove `home` is its key's home: `partner` registered `cluster` there and the key sold on it."""
+    db, ids = listing["db"], listing["ids"]
+    key_id = db.sync.execute(Organization.__table__.select().with_only_columns(Organization.api_key_id).where(
+        Organization.id == ids[home])).scalar()
+    db.add(Organization(name=f"Buyer of {home}", slug=f"{home}-buyer", source="orcahub",
+                        external_id=f"ext-{home}-buyer", api_key_id=key_id, created_by="minter@example.test",
+                        is_active=True))
+    db.sync.commit()
+    buyer = db.sync.execute(Organization.__table__.select().with_only_columns(Organization.id).where(
+        Organization.slug == f"{home}-buyer")).scalar()
+    db.add_all([OrganizationCluster(organization_id=ids[home], cluster_id=cluster, registered_by=partner),
+                OrganizationCluster(organization_id=buyer, cluster_id=cluster)])
+    db.sync.commit()
+
+
 async def get(listing: Dict[str, Any], user: AuthenticatedUser) -> List[Dict[str, Any]]:
     app = FastAPI()
     app.include_router(integrations.router, prefix="/api/v1")
@@ -145,9 +162,19 @@ async def test_only_metadata_is_read_and_each_key_once(listing: Dict[str, Any]) 
 
 
 async def test_a_partner_sees_only_organizations_it_belongs_to(listing: Dict[str, Any]) -> None:
+    sold(listing, "org-revoked", PARTNER.email, "c5")
     rows = await get(listing, PARTNER)
     assert [(row["slug"], row["owner_key_state"]) for row in rows] == [("org-revoked", "revoked")]
     assert [at for at, _ in listing["vault"].reads] == [path("oak_revoked")]
+
+
+async def test_before_the_keys_first_sale_only_an_admin_sees_its_owner_key(listing: Dict[str, Any]) -> None:
+    """The partner runs the organization, but no sale proves it is the key's home yet."""
+    rows = await get(listing, PARTNER)
+    assert [(row["slug"], row["owner_key_name"], row["owner_key_state"], row["owner_key_expires_at"],
+             row["owner_key_expiry_state"]) for row in rows] == [("org-revoked", None, None, None, None)]
+    admin = {row["slug"]: row for row in await get(listing, ADMIN)}
+    assert admin["org-revoked"]["owner_key_state"] == "revoked"
 
 
 async def test_an_empty_list_reads_no_key(listing: Dict[str, Any]) -> None:
@@ -168,9 +195,10 @@ async def test_only_an_organizations_partners_see_its_owner_key(listing: Dict[st
     db.sync.execute(update(Organization).where(Organization.id == ids["org-expiring"]).values(
         created_by=PARTNER.email))
     db.sync.commit()
+    sold(listing, "org-revoked", PARTNER.email, "c5")
     rows = {row["slug"]: row for row in await get(listing, PARTNER)}
     assert set(rows) == {"org-active", "org-expiring", "org-revoked"}
-    assert rows["org-revoked"]["owner_key_state"] == "revoked", "a partner row still shows it"
+    assert rows["org-revoked"]["owner_key_state"] == "revoked", "a partner of the key's home still sees it"
     for slug in ("org-active", "org-expiring"):
         row = rows[slug]
         assert (row["owner_key_name"], row["owner_key_state"], row["owner_key_expires_at"],
@@ -183,8 +211,8 @@ async def test_a_buyer_founder_does_not_see_the_sellers_owner_key(listing: Dict[
     """OrcaHub makes a buyer organization's founder a partner of it, and the buyer carries the seller's key.
 
     The seller (org-expiring) registered c7 and sold on it through its key, so its partner sees that
-    key; the founder of the buyer it sold to does not, while their own seller's key (org-revoked, no
-    sale yet) still shows.
+    key; the founder of the buyer it sold to does not. Their own organization's key (org-revoked) has
+    made no sale yet, so it reads Not Shown to them too, until one proves its home.
     """
     db, ids = listing["db"], listing["ids"]
     seller = AuthenticatedUser(user_id="s1", email="seller@example.test", groups=["role_partner"])
@@ -205,7 +233,7 @@ async def test_a_buyer_founder_does_not_see_the_sellers_owner_key(listing: Dict[
             founder["org-buyer"]["owner_key_expires_at"], founder["org-buyer"]["owner_key_expiry_state"]) == (
         None, None, None, None,
     )
-    assert founder["org-revoked"]["owner_key_state"] == "revoked", "their own key, before any sale, still shows"
+    assert founder["org-revoked"]["owner_key_state"] is None, "before its first sale only an admin sees a key"
     selling = {row["slug"]: row for row in await get(listing, seller)}
     assert (selling["org-expiring"]["owner_key_name"], selling["org-expiring"]["owner_key_state"]) == (
         "oak_expiring name", "expiring",

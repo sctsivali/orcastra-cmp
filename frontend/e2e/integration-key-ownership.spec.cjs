@@ -227,7 +227,7 @@ test("a partner reads ownership and cannot transfer", async ({ page }, testInfo)
   await expect(panel.getByText("Ask an administrator to transfer this organization to an active key.")).toBeVisible();
   const tenantOnly = panel.getByRole("row").filter({ hasText: "buyer-two" });
   await expect(tenantOnly.getByText("Not Shown", { exact: true })).toBeVisible();
-  await expect(tenantOnly.getByText("Only the partners of the organization this key belongs to see it.")).toBeVisible();
+  await expect(tenantOnly.getByText("Only administrators see this owner key, and partners of the key's own organization once it has provisioned a buyer.")).toBeVisible();
   await expect(panel.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
   await expect(panel.getByText("no longer works", { exact: false })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
