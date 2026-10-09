@@ -393,7 +393,7 @@ async def check_owner_sets(db: AsyncSession) -> None:
     """Write the pending owner-set changes and check the primary-in-set rule now rather than at commit.
 
     For a caller that must stop before an outside write (Vault) when the database would refuse the change.
-    On PostgreSQL the deferred foreign key from migration 038 is checked here; SQLite has no such key.
+    On PostgreSQL the deferred foreign key from migration 015a is checked here; SQLite has no such key.
     """
     from app.services.integration_key_ownership import _dialect_name
 
