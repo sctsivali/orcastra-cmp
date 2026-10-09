@@ -38,7 +38,8 @@ import hashlib
 import logging
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
@@ -48,7 +49,16 @@ from app.core.api_key_capabilities import has_capability
 from app.core.api_key_expiry import classify_key, expiry_state
 from app.models.db_models import Organization, OrganizationCluster, OrganizationOwnerKey
 from app.services.add_on_credential_edits import is_add_on_credential
-from app.services.organization_owners import carry, owned_by_clause, replace_owners
+from app.services.organization_owners import (
+    OwnerRow,
+    carry,
+    drop_unable_primary,
+    multi_owner_enabled,
+    owned_by_clause,
+    owners_of,
+    remove_owner,
+    replace_owners,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +246,7 @@ def _owned_message(
     admin: bool,
     add_on: bool,
     withdrawn: Sequence[str] = (),
+    co_owner: bool = False,
 ) -> str:
     one = total == 1
     them, their = ("it", "its") if one else ("them", "their")
@@ -254,7 +265,19 @@ def _owned_message(
         remedy = f"Transfer {them} to another active key first, or delete {them}."
     else:
         remedy = f"Ask an administrator to transfer {them} to another active key first, or to delete {them}."
-    parts = [f"This key owns {total} OrcaHub {noun} ({name_organizations(slugs, hidden)}).", effect, remedy]
+    if co_owner:
+        effect = effect.replace(
+            "with an owner no other key can replace", "with no other owner key able to sync them"
+        ) if total != 1 else effect.replace(
+            "with an owner no other key can replace", "with no other owner key able to sync it"
+        )
+        remedy += (
+            f" Or make another active key a co-owner of {them} first (OrcaHub's Make Co-owner, or an "
+            "administrator), then end this one."
+        )
+    parts = [f"This key is the only able owner of {total} OrcaHub {noun} ({name_organizations(slugs, hidden)})."
+             if co_owner else f"This key owns {total} OrcaHub {noun} ({name_organizations(slugs, hidden)}).",
+             effect, remedy]
     if add_on:
         parts.append("Suspend the add-on to stop it now.")
     elif action in ("revoke", "delete"):
@@ -262,6 +285,22 @@ def _owned_message(
             "To stop a leaked secret now, rotate the secret instead: the key ID and its organizations stay."
         )
     return " ".join(parts)
+
+
+MetadataReader = Callable[[str], Awaitable[Tuple[Optional[Dict[str, Any]], Optional[str]]]]
+
+
+@dataclass
+class OwnerHandoff:
+    """An organization a key leaves, or stops being able to serve, while another owner carries on.
+
+    `able` holds, for every other owner key, whether it can sync the organization (True or False),
+    as read under the locks; the handoff moves the primary along that same verdict.
+    """
+
+    org: Organization
+    owners: List[OwnerRow]
+    able: Dict[str, bool] = field(default_factory=dict)
 
 
 async def refuse_if_key_owns_organizations(
@@ -272,14 +311,21 @@ async def refuse_if_key_owns_organizations(
     user: Any,
     metadata: Mapping[str, Any],
     withdrawn: Sequence[str] = (),
-) -> None:
-    """409 when the key owns an active OrcaHub organization, 503 when that cannot be read.
+    read_metadata: Optional[MetadataReader] = None,
+) -> List[OwnerHandoff]:
+    """409 when the key is the only able owner of an active OrcaHub organization, 503 when that cannot
+    be read; otherwise the organizations it co-owns, for apply_owner_handoffs.
 
     `withdrawn` names the SYNC_CAPABILITIES a capability edit would take away, for its message.
+    `read_metadata(key_id)` reads another owner key's metadata uncached ((metadata, failure) as
+    integrations._read_key_metadata_blocking answers); without it, every other owner is unreadable.
 
-    The caller has already authorized the key (so an id outside the caller's reach is still 404),
-    holds serialize_key_ownership(key_id), and has written nothing yet. There is no Administrator
-    bypass: the remedy is to transfer the organizations or delete them, which an Administrator can.
+    An organization another owner can still sync (active, holding SYNC_CAPABILITIES, an OrcaHub key)
+    does not stop this key ending; one where every other owner is unreadable refuses with 503, since
+    allowing it might freeze the organization. The caller has already authorized the key (so an id
+    outside the caller's reach is still 404), holds serialize_key_ownership(key_id) and
+    organization_owners.serialize_org_owners over owned_org_ids_to_lock, and has written nothing yet.
+    There is no Administrator bypass.
 
     note: a caller who is not an Administrator sees only the slugs of organizations they belong to;
     the rest are counted, in the answer and in its audit record alike.
@@ -289,15 +335,36 @@ async def refuse_if_key_owns_organizations(
     """
     try:
         owned = await owned_organizations(db, key_id)
+        owners = await owners_of(db, [org.id for org in owned]) if owned else {}
         visible = await visible_organization_ids(db, user) if owned else None
     except Exception as exc:  # noqa: BLE001 - unknown ownership refuses, it never allows
         logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
         raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
     if not owned:
-        return
+        return []
+    verdicts = await able_owners(
+        {row.api_key_id for rows in owners.values() for row in rows if row.api_key_id != key_id}, read_metadata
+    )
+    sole: List[Organization] = []
+    handoffs: List[OwnerHandoff] = []
+    unknown = False
+    for org in owned:
+        others = [row.api_key_id for row in owners.get(org.id, []) if row.api_key_id != key_id]
+        if any(verdicts.get(other) for other in others):
+            handoffs.append(OwnerHandoff(org, owners.get(org.id, []), {k: bool(v) for k, v in verdicts.items() if v is not None}))
+        elif any(verdicts.get(other) is None for other in others):
+            unknown = True
+        else:
+            sole.append(org)
+    if unknown and not sole:
+        logger.warning("Could not read the other owner keys of an organization api key %s co-owns", key_id)
+        raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL)
+    if not sole:
+        return handoffs
+    co_owner = multi_owner_enabled()
     admin = visible is None
-    slugs = [org.slug for org in owned if admin or org.id in visible]
-    hidden = len(owned) - len(slugs)
+    slugs = [org.slug for org in sole if admin or org.id in visible]
+    hidden = len(sole) - len(slugs)
     add_on = is_add_on_credential(metadata)
     if add_on:
         remedies = ["transfer_owner", "delete_organization", "suspend_add_on"]
@@ -305,26 +372,104 @@ async def refuse_if_key_owns_organizations(
         remedies = ["transfer_owner", "delete_organization", "rotate_secret"]
     else:
         remedies = ["transfer_owner", "delete_organization"]
+    if co_owner:
+        remedies.append("add_owner_key")
     detail = {
         "error": "key_owns_organizations",
         "action": action,
         "message": _owned_message(
-            action, len(owned), slugs, hidden, admin=admin, add_on=add_on, withdrawn=withdrawn
+            action, len(sole), slugs, hidden, admin=admin, add_on=add_on, withdrawn=withdrawn, co_owner=co_owner
         ),
         "api_key_id": key_id,
-        "organization_count": len(owned),
+        "organization_count": len(sole),
         "organization_slugs": slugs[:MAX_LISTED_SLUGS],
         "hidden_organization_count": hidden,
         "remedies": remedies,
     }
+    if co_owner:
+        # note: the organizations another owner keeps serving, which would not have stopped this key
+        detail["co_owned_organization_count"] = len(handoffs)
     # important: the same slugs the caller was shown. A refusal's record is visible to the caller who
     # triggered it, so naming the hidden organizations there would undo hiding them in the answer.
     audit = {
         "owned_organization_slugs": slugs[:MAX_LISTED_SLUGS],
-        "owned_organization_count": len(owned),
+        "owned_organization_count": len(sole),
         "owned_organization_hidden_count": hidden,
     }
     raise KeyOwnsOrganizations(detail, audit)
+
+
+async def able_owners(key_ids: Iterable[str], read_metadata: Optional[MetadataReader]) -> Dict[str, Optional[bool]]:
+    """For each key, whether it could own an organization now (owner_key_refusal), None when unreadable."""
+    verdicts: Dict[str, Optional[bool]] = {}
+    for other in sorted(set(key_ids)):
+        if read_metadata is None:
+            verdicts[other] = None
+            continue
+        try:
+            other_metadata, failure = await read_metadata(other)
+        except Exception:  # noqa: BLE001 - an unreadable owner is unknown, never able
+            verdicts[other] = None
+            continue
+        refused = owner_key_refusal(other_metadata, failure)
+        verdicts[other] = None if refused is not None and refused[0] >= 500 else refused is None
+    return verdicts
+
+
+async def apply_owner_handoffs(
+    db: AsyncSession, key_id: str, handoffs: Sequence[OwnerHandoff], *, remove: bool
+) -> List[Tuple[Organization, List[str], Optional[str], Optional[str]]]:
+    """Move the primary off a key that ends (and take it out of the sets when `remove`).
+
+    For revoke and delete the key leaves every set it was in (`remove`); for a withdrawn capability it
+    stays an owner but stops being the primary. The caller holds the locks and commits after its Vault
+    write. Returns (org, owners before, primary before, primary after) for the audit records.
+    """
+    changed = []
+    for handoff in handoffs:
+        org = handoff.org
+        before = [row.api_key_id for row in handoff.owners]
+        primary_before = org.api_key_id
+
+        def able(other: str, verdicts: Dict[str, bool] = handoff.able) -> Optional[bool]:
+            return verdicts.get(other)
+
+        if remove:
+            await remove_owner(db, org, key_id, able=able)
+        else:
+            await drop_unable_primary(db, org, key_id, able=able)
+        changed.append((org, before, primary_before, org.api_key_id))
+    return changed
+
+
+def record_owner_handoffs(
+    changes: Sequence[Tuple[Organization, List[str], Optional[str], Optional[str]]], *, key_id: str, action: str,
+    actor_email: Optional[str], remove: bool,
+) -> None:
+    """One audit record per organization a key left or stopped being primary of, after the commit."""
+    from app.services.organization_owners import PRIMARY_ACTION, REMOVE_ACTION, record_owner_change
+
+    for org, before, primary_before, primary_after in changes:
+        after = [k for k in before if not (remove and k == key_id)]
+        if not remove and primary_before == primary_after:
+            continue
+        record_owner_change(
+            REMOVE_ACTION if remove else PRIMARY_ACTION, org,
+            before=before, after=after, primary_before=primary_before, primary_after=primary_after,
+            details={"owner_key_id": key_id, "trigger": action, "actor_email": actor_email},
+        )
+
+
+async def owned_org_ids_to_lock(db: AsyncSession, key_id: str) -> List[int]:
+    """The organizations whose owner sets a key's end may change: every active OrcaHub one it owns.
+
+    An unreadable database answers 503 with the fixed sentence, as refuse_if_key_owns_organizations does.
+    """
+    try:
+        return [org.id for org in await owned_organizations(db, key_id)]
+    except Exception as exc:  # noqa: BLE001 - unknown ownership refuses, it never allows
+        logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
+        raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
 
 
 async def carry_owned_organizations(

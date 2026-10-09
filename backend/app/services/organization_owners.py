@@ -338,3 +338,10 @@ async def serialize_org_owners(db: AsyncSession, org_ids: Iterable[int]) -> Asyn
         for org_id in wanted:
             await stack.enter_async_context(_local_lock(org_id))
         yield
+
+
+def multi_owner_enabled() -> bool:
+    """INTEGRATION_MULTI_OWNER_ENABLED: whether keys may join an owner set and the owner-key routes answer."""
+    from app.core.config import get_settings
+
+    return bool(getattr(get_settings(), "integration_multi_owner_enabled", False))

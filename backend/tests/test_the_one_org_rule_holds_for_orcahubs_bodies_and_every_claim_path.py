@@ -414,7 +414,10 @@ def test_no_ownership_by_primary_equality() -> None:
                        and ast.unparse(side.value) in ("Organization", "org", "existing", "owner", "slug_owner")
                        for side in sides):
                     offending.add(where)
-    assert offending == set(), offending
+    # note: these compare with the primary because they are about the primary itself: whether a new
+    # primary is already the one, and which owner key a callback is tried with first
+    assert offending == {"routers/integrations.py:set_organization_primary",
+                         "services/orcahub_sync.py:_get_orcahub_credentials"}, offending
 
 
 def test_mcp_and_proxy_reach_no_claim_writer() -> None:

@@ -254,7 +254,8 @@ def _calls(where: str) -> set:
 
 
 @pytest.mark.parametrize("where", [
-    "services/orcahub_sync.py:_get_orcahub_credentials",
+    # note: _get_orcahub_credentials tries each owner key through _credentials_of
+    "services/orcahub_sync.py:_credentials_of",
     "routers/integrations.py:refresh_organizations",
 ])
 def test_the_callbacks_take_their_url_from_the_binding(where: str) -> None:
