@@ -1731,13 +1731,15 @@ async def _upsert_synced_members(
     for m in members:
         try:
             # resolve external org UUID to local org id
+            # note: read afresh. A transfer or an owner leaving can land while a long member list is
+            # written, and the session keeps the primary it read first (is_owner trusts it).
             org = (await db.execute(
                 select(Organization).where(
                     and_(
                         Organization.source == "orcahub",
                         Organization.external_id == m.organization_id,
                     )
-                )
+                ).execution_options(populate_existing=True)
             )).scalar_one_or_none()
             if not org:
                 logger.warning(f"Org not found for external_id={m.organization_id}, skipping member {m.email}")
@@ -5945,8 +5947,10 @@ class OwnerSetResponse(BaseModel):
 def _require_multi_owner() -> None:
     """404 while INTEGRATION_MULTI_OWNER_ENABLED is off, as if the route did not exist.
 
-    important: a route dependency (dependencies=[...]), which FastAPI resolves before the key or login
-    and before the body, so with the flag off nothing is authenticated, validated or answered first.
+    important: a route dependency (dependencies=[...]), which FastAPI resolves before the route's own
+    parameters and its body. On the external router that is before the key is checked, so a key that is
+    wrong or missing still reads 404 while the flag is off. The internal router's own dependencies (the
+    login and the cluster scope) run first, so there an unauthenticated call answers 401 either way.
     """
     if not multi_owner_enabled():
         raise HTTPException(status_code=404, detail="Not Found")
@@ -6334,7 +6338,8 @@ async def enroll_owner_key(
                 if status >= 500:
                     raise HTTPException(status_code=status, detail=message)
                 raise _refuse(status, code, message)
-            if not await owner_key_enrollment.party_check(db, org, vouching_metadata or {}, new_metadata):
+            if not await owner_key_enrollment.party_check(db, org, vouching_metadata or {}, new_metadata,
+                                                          vouching_key_id=vouching):
                 raise _refuse(403, "new_key_outside_organization", (
                     "The new key was minted by someone who neither minted the calling key nor runs this "
                     "organization, so it cannot join its owner set. Ask an Orcastra administrator to add it."
@@ -6359,12 +6364,17 @@ async def enroll_owner_key(
         evict_api_key_cache(vouching)
         evict_api_key_cache(new_key)
         # note: D9 (telling the partners) is not built: Orcastra has no notification channel. The count
-        # is recorded so the record says who would have been told.
-        partners = await owner_key_enrollment.partner_emails(db, org)
+        # is recorded so the record says who would have been told; the enrollment is committed by now, so
+        # a failed count must not cost it its audit record.
+        try:
+            partner_count: Optional[int] = len(await owner_key_enrollment.partner_emails(db, org))
+        except Exception as exc:  # noqa: BLE001 - the record matters more than the count
+            logger.warning("Could not count the partners of organization %s: %s", org.slug, type(exc).__name__)
+            partner_count = None
         record_owner_change(ADD_ACTION, org, before=before, after=after, primary_before=org.api_key_id,
                             primary_after=org.api_key_id, details={
                                 "owner_key_id": new_key, "proof_key_id": vouching, "trigger": "enroll",
-                                "partner_count": len(partners),
+                                "partner_count": partner_count,
                             })
         logger.info("Api key %s joined the owner set of organization %s, vouched for by %s", new_key, org.slug, vouching)
     return OwnerKeyEnrollResponse(
