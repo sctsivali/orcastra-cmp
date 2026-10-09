@@ -17,7 +17,7 @@ from app.core.auth import AuthenticatedUser
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 from app.routers import integrations
 from app.services import cluster_parties
-from app.services.organization_owners import add_owner, carry, replace_owners
+from app.services.organization_owners import add_owner, carry, remove_owner, replace_owners
 from tests._owner_invariants import assert_owner_invariants
 from tests._sqlite_session import org_tables, sqlite_session
 
@@ -133,4 +133,22 @@ async def test_a_carried_enrolled_key_still_lends_no_party(world: Dict[str, Any]
     row = db.sync.query(OrganizationOwnerKey).filter_by(organization_id=buyer.id, api_key_id="oak_founder_next").one()
     assert row.added_via == "enroll"
     assert "oak_founder_next" not in await cluster_parties.side_keys(db, SELLER)
+    await assert_owner_invariants(db)
+
+
+async def test_a_promoted_enrolled_key_still_lends_no_party(world: Dict[str, Any]) -> None:
+    """Pinned on purpose: when the claiming key leaves, the enrolled key becomes primary as it came in.
+
+    The organization then lends no party, so its partners no longer manage keys on a shared cluster
+    through it, until an Administrator's transfer restamps the row. Fail-closed: it only narrows access.
+    """
+    db = world["db"]
+    buyer = world["buyer"]
+    assert await add_owner(db, buyer, FOUNDER_KEY, via="enroll", by="key:oak_seller", proof_key_id=SELLER_KEY)
+    await db.commit()
+    assert await remove_owner(db, buyer, SELLER_KEY, able=lambda _key: True) == FOUNDER_KEY
+    await db.commit()
+    row = db.sync.query(OrganizationOwnerKey).filter_by(organization_id=buyer.id).one()
+    assert (row.api_key_id, row.added_via) == (FOUNDER_KEY, "enroll")
+    assert FOUNDER_KEY not in await cluster_parties.side_keys(db, SELLER)
     await assert_owner_invariants(db)
