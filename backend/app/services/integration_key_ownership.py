@@ -50,6 +50,8 @@ from app.core.api_key_expiry import classify_key, expiry_state
 from app.models.db_models import Organization, OrganizationCluster, OrganizationOwnerKey
 from app.services.add_on_credential_edits import is_add_on_credential
 from app.services.organization_owners import (
+    LastOwner,
+    NoAbleOwner,
     OwnerRow,
     carry,
     drop_unable_primary,
@@ -63,6 +65,14 @@ from app.services.organization_owners import (
 logger = logging.getLogger(__name__)
 
 TRANSFER_ACTION = "integration.organization.owner.transfer"
+
+LAST_OWNER_DETAIL = {
+    "error": "last_owner",
+    "message": (
+        "Another request changed this organization's owner keys, and this key is now its only owner able "
+        "to sync it. Nothing was changed. Transfer the organization to another key, or add an owner key first."
+    ),
+}
 
 # The words an owner key's state is reported in. `unclaimed` is an organization with no owner,
 # `missing` a key Vault says does not exist, `unknown` a key whose record could not be read.
@@ -434,10 +444,18 @@ async def apply_owner_handoffs(
         def able(other: str, verdicts: Dict[str, bool] = handoff.able) -> Optional[bool]:
             return verdicts.get(other)
 
-        if remove:
-            await remove_owner(db, org, key_id, able=able)
-        else:
-            await drop_unable_primary(db, org, key_id, able=able)
+        # important: answered, never raised as a 500. The refusal above was decided on the same locked
+        # rows, so this is not expected; every caller runs it before its Vault write, so nothing is
+        # written when it does happen.
+        try:
+            if remove:
+                await remove_owner(db, org, key_id, able=able)
+            else:
+                await drop_unable_primary(db, org, key_id, able=able)
+        except (LastOwner, NoAbleOwner):
+            raise HTTPException(status_code=409, detail=LAST_OWNER_DETAIL) from None
+        except LookupError:
+            raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
         changed.append((org, before, primary_before, org.api_key_id))
     return changed
 
