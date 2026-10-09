@@ -126,6 +126,9 @@ ACTION_CATEGORIES = {
     "lxd.connection.reconnect": EventCategory.LXD_INFRA,
     # Cluster management
     "cluster.location.update": EventCategory.ADMIN,
+    # An Administrator moving a synced organization to another owner key. The owner is the only
+    # key that may sync the organization, write its members and policies and provision for it.
+    "integration.organization.owner.transfer": EventCategory.ADMIN,
 }
 
 # High severity actions
@@ -149,6 +152,7 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.api_key.revoke",
     "integration.api_key.secret.rotate",
     "integration.api_key.delete",
+    "integration.organization.owner.transfer",
     "vault.cert.generate",
     "vault.secret.write",
     "vault.secret.delete",
