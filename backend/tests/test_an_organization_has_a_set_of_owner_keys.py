@@ -14,6 +14,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.dialects import postgresql
 
 from app.models.db_models import Organization, OrganizationMember, OrganizationOwnerKey
 from app.routers import integrations
@@ -99,6 +100,48 @@ async def test_a_key_outside_the_set_stays_refused(hub: Dict[str, Any]) -> None:
     assert response.status_code == 200 and response.json()["organizations_synced"] == 0
     assert await members_of(db, "acme-cloud") == [F]
     assert not await is_owner(db, await org(db, "acme-cloud"), K_ATTACKER)
+
+
+async def test_the_sync_reads_each_organization_for_update(hub: Dict[str, Any]) -> None:  # noqa: F811
+    """Two keys claiming one unclaimed organization at once take turns only if the sync holds the row it
+    judges, in both passes. SQLite leaves FOR UPDATE out, so this reads what PostgreSQL would be sent."""
+    db = world_db()
+    db.add(Organization(name="Acme Cloud", slug="acme-cloud", source="orcahub", external_id=SELLER,
+                        api_key_id=None, created_by="system", is_active=True))
+    await db.commit()
+    db.statements.clear()
+    pushed = [integrations.SyncOrganization(id=SELLER, name="Acme Cloud", slug="acme-cloud"),
+              integrations.SyncOrganization(id="ext-new", name="New Co", slug="new-co")]
+    assert await integrations._upsert_synced_organizations(db, pushed, K_PARTNER) == 2
+    reads = [statement for statement in db.statements
+             if [d["type"] for d in getattr(statement, "column_descriptions", [])] == [Organization]]
+    assert len(reads) == 3, "two by identity, then one by slug for the organization not known yet"
+    for read in reads:
+        assert "FOR UPDATE" in str(read.compile(dialect=postgresql.dialect())), str(read)
+        assert read.get_execution_options().get("populate_existing") is True, str(read)
+    assert await claims(db) == [("acme-cloud", K_PARTNER), ("new-co", K_PARTNER)]
+
+
+async def test_a_refused_organization_is_not_held_through_the_rest_of_the_sync(hub: Dict[str, Any]) -> None:  # noqa: F811
+    """A refusal ends its transaction, so the row read FOR UPDATE is not still locked when the sync goes
+    on to take its key's lock (on PostgreSQL a transfer holding that lock and waiting on the row would
+    deadlock with it)."""
+    db = world_db()
+    await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
+    pushed = [integrations.SyncOrganization(id=SELLER, name="Acme Cloud", slug="acme-cloud")]
+    assert await integrations._upsert_synced_organizations(db, pushed, K_ATTACKER) == 0
+    assert not db.sync.in_transaction(), "the refused organization's row is still held"
+    assert await claims(db) == [("acme-cloud", K_PARTNER)]
+
+
+async def test_a_slug_clash_is_not_held_through_the_rest_of_the_sync(hub: Dict[str, Any]) -> None:  # noqa: F811
+    db = world_db()
+    db.add(Organization(name="Made Here", slug="made-here", source="local", created_by="partner@example.test",
+                        is_active=True))
+    await db.commit()
+    pushed = [integrations.SyncOrganization(id="ext-new", name="Made Here", slug="made-here")]
+    assert await integrations._upsert_synced_organizations(db, pushed, K_PARTNER) == 0
+    assert not db.sync.in_transaction(), "the clashing row is still held"
 
 
 MATE = "mate@example.test"
