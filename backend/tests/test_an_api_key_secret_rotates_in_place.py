@@ -7,8 +7,9 @@ rotate handler and the real key validation against an in-memory Vault and cache.
 A rotation hands its caller a working secret, unlike a revoke or a delete. So a Partner, the key's
 creator included, rotates it only when every cluster it grants is inside their scope, and one who
 did not mint it only when every project is inside their bound too. A key that owns organizations is
-rotated only by a current partner of one of them; created_by never counts. An Admin skips all of
-that. An add-on credential is refused: its installation rotates it.
+rotated only by a current partner of its home organization; a partner row in a buyer organization
+and created_by never count. An Admin skips all of that. An add-on credential is refused: its
+installation rotates it.
 """
 
 from contextlib import asynccontextmanager
@@ -437,9 +438,10 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
         org_scope._allowed_clusters_var.reset(token)
 
 
-# note: a key that owns organizations is rotated only by a current partner of one of them. Minting
-# it is a fact about the past: a partner who left the organization still matches created_by, and so
-# do the buyer organizations provisioning created with the minter as created_by.
+# note: a key that owns organizations is rotated only by a current partner of its home organization.
+# Minting it is a fact about the past: a partner who left the organization still matches created_by,
+# and so do the buyer organizations provisioning created with the minter as created_by. Nor does a
+# partner row in a buyer organization count: OrcaHub makes every buyer's founder a partner of it.
 
 async def test_a_creator_who_left_cannot_take_the_secret_of_a_key_that_owns_organizations(
     world, partner_scope
@@ -449,7 +451,7 @@ async def test_a_creator_who_left_cannot_take_the_secret_of_a_key_that_owns_orga
         await _rotate(OWNER, db)
     assert caught.value.status_code == 403 and "administrator" in caught.value.detail
     assert world["vault"].writes == [] and await _valid(world["old"])
-    assert _denied(world) == [("denied", "outside_the_owning_organizations")]
+    assert _denied(world) == [("denied", "outside_the_home_organization")]
 
 
 async def test_the_creator_who_is_a_partner_of_an_owned_organization_rotates(world, partner_scope) -> None:
@@ -494,7 +496,123 @@ async def test_a_minter_who_left_the_seller_cannot_rotate_through_the_buyers_it_
         org_scope._allowed_clusters_var.reset(token)
     assert caught.value.status_code == 403 and "administrator" in caught.value.detail
     assert world["vault"].writes == [] and await _valid(world["old"])
-    assert _denied(world) == [("denied", "outside_the_owning_organizations")]
+    assert _denied(world) == [("denied", "outside_the_home_organization")]
+
+
+FOUNDER = AuthenticatedUser(user_id="f", email="founder@example.test", groups=["role_partner"])
+
+
+async def _seller_with_buyers(*, minter_partners: Any = None) -> Any:
+    """The seller's home (1) and two buyers provisioning made (2, 3) on KEY, all bound to c1.
+
+    The successor runs the seller and registered c1 there; each buyer is stamped with the key's minter
+    as created_by, and OrcaHub made the founder of buyer 2 a partner of it. `minter_partners` adds a
+    partner row for the minter: "home" for one who still runs the seller, "buyer" for one who left it
+    and then bought from it, so that buyer 3 is theirs.
+    """
+    from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
+
+    db = sqlite_session(*org_tables())
+    db.add_all([
+        Org(id=1, name="Acme", slug="acme", source="orcahub", external_id="ext-acme", api_key_id=KEY,
+            created_by="system", is_active=True),
+        Org(id=2, name="Buyer", slug="buyer", source="orcahub", external_id="ext-buyer", api_key_id=KEY,
+            created_by=OWNER.email, is_active=True),
+        Org(id=3, name="M Co", slug="m-co", source="orcahub", external_id="ext-mco", api_key_id=KEY,
+            created_by=OWNER.email, is_active=True),
+    ])
+    await db.commit()
+    rows = [
+        OrganizationMember(organization_id=1, user_email="successor@example.test", role="partner"),
+        OrganizationMember(organization_id=2, user_email=FOUNDER.email, role="partner"),
+        OrganizationCluster(organization_id=1, cluster_id="c1", registered_by="successor@example.test"),
+        OrganizationCluster(organization_id=2, cluster_id="c1"),
+        OrganizationCluster(organization_id=3, cluster_id="c1"),
+    ]
+    if minter_partners:
+        rows.append(OrganizationMember(organization_id={"home": 1, "buyer": 3}[minter_partners],
+                                       user_email=OWNER.email, role="partner"))
+    db.add_all(rows)
+    await db.commit()
+    return db
+
+
+async def _rotate_in_scope(user: AuthenticatedUser, db: Any) -> Any:
+    """Rotate with the caller's real cluster scope, as the org-scope dependency would set it."""
+    from app.core import org_scope
+
+    token = org_scope._allowed_clusters_var.set(await org_scope._query_owned_clusters(user.email, db))
+    try:
+        return await _rotate(user, db)
+    finally:
+        org_scope._allowed_clusters_var.reset(token)
+
+
+async def test_a_minter_who_left_and_bought_from_the_seller_cannot_rotate_its_key(world, monkeypatch) -> None:
+    """The departed minter's own buyer organization carries the seller's key and their partner row.
+
+    That row used to count, and the creator skips the side rule, so they took a working secret for
+    every organization the key owns and cut off the seller's live connection.
+    """
+    monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
+    _stored(world, created_by=OWNER.email)
+    db = await _seller_with_buyers(minter_partners="buyer")
+    with pytest.raises(HTTPException) as caught:
+        await _rotate_in_scope(OWNER, db)
+    assert caught.value.status_code == 403 and "administrator" in caught.value.detail
+    assert world["vault"].writes == [] and await _valid(world["old"])
+    assert _denied(world) == [("denied", "outside_the_home_organization")]
+
+
+async def test_a_minter_who_still_runs_the_seller_rotates_after_its_sales(world, monkeypatch) -> None:
+    monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
+    _stored(world, created_by=OWNER.email)
+    answer = await _rotate_in_scope(OWNER, await _seller_with_buyers(minter_partners="home"))
+    assert answer.api_key_id == KEY and await _valid(answer.api_key_secret)
+    assert not await _valid(world["old"])
+
+
+async def test_a_buyer_founder_who_did_not_mint_the_key_cannot_manage_it(world, monkeypatch) -> None:
+    monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
+    _stored(world, created_by=OWNER.email)
+    with pytest.raises(HTTPException) as caught:
+        await _rotate_in_scope(FOUNDER, await _seller_with_buyers(minter_partners="buyer"))
+    assert caught.value.status_code == 404
+    assert world["vault"].writes == [] and await _valid(world["old"])
+
+
+async def test_a_buyer_that_is_the_oldest_synced_organization_lends_nothing_once_the_key_sold(
+    world, monkeypatch
+) -> None:
+    """The seller's home was deleted and synced again, so a synced buyer is the key's oldest one.
+
+    Before any sale that oldest organization is the home. After one, only the proof of a sale names
+    it (cluster_parties.home_partner_keys), and the buyer's binding is one provisioning made, so the
+    minter who left and partners that buyer gets nothing.
+    """
+    from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
+
+    monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
+    _stored(world, created_by=OWNER.email)
+    db = sqlite_session(*org_tables())
+    db.add_all([
+        Org(id=1, name="M Co", slug="m-co", source="orcahub", external_id="ext-mco", api_key_id=KEY,
+            created_by="system", is_active=True),
+        Org(id=5, name="Acme", slug="acme", source="orcahub", external_id="ext-acme-2", api_key_id=KEY,
+            created_by="system", is_active=True),
+    ])
+    await db.commit()
+    db.add_all([
+        OrganizationMember(organization_id=1, user_email=OWNER.email, role="partner"),
+        OrganizationMember(organization_id=5, user_email="successor@example.test", role="partner"),
+        OrganizationCluster(organization_id=5, cluster_id="c1", registered_by="successor@example.test"),
+        OrganizationCluster(organization_id=1, cluster_id="c1"),
+    ])
+    await db.commit()
+    with pytest.raises(HTTPException) as caught:
+        await _rotate_in_scope(OWNER, db)
+    assert caught.value.status_code == 403
+    assert world["vault"].writes == [] and await _valid(world["old"])
 
 
 async def test_a_creator_whose_scope_shrank_cannot_rotate_a_key_reaching_past_it(world, partner_scope) -> None:

@@ -152,7 +152,7 @@ from app.services.integration_key_ownership import (
     owned_by_keys,
     owner_key_refusal,
     refuse_if_key_owns_organizations,
-    partners_an_owned_organization,
+    partners_the_home_organization,
     release_key_locks,
     serialize_key_ownership,
     SYNC_CAPABILITIES,
@@ -2839,24 +2839,25 @@ async def rotate_api_key_secret(
                             result="denied", error_code="project_out_of_bound",
                         )
                     raise
-            # important: and for a key that owns organizations, only as a current partner of one of
-            # them, the creator too. A fresh secret for such a key is their sync, members and
-            # provisioning, and created_by is not a current role: see partners_an_owned_organization.
+            # important: and for a key that owns organizations, only as a current partner of the key's
+            # home organization, the creator too. A fresh secret for such a key is the sync, members
+            # and provisioning of every organization it owns. A partner row in a buyer organization
+            # does not count, nor does created_by: see keys_whose_home_the_user_partners.
             try:
-                partners_one = await partners_an_owned_organization(db, key_id, _rbac.email)
+                partners_home = await partners_the_home_organization(db, key_id, _rbac.email)
             except Exception as exc:  # noqa: BLE001 - unknown refuses; the text names no database
                 logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
                 raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
-            if partners_one is False:
+            if partners_home is False:
                 _audit_credential_lifecycle(
                     action=API_KEY_ROTATE, key_id=key_id, metadata=metadata,
-                    result="denied", error_code="outside_the_owning_organizations",
+                    result="denied", error_code="outside_the_home_organization",
                 )
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        "This key owns OrcaHub organizations you are not a partner of, so only an "
-                        "administrator can rotate its secret."
+                        "This key owns OrcaHub organizations, and only an administrator or a partner of "
+                        "the key's own organization can rotate its secret."
                     ),
                 )
         try:
