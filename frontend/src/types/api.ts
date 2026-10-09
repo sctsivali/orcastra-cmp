@@ -2095,6 +2095,8 @@ export interface APIKeyInfo {
   // The slugs this caller may see, at most 20. The rest are counted in the hidden count.
   owned_organization_slugs?: string[];
   owned_organization_hidden_count?: number;
+  // Of those, the ones no other key co-owns: ending this key would freeze these. null: not read.
+  sole_owned_organization_count?: number | null;
 }
 
 /** The structured refusal a revoke, delete or sync capability withdrawal of an owner key answers with. */
@@ -2107,6 +2109,8 @@ export interface KeyOwnsOrganizationsDetail {
   organization_slugs: string[];
   hidden_organization_count: number;
   remedies: string[];
+  // With several owner keys allowed: the organizations another owner key keeps serving.
+  co_owned_organization_count?: number;
 }
 
 /**
@@ -2626,6 +2630,34 @@ export interface IntegrationOrganization {
   owner_key_expires_at?: string | null;
   owner_key_expiry_state?: "never" | "active" | "expiring" | "expired" | null;
   cluster_ids?: string[];
+  // Every key in the owner set, primary first. Empty when the caller may not see the owner keys.
+  owner_keys?: OwnerKeyEntry[];
+}
+
+// One key in a synced organization's owner set. Any of them may sync the organization, update its
+// members and policies and provision tenant access; the primary is the one OrcaHub callbacks use.
+export interface OwnerKeyEntry {
+  api_key_id: string;
+  name: string | null;
+  state: OwnerKeyState;
+  expires_at: string | null;
+  is_primary: boolean;
+  added_at: string | null;
+  added_via: string | null;
+}
+
+export interface OwnerKeyChangeRequest {
+  api_key_id: string;
+  reason: string;
+}
+
+export interface OwnerSetResponse {
+  organization_id: number;
+  organization_slug: string;
+  external_id: string | null;
+  primary_key_id: string | null;
+  owner_key_ids: string[];
+  changed: boolean;
 }
 
 export interface OwnerKeyTransferRequest {

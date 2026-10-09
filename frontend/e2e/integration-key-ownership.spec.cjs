@@ -53,6 +53,7 @@ function world(role) {
   const admin = role === "admin";
   return {
     puts: [],
+    ownerChanges: [],
     capabilityPuts: [],
     rotations: [],
     keys: [
@@ -122,6 +123,30 @@ async function installOwnership(page, role) {
       }
       Object.assign(target, { capabilities: body.capabilities });
       return route.fulfill({ json: target });
+    }
+    const ownerSet = path.match(/^\/integrations\/organizations\/(\d+)\/(owner-keys|primary-key)(?:\/([^/]+))?$/);
+    if (ownerSet) {
+      if (role !== "admin") return route.fulfill({ status: 403, json: { detail: "Insufficient permissions" } });
+      const target = state.orgs.find((o) => o.id === Number(ownerSet[1]));
+      const body = request.method() === "DELETE" ? { api_key_id: ownerSet[3], reason: url.searchParams.get("reason") }
+        : JSON.parse(request.postData() || "{}");
+      state.ownerChanges.push({ method: request.method(), what: ownerSet[2], body });
+      const owners = target.owner_keys || [];
+      if (request.method() === "POST") {
+        const added = state.keys.find((k) => k.id === body.api_key_id);
+        owners.push({ api_key_id: added.id, name: added.name, state: "active", expires_at: null, is_primary: false,
+          added_at: null, added_via: "admin" });
+      } else if (request.method() === "PUT") {
+        owners.forEach((o) => { o.is_primary = o.api_key_id === body.api_key_id; });
+        target.api_key_id = body.api_key_id;
+      } else {
+        target.owner_keys = owners.filter((o) => o.api_key_id !== body.api_key_id);
+      }
+      target.owner_keys = target.owner_keys || owners;
+      return route.fulfill({ json: {
+        organization_id: target.id, organization_slug: target.slug, external_id: target.external_id,
+        primary_key_id: target.api_key_id, owner_key_ids: target.owner_keys.map((o) => o.api_key_id), changed: true,
+      } });
     }
     const transfer = path.match(/^\/integrations\/organizations\/(\d+)\/owner-key$/);
     if (request.method() === "PUT" && transfer) {
@@ -296,5 +321,56 @@ test("rotating a secret needs the key's name typed first", async ({ page }, test
   });
   await expect(page.getByRole("dialog", { name: "Secret Rotated" })).toBeVisible();
   expect(state.rotations).toEqual(["oak_hub_new"]);
+  await expectCleanSettingsHarness(settings);
+});
+
+test("an admin manages an organization's owner keys", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "admin");
+  const { settings, state } = await installOwnership(page, "admin");
+  const fossgo = state.orgs.find((o) => o.slug === "fossgo");
+  fossgo.owner_keys = [
+    { api_key_id: "oak_hub_new", name: "Hub Connection", state: "active", expires_at: null, is_primary: true,
+      added_at: null, added_via: "claim" },
+  ];
+  const hubKey = state.keys.find((k) => k.id === "oak_hub_new");
+  Object.assign(hubKey, { sole_owned_organization_count: 1 });
+  await page.goto("/settings/integrations");
+
+  await expect(card(page, "Hub Connection").getByText(
+    "Another owner key also owns 1 of them, which keeps that organization syncing if this key ends.",
+  )).toBeVisible();
+
+  const panel = page.locator("#synced-organizations");
+  await panel.getByRole("button", { name: "Actions for fossgo" }).click();
+  await page.getByRole("menuitem", { name: "Owner Keys" }).click();
+  const dialog = page.getByRole("dialog", { name: "Owner Keys" });
+  await expect(dialog.getByText("Primary", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  await expect(dialog).toContainText("An organization always keeps one owner key.");
+
+  const add = dialog.getByRole("button", { name: "Add Owner Key" });
+  await expect(add).toBeDisabled();
+  await dialog.locator("#owner-keys-add").click();
+  await expect(page.getByRole("option", { name: /Agent Key|backup-bot|Hub Old|Hub Connection/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /Expiring Key/ }).click();
+  await expect(add).toBeDisabled();
+  await dialog.getByLabel("Reason").fill("A second connection to this control plane");
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "admin-owner-keys-dialog");
+  await add.click();
+  await expect(page.getByText("Owner Key Added", { exact: true })).toBeVisible();
+  expect(state.ownerChanges).toEqual([
+    { method: "POST", what: "owner-keys", body: { api_key_id: "oak_expiring", reason: "A second connection to this control plane" } },
+  ]);
+
+  await expect(dialog.getByRole("button", { name: "Make Primary" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Make Primary" }).click();
+  await expect(page.getByText("Primary Owner Key Changed", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Remove" })).toHaveCount(2);
+  await dialog.getByRole("button", { name: "Remove" }).first().click();
+  await expect(page.getByText("Owner Key Removed", { exact: true })).toBeVisible();
+  expect(state.ownerChanges.map((c) => [c.method, c.what, c.body.api_key_id])).toEqual([
+    ["POST", "owner-keys", "oak_expiring"], ["PUT", "primary-key", "oak_expiring"], ["DELETE", "owner-keys", "oak_hub_new"],
+  ]);
   await expectCleanSettingsHarness(settings);
 });

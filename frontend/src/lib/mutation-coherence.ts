@@ -289,6 +289,8 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
       "api.integrations.rotateAPIKeySecret",
       "api.integrations.addUserMapping", "api.integrations.deleteUserMapping",
       "api.integrations.refreshOrganizations", "api.integrations.transferOrganizationOwner",
+      "api.integrations.addOrganizationOwner", "api.integrations.removeOrganizationOwner",
+      "api.integrations.setOrganizationPrimary",
     ],
   },
   "extension.write": {

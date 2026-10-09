@@ -650,7 +650,9 @@ function IntegrationsSettingsContent() {
             const keyStatus = getAPIKeyStatus(apiKey);
             // An owner key is not revoked or deleted by the server, so its dialogs explain why and
             // offer the way forward instead of a destructive action that would only be refused.
-            const ownsOrganizations = (apiKey.owned_organization_count ?? 0) > 0;
+            // note: only the organizations no other key co-owns stop the end; the server re-checks
+            // that the co-owner can still sync them.
+            const ownsOrganizations = (apiKey.sole_owned_organization_count ?? apiKey.owned_organization_count ?? 0) > 0;
             
             return (
               <Card key={apiKey.id}>
