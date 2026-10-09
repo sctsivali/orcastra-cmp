@@ -291,7 +291,9 @@ def test_a_legacy_key_can_be_narrowed_without_reissuing_it() -> None:
     assert hasattr(integrations, "update_api_key_capabilities")
     source = inspect.getsource(integrations.update_api_key_capabilities)
     assert "get_api_key_from_vault" in source, "must read-modify-write, not compose a fresh dict"
-    assert "evict_api_key_cache" in source, "the old set would keep authorising until its TTL"
+    # note: the write goes through _write_key_then_commit, which evicts as soon as Vault may hold it
+    assert "_write_key_then_commit" in source, "the old set would keep authorising until its TTL"
+    assert "evict_api_key_cache" in inspect.getsource(integrations._write_key_then_commit)
 
 
 def test_narrowing_refuses_an_unknown_capability() -> None:
