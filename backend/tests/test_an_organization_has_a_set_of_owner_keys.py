@@ -16,6 +16,7 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine, inspect, select, text
 
 from app.models.db_models import Organization, OrganizationMember, OrganizationOwnerKey
+from app.routers import integrations
 from app.services.integration_key_ownership import carry_owned_organizations, transfer_owner
 from app.services.integration_roles import decide_upsert, membership_owners
 from app.services.organization_owners import (
@@ -98,6 +99,45 @@ async def test_a_key_outside_the_set_stays_refused(hub: Dict[str, Any]) -> None:
     assert response.status_code == 200 and response.json()["organizations_synced"] == 0
     assert await members_of(db, "acme-cloud") == [F]
     assert not await is_owner(db, await org(db, "acme-cloud"), K_ATTACKER)
+
+
+MATE = "mate@example.test"
+
+
+def moved_meanwhile(db: Any, to_key: str) -> Organization:
+    """acme-cloud as this session holds it, after its owner set moved to `to_key` outside its view."""
+    held = db.sync.execute(select(Organization).where(Organization.slug == "acme-cloud")).scalar_one()
+    db.sync.execute(text("UPDATE organizations SET api_key_id = :k WHERE slug = 'acme-cloud'"), {"k": to_key})
+    db.sync.execute(text("UPDATE organization_owner_keys SET api_key_id = :k"), {"k": to_key})
+    db.sync.commit()
+    assert held.api_key_id == K_PARTNER, "precondition: the session still holds the old primary"
+    return held
+
+
+async def test_member_writes_judge_the_organization_as_it_stands_now(hub: Dict[str, Any]) -> None:  # noqa: F811
+    """A transfer that lands while a long member list is written: the key it took the organization from
+    writes no member there, though the session still holds that key as the primary."""
+    db = world_db()
+    await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
+    # note: held, as the member loop holds the organization it wrote the previous member into
+    held = moved_meanwhile(db, K_ATTACKER)
+    pushed = [integrations.SyncMember(email=MATE, name=None, organization_id=SELLER, role="TENANT")]
+    assert await integrations._upsert_synced_members(db, pushed, K_PARTNER) == (0, 0)
+    assert await members_of(db, "acme-cloud") == [F]
+    assert held.api_key_id == K_ATTACKER, "the lookup read the organization again"
+
+
+async def test_reconcile_judges_the_organization_as_it_stands_now(hub: Dict[str, Any]) -> None:  # noqa: F811
+    """The same move ahead of a reconcile. The reconcile asks the owner rows themselves (owner_key_ids),
+    never the session's copy of the primary, so the key it took the organization from prunes nothing."""
+    db = world_db()
+    await sync(db, (SELLER,), [(F, SELLER, "PARTNER")])
+    moved_meanwhile(db, K_ATTACKER)
+    pushed = [integrations.SyncOrganization(id=SELLER, name="Acme Cloud", slug="acme-cloud")]
+    # note: a roster without F, so only the ownership check stands between F and its removal
+    roster = [integrations.SyncMember(email=MATE, name=None, organization_id=SELLER, role="TENANT")]
+    assert await integrations._reconcile_synced_members(db, pushed, roster, K_PARTNER, dry_run=False) == 0
+    assert await members_of(db, "acme-cloud") == [F]
 
 
 async def test_a_co_owner_provisions_and_an_outsider_does_not(sale: Dict[str, Any]) -> None:  # noqa: F811

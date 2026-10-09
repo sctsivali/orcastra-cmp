@@ -44,7 +44,8 @@ Ported from the v1.0.0-RC4-hotfix2 line, where the same module also confines a t
 (clusters_another_org_holds). That half is not part of this line.
 """
 
-from typing import Dict, FrozenSet, Iterable, Set
+from datetime import datetime
+from typing import Dict, FrozenSet, Iterable, Optional, Set
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,9 +116,10 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
     return created | await home_partner_keys(db, email)
 
 
-async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
+async def home_partner_keys(db: AsyncSession, email: str, *, settled_before: Optional[datetime] = None) -> Set[str]:
     """The keys whose home organization this user holds a partner row in: side_keys without the
-    organizations the user created. The home, and why it must be proven by a sale, is side_keys'.
+    organizations the user created. The home, and why it must be proven by a sale, is side_keys'. With
+    `settled_before`, only a partner row that joined by then counts (owner_key_enrollment.party_check).
 
     note: the half of side_keys that a current role decides. created_by is the key's minter on every
     buyer organization provisioning made, so it says nothing about who runs the seller today.
@@ -140,6 +142,7 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
             OrganizationMember.user_email == email,
             OrganizationMember.role.in_(RUNNING_ROLES),
             lends_party(),
+            *([OrganizationMember.joined_at <= settled_before] if settled_before is not None else []),
         )
     )).all()
     if not rows:
