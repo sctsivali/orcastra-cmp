@@ -653,7 +653,7 @@ export function IntegrationsSettings() {
                     {isRotatable(apiKey) && (
                       <RotateSecretButton
                         keyId={apiKey.id}
-                        keyName={String(apiKey.name || "this key")}
+                        keyName={String(apiKey.name || apiKey.id)}
                         onRotated={(response) => setRotatedKeys((queue) => [...queue, response])}
                       />
                     )}

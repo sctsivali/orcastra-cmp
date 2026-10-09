@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -29,63 +30,100 @@ export function isRotatable(key: { is_revoked?: boolean; is_active?: boolean; ex
   return Number.isNaN(expires) ? false : expires > Date.now();
 }
 
-// note: a rotation keeps the key id, which every synced organization records as its owner, and
-// replaces only the secret. Two rotations in one tick would each show a secret while only the
-// last one works, so the in-flight flag is claimed synchronously, not through isPending.
+/**
+ * Issue a new secret for the same key id, once its name is typed.
+ *
+ * note: the key id is what every synced organization records as its owner, so a rotation keeps
+ * the organizations, the member push and provisioning working and replaces only the secret. It
+ * also stops whatever uses the key until it has the new secret, so the name is typed first, as a
+ * transfer types the slug. Two rotations in one tick would each show a secret while only the last
+ * one works, so the in-flight flag is claimed synchronously rather than read from isPending.
+ */
 export function RotateSecretButton({
   keyId,
   keyName,
   onRotated,
 }: {
   keyId: string;
+  /** What the operator types to confirm: the key's name, or its id when it has none. */
   keyName: string;
   onRotated: (response: APIKeyCreateResponse) => void;
 }) {
-  const inFlight = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const rotateInFlightRef = useRef(false);
   const mutation = useMutation({
     mutationFn: () => api.integrations.rotateAPIKeySecret(keyId),
-    onSuccess: onRotated,
+    onSuccess: (response) => {
+      setOpen(false);
+      onRotated(response);
+    },
     onError: (error: Error) => {
       toast({ title: "Failed to rotate the secret", description: error.message, variant: "destructive" });
     },
     onSettled: () => {
-      inFlight.current = false;
+      rotateInFlightRef.current = false;
     },
   });
 
-  const rotate = () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+  const confirmed = confirmation.trim() === keyName;
+
+  const rotate = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (rotateInFlightRef.current) return;
+    if (!confirmed) return;
+    rotateInFlightRef.current = true;
     mutation.mutate();
   };
 
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    if (next) setConfirmation("");
+  };
+
   return (
-    <AlertDialog>
+    <AlertDialog open={open} onOpenChange={changeOpen}>
       <AlertDialogTrigger asChild>
         <Button variant="outline" size="sm" disabled={mutation.isPending}>
           {mutation.isPending ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden />
           ) : (
-            <KeyRound className="h-4 w-4 mr-1" />
+            <KeyRound className="h-4 w-4 mr-1" aria-hidden />
           )}
-          Rotate secret
+          Rotate Secret
         </Button>
       </AlertDialogTrigger>
       <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Rotate the secret of {keyName}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            A new secret is issued for the same key ID, and the current secret stops working
-            immediately. The key&apos;s callback URL is cleared too, so a secret that leaked cannot
-            be sent to an address someone else set; the connection sets it again on its next sync.
-            Anything that uses this key, such as the OrcaHub connection, fails until you update it
-            with the new secret.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={rotate}>Rotate secret</AlertDialogAction>
-        </AlertDialogFooter>
+        <form onSubmit={rotate} className="grid gap-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rotate API Key Secret?</AlertDialogTitle>
+            <AlertDialogDescription>
+              A new secret is issued for {keyName}, under the same key ID, and the current secret
+              stops working. The organizations this key owns stay with it. The key&apos;s callback URL
+              is cleared too, so a secret that leaked cannot be sent to an address someone else set;
+              the connection sets it again on its next sync. Anything that uses this key, such as the
+              OrcaHub connection, fails until you update it with the new secret.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor={`rotate-confirm-${keyId}`}>Type the key&apos;s name to confirm</Label>
+            <Input
+              id={`rotate-confirm-${keyId}`}
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              placeholder={keyName}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
+            <Button type="submit" disabled={!confirmed || mutation.isPending}>
+              {mutation.isPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />}
+              Rotate Secret
+            </Button>
+          </AlertDialogFooter>
+        </form>
       </AlertDialogContent>
     </AlertDialog>
   );

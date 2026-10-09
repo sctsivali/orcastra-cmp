@@ -137,7 +137,7 @@ def test_the_settings_page_offers_the_rotation() -> None:
     frontend = Path(__file__).resolve().parents[2] / "frontend" / "src"
     button = (frontend / "components" / "integrations" / "rotate-secret-button.tsx").read_text()
     assert "api.integrations.rotateAPIKeySecret(keyId)" in button
-    assert "if (inFlight.current) return;" in button, "two rotations in one tick would show a dead secret"
+    assert "if (rotateInFlightRef.current) return;" in button, "two rotations in one tick would show a dead secret"
     client = (frontend / "lib" / "api.ts").read_text()
     call = client[client.index("rotateAPIKeySecret:") :]
     assert "/rotate-secret`" in call[:300] and 'method: "POST"' in call[:300]
