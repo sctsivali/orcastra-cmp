@@ -152,6 +152,7 @@ from app.services.integration_key_ownership import (
     owned_by_keys,
     owner_key_refusal,
     refuse_if_key_owns_organizations,
+    keys_whose_home_the_user_partners,
     partners_the_home_organization,
     release_key_locks,
     serialize_key_ownership,
@@ -5429,10 +5430,13 @@ async def list_synced_organizations(
                 if cluster_id:
                     clusters.setdefault(org_id, []).append(cluster_id)
 
-        # important: the owner key's name, state and expiry only for an Admin or a current partner
-        # of the organization (cluster_parties.RUNNING_ROLES). Membership lists the organization for
-        # a tenant too, and created_by is the key's minter on a buyer organization provisioning made.
+        # important: the owner key's name, state and expiry only for an Admin or a current partner of
+        # that key's home organization (keys_whose_home_the_user_partners). Membership lists the
+        # organization for a tenant too, OrcaHub makes a buyer's founder a partner of the buyer, and
+        # created_by is the key's minter on a buyer organization provisioning made. An organization
+        # with no owner key has nothing to hide and says so to its own partners.
         running: Optional[set] = None
+        homes: set = set()
         if highest != Role.ADMIN:
             from app.services.cluster_parties import RUNNING_ROLES
 
@@ -5443,6 +5447,7 @@ async def list_synced_organizations(
                 )
             )
             running = {org_id for (org_id,) in partner_rows.all()}
+            homes = await keys_whose_home_the_user_partners(db, user.email, {org.api_key_id for org in orgs})
 
         # note: the owner key's metadata only, never its secret, and read live: a cached copy from
         # before a revoke would report a frozen organization as healthy.
@@ -5452,7 +5457,7 @@ async def list_synced_organizations(
         for org in orgs:
             read = owners.get(org.api_key_id, (None, None)) if org.api_key_id else (None, None)
             meta = read[0] or {}
-            shown = running is None or org.id in running
+            shown = running is None or (org.api_key_id in homes if org.api_key_id else org.id in running)
             response.append(IntegrationOrgResponse(
                 id=org.id,
                 name=org.name,
