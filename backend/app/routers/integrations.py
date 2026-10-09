@@ -1605,6 +1605,10 @@ async def _upsert_synced_organizations(
     # from, so Pass 2's inserts/re-links see the post-rename slug map.
     for org_data in organizations:
         try:
+            # note: FOR UPDATE (PostgreSQL; SQLite omits it), so two keys claiming one unclaimed
+            # organization at once take turns: the second reads the first's claim and is refused,
+            # rather than both claiming it and the loser staying in its owner set unseen. A transfer
+            # reads the row the same way, so it waits for this sync or this sync waits for it.
             existing = (await db.execute(
                 select(Organization).where(
                     and_(
@@ -1612,6 +1616,8 @@ async def _upsert_synced_organizations(
                         Organization.external_id == org_data.id,
                     )
                 )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )).scalar_one_or_none()
             if not existing:
                 continue
@@ -1628,6 +1634,11 @@ async def _upsert_synced_organizations(
                     existing.slug, org_data.id, existing.api_key_id, api_key_id,
                 )
                 handled.add(org_data.id)
+                # important: nothing changed, so end the transaction now. Kept open, the row read
+                # FOR UPDATE above stays locked into the rest of the sync, which takes this key's
+                # lock; a transfer or owner-set change for this key holds that lock while it waits
+                # on this row, and PostgreSQL answers one of the two with a deadlock.
+                await db.commit()
                 continue
             existing.name = org_data.name
             existing.slug = org_data.slug
@@ -1649,6 +1660,8 @@ async def _upsert_synced_organizations(
         try:
             slug_owner = (await db.execute(
                 select(Organization).where(Organization.slug == org_data.slug)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )).scalar_one_or_none()
 
             if slug_owner is None:
@@ -1694,6 +1707,8 @@ async def _upsert_synced_organizations(
                     f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}); "
                     f"resolve the slug clash to sync it"
                 )
+                # note: as in Pass 1, the row read FOR UPDATE is released before going on
+                await db.commit()
                 continue
 
             await db.commit()
