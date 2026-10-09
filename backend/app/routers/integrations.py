@@ -3228,19 +3228,19 @@ async def sync_data(
             presented = x_api_key_secret if isinstance(x_api_key_secret, str) else None
             try:
                 async with serialize_key_ownership(db, api_key_id):
-                    await run_blocking(
-                        _bind_callback_url_blocking,
-                        api_key_id,
-                        request.app_url,
-                        presented,
-                        timeout=VALIDATE_KEY_TIMEOUT,
-                        label=f"store_app_url[{api_key_id}]",
-                        executor=auth_executor,
-                    )
-                # note: not held through the inventory reads below
-                await release_key_locks(db)
+                    # important: waited out, never cut off, as the rotation's writes are. A timeout
+                    # stopped the wait but not the thread, whose read-modify-write of the whole key
+                    # document then landed outside the lock and could undo a revoke or a grant edit
+                    # made meanwhile. The Vault client bounds each attempt itself.
+                    await asyncio.to_thread(_bind_callback_url_blocking, api_key_id, request.app_url, presented)
             except Exception as e:
                 logger.warning(f"Could not store app_url for {api_key_id}: {e}")
+            finally:
+                # note: not held through the inventory reads below, whether or not the write worked
+                try:
+                    await release_key_locks(db)
+                except Exception as e:  # noqa: BLE001 - the lock ends with the session either way
+                    logger.warning(f"Could not release the key lock of {api_key_id} after the sync: {e}")
         
         # Get allowed cluster IDs from API key permissions
         allowed_clusters = {
