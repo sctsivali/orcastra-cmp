@@ -41,7 +41,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import has_capability
@@ -102,32 +102,73 @@ async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organizatio
     return list(rows.scalars().all())
 
 
-async def partners_an_owned_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:
-    """None when the key owns no active OrcaHub organization, else whether this user holds a current
-    partner row (cluster_parties.RUNNING_ROLES) in one of them.
+async def keys_whose_home_the_user_partners(db: AsyncSession, email: str, key_ids: Iterable[str]) -> Set[str]:
+    """Of these keys, the ones whose home organization this user holds a current partner row in.
 
-    important: a secret rotation asks this of every caller but an Administrator, and created_by never
-    counts. Minting a key is a fact about the past, and provisioning stamps every buyer organization
-    it creates with the key's minter as created_by, so a minter who has since left the seller would
-    still match the buyers it provisioned and take a working secret for all of them.
+    The home is the one cluster_parties proves by a sale (home_partner_keys): the oldest organization
+    the key's sync created, holding a cluster one of its own partners registered that the key sold on.
+    A key nobody has bought through yet has no buyer organization to mistake for its home, so until
+    then the oldest organization its sync created is the home without that proof.
+
+    important: never a partner row in a buyer organization, and never created_by. OrcaHub makes every
+    organization's founder a PARTNER, and provisioning stamps each buyer organization with the key's
+    minter as created_by, so either would let a minter who left the seller and then bought from it act
+    for the seller's key through their own buyer organization.
     """
-    from app.services.cluster_parties import RUNNING_ROLES
+    from app.services.cluster_parties import RUNNING_ROLES, home_partner_keys
 
-    owned = await owned_organizations(db, key_id)
-    if not owned:
-        return None
-    if not email:
-        return False
-    found = await db.execute(
-        select(OrganizationMember.organization_id)
+    wanted = {key_id for key_id in key_ids if key_id}
+    if not wanted or not email:
+        return set()
+    proven = await home_partner_keys(db, email) & wanted
+    unproven = sorted(wanted - proven)
+    if not unproven:
+        return proven
+    homes = dict((await db.execute(
+        select(Organization.api_key_id, func.min(Organization.id))
         .where(
-            OrganizationMember.organization_id.in_([org.id for org in owned]),
+            Organization.is_active.is_(True),
+            Organization.created_by == "system",
+            Organization.api_key_id.in_(unproven),
+        )
+        .group_by(Organization.api_key_id)
+    )).all())
+    if not homes:
+        return proven
+    # important: a binding provisioning made carries no registrant, so one on any organization of the
+    # key, the oldest one included, means someone bought through it, and from then on only the proof
+    # above names the home. The oldest synced organization is a buyer when the seller's home was
+    # deleted and synced again, and that buyer's partner must not inherit the key.
+    sold = set((await db.execute(
+        select(Organization.api_key_id)
+        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+        .where(Organization.api_key_id.in_(sorted(homes)), OrganizationCluster.registered_by.is_(None))
+        .distinct()
+    )).scalars().all())
+    unsold = {key: org for key, org in homes.items() if key not in sold}
+    if not unsold:
+        return proven
+    partnered = set((await db.execute(
+        select(OrganizationMember.organization_id).where(
+            OrganizationMember.organization_id.in_(sorted(set(unsold.values()))),
             OrganizationMember.user_email == email,
             OrganizationMember.role.in_(RUNNING_ROLES),
         )
-        .limit(1)
-    )
-    return found.first() is not None
+    )).scalars().all())
+    return proven | {key for key, org in unsold.items() if org in partnered}
+
+
+async def partners_the_home_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:
+    """None when the key owns no active OrcaHub organization, else whether this user holds a current
+    partner row in the key's home organization (keys_whose_home_the_user_partners).
+
+    important: a secret rotation asks this of every caller but an Administrator, the key's creator
+    included. A fresh secret for such a key is the sync, the member writes and the provisioning of
+    every organization it owns, buyers included, so only the seller's current partners may take one.
+    """
+    if not await owned_organizations(db, key_id):
+        return None
+    return key_id in await keys_whose_home_the_user_partners(db, email, [key_id])
 
 
 async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, List[Tuple[int, str]]]:
