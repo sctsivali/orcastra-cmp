@@ -32,6 +32,7 @@ from app.models.db_models import (
     Organization,
     OrganizationCluster,
     OrganizationMember,
+    OrganizationOwnerKey,
     TenantAccessPolicy,
     TenantPolicyAssignment,
     TenantPolicyRule,
@@ -65,7 +66,7 @@ async def _world(rules: Optional[Dict[str, List[str]]] = None, shared: bool = Tr
     `shared` is False. `rules` are org 6's policy rules per cluster. `foreign_rules` are org 7's
     rules on nuc2, where the partner holds a tenant row, assigned to that row when `assigned`."""
     db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy,
-                        TenantPolicyRule, TenantPolicyAssignment)
+                        TenantPolicyRule, TenantPolicyAssignment, OrganizationOwnerKey)
     db.add_all([
         Organization(id=6, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_6"),
         Organization(id=7, name="other", slug="other", created_by="system", is_active=True, api_key_id="oak_7"),

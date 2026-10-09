@@ -38,6 +38,9 @@ class FakeSession:
 
     async def execute(self, stmt: Any, *_a: Any, **_k: Any) -> _Result:
         text = str(stmt)
+        if text.startswith("SELECT organization_owner_keys.organization_id"):
+            # owners_of: a keyed holder's key is its one owner row, from a claim
+            return _Result([(org_id, key, None, "claim", key) for org_id, key in self.holders if key])
         if "tenant_policy_rules" in text:
             return _Result(self.holders)
         if "organization_members" in text:
@@ -157,7 +160,9 @@ async def test_a_tenant_row_of_the_creator_does_not_make_another_orgs_project_it
         return "JSON"
 
     creator = "partner-a@example.test"
-    db = sqlite_session(Organization, OrganizationMember, TenantAccessPolicy, TenantPolicyRule)
+    from app.models.db_models import OrganizationOwnerKey
+
+    db = sqlite_session(Organization, OrganizationMember, TenantAccessPolicy, TenantPolicyRule, OrganizationOwnerKey)
     db.add_all([
         Organization(id=6, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_home"),
         Organization(id=7, name="other", slug="other", created_by="system", is_active=True, api_key_id="oak_other"),

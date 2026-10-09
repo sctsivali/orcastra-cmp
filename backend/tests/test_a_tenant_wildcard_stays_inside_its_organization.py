@@ -331,11 +331,11 @@ def test_a_tenant_on_a_shared_cluster_is_bound_on_both_paths(
 async def test_a_wildcard_follows_its_organization() -> None:
     """Any other holder confines a '*', the partner's own buyers included: nothing in the database
     tells a home from a buyer, and a buyer synced from OrcaHub even carries a partner row."""
-    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
     from app.services.cluster_parties import clusters_another_org_holds
     from tests._sqlite_session import sqlite_session
 
-    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster)
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey)
     db.add_all([
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_a"),
         Organization(id=2, name="buyer", slug="buyer", created_by="p@example.com", is_active=True, api_key_id="oak_a"),

@@ -24,6 +24,7 @@ from app.models.db_models import (
     Organization,
     OrganizationCluster,
     OrganizationMember,
+    OrganizationOwnerKey,
     TenantAccessPolicy,
     TenantPolicyAssignment,
     TenantPolicyRule,
@@ -38,7 +39,7 @@ def _jsonb_as_json_on_sqlite(_element, _compiler, **_kw):  # the policy tables c
 
 PARTNER = "p@example.com"
 TABLES = (Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule,
-          TenantPolicyAssignment)
+          TenantPolicyAssignment, OrganizationOwnerKey)
 
 
 def _user(email: str, role: str) -> AuthenticatedUser:

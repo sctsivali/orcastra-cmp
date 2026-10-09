@@ -14,7 +14,10 @@
 #    This script detects that and stops rather than guessing, because the right answer
 #    depends on the migration. Migration 015 only widens three session_audit_logs counters
 #    from int to bigint, and older code reads a bigint column without complaint, so for that
-#    one the schema can simply stay where it is and RUN_MIGRATIONS=false is safe.
+#    one the schema can simply stay where it is and RUN_MIGRATIONS=false is safe. Migration
+#    015a (organization owner sets) is NOT: older code claims an organization without its
+#    owner row and the foreign key it adds refuses that commit, so it is always downgraded
+#    first: `alembic downgrade 015_session_audit_bigint` from an image that ships 015a.
 #
 # 2. The Redis flush, and why it is not optional.
 #    Cached bodies written by the newer build carry fields the older models reject, and the
@@ -111,8 +114,8 @@ if docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
                 echo ""
                 echo "  Either downgrade the schema first, from an image that HAS the revision:"
                 echo "    docker exec ${PREFIX}-backend alembic downgrade <older-revision>"
-                echo "  or, when the migrations in between are forward-compatible (015 is),"
-                echo "  re-run this with --skip-migrations."
+                echo "  or, when the migrations in between are forward-compatible (015 is,"
+                echo "  015a is not), re-run this with --skip-migrations."
                 exit 1
             fi
             echo -e "${YEL}schema is ahead of the target image; proceeding with RUN_MIGRATIONS=false${NC}"

@@ -280,6 +280,8 @@ async def test_moving_to_the_current_owner_changes_nothing(world: Dict[str, Any]
 async def test_an_unowned_organization_is_assigned(world: Dict[str, Any]) -> None:
     world["db"].sync.execute(Organization.__table__.update().values(api_key_id=None))
     world["db"].sync.commit()
+    # note: a Core UPDATE bypasses the identity map, and the test session keeps objects on commit
+    world["db"].sync.expire_all()
     response = await put(world, move())
     assert response.status_code == 200, response.text
     assert (response.json()["previous_api_key_id"], response.json()["previous_key_state"]) == (None, "unclaimed")
@@ -392,6 +394,8 @@ async def test_an_unknown_organization_is_404(world: Dict[str, Any]) -> None:
 async def test_a_dashboard_organization_has_no_owner_key(world: Dict[str, Any]) -> None:
     world["db"].sync.execute(Organization.__table__.update().values(source="local", api_key_id=None))
     world["db"].sync.commit()
+    # note: a Core UPDATE bypasses the identity map, and the test session keeps objects on commit
+    world["db"].sync.expire_all()
     response = await put(world, move())
     assert response.status_code == 409 and response.json()["detail"]["error"] == "organization_not_synced"
     untouched(world, expected_owner=None)

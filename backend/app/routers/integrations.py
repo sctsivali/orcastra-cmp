@@ -100,6 +100,13 @@ from app.services.integration_key_ownership import (
 )
 from app.services.integration_callback_url import APP_URL_SECRET_TAG, bound_callback_url, callback_url_tag
 from app.services.integration_roles import apply_upsert_role, revoke_if_orphaned
+from app.services.organization_owners import (
+    is_owner,
+    mark_entry,
+    owned_by_clause,
+    owners_of,
+    serialize_org_owners,
+)
 from app.services.orcahub_sync import callback_networks, callback_requires_https, check_callback_url
 
 logger = logging.getLogger(__name__)
@@ -1386,6 +1393,10 @@ async def _upsert_synced_organizations(
     # from, so Pass 2's inserts/re-links see the post-rename slug map.
     for org_data in organizations:
         try:
+            # note: FOR UPDATE (PostgreSQL; SQLite omits it), so two keys claiming one unclaimed
+            # organization at once take turns: the second reads the first's claim and is refused,
+            # rather than both claiming it and the loser staying in its owner set unseen. A transfer
+            # reads the row the same way, so it waits for this sync or this sync waits for it.
             existing = (await db.execute(
                 select(Organization).where(
                     and_(
@@ -1393,6 +1404,8 @@ async def _upsert_synced_organizations(
                         Organization.external_id == org_data.id,
                     )
                 )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )).scalar_one_or_none()
             if not existing:
                 continue
@@ -1400,7 +1413,9 @@ async def _upsert_synced_organizations(
             # without ever reading it, so any valid key could claim and rewrite an org another
             # integration owned, including its members' roles. A key may only update what it
             # already owns, or an org not yet claimed by one.
-            if existing.api_key_id and existing.api_key_id != api_key_id:
+            # note: any key in the owner set may sync it. Only an unclaimed org gets this key as its
+            # primary; an owned org keeps its primary, so a co-owner's push never moves the callbacks.
+            if existing.api_key_id and not await is_owner(db, existing, api_key_id):
                 logger.warning(
                     "Refusing sync of organization %s (external_id=%s): owned by api key %s, "
                     "caller is %s",
@@ -1411,7 +1426,8 @@ async def _upsert_synced_organizations(
             existing.name = org_data.name
             existing.slug = org_data.slug
             existing.description = org_data.description
-            existing.api_key_id = api_key_id
+            if not existing.api_key_id:
+                existing.api_key_id = api_key_id
             existing.is_active = True
             await db.commit()
             handled.add(org_data.id)
@@ -1427,6 +1443,8 @@ async def _upsert_synced_organizations(
         try:
             slug_owner = (await db.execute(
                 select(Organization).where(Organization.slug == org_data.slug)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )).scalar_one_or_none()
 
             if slug_owner is None:
@@ -1443,7 +1461,7 @@ async def _upsert_synced_organizations(
             elif (
                 slug_owner.source == "orcahub"
                 and slug_owner.external_id not in incoming_ids
-                and (not slug_owner.api_key_id or slug_owner.api_key_id == api_key_id)
+                and (not slug_owner.api_key_id or await is_owner(db, slug_owner, api_key_id))
             ):
                 # The row's OrcaHub identity is RETIRED (its external_id is absent from this
                 # push) and OrcaHub slugs are globally unique, so this row is the deleted
@@ -1454,7 +1472,8 @@ async def _upsert_synced_organizations(
                 slug_owner.name = org_data.name
                 slug_owner.description = org_data.description
                 slug_owner.external_id = org_data.id
-                slug_owner.api_key_id = api_key_id
+                if not slug_owner.api_key_id:
+                    slug_owner.api_key_id = api_key_id
                 slug_owner.is_active = True
             else:
                 # important: the slug is held by a row we must NOT steal - either a non-OrcaHub
@@ -1542,7 +1561,7 @@ async def _upsert_synced_members(
             # key that owns nothing could name another integration's org and rewrite its
             # members, which pushes a global Authentik role change for those emails. Same
             # ownership rule as the organisation upsert above.
-            if org.api_key_id and org.api_key_id != api_key_id:
+            if org.api_key_id and not await is_owner(db, org, api_key_id):
                 logger.warning(
                     "Refusing member sync into organization %s: owned by api key %s, caller is %s",
                     org.slug, org.api_key_id, api_key_id,
@@ -1676,7 +1695,7 @@ async def _reconcile_synced_members(
                 continue  # org not synced (ex; slug clash skipped it); nothing to reconcile
             # important: same ownership rule as the member upsert. Without it a key could name
             # another integration's organization and purge its roster.
-            if org.api_key_id != api_key_id:
+            if not await is_owner(db, org, api_key_id):
                 logger.warning(
                     "Reconcile refused for organization %s: owned by api key %s, caller is %s",
                     org.slug, org.api_key_id, api_key_id,
@@ -4042,12 +4061,14 @@ async def transfer_organization_owner(
                     status_code=status,
                     detail=message if status >= 500 else {"error": code, "message": message},
                 )
-            moved, previous = await transfer_owner(db, org_id, target)
-            if moved is None:
-                raise HTTPException(status_code=404, detail="Organization not found")
-            org, changed = moved, previous != target
-            if changed:
-                await db.commit()
+            # note: the key lock first, then the organization's, as every change to an owner set
+            async with serialize_org_owners(db, [org_id]):
+                moved, previous = await transfer_owner(db, org_id, target)
+                if moved is None:
+                    raise HTTPException(status_code=404, detail="Organization not found")
+                org, changed = moved, previous != target
+                if changed:
+                    await db.commit()
 
     uncovered = await uncovered_clusters(db, org.id, metadata)
     claimed = await owned_organization_count(db, target)
@@ -4215,7 +4236,7 @@ async def sync_policies_from_external(
             # the org, any valid key could write policies into another integration's tenants.
             # Reported as not-found so a caller cannot probe which external ids exist.
             # important: a NULL owner is not "anyone's". Tenant policies are authorization data.
-            if org.api_key_id != api_key_id:
+            if not await is_owner(db, org, api_key_id):
                 logger.warning(
                     "Refusing policy sync into organization %s: owned by api key %s, caller is %s",
                     org.slug, org.api_key_id or "<none>", api_key_id,
@@ -4370,8 +4391,8 @@ async def get_policies_for_external(
     if org_external_id:
         stmt = stmt.where(Organization.external_id == org_external_id)
 
-    # limit to orgs associated with this API key
-    stmt = stmt.where(Organization.api_key_id == api_key_id)
+    # limit to orgs this API key is an owner of
+    stmt = stmt.where(owned_by_clause([api_key_id]))
 
     result = await db.execute(stmt)
     policies = result.scalars().unique().all()
@@ -4484,7 +4505,10 @@ async def _refuse_a_project_another_party_holds(
     key_id = api_key.get("id", "")
     creator = api_key.get("created_by") or ""
     own_orgs = set(await cluster_parties.run_orgs(db, creator)) if creator else set()
-    if any(org_key != key_id and org_id not in own_orgs for org_id, org_key in holders):
+    # note: an organization this key is any owner of is its own, as provisioning for it would be
+    owners = await owners_of(db, [org_id for org_id, _primary in holders])
+    owned = {org_id for org_id, rows in owners.items() if any(row.api_key_id == key_id for row in rows)}
+    if any(org_id not in owned and org_id not in own_orgs for org_id, _primary in holders):
         raise HTTPException(
             status_code=403,
             detail=(
@@ -4532,7 +4556,7 @@ async def provision_tenant_access(
         and_(
             Organization.source == "orcahub",
             Organization.external_id == body.organization_external_id,
-            Organization.api_key_id == api_key_id,
+            owned_by_clause([api_key_id]),
         )
     )
     result = await db.execute(stmt)
@@ -4561,7 +4585,7 @@ async def provision_tenant_access(
             )
         )
         owner = (await db.execute(owner_stmt)).scalar_one_or_none()
-        if owner is not None and owner.api_key_id and owner.api_key_id != api_key_id:
+        if owner is not None and owner.api_key_id and not await is_owner(db, owner, api_key_id):
             logger.warning(
                 "Refusing provision of organization %s (external_id=%s): owned by api key %s, "
                 "caller is %s",
@@ -4587,6 +4611,7 @@ async def provision_tenant_access(
             # buyer org silently received no ACL at purchase (500, no policy). Stamp the provisioning key.
             created_by=api_key.get("created_by") or "orcahub-provisioning",
         )
+        mark_entry(org, "provision")
         db.add(org)
         try:
             await db.flush()
@@ -4647,7 +4672,7 @@ async def provision_tenant_access(
             if not partner_org:
                 partner_stmt = select(Organization).where(
                     and_(
-                        Organization.api_key_id == api_key_id,
+                        owned_by_clause([api_key_id]),
                         Organization.id != org.id,
                     )
                 ).order_by(Organization.created_at.asc()).limit(1)
@@ -4904,7 +4929,7 @@ async def revoke_tenant_access(
     org = (await db.execute(select(Organization).where(and_(
         Organization.source == "orcahub",
         Organization.external_id == body.organization_external_id,
-        Organization.api_key_id == caller_key_id,
+        owned_by_clause([caller_key_id]),
     )))).scalar_one_or_none()
     if not org:
         # important: that lookup folds api_key_id in, so it misses for two different
@@ -4916,7 +4941,7 @@ async def revoke_tenant_access(
             Organization.source == "orcahub",
             Organization.external_id == body.organization_external_id,
         )))).scalar_one_or_none()
-        if owner is not None and owner.api_key_id and owner.api_key_id != caller_key_id:
+        if owner is not None and owner.api_key_id and not await is_owner(db, owner, caller_key_id):
             logger.warning(
                 "Refusing revoke of organization %s (external_id=%s): owned by api key %s, "
                 "caller is %s",

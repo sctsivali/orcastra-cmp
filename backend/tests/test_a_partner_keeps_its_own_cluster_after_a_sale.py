@@ -17,6 +17,7 @@ from app.models.db_models import (
     Organization,
     OrganizationCluster,
     OrganizationMember,
+    OrganizationOwnerKey,
     TenantAccessPolicy,
     TenantPolicyAssignment,
     TenantPolicyRule,
@@ -34,7 +35,7 @@ PARTNER = AuthenticatedUser(user_id="p", email="partner@example.test", groups=["
 
 async def _world():
     db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule,
-                        TenantPolicyAssignment)
+                        TenantPolicyAssignment, OrganizationOwnerKey)
     db.add_all([
         # the partner's home org and a buyer its key provisioned: one party
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, source="orcahub", api_key_id="oak_a"),
@@ -69,7 +70,7 @@ async def test_a_cluster_another_partner_holds_keeps_the_bound() -> None:
 @pytest.mark.parametrize("extra_binding", [None, 3])
 async def test_nothing_is_bounded_when_no_other_party_holds_anything(extra_binding) -> None:
     db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, TenantAccessPolicy, TenantPolicyRule,
-                        TenantPolicyAssignment)
+                        TenantPolicyAssignment, OrganizationOwnerKey)
     db.add_all([
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, api_key_id="oak_a"),
         Organization(id=2, name="buyer", slug="buyer", created_by="system", is_active=True, api_key_id="oak_a"),

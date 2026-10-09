@@ -19,12 +19,13 @@ organizations. Authentik reads and writes happen in the apply helpers.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence
+from typing import AbstractSet, Any, FrozenSet, List, Optional, Sequence, Union
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import Organization, OrganizationMember
+from app.services.organization_owners import owners_of
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,17 @@ def _keep(reason: str) -> RoleChange:
     return RoleChange(None, frozenset(), reason)
 
 
+def _holds(owner: Union[None, str, AbstractSet[str]], api_key_id: str) -> bool:
+    """Whether one organization's owner (a key, an owner set, or None for none) includes this key."""
+    if isinstance(owner, AbstractSet):
+        return api_key_id in owner
+    return owner == api_key_id
+
+
 def decide_upsert(
     target_role: str,
     current: Optional[set],
-    owners: Sequence[Optional[str]],
+    owners: Sequence[Union[None, str, AbstractSet[str]]],
     api_key_id: str,
 ) -> RoleChange:
     """What an integration may do to a pushed member's Authentik role. It may grant, never demote."""
@@ -64,8 +72,8 @@ def decide_upsert(
         if ROLE_PARTNER in current:
             return _keep("already_partner")
         # important: a global partner is unfiltered on every org it belongs to, so a key may only
-        # promote someone whose organizations all sit under this key.
-        if not owners or any(owner != api_key_id for owner in owners):
+        # promote someone whose organizations all sit under this key (in each one's owner set).
+        if not owners or any(not _holds(owner, api_key_id) for owner in owners):
             return _keep("membership_outside_this_key")
         return RoleChange(ROLE_PARTNER, frozenset({ROLE_TENANT}) & frozenset(current), "grant_partner")
     if ROLE_PARTNER in current:
@@ -89,10 +97,10 @@ def decide_orphan_revoke(current: Optional[set], remaining: int) -> RoleChange:
     return _keep("nothing_held")
 
 
-async def membership_owners(db: AsyncSession, email: str) -> List[Optional[str]]:
-    """The owning key of every organization the email belongs to or created.
+async def membership_owners(db: AsyncSession, email: str) -> List[FrozenSet[str]]:
+    """The owner set of every organization the email belongs to or created.
 
-    Dashboard organizations have no api_key_id, so they come back as None and count as foreign.
+    Dashboard organizations have no owner, so they come back as an empty set and count as foreign.
     note: created organizations are included because the Partner scope includes them too.
     """
     lowered = email.lower()
@@ -105,7 +113,8 @@ async def membership_owners(db: AsyncSession, email: str) -> List[Optional[str]]
         ))
         .distinct()
     )).all()
-    return [owner for _org_id, owner in rows]
+    owners = await owners_of(db, [org_id for org_id, _primary in rows])
+    return [frozenset(row.api_key_id for row in owners.get(org_id, [])) for org_id, _primary in rows]
 
 
 def _log(api_key_id: Optional[str], email: str, change: RoleChange) -> None:

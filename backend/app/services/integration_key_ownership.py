@@ -1,7 +1,8 @@
-"""Which integration key owns an OrcaHub organization, and how an Administrator moves it.
+"""Which integration keys own an OrcaHub organization, and how an Administrator moves it.
 
-`organizations.api_key_id` names the integration key that owns a synced organization. Only the
-owner may sync it (`_upsert_synced_organizations`), write its members and tenant access policies
+A synced organization is owned by a set of integration keys (app.services.organization_owners);
+`organizations.api_key_id` is its primary, the key OrcaHub callbacks use. Only an owner may sync it
+(`_upsert_synced_organizations`), write its members and tenant access policies
 (`_upsert_synced_members`, `sync_policies_from_external`) and provision tenant access for it
 (`provision_tenant_access`). An organization whose owner is NULL is claimable by any key that
 pushes or provisions it. That binding is what stops one integration rewriting another's
@@ -40,7 +41,8 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_expiry import classify_key, expiry_state
-from app.models.db_models import Organization, OrganizationCluster
+from app.models.db_models import Organization, OrganizationCluster, OrganizationOwnerKey
+from app.services.organization_owners import owned_by_clause, owned_org_ids, replace_owners
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ def _owned_filter(key_ids: Iterable[str]) -> List[Any]:
     return [
         Organization.source == "orcahub",
         Organization.is_active.is_(True),
-        Organization.api_key_id.in_(sorted(set(key_ids))),
+        owned_by_clause(key_ids),
     ]
 
 
@@ -134,9 +136,14 @@ async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, L
     if not wanted:
         return {}
     rows = await db.execute(
-        select(Organization.api_key_id, Organization.id, Organization.slug)
-        .where(*_owned_filter(wanted))
-        .order_by(Organization.api_key_id, Organization.slug)
+        select(OrganizationOwnerKey.api_key_id, Organization.id, Organization.slug)
+        .join(OrganizationOwnerKey, OrganizationOwnerKey.organization_id == Organization.id)
+        .where(
+            Organization.source == "orcahub",
+            Organization.is_active.is_(True),
+            OrganizationOwnerKey.api_key_id.in_(sorted(wanted)),
+        )
+        .order_by(OrganizationOwnerKey.api_key_id, Organization.slug)
     )
     owned: Dict[str, List[Tuple[int, str]]] = {}
     for key_id, org_id, slug in rows.all():
@@ -310,9 +317,8 @@ async def uncovered_clusters(
 
 
 async def owned_organization_count(db: AsyncSession, key_id: str) -> int:
-    """How many organizations carry this key as their owner, inactive and of any source included."""
-    rows = await db.execute(select(Organization.id).where(Organization.api_key_id == key_id))
-    return len(rows.scalars().all())
+    """How many organizations this key is an owner of, inactive and of any source included."""
+    return len(await owned_org_ids(db, key_id))
 
 
 def _dialect_name(db: AsyncSession) -> str:
@@ -366,15 +372,13 @@ async def release_key_locks(db: AsyncSession) -> None:
 async def transfer_owner(
     db: AsyncSession, organization_id: int, to_key_id: str
 ) -> Tuple[Optional[Organization], Optional[str]]:
-    """Make `to_key_id` the owner of one organization. Returns it and its previous owner.
+    """Make `to_key_id` the sole owner of one organization. Returns it and its previous primary.
 
-    The caller holds serialize_key_ownership(to_key_id), has decided the key may own it, and
-    commits. The row is read FOR UPDATE, so a sync or a second transfer of the same organization
-    waits for this one, and the owner it reports is the one this write replaced. An organization
-    the key already owns is returned unchanged, so the caller can answer without writing.
-
-    important: an ORM assignment, never an UPDATE statement, like every other writer of
-    organizations.api_key_id.
+    The caller holds serialize_key_ownership(to_key_id) and the organization's owner lock, has decided
+    the key may own it, and commits. The row is read FOR UPDATE, so a sync or a second transfer of the
+    same organization waits for this one, and the primary it reports is the one this write replaced. A
+    transfer replaces the whole owner set (organization_owners.replace_owners), so every co-owner leaves
+    with the old primary; an organization the key already solely owns is left unchanged.
     """
     # note: populate_existing, because the caller may already hold this row from an earlier read in
     # the same session, and the owner reported has to be the one the lock saw.
@@ -387,6 +391,5 @@ async def transfer_owner(
     if org is None:
         return None, None
     previous = org.api_key_id
-    if previous != to_key_id:
-        org.api_key_id = to_key_id
+    await replace_owners(db, org, to_key_id, via="transfer", by=None)
     return org, previous

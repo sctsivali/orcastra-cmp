@@ -53,12 +53,19 @@ class FakeSession:
     async def execute(self, stmt: Any, *_a: Any, **_k: Any) -> _Result:
         text = str(stmt)
         self.queries.append(text)
-        if "organization_clusters" in text:
-            return _Result(self.holders)
-        if text.startswith("SELECT organizations.api_key_id \nFROM organizations") and "created_by" in text:
+        if text.startswith("SELECT organization_clusters.cluster_id"):
+            return _Result([row[:3] for row in self.holders])
+        if text.startswith("SELECT organization_owner_keys.organization_id, organization_owner_keys.api_key_id"):
+            # owners_of: every keyed organization has its key as its one owner row, from a claim
+            keyed = {org_id: key for _c, org_id, _r, key in self.holders if org_id is not None and key}
+            keyed.update({org_id: key for org_id, key in self.own.items() if key})
+            return _Result([(org_id, key, None, "claim", key) for org_id, key in sorted(keyed.items())])
+        if text.startswith("SELECT organization_owner_keys.api_key_id \nFROM organization_owner_keys") and (
+            "created_by" in text
+        ):
             # side_keys: the caller created every org it runs here, so each one's key is held
             return _Result(sorted({key for key in self.own.values() if key}))
-        if text.startswith("SELECT organizations.api_key_id, organizations.id"):
+        if text.startswith("SELECT organization_owner_keys.api_key_id, organizations.id"):
             return _Result([])
         if text.startswith("SELECT organizations.id, organizations.api_key_id"):
             return _Result(sorted(self.own.items()))

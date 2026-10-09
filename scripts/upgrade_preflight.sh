@@ -29,7 +29,7 @@ need()    { command -v "$1" >/dev/null 2>&1 || { echo "missing dep: $1" >&2; exi
 # important: bump this with each release that adds a migration. When the target image is
 # already pulled the real head is read out of it instead, which is why the runbook has you
 # pull and then run this a second time.
-EXPECTED_HEAD_FALLBACK="015_session_audit_bigint"
+EXPECTED_HEAD_FALLBACK="015a_organization_owner_keys"
 
 CLUSTER_ID_RE='^[a-zA-Z0-9][a-zA-Z0-9._-]*$'
 MIN_FREE_GB=10

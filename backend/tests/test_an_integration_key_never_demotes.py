@@ -282,7 +282,8 @@ async def test_membership_owners_reads_memberships_and_created_orgs():
     db.add(Organization(name="L", slug="l", source="local", created_by="someone@example.test"))
     await db.commit()
     owners = await membership_owners(db, "someone@example.test")
-    assert sorted(owners, key=str) == sorted([KEY, None], key=str)
+    # note: each organization's owner set; the dashboard organization has none
+    assert sorted(owners, key=sorted) == sorted([frozenset({KEY}), frozenset()], key=sorted)
 
 
 async def test_the_reconcile_refuses_another_keys_org(authentik):
