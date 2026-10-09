@@ -145,7 +145,9 @@ def test_the_settings_page_offers_the_rotation() -> None:
     assert "<RotateSecretButton" in page and 'title="Secret Rotated"' in page
     assert "isRotatable(apiKey) && (" in page, "a revoked, inactive or expired key must not offer a rotation that fails"
     assert "[...queue, response]" in page and "queue.slice(1)" in page, "overlapping rotations must each show their secret"
-    assert "if (!key.expires_at) return true;" in button and "`${key.expires_at}Z`" in button, "a naive expiry is UTC"
+    assert "if (!key.expires_at) return true;" in button and "parseKeyTimestamp(key.expires_at)" in button
+    display = (frontend / "lib" / "integration-display.ts").read_text()
+    assert "`${value}Z`" in display, "a naive expiry is UTC"
 
 
 async def test_a_key_whose_grants_no_longer_validate_is_not_rotated(world) -> None:

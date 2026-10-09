@@ -1755,6 +1755,24 @@ export interface APIKeyInfo {
   last_used_at?: string | null;
   cluster_permissions: ClusterPermission[];
   user_mappings_count: number;
+  // The active OrcaHub organizations this key owns. Only the owner syncs them, so ending this key
+  // freezes them. null means the count could not be read, which is not the same as owning none.
+  owned_organization_count?: number | null;
+  // The slugs this caller may see, at most 20. The rest are counted in the hidden count.
+  owned_organization_slugs?: string[];
+  owned_organization_hidden_count?: number;
+}
+
+/** The structured refusal a revoke or delete of an owner key answers with. */
+export interface KeyOwnsOrganizationsDetail {
+  error: "key_owns_organizations";
+  action: "revoke" | "delete";
+  message: string;
+  api_key_id: string;
+  organization_count: number;
+  organization_slugs: string[];
+  hidden_organization_count: number;
+  remedies: string[];
 }
 
 export interface APIKeyCreateRequest {
@@ -2152,6 +2170,16 @@ export interface Organization {
   cluster_count: number;
 }
 
+export type OwnerKeyState =
+  | "active"
+  | "expiring"
+  | "expired"
+  | "revoked"
+  | "inactive"
+  | "missing"
+  | "unknown"
+  | "unclaimed";
+
 /** Organization synced from external app (OrcaHub) */
 export interface IntegrationOrganization {
   id: number;
@@ -2164,6 +2192,33 @@ export interface IntegrationOrganization {
   app_name: string | null;
   created_at: string | null;
   updated_at: string | null;
+  // The owner key as it stands now. Only the owner syncs the organization, updates its members
+  // and policies, and provisions tenant access for it. Null for a caller who is neither an
+  // administrator nor a partner of the owner key's home organization.
+  owner_key_name?: string | null;
+  owner_key_state?: OwnerKeyState | null;
+  owner_key_expires_at?: string | null;
+  owner_key_expiry_state?: "never" | "active" | "expiring" | "expired" | null;
+  cluster_ids?: string[];
+}
+
+export interface OwnerKeyTransferRequest {
+  api_key_id: string;
+  reason: string;
+}
+
+export interface OwnerKeyTransferResponse {
+  organization_id: number;
+  organization_slug: string;
+  external_id: string | null;
+  previous_api_key_id: string | null;
+  previous_key_state: OwnerKeyState;
+  api_key_id: string;
+  api_key_name: string | null;
+  app_name: string | null;
+  changed: boolean;
+  uncovered_cluster_ids: string[];
+  claimed_organization_count: number;
 }
 
 export interface OrganizationCreateRequest {

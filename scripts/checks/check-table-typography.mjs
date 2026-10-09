@@ -109,7 +109,10 @@ for (const file of walk(ROOT)) {
 // Status and Severity columns keep their Badge by an explicit product decision, so a hard
 // ban would fail on purpose-built code. A ratchet instead: the count may fall, never rise.
 // Raise BADGE_BASELINE only with a reason.
-const BADGE_BASELINE = 17;
+// 17 to 18: the Synced Organizations table (components/integrations/synced-organizations-panel.tsx)
+// has an Owner State column, the owner key's status, so it is the Status exception. The badge is
+// what an administrator scans the list for: which organizations sit behind a key that stopped working.
+const BADGE_BASELINE = 18;
 // A ratchet, not a ban. The remaining occurrences live on chart, console and dialog-form
 // surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
 // fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those

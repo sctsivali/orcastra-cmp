@@ -32,6 +32,7 @@ const CONVERTED = new Map([
   ['components/networks/network-create-dialog.tsx', ['net-project']],
   ['app/my-keys/page.tsx', ['project']],
   ['components/iso-upload-dialog.tsx', ['iso-pool']],
+  ['components/integrations/transfer-owner-key-dialog.tsx', ['transfer-owner-key']],
 ]);
 
 // Files that still map a data-driven list into <SelectItem>, each with the reason it waits.

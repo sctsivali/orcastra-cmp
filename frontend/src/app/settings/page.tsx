@@ -12,6 +12,7 @@ import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
 import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
 import { PersonalizationSettings } from "@/components/personalization-settings";
 import { IntegrationsSettings } from "@/components/integrations-settings";
+import { SyncedOrganizationsPanel } from "@/components/integrations/synced-organizations-panel";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
@@ -215,8 +216,11 @@ export default function SettingsPage() {
 
         {/* Integrations Tab - Admin + Partner */}
         {isPartner && (
-        <TabsContent value="integrations">
+        <TabsContent value="integrations" className="space-y-6">
           <IntegrationsSettings />
+          {/* Which key owns each synced organization. Only the owner syncs it, so an owner that
+              stopped working freezes it, and this is where an administrator moves it. */}
+          <SyncedOrganizationsPanel />
         </TabsContent>
         )}
 

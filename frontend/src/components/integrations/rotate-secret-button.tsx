@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import { parseKeyTimestamp } from "@/lib/integration-display";
 import type { APIKeyCreateResponse } from "@/types/api";
 
 // note: the server refuses a revoked, inactive or expired key, so the control is not offered for
@@ -24,8 +25,7 @@ import type { APIKeyCreateResponse } from "@/types/api";
 export function isRotatable(key: { is_revoked?: boolean; is_active?: boolean; expires_at?: string | null }): boolean {
   if (key.is_revoked || key.is_active === false) return false;
   if (!key.expires_at) return true;
-  const iso = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(key.expires_at) ? key.expires_at : `${key.expires_at}Z`;
-  const expires = Date.parse(iso);
+  const expires = parseKeyTimestamp(key.expires_at);
   return Number.isNaN(expires) ? false : expires > Date.now();
 }
 

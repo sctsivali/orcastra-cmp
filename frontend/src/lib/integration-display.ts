@@ -58,6 +58,54 @@ export function summarizeClusterAccessLevel(clusters: ClusterAccessDisplay[]): s
   return levels.size === 1 ? ceiling : `${ceiling}, mixed`;
 }
 
+/**
+ * A stored key timestamp in epoch milliseconds, NaN when it cannot be read.
+ *
+ * note: a value without an offset is UTC, as the backend writes it. Parsed bare, the browser reads
+ * it as local time and the date lands a day out either side of midnight.
+ */
+export function parseKeyTimestamp(value: string): number {
+  return Date.parse(/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`);
+}
+
+// How close to its expiry an active key reads as expiring: EXPIRY_WARNING_DAYS in
+// backend/app/core/api_key_expiry.py, the window in which its organizations can still be moved.
+const EXPIRY_WARNING_DAYS = 14;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type APIKeyExpiryState = "never" | "active" | "expiring" | "expired";
+
+/**
+ * How a key's expiry stands, as backend/app/core/api_key_expiry.py expiry_state judges it.
+ *
+ * important: this line's key list carries no expiry_state, so the card computes it. An expiry that
+ * cannot be read counts as expired, as authentication counts it.
+ */
+export function getAPIKeyExpiryState(expiresAt: string | null | undefined, now: number = Date.now()): APIKeyExpiryState {
+  if (!expiresAt) return "never";
+  const expires = parseKeyTimestamp(expiresAt);
+  if (Number.isNaN(expires) || expires < now) return "expired";
+  return Math.floor((expires - now) / DAY_MS) <= EXPIRY_WARNING_DAYS ? "expiring" : "active";
+}
+
+/**
+ * How a key stands as a credential, in one word.
+ *
+ * note: the order is the backend's classify_key precedence. A revocation outranks a date, and an
+ * expiry outranks is_active, which nothing sets false when a key lapses.
+ */
+export type APIKeyStatusLabel = "Active" | "Expired" | "Revoked" | "Inactive";
+
+export function getAPIKeyStatus(key: {
+  is_revoked?: boolean;
+  is_active?: boolean;
+  expires_at?: string | null;
+}): APIKeyStatusLabel {
+  if (key.is_revoked) return "Revoked";
+  if (getAPIKeyExpiryState(key.expires_at) === "expired") return "Expired";
+  return key.is_active ? "Active" : "Inactive";
+}
+
 export function getClusterAccessDisplay(
   clusterPermissions: ClusterPermission[] | undefined,
   availableClusters: AvailableCluster[] = [],

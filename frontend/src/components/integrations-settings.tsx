@@ -22,6 +22,7 @@ import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
 import { RotateSecretButton, isRotatable } from "@/components/integrations/rotate-secret-button";
+import { KeyOwnershipSummary, TransferOwnershipFirst } from "@/components/integrations/key-ownership-summary";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -55,8 +56,11 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/use-permissions";
 import { api } from "@/lib/api";
 import { getClusterAccessDisplay, summarizeClusterAccessLevel } from "@/lib/integration-display";
+import { invalidateIntegrationQueries } from "@/lib/integration-queries";
+import { keyOwnsOrganizationsDetail } from "@/lib/key-ownership-display";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ClusterAccessSelector } from "@/components/cluster-access-selector";
 import type {
@@ -331,6 +335,7 @@ function APIKeySecretDialog({
 // Main Integrations Settings Component (for embedding in Settings page)
 export function IntegrationsSettings() {
   const queryClient = useQueryClient();
+  const { isAdmin } = usePermissions();
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKeyCreateResponse | null>(null);
   // note: a queue, so two rotations that overlap each show their own secret once
@@ -405,6 +410,11 @@ export function IntegrationsSettings() {
       toast({ title: "API Key Revoked" });
     },
     onError: (error: Error) => {
+      // A key that came to own an organization after this list loaded is refused by the server,
+      // and the reread puts its ownership on the card.
+      if (keyOwnsOrganizationsDetail(error)) {
+        void invalidateIntegrationQueries(queryClient).catch(() => undefined);
+      }
       toast({ title: "Failed to revoke", description: error.message, variant: "destructive" });
     },
   });
@@ -417,6 +427,9 @@ export function IntegrationsSettings() {
       toast({ title: "API Key Deleted" });
     },
     onError: (error: Error) => {
+      if (keyOwnsOrganizationsDetail(error)) {
+        void invalidateIntegrationQueries(queryClient).catch(() => undefined);
+      }
       toast({ title: "Failed to delete", description: error.message, variant: "destructive" });
     },
   });
@@ -566,7 +579,10 @@ export function IntegrationsSettings() {
             const expiryLabel = apiKey.expires_at
               ? new Date(apiKey.expires_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
               : "Never";
-            
+            // An owner key is not revoked or deleted by the server, so its dialogs explain why and
+            // offer the way forward instead of a destructive action that would only be refused.
+            const ownsOrganizations = (apiKey.owned_organization_count ?? 0) > 0;
+
             return (
               <Card key={apiKey.id}>
                 <CardHeader className="pb-3">
@@ -631,7 +647,8 @@ export function IntegrationsSettings() {
                     clusters={clusterAccess}
                     keyName={String(apiKey.name || "N/A")}
                   />
-                  
+                  <KeyOwnershipSummary apiKey={apiKey} />
+
                   <div className="flex items-center justify-end gap-2 border-t pt-3">
                     {isRotatable(apiKey) && (
                       <RotateSecretButton
@@ -648,49 +665,57 @@ export function IntegrationsSettings() {
                             Revoke
                           </Button>
                         </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Revoke API Key?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will immediately revoke access. This action cannot be undone.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => revokeMutation.mutate(apiKey.id)}
-                              className="bg-yellow-600"
-                            >
-                              Revoke
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
+                        {ownsOrganizations ? (
+                          <TransferOwnershipFirst apiKey={apiKey} action="revoke" isAdmin={isAdmin} />
+                        ) : (
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Revoke API Key?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This will immediately revoke access. This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => revokeMutation.mutate(apiKey.id)}
+                                className="bg-yellow-600"
+                              >
+                                Revoke
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        )}
                       </AlertDialog>
                     )}
-                    
+
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button variant="outline" size="sm" className="text-red-600">
                           Delete
                         </Button>
                       </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Delete API Key?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This will permanently delete this API key.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => deleteMutation.mutate(apiKey.id)}
-                            className="bg-red-600"
-                          >
-                            Delete
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
+                      {ownsOrganizations ? (
+                        <TransferOwnershipFirst apiKey={apiKey} action="delete" isAdmin={isAdmin} />
+                      ) : (
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete API Key?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This will permanently delete this API key.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => deleteMutation.mutate(apiKey.id)}
+                              className="bg-red-600"
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      )}
                     </AlertDialog>
                   </div>
                 </CardContent>

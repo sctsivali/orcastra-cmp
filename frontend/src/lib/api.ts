@@ -374,6 +374,16 @@ async function _fetchAPIInternal<T>(
         errorMessage = `HTTP ${response.status}`;
       } else if (typeof errorDetail === 'string') {
         errorMessage = errorDetail;
+      } else if (
+        typeof errorDetail === 'object' &&
+        errorDetail !== null &&
+        typeof (errorDetail as { message?: unknown }).message === 'string'
+      ) {
+        // important: a structured refusal already carries a sentence written for a human. The
+        // owner-key refusals answer with `{error, message, ...}` so the caller can act on the
+        // machine-readable part, and stringifying the whole object put a raw JSON blob in front
+        // of the operator instead of the sentence inside it. APIError.detail keeps the object.
+        errorMessage = (errorDetail as { message: string }).message;
       } else {
         errorMessage = JSON.stringify(errorDetail);
       }
@@ -1817,6 +1827,8 @@ import type {
   UserMappingRequest,
   AvailableClustersResponse,
   IntegrationOrganization,
+  OwnerKeyTransferRequest,
+  OwnerKeyTransferResponse,
 } from "@/types";
 
 export const integrationsAPI = {
@@ -1893,6 +1905,18 @@ export const integrationsAPI = {
   refreshOrganizations: async (apiKeyId: string): Promise<{ message: string; organizations_synced: number }> => {
     return fetchAPI(`/integrations/refresh-organizations?api_key_id=${encodeURIComponent(apiKeyId)}`, {
       method: "POST",
+    });
+  },
+
+  // Admin only. Makes another active OrcaHub key the owner of a synced organization; there is no
+  // release to no owner.
+  transferOrganizationOwner: async (
+    orgId: number,
+    request: OwnerKeyTransferRequest,
+  ): Promise<OwnerKeyTransferResponse> => {
+    return fetchAPI<OwnerKeyTransferResponse>(`/integrations/organizations/${encodeURIComponent(String(orgId))}/owner-key`, {
+      method: "PUT",
+      body: JSON.stringify(request),
     });
   },
 };
