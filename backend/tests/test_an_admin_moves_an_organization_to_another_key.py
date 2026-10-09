@@ -24,7 +24,7 @@ from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.database import get_db
 from app.core.org_scope import org_scope_dependency
 from app.core.vault_client import VaultClientError
-from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 from app.routers import integrations
 from app.services import authentik_sync, integration_key_ownership
 from app.services.activity_logger import ACTION_CATEGORIES, HIGH_SEVERITY_ACTIONS, EventCategory
@@ -189,6 +189,7 @@ async def test_an_admin_moves_an_organization_off_a_revoked_owner(world: Dict[st
         "previous_api_key_id": K_OLD, "previous_key_state": "revoked",
         "api_key_id": K_NEW, "api_key_name": f"{K_NEW} connection", "app_name": "OrcaHub",
         "changed": True, "uncovered_cluster_ids": [], "claimed_organization_count": 1,
+        "removed_owner_key_ids": [],
     }
     assert owner(world) == K_NEW
     assert world["evicted"] == [K_OLD, K_NEW]
@@ -202,8 +203,11 @@ async def test_an_admin_moves_an_organization_off_a_revoked_owner(world: Dict[st
         "organization_slug": SLUG, "external_id": SELLER, "from_key_id": K_OLD, "from_key_state": "revoked",
         "to_key_id": K_NEW, "to_key_name": f"{K_NEW} connection", "to_key_app_name": "OrcaHub",
         "reason": REASON, "actor_email": ADMIN.email, "uncovered_cluster_ids": [], "trigger": "admin",
+        "removed_owner_key_ids": [],
     }
-    assert (record["before_state"], record["after_state"]) == ({"owner_key_id": K_OLD}, {"owner_key_id": K_NEW})
+    assert (record["before_state"], record["after_state"]) == (
+        {"owner_key_id": K_OLD, "owner_key_ids": [K_OLD]}, {"owner_key_id": K_NEW, "owner_key_ids": [K_NEW]},
+    )
 
 
 async def test_only_key_metadata_is_read_and_never_from_the_cache(world: Dict[str, Any]) -> None:
@@ -278,7 +282,9 @@ async def test_moving_to_the_current_owner_changes_nothing(world: Dict[str, Any]
 
 
 async def test_an_unowned_organization_is_assigned(world: Dict[str, Any]) -> None:
+    # note: an unclaimed organization has neither a primary nor owner rows
     world["db"].sync.execute(Organization.__table__.update().values(api_key_id=None))
+    world["db"].sync.execute(OrganizationOwnerKey.__table__.delete())
     world["db"].sync.commit()
     # note: a Core UPDATE bypasses the identity map, and the test session keeps objects on commit
     world["db"].sync.expire_all()
@@ -287,7 +293,8 @@ async def test_an_unowned_organization_is_assigned(world: Dict[str, Any]) -> Non
     assert (response.json()["previous_api_key_id"], response.json()["previous_key_state"]) == (None, "unclaimed")
     assert owner(world) == K_NEW and world["evicted"] == [K_NEW]
     (record,) = transfers(world)
-    assert record["before_state"] == {"owner_key_id": None} and record["details"]["from_key_state"] == "unclaimed"
+    assert record["before_state"] == {"owner_key_id": None, "owner_key_ids": []}
+    assert record["details"]["from_key_state"] == "unclaimed"
 
 
 @pytest.mark.parametrize("body", [{"api_key_id": None, "reason": REASON}, {"reason": REASON}, {"api_key_id": "",

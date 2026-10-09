@@ -172,10 +172,13 @@ def app_for(user: AuthenticatedUser, db: Any) -> FastAPI:
     return app
 
 
-async def send(owned: Dict[str, Any], user: AuthenticatedUser, method: str, at: str) -> httpx.Response:
-    transport = httpx.ASGITransport(app=app_for(user, owned["db"]))
+async def send(
+    owned: Dict[str, Any], user: AuthenticatedUser, method: str, at: str, body: Any = None, *, db: Any = None,
+) -> httpx.Response:
+    """One request as `user`, on the world's session unless another request's session is given."""
+    transport = httpx.ASGITransport(app=app_for(user, owned["db"] if db is None else db))
     async with httpx.AsyncClient(transport=transport, base_url="http://orcastra.test") as client:
-        return await client.request(method, at)
+        return await client.request(method, at, json=body)
 
 
 def nothing_changed(owned: Dict[str, Any], key_id: str = PLAIN) -> None:

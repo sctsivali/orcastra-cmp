@@ -1,0 +1,193 @@
+"""An owner-set change is decided on the organization as it stands once its lock is held.
+
+Sessions do not expire on commit, so an organization a handler loaded before taking the organization
+lock kept the primary it had then. Two concurrent revokes of a set's primary and of another owner made
+the second one skip the promotion the first had made necessary; its commit then failed on the
+primary-in-set foreign key after Vault had been written, with the database's text in a 500 and the
+key still cached.
+
+Now the lock reads its organizations again, the owner sets are checked before the Vault write, the
+key's cached copies are dropped whenever the Vault write may have landed, and the answers are fixed
+sentences.
+"""
+
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.models.db_models import Organization
+from app.routers import integrations
+from app.services.integration_key_ownership import OWNERSHIP_UNKNOWN_DETAIL
+from app.services.organization_owners import owner_key_ids, serialize_org_owners
+from tests._owner_invariants import assert_owner_invariants
+from tests._sqlite_session import AsyncSessionFacade
+from tests.test_a_co_owned_organization_survives_its_owner_ending import (  # noqa: F401
+    CO,
+    ORGS,
+    THIRD,
+    co_own,
+    co_owned,
+    primary,
+)
+from tests.test_a_key_that_owns_an_organization_is_not_revoked_or_deleted import (  # noqa: F401
+    ADMIN,
+    KEYS,
+    PLAIN,
+    owned,
+    send,
+)
+
+LEAKED = "OperationalError: SQL fk_org_primary_owner_key oak_plain"
+
+
+@pytest.fixture
+def three(co_owned: Dict[str, Any]) -> Dict[str, Any]:  # noqa: F811
+    """co_owned, where the tests make acme-cloud and nimbus-co each owned by PLAIN (primary), CO and THIRD."""
+    return co_owned
+
+
+async def _co_own_all(world: Dict[str, Any]) -> None:
+    for org_id in (world["acme"], world["nimbus"]):
+        await co_own(world["db"], org_id, CO)
+        await co_own(world["db"], org_id, THIRD)
+
+
+def _second_session(db: Any) -> AsyncSessionFacade:
+    """Another request's session on the same database, the way two workers each hold their own."""
+    return AsyncSessionFacade(Session(db.sync.get_bind(), expire_on_commit=False))
+
+
+async def test_the_lock_reads_the_organization_again(three: Dict[str, Any]) -> None:
+    db = three["db"]
+    await co_own(db, three["acme"], CO)
+    org = db.sync.get(Organization, three["acme"])
+    db.sync.execute(text("UPDATE organizations SET api_key_id = :key WHERE id = :id"), {"key": CO, "id": org.id})
+    db.sync.commit()
+    assert org.api_key_id == PLAIN, "the session's copy is from before the change"
+    async with serialize_org_owners(db, [org.id]):
+        assert org.api_key_id == CO
+
+
+async def test_a_second_end_decides_on_the_primary_the_first_one_moved(
+    three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revoking CO waits for the organization lock while PLAIN's revoke moves the primary to CO."""
+    db = three["db"]
+    await _co_own_all(three)
+    other = _second_session(db)
+    real = integrations.serialize_org_owners
+    first: List[Any] = []
+    held: List[Organization] = []
+
+    @asynccontextmanager
+    async def first_revoke_lands_while_waiting(session: Any, org_ids: Any) -> AsyncIterator[None]:
+        if session is other and not first:
+            # note: the second request holds these organizations as it loaded them, with PLAIN as primary
+            held.extend(other.sync.get(Organization, org_id) for org_id in org_ids)
+            assert {org.api_key_id for org in held} == {PLAIN}
+            first.append(await send(three, ADMIN, "POST", f"{KEYS}/{PLAIN}/revoke"))
+        async with real(session, org_ids):
+            yield
+
+    monkeypatch.setattr(integrations, "serialize_org_owners", first_revoke_lands_while_waiting)
+    second = await send(three, ADMIN, "POST", f"{KEYS}/{CO}/revoke", db=other)
+    assert first[0].status_code == 200, first[0].text
+    assert second.status_code == 200, second.text
+    for org_id in (three["acme"], three["nimbus"]):
+        assert await owner_key_ids(db, org_id) == [THIRD]
+        assert primary(db, org_id) == THIRD
+    await assert_owner_invariants(db)
+
+
+async def test_an_admin_removal_decides_on_the_primary_a_revoke_moved(
+    three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Administrator removes CO, which PLAIN's revoke made primary while the removal waited."""
+    monkeypatch.setattr(integrations, "multi_owner_enabled", lambda: True)
+    db = three["db"]
+    await _co_own_all(three)
+    other = _second_session(db)
+    real = integrations.serialize_org_owners
+    first: List[Any] = []
+
+    @asynccontextmanager
+    async def revoke_lands_while_waiting(session: Any, org_ids: Any) -> AsyncIterator[None]:
+        if session is other and not first:
+            first.append(await send(three, ADMIN, "POST", f"{KEYS}/{PLAIN}/revoke"))
+        async with real(session, org_ids):
+            yield
+
+    monkeypatch.setattr(integrations, "serialize_org_owners", revoke_lands_while_waiting)
+    response = await send(three, ADMIN, "DELETE", f"{ORGS}/{three['acme']}/owner-keys/{CO}?reason=retired", db=other)
+    assert first[0].status_code == 200, first[0].text
+    assert response.status_code == 200, response.text
+    assert response.json()["primary_key_id"] == THIRD and response.json()["owner_key_ids"] == [THIRD]
+    await assert_owner_invariants(db)
+
+
+async def test_a_refused_owner_set_writes_nothing_to_vault(
+    three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = three["db"]
+    await _co_own_all(three)
+
+    async def refused(_db: Any) -> None:
+        raise RuntimeError(LEAKED)
+
+    monkeypatch.setattr(integrations, "check_owner_sets", refused)
+    response = await send(three, ADMIN, "POST", f"{KEYS}/{PLAIN}/revoke")
+    assert (response.status_code, response.json()["detail"]) == (503, OWNERSHIP_UNKNOWN_DETAIL)
+    assert three["vault"].writes == [] and three["evicted"] == []
+    assert await owner_key_ids(db, three["acme"]) == [PLAIN, CO, THIRD] and primary(db, three["acme"]) == PLAIN
+
+
+@pytest.mark.parametrize("method, suffix", [("POST", "/revoke"), ("DELETE", "")], ids=["revoke", "delete"])
+async def test_a_commit_that_fails_after_vault_still_evicts_and_names_no_database(
+    three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, method: str, suffix: str
+) -> None:
+    db = three["db"]
+    await _co_own_all(three)
+
+    async def lost() -> None:
+        raise RuntimeError(LEAKED)
+
+    monkeypatch.setattr(db, "commit", lost)
+    response = await send(three, ADMIN, method, f"{KEYS}/{PLAIN}{suffix}")
+    assert (response.status_code, response.json()["detail"]) == (503, integrations.OWNER_SETS_NOT_SAVED)
+    assert three["evicted"] == [PLAIN], "the key must stop working from the cache once Vault says so"
+    assert "OperationalError" not in response.text
+
+
+async def test_a_vault_write_that_raises_still_evicts_and_names_nothing(
+    three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = three["db"]
+    await _co_own_all(three)
+
+    def lost(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError(LEAKED)
+
+    monkeypatch.setattr(three["vault"], "vault_kv_put", lost)
+    response = await send(three, ADMIN, "POST", f"{KEYS}/{PLAIN}/revoke")
+    assert (response.status_code, response.json()["detail"]) == (500, "Failed to revoke the API key")
+    assert three["evicted"] == [PLAIN], "the write may have landed before its reply was lost"
+    assert "OperationalError" not in response.text
+
+
+async def test_a_vault_delete_that_raises_still_evicts_and_names_nothing(
+    three: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = three["db"]
+    await _co_own_all(three)
+
+    def lost(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError(LEAKED)
+
+    monkeypatch.setattr(three["vault"], "vault_delete", lost)
+    response = await send(three, ADMIN, "DELETE", f"{KEYS}/{PLAIN}")
+    assert (response.status_code, response.json()["detail"]) == (500, "Failed to delete the API key")
+    assert three["evicted"] == [PLAIN]
+    assert "OperationalError" not in response.text

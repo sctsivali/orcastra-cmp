@@ -68,6 +68,10 @@ class _OrgResult:
     def scalar_one_or_none(self) -> Any:
         return self.org
 
+    def all(self) -> list:
+        """The owner set the push reads for its callback fallback: none beyond the primary."""
+        return []
+
 
 class _OrgSession:
     def __init__(self, org: Any) -> None:
@@ -88,7 +92,7 @@ def push(monkeypatch, no_raw_httpx):
     recorder = Recorder()
     monkeypatch.setattr(orcahub_sync, "_home_org_cache", {})
 
-    async def _creds(_org: Any) -> Dict[str, str]:
+    async def _creds(_org: Any, _owner_keys: Any = ()) -> Dict[str, str]:
         return dict(CREDS)
 
     monkeypatch.setattr(orcahub_sync, "guarded_request", recorder)
@@ -149,7 +153,7 @@ def webhook(monkeypatch, no_raw_httpx):
     async def _orgs(_db: Any, _cluster: str) -> List[Any]:
         return [_org()]
 
-    async def _creds(_org: Any) -> Dict[str, str]:
+    async def _creds(_org: Any, _owner_keys: Any = ()) -> Dict[str, str]:
         return dict(CREDS)
 
     async def _no_sleep(_s: float) -> None:
@@ -159,6 +163,12 @@ def webhook(monkeypatch, no_raw_httpx):
     monkeypatch.setattr(orcahub_webhook, "_orcahub_orgs_for_cluster", _orgs)
     monkeypatch.setattr(orcahub_webhook, "_get_orcahub_credentials", _creds)
     monkeypatch.setattr(orcahub_webhook, "async_session_maker", _SessionMaker)
+
+    async def _no_co_owners(_db: Any, _orgs: Any) -> Dict[int, List[str]]:
+        return {}
+
+    # note: the owner-set fallback is test_a_co_owned_organization_survives_its_owner_ending's
+    monkeypatch.setattr(orcahub_webhook, "_owner_sets", _no_co_owners)
     monkeypatch.setattr(orcahub_webhook.asyncio, "sleep", _no_sleep)
     return recorder
 

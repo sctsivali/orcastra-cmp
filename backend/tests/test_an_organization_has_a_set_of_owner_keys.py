@@ -270,10 +270,13 @@ CLAIM_WRITERS = {
     "routers/integrations.py:_upsert_synced_organizations": "the sync and refresh claim of an unclaimed org",
     "routers/integrations.py:provision_tenant_access": "provisioning creates a buyer org with its key",
     "services/organization_owners.py:replace_owners": "an Administrator's transfer",
+    "services/organization_owners.py:remove_owner": "a key leaving the set hands the primary to an able owner",
+    "services/organization_owners.py:set_primary": "an Administrator choosing the primary within the set",
 }
 # Every function that builds an owner row.
 OWNER_ROW_WRITERS = {
     "models/db_models.py:_keep_the_primary_in_the_owner_set": "the primary's row, in the flush that sets it",
+    "services/organization_owners.py:add_owner": "an Administrator or an enrollment adding a co-owner",
 }
 # Every function comparing an api_key_id with ==/!=, and why it is not "the caller owns the org".
 PRIMARY_COMPARISONS = {
@@ -282,6 +285,11 @@ PRIMARY_COMPARISONS = {
     "routers/image_uploads.py:create_upload": "an upload session's own key, not an organization",
     "routers/iso_uploads.py:create_upload": "an upload session's own key, not an organization",
     "routers/integrations.py:_refuse_a_project_another_party_holds": "compares owner rows",
+    "routers/integrations.py:set_organization_primary": "a primary that is already the one asked for is a no-op",
+    "services/integration_key_ownership.py:refuse_if_key_owns_organizations": "the other rows of a set",
+    "services/orcahub_sync.py:_get_orcahub_credentials": "the callback fallback past the primary",
+    "services/organization_owners.py:choose_primary": "skips the ending key among owner rows",
+    "services/organization_owners.py:remove_owner": "the ending key among owner rows",
     "services/cluster_parties.py:home_partner_keys": "joins owner rows to owner rows",
     "services/organization_owners.py:is_owner": "the owner test itself",
     "services/organization_owners.py:owned_org_ids": "owner rows of one key",

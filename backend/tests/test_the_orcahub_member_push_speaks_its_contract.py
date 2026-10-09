@@ -96,6 +96,10 @@ class _OrgSession:
             def scalar_one_or_none(self):
                 return org
 
+            def all(self):
+                # note: the owner set the push reads for its callback fallback, none beyond the primary
+                return []
+
         return _R()
 
 
@@ -107,7 +111,7 @@ def orcahub(monkeypatch):
     async def through_the_real_client(method: str, url: str, **kwargs: Any) -> Any:
         return await real(method, url, transport=httpx.MockTransport(hub.handler), **kwargs)
 
-    async def _creds(_org: Any) -> Dict[str, str]:
+    async def _creds(_org: Any, _owner_keys: Any = ()) -> Dict[str, str]:
         return dict(CREDS)
 
     monkeypatch.setattr(orcahub_sync, "guarded_request", through_the_real_client)

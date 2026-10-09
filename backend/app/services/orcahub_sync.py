@@ -10,7 +10,7 @@ import logging
 import re
 import time
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -219,30 +219,38 @@ def _read_orcahub_credentials_blocking(api_key_id: str) -> Optional[Dict[str, An
     }
 
 
-async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]]:
+async def _get_orcahub_credentials(org: Organization, owner_keys: Sequence[str] = ()) -> Optional[Dict[str, Any]]:
     """
     Retrieve OrcaHub callback URL and API key credentials for an org.
     The org must have source='orcahub' and a stored api_key_id.
     Returns dict with app_url, api_key_id, api_key_secret or None.
+
+    The primary owner key is asked first. When it cannot call back (ended, or no URL stored with its
+    current secret), the other keys of the owner set (`owner_keys`, oldest first) are tried in turn, so
+    an organization another owner still serves keeps its callbacks. Nothing is written.
     """
     if org.source != "orcahub" or not org.api_key_id:
         return None
 
     from app.services.lxd.proxy import VALIDATE_KEY_TIMEOUT, auth_executor
 
-    try:
-        return await run_blocking(
-            _read_orcahub_credentials_blocking,
-            org.api_key_id,
-            timeout=VALIDATE_KEY_TIMEOUT,
-            label=f"orcahub_credentials[{org.api_key_id}]",
-            executor=auth_executor,
-        )
-    except Exception as e:
-        logger.warning(
-            "Failed to retrieve OrcaHub credentials for org %s: %s", org.id, sanitize_error(str(e))
-        )
-        return None
+    for key_id in [org.api_key_id, *[k for k in owner_keys if k and k != org.api_key_id]]:
+        try:
+            creds = await run_blocking(
+                _read_orcahub_credentials_blocking,
+                key_id,
+                timeout=VALIDATE_KEY_TIMEOUT,
+                label=f"orcahub_credentials[{key_id}]",
+                executor=auth_executor,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to retrieve OrcaHub credentials for org %s: %s", org.id, sanitize_error(str(e))
+            )
+            continue
+        if creds:
+            return creds
+    return None
 
 
 async def push_members_to_orcahub(
@@ -267,7 +275,9 @@ async def push_members_to_orcahub(
         logger.warning(f"Org {org_id} not found for OrcaHub push")
         return False
 
-    creds = await _get_orcahub_credentials(org)
+    from app.services.organization_owners import owner_key_ids
+
+    creds = await _get_orcahub_credentials(org, await owner_key_ids(db, org.id))
     if not creds:
         logger.debug(f"Org {org_id} is not OrcaHub-synced or has no callback URL, skipping push")
         return False
