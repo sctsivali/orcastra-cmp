@@ -120,6 +120,11 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
     # cluster the key sold on, and the home's binding must be the first of that key's bindings there
     # (by row id, which a rebind renews and reconcile keeps). A buyer founder can register a cluster
     # of its own, or unbind and bind the seller's cluster again, but never ahead of the buyers.
+    # important: and the sale must be a binding provisioning made (no registrant). A founder whose
+    # buyer is the oldest synced organization on the key could otherwise bind a cluster of their own
+    # to it and to a second buyer on the key, which reads as exactly this sale. A dashboard binding
+    # records who made it, so a seller whose buyers were bound by hand lends nothing here, and on
+    # this line that also keeps those buyers another party in the project bound: it fails closed.
     binding, sold, home, buyer = (aliased(OrganizationCluster), aliased(OrganizationCluster),
                                   aliased(Organization), aliased(Organization))
     earlier, earlier_org = aliased(OrganizationCluster), aliased(Organization)
@@ -138,7 +143,11 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
             func.lower(OrganizationMember.user_email) == func.lower(binding.registered_by),
             OrganizationMember.role.in_(RUNNING_ROLES),
         ))
-        .join(sold, and_(sold.cluster_id == binding.cluster_id, sold.organization_id != binding.organization_id))
+        .join(sold, and_(
+            sold.cluster_id == binding.cluster_id,
+            sold.organization_id != binding.organization_id,
+            sold.registered_by.is_(None),
+        ))
         .join(buyer, and_(buyer.id == sold.organization_id, buyer.api_key_id == home.api_key_id))
         .where(binding.organization_id.in_(sorted(set(homes.values()))), first)
     )).scalars().all())

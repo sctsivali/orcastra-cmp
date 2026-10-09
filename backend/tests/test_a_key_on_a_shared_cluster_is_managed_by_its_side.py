@@ -13,7 +13,9 @@ from fastapi import HTTPException
 
 from app.core import org_scope
 from app.core.auth import AuthenticatedUser
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.routers import integrations
+from tests._sqlite_session import sqlite_session
 
 SHARED = "cluster-shared"
 OWN = "cluster-own"
@@ -197,3 +199,93 @@ def test_no_async_handler_reads_a_key_from_vault_on_the_loop() -> None:
                 offenders.append(f"{fn.name}:{node.lineno}")
             stack.extend(ast.iter_child_nodes(node))
     assert offenders == []
+
+
+# -- on real rows: a synced buyer founder is not on the seller's side ---------------------------
+#
+# OrcaHub makes every organization's founder a PARTNER, so the sync writes a partner row in each
+# buyer organization, and every buyer carries the seller's key. "Manages a key that syncs an
+# organization I run" would therefore hand a buyer's founder the seller's integration key. Only
+# the key's home organization lends it (services/cluster_parties.side_keys).
+
+SELLER, FOUNDER = "p@example.com", "founder@example.com"
+
+
+async def _sale(**overrides: Any) -> Any:
+    """The seller's home (synced, its partner registered the cluster) and two buyers its key provisioned."""
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster)
+    orgs = overrides.get("orgs", [(1, "system"), (2, SELLER), (3, SELLER)])
+    db.add_all([Organization(id=i, name=f"o{i}", slug=f"o{i}", created_by=by, is_active=True, api_key_id="oak_a",
+                             source="orcahub") for i, by in orgs])
+    await db.commit()
+    db.add_all([OrganizationMember(organization_id=o, user_email=e, role=r)
+                for o, e, r in overrides.get("members", [(1, SELLER, "partner"), (2, FOUNDER, "partner")])])
+    db.add_all([OrganizationCluster(organization_id=o, cluster_id="own", registered_by=by)
+                for o, by in overrides.get("bindings", [(1, SELLER), (2, None), (3, None)])])
+    await db.commit()
+    return db
+
+
+SELLER_KEY = {"id": "oak_a", "created_by": "ops@example.com",
+              "cluster_permissions": [{"cluster_id": "own", "permissions": ["read"], "projects": ["*"]}]}
+
+
+async def test_a_buyer_founder_cannot_manage_the_sellers_key() -> None:
+    db = await _sale()
+    assert await integrations._keys_the_caller_manages(db, _user(FOUNDER), [SELLER_KEY]) == [], (
+        "a buyer founder could revoke or delete the seller's integration key"
+    )
+    assert await integrations._keys_the_caller_manages(db, _user(SELLER), [SELLER_KEY]) == [SELLER_KEY]
+
+
+async def test_a_teammate_of_the_seller_manages_the_key_its_home_syncs() -> None:
+    db = await _sale(members=[(1, SELLER, "partner"), (1, "mate@example.com", "partner"), (2, FOUNDER, "partner")])
+    assert await integrations._keys_the_caller_manages(db, _user("mate@example.com"), [SELLER_KEY]) == [SELLER_KEY]
+
+
+async def test_a_home_synced_again_after_a_buyer_lends_the_key_to_nobody() -> None:
+    """The seller's home was deleted and synced again, so a buyer is the oldest org on the key. It
+    registered no cluster the key sold on, so no partner row lends the key: the founder stays out,
+    and the seller is narrowed until an administrator fixes the home."""
+    db = await _sale(orgs=[(2, "system"), (3, "ops@example.com"), (5, "system")],
+                     members=[(2, FOUNDER, "partner"), (5, SELLER, "partner")],
+                     bindings=[(2, None), (3, None), (5, SELLER)])
+    for email in (FOUNDER, SELLER):
+        assert await integrations._keys_the_caller_manages(db, _user(email), [SELLER_KEY]) == []
+
+
+async def test_a_founder_binding_their_own_cluster_to_two_buyers_lends_no_key() -> None:
+    """The oldest synced organization on the seller's key is a buyer (the seller's home was synced
+    again later). Its founder registers a cluster of their own and binds it to that buyer and to a
+    second buyer on the same key, which looks like a sale from a home. A sale is a binding
+    provisioning made, never one the caller registered, so it lends nothing."""
+    from app.services.cluster_parties import clusters_held_by_another_party, side_keys
+
+    db = await _sale(
+        orgs=[(2, "system"), (3, "system"), (5, "system")],
+        members=[(2, FOUNDER, "partner"), (3, FOUNDER, "partner"), (5, SELLER, "partner")],
+        bindings=[(5, SELLER), (2, None), (3, None)],
+    )
+    db.add_all([OrganizationCluster(organization_id=2, cluster_id="founders-own", registered_by=FOUNDER)])
+    await db.commit()
+    db.add_all([OrganizationCluster(organization_id=3, cluster_id="founders-own", registered_by=FOUNDER)])
+    await db.commit()
+    assert await side_keys(db, FOUNDER) == set()
+    assert await integrations._keys_the_caller_manages(db, _user(FOUNDER), [SELLER_KEY]) == [], (
+        "a buyer founder could manage, and then rotate, the seller's integration key"
+    )
+    # note: on this line the same side decides the partner project bound, so the seller's cluster
+    # stays another party's to the founder there too.
+    assert await clusters_held_by_another_party(db, FOUNDER, {"own"}) == {"own"}
+
+
+async def test_a_sale_made_by_hand_lends_the_seller_nothing() -> None:
+    """Fail-closed on purpose: a buyer bound to the seller's cluster from the dashboard, not by
+    provisioning, is not a sale, so it puts the key on nobody's side through the home."""
+    from app.services.cluster_parties import side_keys
+
+    synced = [(1, "system"), (2, "system"), (3, "system")]
+    by_hand = await _sale(orgs=synced, bindings=[(1, SELLER), (2, SELLER), (3, SELLER)])
+    assert await side_keys(by_hand, SELLER) == set()
+    provisioned = await _sale(orgs=synced)
+    assert await side_keys(provisioned, SELLER) == {"oak_a"}
