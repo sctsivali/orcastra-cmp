@@ -89,6 +89,45 @@ async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organizatio
     return list(rows.scalars().all())
 
 
+async def keys_whose_home_the_user_partners(db: AsyncSession, email: str, key_ids: Iterable[str]) -> Set[str]:
+    """Of these keys, the ones whose home organization this user holds a current partner row in.
+
+    The home is the one cluster_parties proves by a sale (home_partner_keys): the oldest organization
+    the key's sync created, holding a cluster one of its own partners registered that the key sold on.
+    A key whose home cannot be proven that way, one nobody has bought through yet included, has no home
+    here, so only an Administrator acts for it.
+
+    important: never a partner row in a buyer organization, and never created_by. OrcaHub makes every
+    organization's founder a PARTNER, and provisioning stamps each buyer organization with the key's
+    minter as created_by, so either would let a minter who left the seller and then bought from it act
+    for the seller's key through their own buyer organization.
+
+    important: no grace before the first sale. "Not sold yet" could only be read from the provisioning
+    bindings that exist now, and deregistering a cluster deletes them, so a key whose seller
+    organization and sales were gone would look unsold again and hand its oldest remaining synced
+    organization, a buyer whose founder is a partner, the seller's key. This fails closed instead.
+    """
+    from app.services.cluster_parties import home_partner_keys
+
+    wanted = {key_id for key_id in key_ids if key_id}
+    if not wanted or not email:
+        return set()
+    return await home_partner_keys(db, email) & wanted
+
+
+async def partners_the_home_organization(db: AsyncSession, key_id: str, email: str) -> Optional[bool]:
+    """None when the key owns no active OrcaHub organization, else whether this user holds a current
+    partner row in the key's home organization (keys_whose_home_the_user_partners).
+
+    important: a secret rotation asks this of every caller but an Administrator, the key's creator
+    included. A fresh secret for such a key is the sync, the member writes and the provisioning of
+    every organization it owns, buyers included, so only the seller's current partners may take one.
+    """
+    if not await owned_organizations(db, key_id):
+        return None
+    return key_id in await keys_whose_home_the_user_partners(db, email, [key_id])
+
+
 async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, List[Tuple[int, str]]]:
     """For each key, the (id, slug) of every active OrcaHub organization it owns, by slug. One query."""
     wanted = {key_id for key_id in key_ids if key_id}

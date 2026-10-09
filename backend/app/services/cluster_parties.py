@@ -84,7 +84,7 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
     partner row in any other keyed organization, a synced buyer founder's for one, counts that
     organization only.
     """
-    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+    from app.models.db_models import Organization
 
     if not email:
         return set()
@@ -95,6 +95,21 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
             Organization.api_key_id.is_not(None),
         )
     )).scalars().all())
+    return created | await home_partner_keys(db, email)
+
+
+async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
+    """The keys whose home organization this user holds a partner row in: side_keys without the
+    organizations the user created. The home, and why a sale must prove it, is side_keys'.
+
+    note: the half of side_keys that a current role decides. created_by is the key's minter on every
+    buyer organization provisioning made, so it says nothing about who runs the seller today, which
+    is what a secret rotation and the owner-key details ask (services/integration_key_ownership.py).
+    """
+    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+
+    if not email:
+        return set()
     rows = (await db.execute(
         select(Organization.api_key_id, Organization.id)
         .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
@@ -106,7 +121,7 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
         )
     )).all()
     if not rows:
-        return created
+        return set()
     homes = dict((await db.execute(
         select(Organization.api_key_id, func.min(Organization.id))
         .where(
@@ -151,7 +166,7 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
         .join(buyer, and_(buyer.id == sold.organization_id, buyer.api_key_id == home.api_key_id))
         .where(binding.organization_id.in_(sorted(set(homes.values()))), first)
     )).scalars().all())
-    return created | {key for key, org in rows if homes.get(key) == org and org in registering}
+    return {key for key, org in rows if homes.get(key) == org and org in registering}
 
 
 async def run_org_keys(db: AsyncSession, email: str) -> Set[str]:

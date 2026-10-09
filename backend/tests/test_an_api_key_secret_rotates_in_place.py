@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from app.core.auth import AuthenticatedUser
 from app.core.vault_client import VaultCasMismatch
 from app.routers import integrations
+from tests._sqlite_session import org_tables, sqlite_session
 
 KEY = "oak_" + "a" * 32
 BASE = f"secret/data/{integrations.VAULT_INTEGRATIONS_PATH}/api_keys/{KEY}"
@@ -276,7 +277,8 @@ async def test_the_creator_and_an_admin_rotate_without_the_mint_check(world, par
         raise AssertionError("the mint check ran for a caller who already held the secret")
 
     monkeypatch.setattr(integrations, "_refuse_a_grant_past_the_project_bound", refuse)
-    answer = await integrations.rotate_api_key_secret(KEY, None, OWNER, None)
+    # note: a key that owns no organization; the creator still skips only the project bound
+    answer = await integrations.rotate_api_key_secret(KEY, None, OWNER, sqlite_session(*org_tables()))
     assert answer.api_key_id == KEY
     from app.core import org_scope
 
