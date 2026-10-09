@@ -23,6 +23,7 @@ from app.core.error_sanitizer import sanitize_error
 from app.core.safe_http import guarded_request
 from app.core.url_safety import NEVER_ALLOWED, IPNetwork, UnsafeURLError, validate_url_field
 from app.models.db_models import Organization
+from app.services.integration_callback_url import bound_callback_url
 
 logger = logging.getLogger(__name__)
 
@@ -198,13 +199,15 @@ def _read_orcahub_credentials_blocking(api_key_id: str) -> Optional[Dict[str, An
     if _api_key_is_unusable(metadata):
         logger.info("OrcaHub callback skipped for api key %s: the key is revoked, inactive or expired", api_key_id)
         return None
-    app_url = metadata.get("app_url")
-    if not app_url:
-        logger.warning(f"No app_url stored for API key {api_key_id}")
-        return None
     secret_data = vault_client.vault_read(
         f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret"
     ) or {}
+    # important: only a URL the key's current secret stored, so a URL planted with a secret that a
+    # rotation replaced never receives the new one. See services/integration_callback_url.py.
+    app_url = bound_callback_url(metadata, secret_data.get("hash"))
+    if not app_url:
+        logger.warning(f"No callback URL stored with the current secret of API key {api_key_id}")
+        return None
     raw_secret = secret_data.get("raw")
     if not raw_secret:
         logger.warning(f"No raw secret stored for API key {api_key_id}, cannot call back OrcaHub")

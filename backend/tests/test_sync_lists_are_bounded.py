@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from app.core.auth import AuthenticatedUser
 from app.routers import integrations
+from app.services.integration_callback_url import callback_url_tag
 from app.routers.integrations import (
     MAX_SYNC_MEMBERS,
     MAX_SYNC_ORGANIZATIONS,
@@ -116,7 +117,8 @@ async def test_a_refresh_over_the_cap_upserts_nothing(monkeypatch):
     monkeypatch.setattr(
         integrations,
         "get_api_key_from_vault",
-        lambda _v, _k: ({"id": "oak_test", "app_url": "https://example.test"}, "h"),
+        lambda _v, _k: ({"id": "oak_test", "app_url": "https://example.test",
+                         "app_url_secret_tag": callback_url_tag("h")}, "h"),
     )
     async def manages_every_key(_db, _user, keys):
         return keys

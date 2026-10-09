@@ -23,11 +23,14 @@ from app.core.safe_http import GuardedResponse, SafeHTTPError
 from app.core.url_safety import UnsafeURLError
 from app.core.auth import AuthenticatedUser
 from app.routers import integrations
+from app.services.integration_callback_url import APP_URL_SECRET_TAG, callback_url_tag
 
 KEY_B = {
     "id": "oak_test_b",
     "cluster_permissions": [{"cluster_id": "cluster-b"}],
     "app_url": "https://example.test",
+    # note: stored by a sync with the current secret, whose hash the fixture below returns as "h"
+    APP_URL_SECRET_TAG: callback_url_tag("h"),
 }
 
 

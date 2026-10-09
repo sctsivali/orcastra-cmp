@@ -313,6 +313,17 @@ async def serialize_key_ownership(db: AsyncSession, key_id: str) -> AsyncIterato
         yield
 
 
+async def release_key_locks(db: AsyncSession) -> None:
+    """End the transaction holding serialize_key_ownership's PostgreSQL lock, before slow work.
+
+    The lock lasts until the transaction ends, so a caller with seconds of work left after its
+    write, such as a sync's inventory reads, would keep a rotation or a revoke of the same key
+    waiting. The caller has nothing else pending in the session when it calls this.
+    """
+    if _dialect_name(db) == "postgresql":
+        await db.commit()
+
+
 async def transfer_owner(
     db: AsyncSession, organization_id: int, to_key_id: str
 ) -> Tuple[Optional[Organization], Optional[str]]:

@@ -42,7 +42,7 @@ from app.services.lxd.proxy import (
     raw_request,
     socket_timeout_for,
 )
-from app.core.api_key_expiry import expiry_state, has_expired, is_unusable
+from app.core.api_key_expiry import classify_key, expiry_state, has_expired, is_unusable
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, granted_level
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.error_sanitizer import sanitize_error
@@ -89,11 +89,13 @@ from app.services.integration_key_ownership import (
     owned_organization_count,
     owner_key_refusal,
     refuse_if_key_owns_organizations,
+    release_key_locks,
     serialize_key_ownership,
     transfer_owner,
     uncovered_clusters,
     visible_organization_ids,
 )
+from app.services.integration_callback_url import APP_URL_SECRET_TAG, bound_callback_url, callback_url_tag
 from app.services.integration_roles import apply_upsert_role, revoke_if_orphaned
 from app.services.orcahub_sync import callback_networks, callback_requires_https, check_callback_url
 
@@ -1290,13 +1292,59 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     return metadata
 
 
-def _store_app_url_in_vault(api_key_id: str, app_url: str):
-    """Store external app callback URL in Vault alongside API key metadata."""
+def _store_app_url_in_vault(api_key_id: str, app_url: Optional[str], *, secret_hash: Optional[str] = None) -> bool:
+    """Store external app callback URL in Vault alongside API key metadata. None clears it.
+
+    The URL is stored with a tag of `secret_hash`, the hash of the secret that set it, and a callback
+    uses it only while that is still the key's secret (services/integration_callback_url.py).
+    Without one the stored URL is never used.
+
+    Returns whether the write landed. The sync ignores it (bookkeeping must not fail a sync); a
+    secret rotation does not, because it clears the URL before issuing a secret.
+    """
+    tag = callback_url_tag(secret_hash) if app_url and secret_hash else None
     try:
-        if _merge_into_key_metadata(get_vault_integrations_client(), api_key_id, {"app_url": app_url}):
-            logger.info(f"Stored app_url for API key {api_key_id}")
+        written = _merge_into_key_metadata(
+            get_vault_integrations_client(), api_key_id, {"app_url": app_url, APP_URL_SECRET_TAG: tag}
+        )
     except Exception as e:
         logger.warning(f"Failed to store app_url in Vault: {e}")
+        return False
+    if written is None:
+        return False
+    logger.info(f"Stored app_url for API key {api_key_id}")
+    return True
+
+
+def _bind_callback_url_blocking(key_id: str, app_url: str, presented_secret: Optional[str]) -> bool:
+    """Store the URL a sync sent, bound to the secret it authenticated with, if that is still current.
+
+    important: under the key's lock, and read from Vault itself. A sync authenticated with a secret
+    that a rotation has replaced since must not set the URL the new secret is sent to, and a key
+    revoked, deactivated or expired since gets none. Returns whether the URL was stored.
+    """
+    metadata, secret_hash = get_api_key_from_vault(get_vault_integrations_client(), key_id, use_cache=False)
+    if not presented_secret or not secret_hash or not verify_api_key_secret(presented_secret, secret_hash):
+        logger.warning("Callback URL from api key %s not stored: its secret changed while the sync ran", key_id)
+        return False
+    if classify_key(metadata) != "active":
+        logger.warning("Callback URL from api key %s not stored: the key is no longer active", key_id)
+        return False
+    return _store_app_url_in_vault(key_id, app_url, secret_hash=secret_hash)
+
+
+def _forget_callback_url_blocking(key_id: str) -> Optional[bool]:
+    """Clear a key's stored callback URL. None when it had none, else whether the write landed.
+
+    important: a secret rotation runs this. `app_url` is set by any /sync caller holding the key's
+    secret, and the OrcaHub callbacks send the raw secret to it, so a URL planted with a leaked
+    secret would receive the secret the rotation issues to replace it. The connection sets the URL
+    again on its next sync, with the new secret.
+    """
+    metadata, _ = get_api_key_from_vault(get_vault_integrations_client(), key_id, use_cache=False)
+    if not metadata.get("app_url"):
+        return None
+    return _store_app_url_in_vault(key_id, None)
 
 
 async def _upsert_synced_organizations(
@@ -2420,6 +2468,18 @@ async def rotate_api_key_secret(
                         API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="project_out_of_bound"
                     )
                 raise
+        try:
+            forgot = await asyncio.to_thread(_forget_callback_url_blocking, key_id)
+        except Exception:  # noqa: BLE001 - reported below as a refusal, with nothing changed
+            forgot = False
+        if forgot is False:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The secret was not rotated because the key's callback URL could not be cleared. "
+                    "Nothing changed. Try again."
+                ),
+            )
         key_secret, secret_hash = generate_api_key_secret()
         try:
             await asyncio.to_thread(
@@ -2443,7 +2503,10 @@ async def rotate_api_key_secret(
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         cache.delete("api_responses", f"integrations:api_key:{key_id}")
-    _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata)
+    # note: no second clear. A sync authenticated with the old secret stores its URL under this
+    # lock and only while that secret is current (_bind_callback_url_blocking), and a URL stored
+    # with the old secret is never used with the new one (bound_callback_url).
+    _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata, extra_details={"callback_url_cleared": bool(forgot)})
     logger.info(f"API key {key_id} secret rotated")
     return APIKeyCreateResponse(api_key=key_info, api_key_id=key_id, api_key_secret=key_secret)
 
@@ -2694,6 +2757,8 @@ async def sync_data(
     api_key: Dict[str, Any] = Depends(validate_api_key),
     lxd_service: LXDService = Depends(get_lxd_service),
     db: AsyncSession = Depends(get_db),
+    # note: the secret the dependency above already verified, read again only to bind app_url to it
+    x_api_key_secret: Optional[str] = Header(None, alias="X-API-Key-Secret"),
 ):
     """Sync data to external application."""
     try:
@@ -2726,19 +2791,25 @@ async def sync_data(
 
         # ── Store callback URL in Vault API key metadata ──
         if request.app_url:
-            # note: Vault write, so off the loop like the rest of this handler. Best effort:
-            # a bookkeeping write must not fail or slow the sync.
+            # important: under the key's lock, bound to the secret this sync presented, and only if
+            # that is still the key's secret. A sync already in flight when a rotation ran would
+            # otherwise set the URL the new secret is then sent to. Vault write, so off the loop like
+            # the rest of this handler. Best effort: a bookkeeping write must not fail the sync.
+            presented = x_api_key_secret if isinstance(x_api_key_secret, str) else None
             try:
-                await run_blocking(
-                    _store_app_url_in_vault,
-                    api_key_id,
-                    request.app_url,
-                    timeout=VALIDATE_KEY_TIMEOUT,
-                    label=f"store_app_url[{api_key_id}]",
-                    executor=auth_executor,
-                )
+                async with serialize_key_ownership(db, api_key_id):
+                    # important: waited out, never cut off. A timeout stopped the wait but not the
+                    # thread, whose write could then land outside the lock. The Vault client bounds
+                    # each attempt itself.
+                    await asyncio.to_thread(_bind_callback_url_blocking, api_key_id, request.app_url, presented)
             except Exception as e:
                 logger.warning(f"Could not store app_url for {api_key_id}: {e}")
+            finally:
+                # note: not held through the inventory reads below, whether or not the write worked
+                try:
+                    await release_key_locks(db)
+                except Exception as e:  # noqa: BLE001 - the lock ends with the session either way
+                    logger.warning(f"Could not release the key lock of {api_key_id} after the sync: {e}")
         
         # Get allowed cluster IDs from API key permissions
         allowed_clusters = {
@@ -3732,11 +3803,16 @@ async def refresh_organizations(
             detail="This API key is revoked, inactive or expired, so it cannot be refreshed",
         )
 
-    app_url = metadata.get("app_url")
+    # important: only a URL the key's current secret stored. One stored with a secret a rotation has
+    # replaced would receive this secret's hash. See services/integration_callback_url.py.
+    app_url = bound_callback_url(metadata, secret_hash)
     if not app_url:
         raise HTTPException(
             status_code=400,
-            detail="No callback URL configured for this API key. Trigger a sync from the external app first."
+            detail=(
+                "No callback URL is set for this API key's current secret. Trigger a sync from the "
+                "external app first."
+            ),
         )
 
     # Call external app's organizations endpoint

@@ -15,6 +15,7 @@ import requests
 from app.core import vault_client as vault_module
 from app.core.vault_client import VaultCasMismatch, VaultClient
 from app.routers import integrations
+from app.services.integration_callback_url import callback_url_tag
 
 KEY = "oak_bookkeeping"
 PATH = f"secret/data/{integrations.VAULT_INTEGRATIONS_PATH}/api_keys/{KEY}/metadata"
@@ -100,9 +101,10 @@ def test_a_stored_callback_url_survives_a_concurrent_stamp() -> None:
 
 
 def test_an_unchanged_callback_url_is_not_written_again(monkeypatch) -> None:
-    kv = _KvV2(dict(START, app_url="https://hub.example.test"))
+    """The same URL stored again by a sync with the same secret: the tag is unchanged too."""
+    kv = _KvV2(dict(START, app_url="https://hub.example.test", app_url_secret_tag=callback_url_tag("h")))
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: kv)
-    integrations._store_app_url_in_vault(KEY, "https://hub.example.test")
+    assert integrations._store_app_url_in_vault(KEY, "https://hub.example.test", secret_hash="h") is True
     assert kv.puts == []
 
 

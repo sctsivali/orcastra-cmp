@@ -18,6 +18,7 @@ from app.core.auth import AuthenticatedUser
 from app.models.db_models import Organization, OrganizationMember
 from app.routers import user_groups
 from app.services import orcahub_sync
+from app.services.integration_callback_url import callback_url_tag
 from tests._sqlite_session import org_tables, sqlite_session
 
 
@@ -282,7 +283,10 @@ def test_a_dead_key_gets_no_credentials(monkeypatch, state):
 def test_a_live_key_gets_its_credentials(monkeypatch):
     from app.routers import integrations
 
-    vault = _FakeVault({"app_url": "https://example.test", "is_active": True}, {"raw": "secret"})
+    vault = _FakeVault(
+        {"app_url": "https://example.test", "is_active": True, "app_url_secret_tag": callback_url_tag("h")},
+        {"raw": "secret", "hash": "h"},
+    )
     monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: vault)
     assert orcahub_sync._read_orcahub_credentials_blocking("oak_test") == {
         "app_url": "https://example.test", "api_key_id": "oak_test", "api_key_secret": "secret",
