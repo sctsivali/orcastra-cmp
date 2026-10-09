@@ -5,8 +5,9 @@ provisions for it, so an organization whose owner is revoked, expired, deleted o
 frozen. The list could not say so: it named the key id and the application, read through a helper
 that also loaded the key's secret document. It now reads each owner's metadata only, live rather
 than from the shared cache, and reports the owner's name, state, expiry and the organization's
-clusters. Membership still scopes what a Partner sees, and only an Admin or one of the
-organization's partners reads its owner key's name, state and expiry.
+clusters. Membership still scopes what a Partner sees, and only an Admin or a partner of the owner
+key's home organization reads its owner key's name, state and expiry: a buyer's founder, whom OrcaHub
+makes a partner of the buyer, does not.
 """
 
 from datetime import timedelta
@@ -176,3 +177,36 @@ async def test_only_an_organizations_partners_see_its_owner_key(listing: Dict[st
                 row["owner_key_expiry_state"]) == (None, None, None, None), slug
     admin = {row["slug"]: row for row in await get(listing, ADMIN)}
     assert (admin["org-active"]["owner_key_state"], admin["org-expiring"]["owner_key_state"]) == ("active", "expiring")
+
+
+async def test_a_buyer_founder_does_not_see_the_sellers_owner_key(listing: Dict[str, Any]) -> None:
+    """OrcaHub makes a buyer organization's founder a partner of it, and the buyer carries the seller's key.
+
+    The seller (org-expiring) registered c7 and sold on it through its key, so its partner sees that
+    key; the founder of the buyer it sold to does not, while their own seller's key (org-revoked, no
+    sale yet) still shows.
+    """
+    db, ids = listing["db"], listing["ids"]
+    seller = AuthenticatedUser(user_id="s1", email="seller@example.test", groups=["role_partner"])
+    db.add(Organization(name="Buyer", slug="org-buyer", source="orcahub", external_id="ext-buyer",
+                        api_key_id="oak_expiring", created_by="minter@example.test", is_active=True))
+    db.sync.commit()
+    buyer = db.sync.execute(Organization.__table__.select().with_only_columns(Organization.id).where(
+        Organization.slug == "org-buyer")).scalar()
+    db.add_all([OrganizationMember(organization_id=ids["org-expiring"], user_email=seller.email, role="partner"),
+                OrganizationCluster(organization_id=ids["org-expiring"], cluster_id="c7", registered_by=seller.email)])
+    db.sync.commit()
+    db.add_all([OrganizationMember(organization_id=buyer, user_email=PARTNER.email, role="partner"),
+                OrganizationCluster(organization_id=buyer, cluster_id="c7")])
+    db.sync.commit()
+    founder = {row["slug"]: row for row in await get(listing, PARTNER)}
+    assert set(founder) == {"org-buyer", "org-revoked"}
+    assert (founder["org-buyer"]["owner_key_name"], founder["org-buyer"]["owner_key_state"],
+            founder["org-buyer"]["owner_key_expires_at"], founder["org-buyer"]["owner_key_expiry_state"]) == (
+        None, None, None, None,
+    )
+    assert founder["org-revoked"]["owner_key_state"] == "revoked", "their own key, before any sale, still shows"
+    selling = {row["slug"]: row for row in await get(listing, seller)}
+    assert (selling["org-expiring"]["owner_key_name"], selling["org-expiring"]["owner_key_state"]) == (
+        "oak_expiring name", "expiring",
+    )
