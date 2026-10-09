@@ -2,7 +2,7 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRightLeft, Building2, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, Building2, KeyRound, RotateCcw } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { TableToolbar } from "@/components/ui/table-toolbar";
+import { OwnerKeysDialog } from "@/components/integrations/owner-keys-dialog";
 import { TransferOwnerKeyDialog } from "@/components/integrations/transfer-owner-key-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -26,7 +27,7 @@ import {
   OWNER_KEY_STATE,
   OWNER_KEY_STATE_ORDER,
   formatKeyDate,
-  ownerKeyIsFrozen,
+  organizationIsFrozen,
   ownerKeyState,
 } from "@/lib/key-ownership-display";
 import { defineTable, fromSort } from "@/lib/table-filter";
@@ -87,6 +88,7 @@ const SYNCED_ORGANIZATIONS = defineTable<IntegrationOrganization>()({
 function SyncedOrganizationsContent() {
   const { isAdmin } = usePermissions();
   const [transferring, setTransferring] = useState<IntegrationOrganization | null>(null);
+  const [managing, setManaging] = useState<IntegrationOrganization | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setPage(1);
@@ -106,7 +108,7 @@ function SyncedOrganizationsContent() {
   });
 
   const rows = useMemo(() => orgsQuery.data ?? [], [orgsQuery.data]);
-  const frozen = rows.filter((org) => ownerKeyIsFrozen(ownerKeyState(org))).length;
+  const frozen = rows.filter((org) => organizationIsFrozen(org)).length;
 
   const filters = useTableFilters(SYNCED_ORGANIZATIONS, rows, { onFilterChange: resetPage, syncUrl: false });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
@@ -121,6 +123,13 @@ function SyncedOrganizationsContent() {
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const actionsFor = (org: IntegrationOrganization): RowAction[] => [
+    {
+      id: "owner-keys",
+      label: "Owner Keys",
+      icon: KeyRound,
+      onSelect: () => setManaging(org),
+      unavailableReason: org.api_key_id ? undefined : "No owner yet: transfer it to a key first",
+    },
     {
       id: "transfer-owner",
       label: "Transfer Owner",
@@ -195,13 +204,18 @@ function SyncedOrganizationsContent() {
                           <OverflowText value={org.api_key_id} label={`owner key id of ${org.slug}`} />
                         </TableSubText>
                       )}
+                      {(org.owner_keys?.length ?? 0) > 1 && (
+                        <TableSubText wrap>
+                          Primary of {org.owner_keys?.length} owner keys
+                        </TableSubText>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={OWNER_KEY_STATE[state].tone}>{OWNER_KEY_STATE[state].label}</Badge>
                       {state === "expiring" && org.owner_key_expires_at && (
                         <TableSubText>Expires {formatKeyDate(org.owner_key_expires_at)}</TableSubText>
                       )}
-                      {!isAdmin && ownerKeyIsFrozen(state) && (
+                      {!isAdmin && organizationIsFrozen(org) && (
                         <TableSubText wrap>Ask an administrator to transfer this organization to an active key.</TableSubText>
                       )}
                       {state === "hidden" && (
@@ -257,6 +271,15 @@ function SyncedOrganizationsContent() {
         )}
         {body}
       </CardContent>
+      {managing && (
+        <OwnerKeysDialog
+          organization={rows.find((org) => org.id === managing.id) ?? managing}
+          keys={keysQuery.data?.keys ?? []}
+          onOpenChange={(open) => {
+            if (!open) setManaging(null);
+          }}
+        />
+      )}
       {transferring && (
         <TransferOwnerKeyDialog
           organization={transferring}

@@ -53,6 +53,15 @@ export function ownerKeyIsFrozen(state: OwnerStateShown): boolean {
 }
 
 /**
+ * An organization no owner key can sync any more. With several owner keys, a dead primary is not
+ * enough: another owner that is active or expiring keeps it syncing (OrcaHub calls back through it).
+ */
+export function organizationIsFrozen(org: Pick<IntegrationOrganization, "owner_key_state" | "owner_keys">): boolean {
+  if (!ownerKeyIsFrozen(ownerKeyState(org))) return false;
+  return !(org.owner_keys ?? []).some((key) => key.state === "active" || key.state === "expiring");
+}
+
+/**
  * Whether a key could own an OrcaHub organization, as the transfer endpoint judges it
  * (owner_key_refusal): an active key whose application is OrcaHub.
  *

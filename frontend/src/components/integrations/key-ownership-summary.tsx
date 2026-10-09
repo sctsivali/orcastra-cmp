@@ -33,6 +33,7 @@ export function KeyOwnershipSummary({ apiKey }: { apiKey: APIKeyInfo }) {
   const status = getAPIKeyStatus(apiKey);
   const expiring = keyIsExpiring(apiKey);
   const dead = status === "Expired" || status === "Revoked" || status === "Inactive";
+  const coOwned = count - (apiKey.sole_owned_organization_count ?? count);
 
   return (
     <div className="space-y-2 rounded-md border p-3 text-sm">
@@ -54,6 +55,12 @@ export function KeyOwnershipSummary({ apiKey }: { apiKey: APIKeyInfo }) {
         )}
         {hidden > 0 && <span className="text-xs text-muted-foreground">+{hidden} you cannot see</span>}
       </div>
+      {coOwned > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Another owner key also owns {coOwned === count ? (count === 1 ? "it" : "all of them") : `${coOwned} of them`}, which
+          keeps {coOwned === 1 ? "that organization" : "those organizations"} syncing if this key ends.
+        </p>
+      )}
       {expiring && (
         <p className="text-xs text-muted-foreground">
           When this key expires, the organizations it owns stop syncing. Transfer them before{" "}

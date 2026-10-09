@@ -406,7 +406,9 @@ export function IntegrationsSettings() {
   const revokeMutation = useMutation({
     mutationFn: (keyId: string) => api.integrations.revokeAPIKey(keyId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
+      // note: a co-owned key leaves its owner sets as it ends, and a primary can move with it, so
+      // the Synced Organizations panel rereads as well as the key list.
+      void invalidateIntegrationQueries(queryClient).catch(() => undefined);
       toast({ title: "API Key Revoked" });
     },
     onError: (error: Error) => {
@@ -423,7 +425,7 @@ export function IntegrationsSettings() {
   const deleteMutation = useMutation({
     mutationFn: (keyId: string) => api.integrations.deleteAPIKey(keyId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
+      void invalidateIntegrationQueries(queryClient).catch(() => undefined);
       toast({ title: "API Key Deleted" });
     },
     onError: (error: Error) => {
@@ -581,7 +583,9 @@ export function IntegrationsSettings() {
               : "Never";
             // An owner key is not revoked or deleted by the server, so its dialogs explain why and
             // offer the way forward instead of a destructive action that would only be refused.
-            const ownsOrganizations = (apiKey.owned_organization_count ?? 0) > 0;
+            // note: only the organizations no other key co-owns stop the end; the server re-checks
+            // that the co-owner can still sync them.
+            const ownsOrganizations = (apiKey.sole_owned_organization_count ?? apiKey.owned_organization_count ?? 0) > 0;
 
             return (
               <Card key={apiKey.id}>
