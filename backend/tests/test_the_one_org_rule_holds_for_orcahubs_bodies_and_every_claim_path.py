@@ -363,19 +363,58 @@ def test_only_these_paths_write_a_claim() -> None:
     assert constructs == {"routers/integrations.py:_upsert_synced_organizations",
                           "routers/integrations.py:provision_tenant_access"}
     # note: install is an ExtensionInstallation row, not an organization
-    # note: transfer_owner is the Administrator's owner transfer and carry_owned_organizations an
-    # add-on credential's rotation, the two writers outside the three claim routes. Both move an org
-    # from one key to another and never set the owner back to NULL.
+    # note: the claim routes set the primary of an unclaimed org only. Every other primary change is
+    # in organization_owners: an Administrator's transfer (replace_owners), an add-on credential's
+    # rotation (carry), a removal or a lost capability that moves the primary to the next able owner
+    # (remove_owner, drop_unable_primary) and an Administrator's choice (set_primary). None of them
+    # sets the owner back to NULL.
     assert assigns == {("routers/integrations.py:_upsert_synced_organizations", "existing"),
                        ("routers/integrations.py:_upsert_synced_organizations", "slug_owner"),
-                       ("services/integration_key_ownership.py:transfer_owner", "org"),
-                       ("services/integration_key_ownership.py:carry_owned_organizations", "org"),
+                       ("services/organization_owners.py:replace_owners", "org"),
+                       ("services/organization_owners.py:carry", "org"),
+                       ("services/organization_owners.py:remove_owner", "org"),
+                       ("services/organization_owners.py:drop_unable_primary", "org"),
+                       ("services/organization_owners.py:set_primary", "org"),
                        ("services/extension_install.py:install_extension", "install"),
                        ("services/extension_install.py:rotate_credential", "install")}
     assert upserts == {"routers/integrations.py:sync_data", "routers/integrations.py:refresh_organizations"}
     text = "\n".join(p.read_text() for p in _APP.rglob("*.py")).lower()
     assert not re.search(r"update\s+organizations\s+set|insert\s+into\s+organizations\b", text)
     assert "update(organization)" not in text and "insert(organization)" not in text
+
+
+def test_only_the_owner_module_writes_owner_rows() -> None:
+    """organization_owner_keys is written by organization_owners and by the db_models listener that
+    keeps the primary in the set, never by a route, a raw statement or another service."""
+    constructs, deletes = set(), set()
+    for where, fn in _functions():
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "OrganizationOwnerKey":
+                constructs.add(where.split(":")[0])
+            if isinstance(node, ast.Call) and (getattr(node.func, "attr", None) == "delete" or getattr(
+                    node.func, "id", None) in ("delete", "update", "insert")) and "OrganizationOwnerKey" in ast.unparse(node):
+                deletes.add(where.split(":")[0])
+    assert constructs <= {"services/organization_owners.py", "models/db_models.py"}, constructs
+    assert deletes <= {"services/organization_owners.py"}, deletes
+    text = "\n".join(p.read_text() for p in _APP.rglob("*.py")).lower()
+    assert not re.search(r"(insert\s+into|update|delete\s+from)\s+organization_owner_keys", text)
+
+
+def test_no_ownership_by_primary_equality() -> None:
+    """An owner check compares the caller with the owner set (organization_owners.is_owner,
+    owned_by_clause), never with the primary alone, which would refuse every co-owner."""
+    offending = set()
+    for where, fn in _functions():
+        if where.startswith(("services/organization_owners.py", "models/db_models.py")):
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Compare) and any(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops):
+                sides = [node.left, *node.comparators]
+                if any(isinstance(side, ast.Attribute) and side.attr == "api_key_id"
+                       and ast.unparse(side.value) in ("Organization", "org", "existing", "owner", "slug_owner")
+                       for side in sides):
+                    offending.add(where)
+    assert offending == set(), offending
 
 
 def test_mcp_and_proxy_reach_no_claim_writer() -> None:
@@ -387,7 +426,9 @@ def test_mcp_and_proxy_reach_no_claim_writer() -> None:
     assert mcp_imports == {"ProxyRequest", "proxy_operation", "validate_api_key"}
     writers = {"_upsert_synced_organizations", "provision_tenant_access", "refresh_organizations", "sync_data",
                "_upsert_synced_members", "rebind_creator_clusters", "transfer_organization_owner",
-               "transfer_owner", "carry_owned_organizations"}
+               "transfer_owner", "carry_owned_organizations", "add_owner", "remove_owner", "replace_owners",
+               "carry", "set_primary", "drop_unable_primary", "enroll_owner_key", "remove_own_owner_key",
+               "add_organization_owner", "remove_organization_owner", "set_organization_primary"}
     for where, fn in _functions():
         if where.startswith("mcp/") or where in ("routers/integrations.py:proxy_operation",
                                                   "routers/integrations.py:raw_proxy"):

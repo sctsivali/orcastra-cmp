@@ -101,7 +101,8 @@ def test_the_policy_sync_refuses_an_unclaimed_organization() -> None:
         "a NULL owner skips the ownership comparison entirely, which is an open door and not a "
         "closed one on an endpoint that writes tenant access"
     )
-    assert "if org.api_key_id != api_key_id" in source
+    # note: owner sets. is_owner answers no for an unclaimed organization (organization_owners.is_owner).
+    assert "if not await is_owner(db, org, api_key_id)" in source
 
 
 def test_the_policy_sync_only_looks_at_orcahub_organizations() -> None:

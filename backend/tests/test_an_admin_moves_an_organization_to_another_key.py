@@ -407,6 +407,8 @@ async def test_an_unknown_organization_is_404(world: Dict[str, Any]) -> None:
 async def test_a_dashboard_organization_has_no_owner_key(world: Dict[str, Any]) -> None:
     world["db"].sync.execute(Organization.__table__.update().values(source="local", api_key_id=None))
     world["db"].sync.commit()
+    # note: a raw UPDATE bypasses the session, which may still hold the organization it loaded
+    world["db"].sync.expire_all()
     response = await put(world, move())
     assert response.status_code == 409 and response.json()["detail"]["error"] == "organization_not_synced"
     untouched(world, expected_owner=None)

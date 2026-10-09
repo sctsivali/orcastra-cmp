@@ -10,7 +10,7 @@ organizations stay. These run the real queries on SQLite rows, in the shapes the
 
 import pytest
 
-from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 from app.services import cluster_parties
 from tests._sqlite_session import sqlite_session
 
@@ -38,7 +38,7 @@ def _bind(cluster: str, *org_ids: "int | None", registered_by: "str | None" = No
 
 
 async def _world():
-    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster)
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey)
     db.add_all([
         # A's home org, synced from OrcaHub on A's connection key, run by A and A2. The admin
         # account is a partner member too, as it is on the dev copy.

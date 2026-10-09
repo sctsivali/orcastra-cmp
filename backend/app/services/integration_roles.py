@@ -23,12 +23,13 @@ the seller's key is still promoted.
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Protocol, Sequence
+from typing import AbstractSet, FrozenSet, Iterable, List, Optional, Protocol, Sequence, Union
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import Organization, OrganizationMember
+from app.services.organization_owners import owners_of
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +79,17 @@ def _keep(reason: str) -> RoleChange:
     return RoleChange(None, frozenset(), reason)
 
 
+def _holds(owner: Union[None, str, AbstractSet[str]], api_key_id: str) -> bool:
+    """Whether one organization's owner (a key, an owner set, or None for none) includes this key."""
+    if isinstance(owner, AbstractSet):
+        return api_key_id in owner
+    return owner == api_key_id
+
+
 def decide_upsert(
     target_role: str,
     current: Optional[set[str]],
-    owners: Sequence[Optional[str]],
+    owners: Sequence[Union[None, str, AbstractSet[str]]],
     api_key_id: str,
 ) -> RoleChange:
     """What an integration may do to a pushed member's Authentik role. It may grant, never demote."""
@@ -93,8 +101,8 @@ def decide_upsert(
         if ROLE_PARTNER in current:
             return _keep("already_partner")
         # important: a global partner is unfiltered on every org it belongs to, so a key may only
-        # promote someone whose organizations all sit under this key.
-        if not owners or any(owner != api_key_id for owner in owners):
+        # promote someone whose organizations all sit under this key (in each one's owner set).
+        if not owners or any(not _holds(owner, api_key_id) for owner in owners):
             return _keep("membership_outside_this_key")
         return RoleChange(ROLE_PARTNER, frozenset(), "grant_partner")
     if ROLE_PARTNER in current:
@@ -105,26 +113,26 @@ def decide_upsert(
     return RoleChange(ROLE_TENANT, frozenset(), "grant_tenant")
 
 
-def may_reconcile(org_slug: str, org_owner: Optional[str], api_key_id: str) -> bool:
+def may_reconcile(org_slug: str, org_owner: Union[None, str, AbstractSet[str]], api_key_id: str) -> bool:
     """Whether a key's offboarding reconcile may prune this organization's roster.
 
     important: same ownership rule as the member upsert, and stricter, because a prune deletes
     rows. An organization with no owning key is refused too. Without this a key could name another
     integration's organization in its push and purge that roster.
     """
-    if org_owner == api_key_id:
+    if _holds(org_owner, api_key_id):
         return True
     logger.warning(
         "Reconcile refused for organization %s: owned by api key %s, caller is %s",
-        org_slug, org_owner, api_key_id,
+        org_slug, sorted(org_owner) if isinstance(org_owner, AbstractSet) else org_owner, api_key_id,
     )
     return False
 
 
-async def membership_owners(db: AsyncSession, email: str) -> List[Optional[str]]:
-    """The owning key of every organization the email belongs to or created.
+async def membership_owners(db: AsyncSession, email: str) -> List[FrozenSet[str]]:
+    """The owner set of every organization the email belongs to or created.
 
-    Dashboard organizations have no api_key_id, so they come back as None and count as foreign.
+    Dashboard organizations have no owner, so they come back as an empty set and count as foreign.
     note: created organizations are included because the Partner scope includes them too.
     """
     lowered = email.lower()
@@ -137,7 +145,8 @@ async def membership_owners(db: AsyncSession, email: str) -> List[Optional[str]]
         ))
         .distinct()
     )).all()
-    return [owner for _org_id, owner in rows]
+    owners = await owners_of(db, [org_id for org_id, _primary in rows])
+    return [frozenset(row.api_key_id for row in owners.get(org_id, [])) for org_id, _primary in rows]
 
 
 def _log(api_key_id: Optional[str], email: str, change: RoleChange) -> None:

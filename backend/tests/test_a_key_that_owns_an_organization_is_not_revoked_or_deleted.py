@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import pytest
 
-from app.models.db_models import Organization, OrganizationMember
+from app.models.db_models import Organization, OrganizationMember, OrganizationOwnerKey
 from app.routers import integrations
 from app.services.integration_key_ownership import OWNERSHIP_UNKNOWN_DETAIL
 from tests.test_a_capability_grant_leaves_a_record import PARTNER, _FakeVault
@@ -165,6 +165,8 @@ async def test_a_key_that_owns_nothing_is_ended_as_before(owned: Dict[str, Any],
 
 async def test_inactive_and_dashboard_organizations_do_not_count(owned: Dict[str, Any]) -> None:
     db = owned["db"]
+    # note: a bulk delete skips the ORM cascade, and SQLite enforces no foreign key, so the owner rows go too
+    db.sync.query(OrganizationOwnerKey).delete()
     db.sync.query(Organization).delete()
     db.sync.commit()
     own(db, PLAIN, "retired", active=False)

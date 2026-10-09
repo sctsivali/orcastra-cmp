@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 from app.core import org_scope
 from app.core.auth import AuthenticatedUser
-from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 from app.routers import integrations
 from tests._sqlite_session import sqlite_session
 
@@ -218,7 +218,7 @@ SELLER, FOUNDER = "p@example.com", "founder@example.com"
 
 async def _sale(**overrides: Any) -> Any:
     """The seller's home (synced, its partner registered the cluster) and two buyers its key provisioned."""
-    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster)
+    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey)
     orgs = overrides.get("orgs", [(1, "system"), (2, SELLER), (3, SELLER)])
     db.add_all([Organization(id=i, name=f"o{i}", slug=f"o{i}", created_by=by, is_active=True, api_key_id="oak_a",
                              source="orcahub") for i, by in orgs])
