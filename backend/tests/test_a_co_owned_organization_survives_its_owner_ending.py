@@ -13,6 +13,7 @@ INTEGRATION_MULTI_OWNER_ENABLED is on.
 import asyncio
 from typing import Any, Dict, List
 
+import httpx
 import pytest
 
 from app.services import activity_logger as activity_logger_module
@@ -28,7 +29,7 @@ from tests.test_an_add_on_credential_refuses_grant_edits import (
     plain_metadata,
     surface,  # noqa: F401
 )
-from tests.test_the_add_on_key_rules_hold_through_the_key_routes import ADMIN, KEYS, keys, send  # noqa: F401
+from tests.test_the_add_on_key_rules_hold_through_the_key_routes import ADMIN, KEYS, keys, keys_app, send  # noqa: F401
 
 CO = "oak_co_owner"
 ORGS = "/api/v1/integrations/organizations"
@@ -187,6 +188,26 @@ async def test_the_owner_set_routes_do_not_exist_while_the_flag_is_off(
 ) -> None:
     response = await send(ADMIN, co_owned["db"], method, ORGS + path.format(org=co_owned["acme"]), body)
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("method, path", [("POST", "/{org}/owner-keys"), ("PUT", "/{org}/primary-key")],
+                         ids=["add", "primary"])
+async def test_malformed_json_is_404_while_the_flag_is_off(
+    co_owned: Dict[str, Any], monkeypatch: pytest.MonkeyPatch, method: str, path: str
+) -> None:
+    """FastAPI parses a declared body before any dependency, so these routes read theirs themselves."""
+    async def raw(content: bytes) -> httpx.Response:
+        app = keys_app(ADMIN, co_owned["db"])
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://orcastra.test") as client:
+            return await client.request(method, ORGS + path.format(org=co_owned["acme"]), content=content,
+                                        headers={"content-type": "application/json"})
+
+    assert (await raw(b'{"api_key_id": ')).status_code == 404
+    monkeypatch.setattr("app.routers.integrations.multi_owner_enabled", lambda: True)
+    malformed = await raw(b'{"api_key_id": ')
+    assert malformed.status_code == 422 and malformed.json()["detail"][0]["type"] == "json_invalid"
+    missing = await raw(b'{"api_key_id": "oak_x"}')
+    assert missing.status_code == 422 and missing.json()["detail"][0]["loc"] == ["body", "reason"]
 
 
 async def test_an_admin_adds_makes_primary_and_removes_an_owner(co_owned: Dict[str, Any], multi: None) -> None:
