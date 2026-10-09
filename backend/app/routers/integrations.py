@@ -134,7 +134,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
-from app.services import cluster_parties
+from app.services import cluster_parties, owner_key_enrollment
 from app.services.organization_owners import (
     ADD_ACTION,
     MAX_OWNER_KEYS,
@@ -536,6 +536,11 @@ class APIKeyValidateResponse(BaseModel):
     # build stays invisible to anyone who cannot already authenticate.
     server: Optional[ServerIdentity] = Field(
         default=None, description="Which build of this server answered"
+    )
+    # note: like server, only on the branches that verified a credential. An integration reads this to
+    # learn which optional contracts this deployment speaks before it calls them.
+    features: Optional[List[str]] = Field(
+        default=None, description="Optional integration contracts this server supports, such as organization_owner_keys.v1"
     )
     error: Optional[str] = None
 
@@ -2082,6 +2087,14 @@ async def validate_api_key(
     return metadata
 
 
+OWNER_KEYS_FEATURE = "organization_owner_keys.v1"
+
+
+def _integration_features() -> Optional[List[str]]:
+    """The optional contracts this deployment speaks (APIKeyValidateResponse.features), None for none."""
+    return [OWNER_KEYS_FEATURE] if multi_owner_enabled() else None
+
+
 def require_capability(capability: str):
     """Authenticate the key, then refuse it unless it carries ``capability``.
 
@@ -3221,6 +3234,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             expires_in_days=days_remaining(metadata.get("expires_at")),
             cluster_permissions=enriched_permissions,
             server=ServerIdentity(**build_identity.full()),
+            features=_integration_features(),
         )
         
     except HTTPException:
@@ -3958,6 +3972,7 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
             if isinstance(grant, dict) and "cluster_id" in grant
         ],
         server=ServerIdentity(**build_identity.full()),
+        features=_integration_features(),
     )
 
 
@@ -6072,6 +6087,210 @@ async def set_organization_primary(
                             "actor_email": _rbac.email, "trigger": "admin",
                         })
     return _owner_set_answer(org, owners, True)
+
+
+class OwnerKeysResponse(BaseModel):
+    """Whether the calling key owns an organization, and, only for an owner, the whole set."""
+
+    status: str = Field(..., description="owner, not_owner or unclaimed")
+    primary_key_id: Optional[str] = None
+    owner_key_ids: Optional[List[str]] = None
+
+
+class OwnerKeyEnrollRequest(BaseModel):
+    organization_external_id: str = Field(..., min_length=1, max_length=255)
+    new_key_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,128}$", description="The key that joins the owner set")
+    new_key_secret: str = Field(..., min_length=1, max_length=512, description="Its secret, proving the caller holds it")
+
+
+class OwnerKeyEnrollResponse(BaseModel):
+    organization_external_id: Optional[str] = None
+    primary_key_id: Optional[str] = None
+    owner_key_ids: List[str] = Field(default_factory=list)
+    added: bool
+
+
+class OwnerKeySelfRemoveResponse(BaseModel):
+    removed: bool
+    primary_key_id: Optional[str] = None
+    owner_key_ids: Optional[List[str]] = None
+
+
+def _refuse(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status, detail={"error": code, "message": message})
+
+
+async def _external_org(db: AsyncSession, external_id: str) -> Optional[Organization]:
+    return (await db.execute(select(Organization).where(
+        Organization.source == "orcahub", Organization.external_id == external_id,
+    ))).scalar_one_or_none()
+
+
+@external_router.get(
+    "/external/organizations/{external_id}/owner-keys",
+    response_model=OwnerKeysResponse,
+    summary="Whether this key owns an organization",
+    description=(
+        "Answers owner, not_owner or unclaimed for the calling key. Only an owner is told the primary "
+        "and every owner key. Writes nothing. 404 unless INTEGRATION_MULTI_OWNER_ENABLED is on."
+    ),
+)
+async def read_organization_owner_keys(
+    external_id: str,
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_multi_owner()
+    key_id = api_key.get("id", "")
+    org = await _external_org(db, external_id)
+    # note: a missing organization answers unclaimed, as it is to a sync: the first push claims it.
+    # So this says no more about which ids exist than the sync probe already does.
+    if org is None or not org.api_key_id:
+        return OwnerKeysResponse(status="unclaimed")
+    owners = await owner_key_ids(db, org.id)
+    if key_id not in owners:
+        return OwnerKeysResponse(status="not_owner")
+    return OwnerKeysResponse(status="owner", primary_key_id=org.api_key_id, owner_key_ids=owners)
+
+
+@external_router.post(
+    "/external/organizations/owner-keys",
+    response_model=OwnerKeyEnrollResponse,
+    summary="Add a key the caller also holds to an organization's owner set",
+    description=(
+        "Authenticated as an owner key of the organization (org.sync). The body names a second key and "
+        "its secret; when the secret verifies and the key could own the organization, it joins the owner "
+        "set. Idempotent. 404 unless INTEGRATION_MULTI_OWNER_ENABLED is on."
+    ),
+)
+async def enroll_owner_key(
+    body: OwnerKeyEnrollRequest,
+    api_key: Dict[str, Any] = Depends(require_capability("org.sync")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Two-key enrollment (services/owner_key_enrollment.py).
+
+    important: the new key's secret is in the body. It is checked against the stored hash and dropped;
+    it is never logged, audited or stored, and a missing key and a wrong secret get the same answer.
+    """
+    _require_multi_owner()
+    vouching = api_key.get("id", "")
+    new_key = body.new_key_id
+    if new_key == vouching:
+        raise _refuse(422, "same_key", "A key cannot vouch for itself. Name the other key to add.")
+    if not owner_key_enrollment.within_limits(vouching, body.organization_external_id):
+        raise _refuse(429, "rate_limited", "Too many owner key enrollments. Try again later.")
+    if owner_key_enrollment.locked_out(new_key):
+        raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
+    vault_client = get_vault_integrations_client()
+    try:
+        _new_metadata, new_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, new_key, use_cache=False)
+    except HTTPException:
+        new_hash = ""
+    if not new_hash or not verify_api_key_secret(body.new_key_secret, new_hash):
+        owner_key_enrollment.record_failure(new_key)
+        raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
+
+    first, second = sorted([vouching, new_key])
+    async with serialize_key_ownership(db, first), serialize_key_ownership(db, second):
+        org = await _external_org(db, body.organization_external_id)
+        if not owner_key_enrollment.is_external_org(org) or not org.api_key_id or not await is_owner(db, org, vouching):
+            raise _refuse(403, "not_an_owner", "The calling key does not own this organization, so it cannot add an owner key.")
+        async with serialize_org_owners(db, [org.id]):
+            vouching_metadata, vouching_failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, vouching)
+            # important: re-read here, uncached. The key that vouches must still be able to own the
+            # organization (and an add-on credential never vouches, owner_key_refusal names it).
+            if owner_key_refusal(vouching_metadata, vouching_failure) is not None:
+                raise _refuse(403, "not_an_owner", "The calling key cannot own this organization, so it cannot add an owner key.")
+            new_metadata, new_failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, new_key)
+            refused = owner_key_refusal(new_metadata, new_failure)
+            if refused is not None:
+                status, code, message = refused
+                if status >= 500:
+                    raise HTTPException(status_code=status, detail=message)
+                raise _refuse(status, code, message)
+            if not await owner_key_enrollment.party_check(db, org, vouching_metadata or {}, new_metadata or {}):
+                raise _refuse(403, "new_key_outside_organization", (
+                    "The new key was minted by someone who neither minted the calling key nor runs this "
+                    "organization, so it cannot join its owner set. Ask an Orcastra administrator to add it."
+                ))
+            before = await owner_key_ids(db, org.id)
+            try:
+                added = await add_owner(db, org, new_key, via="enroll", by=f"key:{vouching}", proof_key_id=vouching)
+            except OwnerSetFull:
+                raise _refuse(409, "owner_set_full", (
+                    f"This organization already has {MAX_OWNER_KEYS} owner keys. Remove one before adding another."
+                )) from None
+            if added:
+                try:
+                    await db.commit()
+                except IntegrityError:
+                    # note: a concurrent enrollment of the same key won the unique constraint
+                    await db.rollback()
+                    added = False
+            after = await owner_key_ids(db, org.id)
+    if added:
+        get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
+        evict_api_key_cache(vouching)
+        evict_api_key_cache(new_key)
+        partners = await owner_key_enrollment.partner_emails(db, org)
+        record_owner_change(ADD_ACTION, org, before=before, after=after, primary_before=org.api_key_id,
+                            primary_after=org.api_key_id, details={
+                                "owner_key_id": new_key, "proof_key_id": vouching, "trigger": "enroll",
+                                "partner_count": len(partners),
+                            })
+        logger.info("Api key %s joined the owner set of organization %s, vouched for by %s", new_key, org.slug, vouching)
+    return OwnerKeyEnrollResponse(
+        organization_external_id=org.external_id, primary_key_id=org.api_key_id, owner_key_ids=after, added=added,
+    )
+
+
+@external_router.delete(
+    "/external/organizations/{external_id}/owner-keys/self",
+    response_model=OwnerKeySelfRemoveResponse,
+    summary="Take the calling key out of an organization's owner set",
+    description=(
+        "The calling key leaves the owner set, and the oldest owner that can still sync becomes the "
+        "primary if it was. Refused (409 last_owner) while no other owner can sync the organization. "
+        "404 unless INTEGRATION_MULTI_OWNER_ENABLED is on."
+    ),
+)
+async def remove_own_owner_key(
+    external_id: str,
+    api_key: Dict[str, Any] = Depends(require_capability("org.sync")),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_multi_owner()
+    key_id = api_key.get("id", "")
+    vault_client = get_vault_integrations_client()
+    async with serialize_key_ownership(db, key_id):
+        org = await _external_org(db, external_id)
+        if org is None or not org.api_key_id or not await is_owner(db, org, key_id):
+            return OwnerKeySelfRemoveResponse(removed=False)
+        async with serialize_org_owners(db, [org.id]):
+            before = await owner_key_ids(db, org.id)
+            primary_before = org.api_key_id
+            verdicts = await able_owners([k for k in before if k != key_id], _owner_metadata_reader(vault_client))
+            if not any(verdicts.values()):
+                if any(v is None for v in verdicts.values()):
+                    raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL)
+                raise _refuse(409, "last_owner", (
+                    "No other owner key can sync this organization, so this key cannot leave it. Add "
+                    "another owner key first, or ask an Orcastra administrator to transfer it."
+                ))
+            try:
+                await remove_owner(db, org, key_id, able=verdicts.get)
+            except (LastOwner, NoAbleOwner):
+                raise _refuse(409, "last_owner", "No other owner key can sync this organization.") from None
+            except LookupError:
+                raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+            await db.commit()
+            after = await owner_key_ids(db, org.id)
+    get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
+    evict_api_key_cache(key_id)
+    record_owner_change(REMOVE_ACTION, org, before=before, after=after, primary_before=primary_before,
+                        primary_after=org.api_key_id, details={"owner_key_id": key_id, "trigger": "self"})
+    return OwnerKeySelfRemoveResponse(removed=True, primary_key_id=org.api_key_id, owner_key_ids=after)
 
 
 # ============================================
