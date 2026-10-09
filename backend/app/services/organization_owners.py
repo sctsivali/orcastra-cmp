@@ -44,6 +44,13 @@ ADD_ACTION = "integration.organization.owner.add"
 REMOVE_ACTION = "integration.organization.owner.remove"
 PRIMARY_ACTION = "integration.organization.owner.primary"
 
+# important: the ways in which a key comes to own an organization that also put the organization on its
+# minter's side (services/cluster_parties.py), and so let that side manage the key. A key enrolled by
+# another owner or added by an Administrator owns the organization but lends no party: otherwise the
+# seller who provisioned a buyer would manage, and could rotate, a key the buyer's founder enrolled.
+# An allowlist, so a new way in lends nothing until it is decided here.
+PARTY_ADDED_VIA = ("backfill", "claim", "provision", "transfer", "carry")
+
 
 class LastOwner(Exception):
     """Removing this key would leave the organization with no owner."""
@@ -72,6 +79,11 @@ def owned_by_clause(key_ids: Iterable[str]) -> Any:
         OrganizationOwnerKey.organization_id == Organization.id,
         OrganizationOwnerKey.api_key_id.in_(keys),
     )
+
+
+def lends_party(column: Any = OrganizationOwnerKey.added_via) -> Any:
+    """A WHERE term on an owner row (or an alias's added_via): it puts the organization on its key's side."""
+    return column.in_(PARTY_ADDED_VIA)
 
 
 def _order(row: OwnerRow) -> Tuple[datetime, str]:
@@ -246,6 +258,15 @@ async def replace_owners(
     if org.api_key_id != key_id:
         mark_entry(org, via, by)
         org.api_key_id = key_id
+    # note: a key that was already an owner now owns the organization by the transfer, so its row says so
+    # (and lends the party a transfer lends, as before co-ownership)
+    kept = await db.execute(
+        select(OrganizationOwnerKey).where(
+            OrganizationOwnerKey.organization_id == org.id, OrganizationOwnerKey.api_key_id == key_id
+        )
+    )
+    for row in kept.scalars().all():
+        row.added_via, row.added_by = via, by
     if removed:
         stale = await db.execute(
             select(OrganizationOwnerKey).where(
@@ -259,19 +280,24 @@ async def replace_owners(
 
 async def carry(db: AsyncSession, org: Organization, *, from_key_id: str, to_key_id: str) -> None:
     """An add-on credential's rotation: the new key takes the old one's place in this organization's set,
-    keeping the primary if the old key held it."""
-    if org.api_key_id == from_key_id:
-        mark_entry(org, "carry", f"key:{from_key_id}")
-        org.api_key_id = to_key_id
-    elif not await is_owner(db, org, to_key_id):
-        db.add(OrganizationOwnerKey(organization_id=org.id, api_key_id=to_key_id, added_via="carry",
-                                    added_by=f"key:{from_key_id}"))
-    old = await db.execute(
+    keeping the primary if the old key held it.
+
+    important: and the way the old key came in. A carried enrolled key stays one that lends no party
+    (PARTY_ADDED_VIA), so a rotation cannot turn an enrollment into a claim.
+    """
+    old = list((await db.execute(
         select(OrganizationOwnerKey).where(
             OrganizationOwnerKey.organization_id == org.id, OrganizationOwnerKey.api_key_id == from_key_id
         )
-    )
-    for row in old.scalars().all():
+    )).scalars().all())
+    via = "carry" if all(row.added_via in PARTY_ADDED_VIA for row in old) else old[0].added_via
+    if org.api_key_id == from_key_id:
+        mark_entry(org, via, f"key:{from_key_id}")
+        org.api_key_id = to_key_id
+    elif not await is_owner(db, org, to_key_id):
+        db.add(OrganizationOwnerKey(organization_id=org.id, api_key_id=to_key_id, added_via=via,
+                                    added_by=f"key:{from_key_id}"))
+    for row in old:
         await db.delete(row)
 
 

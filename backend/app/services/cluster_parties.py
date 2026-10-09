@@ -26,6 +26,12 @@ of several partners' organizations, or the key can be deleted while its organiza
 both put one partner's organizations on another partner's side. The integration key an
 organization carries is a fact the database holds and a caller cannot move.
 
+important: an integration key carries an organization here only by an owner row that lends a party
+(organization_owners.PARTY_ADDED_VIA): the claim, provisioning or transfer that made it the owner, as
+before organizations had several owner keys. A key another owner enrolled, or an Administrator added,
+owns the organization without putting it on its minter's side or its minter's key on the
+organization's side, so co-ownership never widens who manages, revokes or rotates a key.
+
 note: known limits, all narrowing except the last. A teammate of a partner whose home org is local
 does not run the buyers that partner's key provisioned. A buyer created by a sync (created_by
 "system") under a key no run org carries is another party's. A rotation by a new key leaves the old
@@ -93,6 +99,7 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
     organization only.
     """
     from app.models.db_models import Organization, OrganizationOwnerKey
+    from app.services.organization_owners import lends_party
 
     if not email:
         return set()
@@ -102,6 +109,7 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
         .where(
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
             Organization.created_by == email,
+            lends_party(),
         )
     )).scalars().all())
     return created | await home_partner_keys(db, email)
@@ -115,11 +123,14 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
     buyer organization provisioning made, so it says nothing about who runs the seller today.
     """
     from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
+    from app.services.organization_owners import lends_party
 
     if not email:
         return set()
-    # note: per key in each organization's owner set. A co-owner's home is its own oldest synced
-    # organization and its own sale, judged exactly as a sole owner's.
+    # note: per key in each organization's owner set, counting only the owner rows that lend a party
+    # (organization_owners.PARTY_ADDED_VIA): an enrolled or Administrator-added key carries no
+    # organization here. A co-owner's home is its own oldest synced organization and its own sale,
+    # judged exactly as a sole owner's.
     rows = (await db.execute(
         select(OrganizationOwnerKey.api_key_id, Organization.id)
         .join(Organization, Organization.id == OrganizationOwnerKey.organization_id)
@@ -128,6 +139,7 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
             OrganizationMember.user_email == email,
             OrganizationMember.role.in_(RUNNING_ROLES),
+            lends_party(),
         )
     )).all()
     if not rows:
@@ -139,6 +151,7 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
             Organization.created_by == "system",
             OrganizationOwnerKey.api_key_id.in_(sorted({key for key, _org in rows})),
+            lends_party(),
         )
         .group_by(OrganizationOwnerKey.api_key_id)
     )).all())
@@ -158,6 +171,7 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
         earlier.organization_id != binding.organization_id,
         earlier_owner.organization_id == earlier.organization_id,
         earlier_owner.api_key_id == home_owner.api_key_id,
+        lends_party(earlier_owner.added_via),
         earlier.id < binding.id,
     )
     registering = set((await db.execute(
@@ -177,10 +191,12 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
         .join(buyer_owner, and_(
             buyer_owner.organization_id == sold.organization_id,
             buyer_owner.api_key_id == home_owner.api_key_id,
+            lends_party(buyer_owner.added_via),
         ))
         .where(
             binding.organization_id.in_(sorted(set(homes.values()))),
             home_owner.api_key_id.in_(sorted(homes)),
+            lends_party(home_owner.added_via),
             first,
         )
     )).all())
@@ -201,7 +217,7 @@ async def clusters_held_by_another_party(
     org_scope._clusters_with_several_orgs.
     """
     from app.models.db_models import OrganizationCluster
-    from app.services.organization_owners import owners_of
+    from app.services.organization_owners import PARTY_ADDED_VIA, owners_of
 
     wanted = sorted(set(cluster_ids))
     if not wanted:
@@ -222,7 +238,7 @@ async def clusters_held_by_another_party(
         if org_id is None:
             if (registered_by or "").lower() != (email or "").lower():
                 held_elsewhere.add(cluster_id)
-        elif org_id in runs or {row.api_key_id for row in owners.get(org_id, [])} & keys:
+        elif org_id in runs or {row.api_key_id for row in owners.get(org_id, []) if row.added_via in PARTY_ADDED_VIA} & keys:
             continue
         else:
             held_elsewhere.add(cluster_id)
