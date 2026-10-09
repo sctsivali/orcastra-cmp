@@ -181,7 +181,7 @@ async def test_partner_promotion_reads_every_owner_set(hub: Dict[str, Any]) -> N
 
 
 def test_the_migration_backfills_every_claimed_org_and_comes_back_out() -> None:
-    """038 on SQLite: one row per claimed organization, none for an unclaimed one, all gone on downgrade."""
+    """015a on SQLite: one row per claimed organization, none for an unclaimed one, all gone on downgrade."""
     migration = _load_migration()
     engine = create_engine("sqlite://")
     Organization.__table__.create(engine)
@@ -204,8 +204,9 @@ def test_the_migration_backfills_every_claimed_org_and_comes_back_out() -> None:
 
 
 def _load_migration() -> Any:
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261009_120000_038_organization_owner_keys.py"
-    spec = importlib.util.spec_from_file_location("migration_038", path)
+    # note: 015a, the hotfix line's revision, creates the set; 038 only merges it into this chain
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "20261009_130000_015a_organization_owner_keys.py"
+    spec = importlib.util.spec_from_file_location("migration_015a", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

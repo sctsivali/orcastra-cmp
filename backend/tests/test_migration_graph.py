@@ -37,10 +37,10 @@ def _script_directory() -> ScriptDirectory:
     return ScriptDirectory.from_config(cfg)
 
 
-def _created_tables() -> set:
-    """Every table name passed to op.create_table across all revisions, read statically."""
-    tables = set()
-    for path in VERSIONS_DIR.glob("*.py"):
+def _create_table_sites() -> list:
+    """(revision file name, table name) for every op.create_table across all revisions, read statically."""
+    sites = []
+    for path in sorted(VERSIONS_DIR.glob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -49,8 +49,13 @@ def _created_tables() -> set:
             if not (isinstance(func, ast.Attribute) and func.attr == "create_table"):
                 continue
             if node.args and isinstance(node.args[0], ast.Constant):
-                tables.add(node.args[0].value)
-    return tables
+                sites.append((path.name, node.args[0].value))
+    return sites
+
+
+def _created_tables() -> set:
+    """Every table name passed to op.create_table across all revisions, read statically."""
+    return {table for _name, table in _create_table_sites()}
 
 
 def _model_modules() -> list:
@@ -124,6 +129,30 @@ class RevisionGraphTests(unittest.TestCase):
         self.assertEqual(
             set(merge.down_revision),
             {"008_image_upload_sessions", "002_org_external_source"},
+        )
+
+    def test_the_owner_set_merge_joins_the_hotfix_revision(self) -> None:
+        # Production on the 1.0.0-RC4 hotfix line sits at 015a, which branches from 015. This merge
+        # is its only path to head, so both edges are pinned.
+        script = _script_directory()
+        self.assertEqual(
+            set(script.get_revision("038_organization_owner_keys").down_revision),
+            {"037_migration_unknown_phase", "015a_organization_owner_keys"},
+        )
+        self.assertEqual(
+            script.get_revision("015a_organization_owner_keys").down_revision,
+            "015_session_audit_bigint",
+        )
+
+    def test_only_015a_creates_the_owner_set(self) -> None:
+        # A database from the hotfix line already ran 015a, so DDL in the merge, or a second
+        # create_table of the same table, would fail its upgrade.
+        merge = next(VERSIONS_DIR.glob("*_038_organization_owner_keys.py"))
+        calls = [node for node in ast.walk(ast.parse(merge.read_text())) if isinstance(node, ast.Call)]
+        self.assertEqual(calls, [], "038 is a merge revision; schema changes belong in a new revision")
+        self.assertEqual(
+            [name for name, table in _create_table_sites() if table == "organization_owner_keys"],
+            ["20261009_130000_015a_organization_owner_keys.py"],
         )
 
 

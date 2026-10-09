@@ -1166,7 +1166,7 @@ def _keep_the_primary_in_the_owner_set(session: Session, _flush_context: object,
     """Whenever an organization's primary owner key is set, make sure that key has an owner row.
 
     The primary is always in the owner set (enforced in PostgreSQL by a deferred foreign key, see
-    migration 038), so the paths that claim or move an organization keep writing api_key_id and this
+    migration 015a), so the paths that claim or move an organization keep writing api_key_id and this
     writes the matching row in the same flush. It never removes a row: taking a key out of the set is
     an explicit decision in app.services.organization_owners.
 
