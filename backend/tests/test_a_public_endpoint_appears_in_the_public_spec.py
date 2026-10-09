@@ -42,6 +42,10 @@ from app.main import create_app  # noqa: E402
 # Every operation an add-on may call. A new external endpoint fails here until somebody adds it,
 # which is the point: the failure is the review.
 PINNED_OPERATION_IDS = {
+    # the owner-key contract (organization_owner_keys.v1), answering 404 unless the feature flag is on
+    "delete_integrations_external_organizations_by_external_id_owner_keys_self",
+    "get_integrations_external_organizations_by_external_id_owner_keys",
+    "post_integrations_external_organizations_owner_keys",
     "get_extensions_self",
     "get_integrations_clusters",
     "get_integrations_external_policies",
