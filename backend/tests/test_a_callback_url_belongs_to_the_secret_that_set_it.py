@@ -150,6 +150,50 @@ async def test_a_sync_with_the_current_secret_sets_the_url_every_callback_uses(
     assert request.headers["X-API-Key-Secret-Hash"] == world["vault"].docs[f"{BASE}/secret"]["hash"]
 
 
+async def test_a_slow_url_write_keeps_the_key_lock_until_it_lands(world, monkeypatch) -> None:  # noqa: F811
+    """The write used to run under a timeout. When Vault answered slowly the sync stopped waiting and
+    left the lock while the thread went on, and its write of the whole key document, read before a
+    revoke that took the lock meanwhile, put the revoked key back. Now the sync holds the lock until
+    the write lands, so the revoke runs after it and stands.
+    """
+    import asyncio
+    import threading
+
+    from app.core import org_scope
+    from tests._sqlite_session import org_tables, sqlite_session
+
+    vault = world["vault"]
+    writing, release = threading.Event(), threading.Event()
+    real_put = vault.vault_kv_put
+
+    def slow_put(path: str, data: Dict[str, Any]) -> None:
+        if path == f"{BASE}/metadata" and data.get("app_url") == HUB and not release.is_set():
+            writing.set()
+            release.wait(5)
+        real_put(path, data)
+
+    monkeypatch.setattr(vault, "vault_kv_put", slow_put)
+    monkeypatch.setattr(integrations, "VALIDATE_KEY_TIMEOUT", 0.1)
+    validated = await integrations.validate_api_key(KEY, world["old"])
+    sync = asyncio.create_task(_sync(validated, HUB, world["old"]))
+    assert await asyncio.to_thread(writing.wait, 5), "precondition: the URL write is under way"
+
+    async def revoke() -> None:
+        token = org_scope._allowed_clusters_var.set(None)
+        try:
+            await integrations.revoke_api_key(KEY, None, ADMIN, sqlite_session(*org_tables()))
+        finally:
+            org_scope._allowed_clusters_var.reset(token)
+
+    revoking = asyncio.create_task(revoke())
+    await asyncio.sleep(0.5)
+    assert not sync.done() and not revoking.done(), "the revoke waits for the key lock the sync holds"
+    release.set()
+    await asyncio.wait_for(asyncio.gather(sync, revoking), 10)
+    doc = vault.docs[f"{BASE}/metadata"]
+    assert doc["is_revoked"] is True, "the URL write undid the revoke"
+
+
 @pytest.mark.parametrize("state", [{"is_revoked": True}, {"is_active": False}], ids=["revoked", "inactive"])
 async def test_a_key_ended_while_the_sync_ran_gets_no_url(world, state: Dict[str, Any]) -> None:  # noqa: F811
     validated = await integrations.validate_api_key(KEY, world["old"])
