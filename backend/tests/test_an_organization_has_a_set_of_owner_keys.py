@@ -161,6 +161,41 @@ async def test_a_slug_clash_is_not_held_through_the_rest_of_the_sync() -> None:
     assert not db.sync.in_transaction(), "the clashing row is still held"
 
 
+def moved_meanwhile(db: Any, to_key: str) -> Organization:
+    """acme-cloud as this session holds it, after its owner set moved to `to_key` outside its view."""
+    held = db.sync.execute(select(Organization).where(Organization.slug == "acme-cloud")).scalar_one()
+    db.sync.execute(text("UPDATE organizations SET api_key_id = :k WHERE slug = 'acme-cloud'"), {"k": to_key})
+    db.sync.execute(text("UPDATE organization_owner_keys SET api_key_id = :k"), {"k": to_key})
+    db.sync.commit()
+    assert held.api_key_id == K_SELLER, "precondition: the session still holds the old primary"
+    return held
+
+
+async def test_member_writes_judge_the_organization_as_it_stands_now() -> None:
+    """A transfer that lands while a long member list is written: the key it took the organization from
+    writes no member there, though the session still holds that key as the primary."""
+    db = world_db()
+    await send(key(K_SELLER), db, push())
+    # note: held, as the member loop holds the organization it wrote the previous member into
+    held = moved_meanwhile(db, K_OUT)
+    pushed = [integrations.SyncMember(email=MATE, name=None, organization_id=SELLER, role="TENANT")]
+    assert await integrations._upsert_synced_members(db, pushed, K_SELLER) == (0, 0)
+    assert await members_of(db, "acme-cloud") == []
+    assert held.api_key_id == K_OUT, "the lookup read the organization again"
+
+
+async def test_reconcile_judges_the_organization_as_it_stands_now() -> None:
+    db = world_db()
+    await send(key(K_SELLER), db, push([(FOUNDER, "PARTNER")]))
+    held = moved_meanwhile(db, K_OUT)
+    pushed = [integrations.SyncOrganization(id=SELLER, name="Acme Cloud", slug="acme-cloud")]
+    # note: a roster without FOUNDER, so only the ownership check stands between FOUNDER and its removal
+    roster = [integrations.SyncMember(email=MATE, name=None, organization_id=SELLER, role="TENANT")]
+    assert await integrations._reconcile_synced_members(db, pushed, roster, K_SELLER, dry_run=False) == 0
+    assert await members_of(db, "acme-cloud") == [FOUNDER]
+    assert held.api_key_id == K_OUT, "the lookup read the organization again"
+
+
 async def test_a_co_owner_provisions_and_an_outsider_does_not() -> None:
     db = world_db()
     await send(key(K_SELLER), db, push([(FOUNDER, "PARTNER")]))

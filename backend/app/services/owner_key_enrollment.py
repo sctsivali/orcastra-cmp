@@ -117,13 +117,19 @@ def reset_limits() -> None:
 
 async def party_check(
     db: AsyncSession, org: Organization, vouching: Mapping[str, Any], new: Mapping[str, Any],
-    *, now: Optional[datetime] = None,
+    *, vouching_key_id: Optional[str] = None, now: Optional[datetime] = None,
 ) -> bool:
     """Whether the new key belongs to the organization's side (decision D1).
 
-    Its minter must be the vouching key's minter, the organization's creator, or a partner of the
-    organization whose row is at least PARTNER_MIN_AGE old. Otherwise a holder of one owner key could
-    enroll a key minted by anyone, which would also survive the rotation of the key that vouched for it.
+    Its minter must be a partner of the organization; or the vouching key's minter, or the organization's
+    creator, while a partner of the vouching key's home (the organization a sale through that key proves,
+    cluster_parties.home_partner_keys). Either partner row must be at least PARTNER_MIN_AGE old. Otherwise
+    a holder of one owner key could enroll a key minted by anyone, which would also survive the rotation of
+    the key that vouched for it.
+
+    important: never the minter relation alone. A minter who left keeps the secrets it held, so "minted
+    the vouching key" or "created this organization" would let it enroll a key of its own that survives
+    the rotation of the key it left with, and that becomes the primary when that key is revoked.
 
     important: the age, because an owner key writes the organization's members. Without it the holder of
     a leaked owner key could push its own email as a partner and enroll a key it minted in the same
@@ -136,11 +142,7 @@ async def party_check(
     minter = str(new.get("created_by") or "").strip().lower()
     if not minter:
         return False
-    if minter == str(vouching.get("created_by") or "").strip().lower():
-        return True
-    if minter == str(org.created_by or "").strip().lower():
-        return True
-    from app.services.cluster_parties import RUNNING_ROLES
+    from app.services.cluster_parties import RUNNING_ROLES, home_partner_keys
 
     settled = (now or datetime.now(timezone.utc)) - PARTNER_MIN_AGE
     row = await db.execute(
@@ -151,7 +153,12 @@ async def party_check(
             OrganizationMember.joined_at <= settled,
         )
     )
-    return row.first() is not None
+    if row.first() is not None:
+        return True
+    if minter not in {str(vouching.get("created_by") or "").strip().lower(), str(org.created_by or "").strip().lower()}:
+        return False
+    key_id = vouching_key_id or str(vouching.get("id") or "")
+    return bool(key_id) and key_id in await home_partner_keys(db, minter, settled_before=settled)
 
 
 async def partner_emails(db: AsyncSession, org: Organization) -> List[str]:

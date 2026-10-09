@@ -92,6 +92,10 @@ def _shared_consume(key: str, limit: int, window_seconds: int) -> Optional[Tuple
         if count == 1:
             client.expire(bucket, window_seconds)
         ttl = client.ttl(bucket)
+        if ttl is not None and ttl == -1:
+            # note: an expire lost after its incr (a blip between the two calls) left the counter with
+            # none, which would hold its budget spent for good. Give it its window again.
+            client.expire(bucket, window_seconds)
         # Redis answers -1 for a key with no expiry and -2 for one that just vanished. Neither is
         # a window this caller can report, so both fall back to the configured length.
         reset = window_seconds if ttl is None or ttl < 0 else int(ttl)
