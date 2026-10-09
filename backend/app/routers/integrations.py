@@ -13,8 +13,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, NamedTuple, Tuple, Union
-from fastapi import APIRouter, HTTPException, Depends, Query, Header, Response
-from pydantic import BaseModel, Field, StringConstraints, ValidationError, field_validator
+from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request, Response
+from pydantic import BaseModel, Field, SecretStr, StringConstraints, ValidationError, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -5943,9 +5943,16 @@ class OwnerSetResponse(BaseModel):
 
 
 def _require_multi_owner() -> None:
-    """404 while INTEGRATION_MULTI_OWNER_ENABLED is off, as if the route did not exist."""
+    """404 while INTEGRATION_MULTI_OWNER_ENABLED is off, as if the route did not exist.
+
+    important: a route dependency (dependencies=[...]), which FastAPI resolves before the key or login
+    and before the body, so with the flag off nothing is authenticated, validated or answered first.
+    """
     if not multi_owner_enabled():
         raise HTTPException(status_code=404, detail="Not Found")
+
+
+_MULTI_OWNER_ONLY = [Depends(_require_multi_owner)]
 
 
 async def _owned_org_or_refuse(db: AsyncSession, org_id: int) -> Organization:
@@ -5981,6 +5988,7 @@ def _evict_owner_keys(*key_ids: Optional[str]) -> None:
 @router.post(
     "/organizations/{org_id}/owner-keys",
     response_model=OwnerSetResponse,
+    dependencies=_MULTI_OWNER_ONLY,
     summary="Add a key to a synced organization's owner set",
     description=(
         "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. The key may then sync the organization, "
@@ -5994,7 +6002,6 @@ async def add_organization_owner(
     _rbac: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_multi_owner()
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
@@ -6031,6 +6038,7 @@ async def add_organization_owner(
 @router.delete(
     "/organizations/{org_id}/owner-keys/{key_id}",
     response_model=OwnerSetResponse,
+    dependencies=_MULTI_OWNER_ONLY,
     summary="Remove a key from a synced organization's owner set",
     description=(
         "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. Removing the primary makes the oldest "
@@ -6048,7 +6056,6 @@ async def remove_organization_owner(
     _rbac: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_multi_owner()
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, key_id), serialize_org_owners(db, [org.id]):
@@ -6087,6 +6094,7 @@ async def remove_organization_owner(
 @router.put(
     "/organizations/{org_id}/primary-key",
     response_model=OwnerSetResponse,
+    dependencies=_MULTI_OWNER_ONLY,
     summary="Choose which owner key is a synced organization's primary",
     description=(
         "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. The primary is the owner key OrcaHub "
@@ -6100,7 +6108,6 @@ async def set_organization_primary(
     _rbac: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_multi_owner()
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
@@ -6142,7 +6149,43 @@ class OwnerKeysResponse(BaseModel):
 class OwnerKeyEnrollRequest(BaseModel):
     organization_external_id: str = Field(..., min_length=1, max_length=255)
     new_key_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,128}$", description="The key that joins the owner set")
-    new_key_secret: str = Field(..., min_length=1, max_length=512, description="Its secret, proving the caller holds it")
+    # note: SecretStr, so a repr or log of the request never shows it. The route parses the body itself
+    # (_enroll_body) because FastAPI's own 422 would echo it.
+    new_key_secret: SecretStr = Field(..., min_length=1, max_length=512, description="Its secret, proving the caller holds it")
+
+
+async def _enroll_body(request: Request) -> OwnerKeyEnrollRequest:
+    """The enrollment body, validated here rather than by FastAPI.
+
+    important: a 422 never carries the input. FastAPI's own validation answer echoes each failing value,
+    and SecretStr does not stop that, so a secret one character too long would come back in the
+    response and in any proxy log of it. It also runs after the flag and the key, not before them.
+    """
+    try:
+        return OwnerKeyEnrollRequest.model_validate_json(await request.body())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=[
+            {"type": error["type"], "loc": ["body", *error["loc"]], "msg": error["msg"]}
+            for error in exc.errors(include_url=False, include_context=False, include_input=False)
+        ]) from None
+
+
+def _read_key_secret_hash_blocking(vault_client, key_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """A key's stored secret hash, or None and why: "missing" when Vault has no such key, else "unknown".
+
+    note: as _read_key_metadata_blocking, so an unreadable store is told apart from a missing key and is
+    never counted as a failed guess.
+    """
+    from app.core.vault_client import VaultClientError
+
+    try:
+        secret = vault_client.vault_read(f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret")
+    except (VaultClientError, HTTPException) as exc:
+        return None, "missing" if getattr(exc, "status_code", None) == 404 else "unknown"
+    except Exception:  # noqa: BLE001 - an unreadable store is reported, never raised
+        return None, "unknown"
+    stored = secret.get("hash") if isinstance(secret, dict) else None
+    return (stored, None) if stored else (None, "missing")
 
 
 class OwnerKeyEnrollResponse(BaseModel):
@@ -6171,6 +6214,7 @@ async def _external_org(db: AsyncSession, external_id: str) -> Optional[Organiza
 @external_router.get(
     "/external/organizations/{external_id}/owner-keys",
     response_model=OwnerKeysResponse,
+    dependencies=_MULTI_OWNER_ONLY,
     summary="Whether this key owns an organization",
     description=(
         "Answers owner, not_owner or unclaimed for the calling key. Only an owner is told the primary "
@@ -6182,7 +6226,6 @@ async def read_organization_owner_keys(
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_multi_owner()
     key_id = api_key.get("id", "")
     org = await _external_org(db, external_id)
     # note: a missing organization answers unclaimed, as it is to a sync: the first push claims it.
@@ -6198,60 +6241,80 @@ async def read_organization_owner_keys(
 @external_router.post(
     "/external/organizations/owner-keys",
     response_model=OwnerKeyEnrollResponse,
+    dependencies=_MULTI_OWNER_ONLY,
     summary="Add a key the caller also holds to an organization's owner set",
     description=(
         "Authenticated as an owner key of the organization (org.sync). The body names a second key and "
         "its secret; when the secret verifies and the key could own the organization, it joins the owner "
         "set. Idempotent. 404 unless INTEGRATION_MULTI_OWNER_ENABLED is on."
     ),
+    # note: the body is read by _enroll_body, so its schema is stated here for the published spec
+    openapi_extra={"requestBody": {"required": True, "content": {
+        "application/json": {"schema": OwnerKeyEnrollRequest.model_json_schema()}}}},
 )
 async def enroll_owner_key(
-    body: OwnerKeyEnrollRequest,
+    request: Request,
     api_key: Dict[str, Any] = Depends(require_capability("org.sync")),
     db: AsyncSession = Depends(get_db),
 ):
     """Two-key enrollment (services/owner_key_enrollment.py).
 
     important: the new key's secret is in the body. It is checked against the stored hash and dropped;
-    it is never logged, audited or stored, and a missing key and a wrong secret get the same answer.
+    it is never logged, audited, stored or echoed, and a missing key and a wrong secret get the same
+    answer.
+
+    important: the order is the guard. Nothing about the new key is read until the calling key is found
+    in the organization's owner set, under the key and organization locks (which read the organization
+    afresh). A key that does not own it, a missing organization and an unclaimed one get one answer, and
+    spend no organization budget and no lockout count.
     """
-    _require_multi_owner()
+    body = await _enroll_body(request)
     vouching = api_key.get("id", "")
     new_key = body.new_key_id
     if new_key == vouching:
         raise _refuse(422, "same_key", "A key cannot vouch for itself. Name the other key to add.")
-    if not owner_key_enrollment.within_limits(vouching, body.organization_external_id):
+    if not owner_key_enrollment.within_key_limits(vouching):
         raise _refuse(429, "rate_limited", "Too many owner key enrollments. Try again later.")
-    if owner_key_enrollment.locked_out(new_key):
-        raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
+    not_an_owner = _refuse(403, "not_an_owner", owner_key_enrollment.NOT_AN_OWNER)
     vault_client = get_vault_integrations_client()
-    try:
-        _new_metadata, new_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, new_key, use_cache=False)
-    except HTTPException:
-        new_hash = ""
-    if not new_hash or not verify_api_key_secret(body.new_key_secret, new_hash):
-        owner_key_enrollment.record_failure(new_key)
-        raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
 
     first, second = sorted([vouching, new_key])
     async with serialize_key_ownership(db, first), serialize_key_ownership(db, second):
         org = await _external_org(db, body.organization_external_id)
-        if not owner_key_enrollment.is_external_org(org) or not org.api_key_id or not await is_owner(db, org, vouching):
-            raise _refuse(403, "not_an_owner", "The calling key does not own this organization, so it cannot add an owner key.")
+        if not owner_key_enrollment.is_external_org(org):
+            raise not_an_owner
         async with serialize_org_owners(db, [org.id]):
+            if not org.api_key_id or not await is_owner(db, org, vouching):
+                raise not_an_owner
+            if not owner_key_enrollment.within_org_limits(body.organization_external_id):
+                raise _refuse(429, "rate_limited", "Too many owner key enrollments. Try again later.")
             vouching_metadata, vouching_failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, vouching)
             # important: re-read here, uncached. The key that vouches must still be able to own the
             # organization (and an add-on credential never vouches, owner_key_refusal names it).
-            if owner_key_refusal(vouching_metadata, vouching_failure) is not None:
+            refused = owner_key_refusal(vouching_metadata, vouching_failure)
+            if refused is not None:
+                if refused[0] >= 500:
+                    raise HTTPException(status_code=503, detail=owner_key_enrollment.UNREADABLE)
                 raise _refuse(403, "not_an_owner", "The calling key cannot own this organization, so it cannot add an owner key.")
+            if owner_key_enrollment.locked_out(vouching, new_key):
+                raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
             new_metadata, new_failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, new_key)
-            refused = owner_key_refusal(new_metadata, new_failure)
+            stored_hash, hash_failure = await asyncio.to_thread(_read_key_secret_hash_blocking, vault_client, new_key)
+            if "unknown" in (new_failure, hash_failure):
+                # note: not a failed guess. An outage must not lock the pair out.
+                raise HTTPException(status_code=503, detail=owner_key_enrollment.UNREADABLE)
+            # note: the hash is computed for a missing key too, so both take the same path
+            verified = verify_api_key_secret(body.new_key_secret.get_secret_value(), stored_hash or "")
+            if new_metadata is None or not verified:
+                owner_key_enrollment.record_failure(vouching, new_key)
+                raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
+            refused = owner_key_refusal(new_metadata, None)
             if refused is not None:
                 status, code, message = refused
                 if status >= 500:
                     raise HTTPException(status_code=status, detail=message)
                 raise _refuse(status, code, message)
-            if not await owner_key_enrollment.party_check(db, org, vouching_metadata or {}, new_metadata or {}):
+            if not await owner_key_enrollment.party_check(db, org, vouching_metadata or {}, new_metadata):
                 raise _refuse(403, "new_key_outside_organization", (
                     "The new key was minted by someone who neither minted the calling key nor runs this "
                     "organization, so it cannot join its owner set. Ask an Orcastra administrator to add it."
@@ -6275,6 +6338,8 @@ async def enroll_owner_key(
         get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         evict_api_key_cache(vouching)
         evict_api_key_cache(new_key)
+        # note: D9 (telling the partners) is not built: Orcastra has no notification channel. The count
+        # is recorded so the record says who would have been told.
         partners = await owner_key_enrollment.partner_emails(db, org)
         record_owner_change(ADD_ACTION, org, before=before, after=after, primary_before=org.api_key_id,
                             primary_after=org.api_key_id, details={
@@ -6290,6 +6355,7 @@ async def enroll_owner_key(
 @external_router.delete(
     "/external/organizations/{external_id}/owner-keys/self",
     response_model=OwnerKeySelfRemoveResponse,
+    dependencies=_MULTI_OWNER_ONLY,
     summary="Take the calling key out of an organization's owner set",
     description=(
         "The calling key leaves the owner set, and the oldest owner that can still sync becomes the "
@@ -6302,7 +6368,6 @@ async def remove_own_owner_key(
     api_key: Dict[str, Any] = Depends(require_capability("org.sync")),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_multi_owner()
     key_id = api_key.get("id", "")
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, key_id):
