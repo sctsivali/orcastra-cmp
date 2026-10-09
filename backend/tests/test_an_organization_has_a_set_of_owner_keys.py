@@ -20,6 +20,7 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine, inspect, select, text
 
 from app.models.db_models import Organization, OrganizationMember, OrganizationOwnerKey
+from app.routers import integrations
 from app.services import authentik_sync
 from app.services.integration_key_ownership import transfer_owner
 from app.services.integration_roles import ROLE_PARTNER, decide_upsert, membership_owners
@@ -136,6 +137,28 @@ async def test_a_key_outside_the_set_stays_refused() -> None:
     assert await members_of(db, "acme-cloud") == [FOUNDER]
     assert not await is_owner(db, await org(db, "acme-cloud"), K_OUT)
     await assert_owner_invariants(db)
+
+
+async def test_a_refused_organization_is_not_held_through_the_rest_of_the_sync() -> None:
+    """A refusal ends its transaction, so the row read FOR UPDATE is not still locked when the sync goes
+    on to take its key's lock (on PostgreSQL a transfer holding that lock and waiting on the row would
+    deadlock with it)."""
+    db = world_db()
+    await send(key(K_SELLER), db, push())
+    pushed = [integrations.SyncOrganization(id=SELLER, name="Acme Cloud", slug="acme-cloud")]
+    assert await integrations._upsert_synced_organizations(db, pushed, K_OUT) == 0
+    assert not db.sync.in_transaction(), "the refused organization's row is still held"
+    assert await primary(db, "acme-cloud") == K_SELLER
+
+
+async def test_a_slug_clash_is_not_held_through_the_rest_of_the_sync() -> None:
+    db = world_db()
+    db.add(Organization(name="Made Here", slug="made-here", source="local", created_by="partner@example.test",
+                        is_active=True))
+    await db.commit()
+    pushed = [integrations.SyncOrganization(id="ext-new", name="Made Here", slug="made-here")]
+    assert await integrations._upsert_synced_organizations(db, pushed, K_SELLER) == 0
+    assert not db.sync.in_transaction(), "the clashing row is still held"
 
 
 async def test_a_co_owner_provisions_and_an_outsider_does_not() -> None:

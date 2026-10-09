@@ -1453,6 +1453,11 @@ async def _upsert_synced_organizations(
                     existing.slug, org_data.id, existing.api_key_id, api_key_id,
                 )
                 handled.add(org_data.id)
+                # important: nothing changed, so end the transaction now. Kept open, the row read
+                # FOR UPDATE above stays locked into the rest of the sync, which takes this key's
+                # lock; a transfer or owner-set change for this key holds that lock while it waits
+                # on this row, and PostgreSQL answers one of the two with a deadlock.
+                await db.commit()
                 continue
             existing.name = org_data.name
             existing.slug = org_data.slug
@@ -1517,6 +1522,8 @@ async def _upsert_synced_organizations(
                     f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}, "
                     f"api_key={slug_owner.api_key_id}). Resolve the slug clash to sync it."
                 )
+                # note: as in Pass 1, the row read FOR UPDATE is released before going on
+                await db.commit()
                 continue
 
             await db.commit()
