@@ -81,7 +81,8 @@ class _Rows:
 class _DB:
     """Answers the install path's lookups: no existing installation, none counted, one organization.
 
-    A rotation also reads, FOR UPDATE, the organizations the old credential owns: none here.
+    A rotation also reads which organizations the old credential owns, to lock their owner sets, and
+    then reads them FOR UPDATE: none here.
     """
 
     def __init__(self) -> None:
@@ -90,7 +91,7 @@ class _DB:
 
     async def execute(self, statement: Any) -> Any:
         text = str(statement)
-        if "FOR UPDATE" in text:
+        if "FOR UPDATE" in text or "FROM organization_owner_keys" in text:
             return _Rows([])
         if "count(" in text:
             return _Result(0)

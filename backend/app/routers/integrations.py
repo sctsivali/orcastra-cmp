@@ -144,6 +144,7 @@ from app.services.organization_owners import (
     NoAbleOwner,
     OwnerSetFull,
     add_owner,
+    check_owner_sets,
     is_owner,
     mark_entry,
     multi_owner_enabled,
@@ -2436,6 +2437,50 @@ async def _refuse_ending_an_owner(
         raise
 
 
+# important: a fixed sentence. The database's own text names the database, and this answer reaches the browser.
+OWNER_SETS_NOT_SAVED = (
+    "The key was changed, but the organizations it owns could not be updated. An Orcastra administrator "
+    "can finish this from each organization's owner keys."
+)
+
+
+async def _write_key_then_commit(
+    db: AsyncSession, key_id: str, handed_off: List[Any], write: Callable[[], None]
+) -> None:
+    """The Vault write that ends or narrows a key, and the owner-set changes it carries.
+
+    important: the owner sets are flushed and the primary-in-set rule checked before the Vault write, so a
+    change the database would refuse stops here with nothing written anywhere. Once the write lands the
+    key's cached copies are dropped at once, whatever follows: a revoke must not keep working from the
+    validation cache because a later step failed. A commit that still fails after the write (the
+    connection lost) answers a fixed sentence; the owner sets are then finished from the Administrator's
+    owner-key routes.
+    """
+    if handed_off:
+        try:
+            await check_owner_sets(db)
+        except Exception as exc:  # noqa: BLE001 - nothing is written yet; the text names the database
+            logger.warning("Could not save the owner sets api key %s leaves: %s", key_id, type(exc).__name__)
+            await db.rollback()
+            raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+    try:
+        write()
+    finally:
+        # note: also when the write raised. It may have landed before its reply was lost.
+        evict_api_key_cache(key_id)
+    if not handed_off:
+        return
+    try:
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - Vault is written; the text names the database
+        logger.error("Api key %s was written in Vault but its owner sets were not saved: %s", key_id, type(exc).__name__)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001 - the answer below is the same either way
+            pass
+        raise HTTPException(status_code=503, detail=OWNER_SETS_NOT_SAVED) from None
+
+
 async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[APIKeyInfo]) -> List[APIKeyInfo]:
     """Fill in which organizations each key owns, as this caller may see them.
 
@@ -2746,12 +2791,10 @@ async def update_api_key_capabilities(
                     forced = await confirm_provisioning_withdrawal(
                         db, key_id, user=_rbac, force=request.force, read_metadata=_owner_metadata_reader(vault_client)
                     )
-                vault_client.vault_kv_put(
+                await _write_key_then_commit(db, key_id, handed_off, lambda: vault_client.vault_kv_put(
                     f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
                     metadata,
-                )
-                if handed_off:
-                    await db.commit()
+                ))
         record_owner_handoffs(handed_off, key_id=key_id, action="capabilities", actor_email=_rbac.email, remove=False)
         logger.info(
             "Set capabilities on API key %s to %s (was %s)",
@@ -2760,7 +2803,6 @@ async def update_api_key_capabilities(
 
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-        evict_api_key_cache(key_id)
         _audit_credential_lifecycle(
             action=CAPABILITIES_UPDATE_ACTION, key_id=key_id, metadata=metadata, previous=previous,
             extra_details=forced,
@@ -2812,21 +2854,18 @@ async def revoke_api_key(
                 metadata["revoked_at"] = datetime.utcnow().isoformat()
 
                 # Save updated metadata
-                vault_client.vault_kv_put(
+                await _write_key_then_commit(db, key_id, handed_off, lambda: vault_client.vault_kv_put(
                     f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
                     metadata
-                )
-                if handed_off:
-                    await db.commit()
+                ))
         record_owner_handoffs(handed_off, key_id=key_id, action="revoke", actor_email=_rbac.email, remove=True)
         
         # Clear all scoped cache variants for real-time revocation
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         cache.delete("api_responses", f"integrations:api_key:{key_id}")
-        # important: revocation must be immediate. Without this the key keeps working from
-        # the process-local validation cache until its TTL expires.
-        evict_api_key_cache(key_id)
+        # important: revocation must be immediate. _write_key_then_commit evicted the key from the
+        # process-local validation cache, without which it keeps working until its TTL expires.
 
         logger.info(f"API key {key_id} revoked")
         _audit_credential_lifecycle(
@@ -2840,7 +2879,7 @@ async def revoke_api_key(
         raise
     except Exception as e:
         logger.error(f"Error revoking API key: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to revoke the API key") from None
 
 
 API_KEY_ROTATE = "integration.api_key.secret.rotate"
@@ -3013,15 +3052,12 @@ async def delete_api_key(
                 handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
 
                 # Delete from Vault
-                delete_api_key_from_vault(vault_client, key_id)
-                if handed_off:
-                    await db.commit()
+                await _write_key_then_commit(db, key_id, handed_off, lambda: delete_api_key_from_vault(vault_client, key_id))
         record_owner_handoffs(handed_off, key_id=key_id, action="delete", actor_email=_rbac.email, remove=True)
 
-        # Clear all scoped cache variants
+        # Clear all scoped cache variants (the validation cache went with the delete)
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-        evict_api_key_cache(key_id)
 
         _audit_credential_lifecycle(
             action="integration.api_key.delete", key_id=key_id, metadata=metadata
@@ -3033,7 +3069,7 @@ async def delete_api_key(
         raise
     except Exception as e:
         logger.error(f"Error deleting API key: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete the API key") from None
 
 
 # ============================================
@@ -5962,6 +5998,8 @@ async def add_organization_owner(
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
+        # note: again under the lock, which read the organization afresh
+        org = await _owned_org_or_refuse(db, org_id)
         metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, body.api_key_id)
         refused = owner_key_refusal(metadata, failure)
         if refused is not None:
@@ -6014,6 +6052,8 @@ async def remove_organization_owner(
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, key_id), serialize_org_owners(db, [org.id]):
+        # note: again under the lock, which read the organization afresh
+        org = await _owned_org_or_refuse(db, org_id)
         before = await owner_key_ids(db, org.id)
         if key_id not in before:
             return _owner_set_answer(org, before, False)
@@ -6064,6 +6104,8 @@ async def set_organization_primary(
     org = await _owned_org_or_refuse(db, org_id)
     vault_client = get_vault_integrations_client()
     async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
+        # note: again under the lock, which read the organization afresh
+        org = await _owned_org_or_refuse(db, org_id)
         owners = await owner_key_ids(db, org.id)
         if body.api_key_id not in owners:
             raise HTTPException(status_code=409, detail={
@@ -6269,6 +6311,11 @@ async def remove_own_owner_key(
             return OwnerKeySelfRemoveResponse(removed=False)
         async with serialize_org_owners(db, [org.id]):
             before = await owner_key_ids(db, org.id)
+            # important: again under the lock. An Administrator's transfer replaces the set holding only
+            # the new key's lock, so this key may have left it while this waited; then nothing changes
+            # here and nothing is recorded.
+            if key_id not in before:
+                return OwnerKeySelfRemoveResponse(removed=False)
             primary_before = org.api_key_id
             verdicts = await able_owners([k for k in before if k != key_id], _owner_metadata_reader(vault_client))
             if not any(verdicts.values()):

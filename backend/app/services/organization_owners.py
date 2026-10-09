@@ -358,12 +358,49 @@ async def serialize_org_owners(db: AsyncSession, org_ids: Iterable[int]) -> Asyn
     if _dialect_name(db) == "postgresql":
         for org_id in wanted:
             await db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _advisory_key(org_id)})
+        await _reload(db, wanted)
         yield
         return
     async with AsyncExitStack() as stack:
         for org_id in wanted:
             await stack.enter_async_context(_local_lock(org_id))
+        await _reload(db, wanted)
         yield
+
+
+async def _reload(db: AsyncSession, org_ids: List[int]) -> None:
+    """Read these organizations again now that their sets are held, over any copy the session has.
+
+    important: sessions do not expire on commit, so an organization a handler loaded before taking the
+    lock keeps the primary it had then. Deciding on that copy, a second concurrent end of an owner key
+    skipped the promotion the first one had made necessary, and its commit failed on the primary-in-set
+    foreign key after Vault was written. FOR UPDATE (PostgreSQL only; SQLite omits it) also holds the
+    rows against a writer that does not take this lock.
+    """
+    if not org_ids:
+        return
+    # note: the rows must be fetched; populate_existing refreshes an object only as its row is read
+    (await db.execute(
+        select(Organization)
+        .where(Organization.id.in_(org_ids))
+        .order_by(Organization.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalars().all()
+
+
+async def check_owner_sets(db: AsyncSession) -> None:
+    """Write the pending owner-set changes and check the primary-in-set rule now rather than at commit.
+
+    For a caller that must stop before an outside write (Vault) when the database would refuse the change.
+    On PostgreSQL the deferred foreign key from migration 038 is checked here; SQLite has no such key.
+    """
+    from app.services.integration_key_ownership import _dialect_name
+
+    await db.flush()
+    if _dialect_name(db) == "postgresql":
+        await db.execute(text("SET CONSTRAINTS fk_org_primary_owner_key IMMEDIATE"))
+        await db.execute(text("SET CONSTRAINTS fk_org_primary_owner_key DEFERRED"))
 
 
 def multi_owner_enabled() -> bool:

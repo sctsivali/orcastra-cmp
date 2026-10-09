@@ -41,6 +41,7 @@ from app.services.integration_key_ownership import (
     refuse_if_key_owns_organizations,
     serialize_key_ownership,
 )
+from app.services.organization_owners import owned_org_ids, serialize_org_owners
 
 logger = logging.getLogger(__name__)
 
@@ -502,7 +503,8 @@ async def rotate_credential(
     # as the row. Only the owner key may sync an organization, so leaving them on a credential this
     # rotation retires would freeze them, and the add-on's next sync with its new key would be
     # refused for every one of them.
-    async with serialize_key_ownership(db, old_key_id):
+    # note: and their owner sets, as every other change to a set is made (organization_owners)
+    async with serialize_key_ownership(db, old_key_id), serialize_org_owners(db, await owned_org_ids(db, old_key_id)):
         carried = await carry_owned_organizations(db, from_key_id=old_key_id, to_key_id=new_key_id)
         await db.commit()
     await db.refresh(install)
@@ -529,7 +531,6 @@ async def uninstall(
         owned_org_ids_to_lock,
         record_owner_handoffs,
     )
-    from app.services.organization_owners import serialize_org_owners
 
     keys = sorted(filter(None, {install.api_key_id, install.previous_api_key_id}))
     handed_off: Dict[str, List[Any]] = {}
