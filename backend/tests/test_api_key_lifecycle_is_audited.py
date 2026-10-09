@@ -18,6 +18,7 @@ from app.core.auth import AuthenticatedUser
 from app.routers import integrations
 from app.routers.integrations import APIKeyCreateRequest, ClusterPermission
 from app.services.activity_logger import ActivityLogger
+from tests._sqlite_session import org_tables, sqlite_session
 
 PARTNER = AuthenticatedUser(user_id="partner", email="partner@example.test", groups=["role_partner"])
 
@@ -38,6 +39,11 @@ STORED: Dict[str, Any] = {
 }
 MARKERS = ("APP-URL-MARKER", "RAW-SECRET-MARKER", "HASH-MARKER", "JUNK-MARKER")
 
+
+
+def _no_owned_orgs() -> Any:
+    """An empty organization table: revoke and delete read what the key owns before ending it."""
+    return sqlite_session(*org_tables())
 
 async def _returns_copy_of_stored(_key_id: str, _user: Any, _db: Any) -> Dict[str, Any]:
     return json.loads(json.dumps(STORED))
@@ -173,7 +179,7 @@ async def test_update_records_before_and_after(env):
 
 
 async def test_revoke_records_one_event(env):
-    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert [(e["action"], e["target_id"]) for e in env["spy"].events] == [
         ("integration.api_key.revoke", "oak_test")
     ]
@@ -181,7 +187,7 @@ async def test_revoke_records_one_event(env):
 
 
 async def test_delete_records_one_event(env):
-    await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert [(e["action"], e["target_id"]) for e in env["spy"].events] == [
         ("integration.api_key.delete", "oak_test")
     ]
@@ -191,7 +197,7 @@ async def test_delete_records_one_event(env):
 async def test_the_real_logger_writes_a_high_severity_identity_event(env, monkeypatch, caplog):
     monkeypatch.setattr(integrations, "activity_logger", ActivityLogger())
     caplog.set_level(logging.INFO, logger="orcastra.audit")
-    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     records = [r for r in caplog.records if r.name == "orcastra.audit"]
     assert len(records) == 1
     assert "AUDIT: integration.api_key.revoke on integration_api_key/oak_test" in records[0].getMessage()
@@ -208,13 +214,13 @@ async def test_an_audit_failure_never_fails_the_action(env, monkeypatch):
             raise RuntimeError("audit sink down")
 
     monkeypatch.setattr(integrations, "activity_logger", Broken())
-    result = await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    result = await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert result.is_revoked is True
 
 
 async def test_revoke_and_a_permissions_edit_write_only_on_the_version_they_read(env):
     """Both go through the check-and-set merge, so neither can undo the other or a last-used stamp."""
-    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     await integrations.update_api_key_permissions(
         key_id="oak_test", permissions=[ClusterPermission(cluster_id="c1", permissions=["read"], projects=["*"])],
         _=None, _rbac=PARTNER,
@@ -229,7 +235,7 @@ async def test_a_delete_that_does_not_happen_answers_an_error_and_is_not_audited
 
     monkeypatch.setattr(integrations, "delete_api_key_from_vault", refused)
     with pytest.raises(HTTPException) as caught:
-        await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+        await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert caught.value.status_code == 500
     assert [e["action"] for e in env["spy"].events] == [], "a delete that failed was recorded as done"
 
@@ -257,7 +263,7 @@ async def test_a_delete_that_stops_halfway_still_drops_every_cached_copy(env, mo
 
     monkeypatch.setattr(integrations, "delete_api_key_from_vault", halfway)
     with pytest.raises(HTTPException):
-        await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+        await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert evicted == ["oak_test"]
 
 
@@ -279,7 +285,7 @@ async def test_a_key_whose_secret_is_already_gone_can_still_be_deleted(env, monk
         raise HTTPException(status_code=404, detail="API key not found")
 
     monkeypatch.setattr(integrations, "get_api_key_from_vault", no_secret)
-    answer = await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    answer = await integrations.delete_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert answer["success"] is True
 
 
@@ -309,13 +315,13 @@ async def test_a_revoke_is_written_even_for_a_key_that_is_already_unusable(env, 
     real = integrations._merge_into_key_metadata
     monkeypatch.setattr(integrations, "_merge_into_key_metadata",
                         lambda *a, **k: seen.append(k) or real(*a, **k))
-    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+    await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     assert seen and not seen[0].get("skip_unusable")
 
 
 async def _act(action: str) -> Any:
     if action == "revoke":
-        return await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER)
+        return await integrations.revoke_api_key(key_id="oak_test", _=None, _rbac=PARTNER, db=_no_owned_orgs())
     return await integrations.update_api_key_permissions(
         key_id="oak_test", permissions=[ClusterPermission(cluster_id="cluster-a", permissions=["read"], projects=["*"])],
         _=None, _rbac=PARTNER, db=None,

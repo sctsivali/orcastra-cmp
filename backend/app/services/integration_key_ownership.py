@@ -15,7 +15,10 @@ open to whichever key names the organization next.
 Nothing used to move an owner. Revoking or deleting the owner key left its organizations bound to
 a key that can never authenticate again, so their sync, member updates and provisioning stopped
 for good, and the only way out was SQL against production. `transfer_owner` is that way out, as
-an audited Administrator action.
+an audited Administrator action, and `refuse_if_key_owns_organizations` stops the key routes from
+creating the state in the first place: a key that owns an active OrcaHub organization is not
+revoked or deleted, for any caller, an Administrator included. Rotating its secret keeps the key
+id, so it is the way to stop a leaked secret without freezing anything.
 
 Concurrency: a decision about one key's ownership runs inside `serialize_key_ownership` for that
 key, and the key is read and judged inside it, so two decisions about the same key never
@@ -30,8 +33,9 @@ import hashlib
 import logging
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,8 +50,59 @@ TRANSFER_ACTION = "integration.organization.owner.transfer"
 # `missing` a key Vault says does not exist, `unknown` a key whose record could not be read.
 OWNER_KEY_STATES = ("active", "expiring", "expired", "revoked", "inactive", "missing", "unknown", "unclaimed")
 
+# What a refusal lists. The message names a few, the answer up to the cap, the count all of them.
+MAX_LISTED_SLUGS = 20
+MAX_NAMED_SLUGS = 5
+
+OWNERSHIP_UNKNOWN_DETAIL = (
+    "The organizations this key owns could not be checked, so nothing was changed. Try again."
+)
+
+_ENDING = {
+    "revoke": "Revoking it",
+    "delete": "Deleting it",
+}
+
 _local_locks_guard = threading.Lock()
 _local_locks: Dict[Tuple[int, str], asyncio.Lock] = {}
+
+
+def _owned_filter(key_ids: Iterable[str]) -> List[Any]:
+    return [
+        Organization.source == "orcahub",
+        Organization.is_active.is_(True),
+        Organization.api_key_id.in_(sorted(set(key_ids))),
+    ]
+
+
+async def owned_organizations(db: AsyncSession, key_id: str) -> List[Organization]:
+    """The active OrcaHub organizations this key owns, by slug.
+
+    note: not `owned_organization_count`, which counts every organization naming the key, inactive
+    and of any source. This one answers what stops working when the key ends: only an active
+    OrcaHub organization is synced and provisioned, so only one of those is frozen by losing its
+    owner.
+    """
+    if not key_id:
+        return []
+    rows = await db.execute(select(Organization).where(*_owned_filter([key_id])).order_by(Organization.slug))
+    return list(rows.scalars().all())
+
+
+async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, List[Tuple[int, str]]]:
+    """For each key, the (id, slug) of every active OrcaHub organization it owns, by slug. One query."""
+    wanted = {key_id for key_id in key_ids if key_id}
+    if not wanted:
+        return {}
+    rows = await db.execute(
+        select(Organization.api_key_id, Organization.id, Organization.slug)
+        .where(*_owned_filter(wanted))
+        .order_by(Organization.api_key_id, Organization.slug)
+    )
+    owned: Dict[str, List[Tuple[int, str]]] = {}
+    for key_id, org_id, slug in rows.all():
+        owned.setdefault(key_id, []).append((org_id, slug))
+    return owned
 
 
 def key_state(metadata: Optional[Mapping[str, Any]], *, missing: bool = False, unknown: bool = False) -> str:
@@ -66,6 +121,106 @@ def key_state(metadata: Optional[Mapping[str, Any]], *, missing: bool = False, u
     if state == "active" and expiry_state(metadata.get("expires_at")) == "expiring":
         return "expiring"
     return state
+
+
+class KeyOwnsOrganizations(HTTPException):
+    """409: the key still owns active OrcaHub organizations. Carries the fields its audit record adds."""
+
+    def __init__(self, detail: Dict[str, Any], audit_details: Dict[str, Any]) -> None:
+        super().__init__(status_code=409, detail=detail)
+        self.audit_details = audit_details
+
+
+def _is_admin(user: Any) -> bool:
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+
+    return get_highest_role(resolve_roles(user)) == Role.ADMIN
+
+
+async def visible_organization_ids(db: AsyncSession, user: Any) -> Optional[Set[int]]:
+    """The organizations this caller may see named, or None for an Administrator, who sees all."""
+    from app.core.org_scope import get_user_org_ids
+
+    if _is_admin(user):
+        return None
+    return set(await get_user_org_ids(user, db))
+
+
+def name_organizations(slugs: List[str], hidden: int) -> str:
+    """The slugs a message names, the rest counted: "a, b and 3 more and 1 you cannot see"."""
+    shown = ", ".join(slugs[:MAX_NAMED_SLUGS])
+    rest = []
+    if len(slugs) > MAX_NAMED_SLUGS:
+        rest.append(f"{len(slugs) - MAX_NAMED_SLUGS} more")
+    if hidden:
+        rest.append(f"{hidden} you cannot see")
+    if not rest:
+        return shown
+    return f"{shown} and {' and '.join(rest)}" if shown else " and ".join(rest)
+
+
+def _owned_message(action: str, total: int, slugs: List[str], hidden: int, *, admin: bool) -> str:
+    one = total == 1
+    them, their = ("it", "its") if one else ("them", "their")
+    noun = "organization" if one else "organizations"
+    effect = (
+        f"{_ENDING.get(action, 'Ending it')} would leave {them} with an owner no other key can "
+        f"replace, so {their} sync, member updates and provisioning would stop."
+    )
+    if admin:
+        remedy = f"Transfer {them} to another active key first, or delete {them}."
+    else:
+        remedy = f"Ask an administrator to transfer {them} to another active key first, or to delete {them}."
+    return " ".join([
+        f"This key owns {total} OrcaHub {noun} ({name_organizations(slugs, hidden)}).",
+        effect,
+        remedy,
+        "To stop a leaked secret now, rotate the secret instead: the key ID and its organizations stay.",
+    ])
+
+
+async def refuse_if_key_owns_organizations(db: AsyncSession, key_id: str, *, action: str, user: Any) -> None:
+    """409 when the key owns an active OrcaHub organization, 503 when that cannot be read.
+
+    The caller has already authorized the key (so an id outside the caller's reach is still 404),
+    holds serialize_key_ownership(key_id), and has written nothing yet. There is no Administrator
+    bypass: the remedy is to transfer the organizations or delete them, which an Administrator can.
+
+    note: a caller who is not an Administrator sees only the slugs of organizations they belong to;
+    the rest are counted, in the answer and in its audit record alike.
+
+    important: the 503 detail is a fixed sentence. The exception text of a database failure names
+    the database, and this answer reaches the browser.
+    """
+    try:
+        owned = await owned_organizations(db, key_id)
+        visible = await visible_organization_ids(db, user) if owned else None
+    except Exception as exc:  # noqa: BLE001 - unknown ownership refuses, it never allows
+        logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
+        raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+    if not owned:
+        return
+    admin = visible is None
+    slugs = [org.slug for org in owned if admin or org.id in visible]
+    hidden = len(owned) - len(slugs)
+    detail = {
+        "error": "key_owns_organizations",
+        "action": action,
+        "message": _owned_message(action, len(owned), slugs, hidden, admin=admin),
+        "api_key_id": key_id,
+        "organization_count": len(owned),
+        "organization_slugs": slugs[:MAX_LISTED_SLUGS],
+        "hidden_organization_count": hidden,
+        "remedies": ["transfer_owner", "delete_organization", "rotate_secret"],
+    }
+    # important: the same slugs the caller was shown. A refusal's record is visible to the caller who
+    # triggered it, so naming the hidden organizations there would undo hiding them in the answer.
+    audit = {
+        "owned_organization_slugs": slugs[:MAX_LISTED_SLUGS],
+        "owned_organization_count": len(owned),
+        "owned_organization_hidden_count": hidden,
+    }
+    raise KeyOwnsOrganizations(detail, audit)
 
 
 def owner_key_refusal(

@@ -81,13 +81,18 @@ from app.core.safe_http import guarded_request
 from app.core.url_safety import UnsafeURLError
 from app.services.activity_logger import get_activity_logger
 from app.services.integration_key_ownership import (
+    MAX_LISTED_SLUGS,
     TRANSFER_ACTION as OWNER_TRANSFER_ACTION,
+    KeyOwnsOrganizations,
     key_state,
+    owned_by_keys,
     owned_organization_count,
     owner_key_refusal,
+    refuse_if_key_owns_organizations,
     serialize_key_ownership,
     transfer_owner,
     uncovered_clusters,
+    visible_organization_ids,
 )
 from app.services.integration_roles import apply_upsert_role, revoke_if_orphaned
 from app.services.orcahub_sync import callback_networks, callback_requires_https, check_callback_url
@@ -196,6 +201,18 @@ class APIKeyInfo(BaseModel):
         description="Cluster access permissions"
     )
     user_mappings_count: int = Field(0, description="Number of mapped users")
+    # note: filled from the database after the list cache, because what a key owns changes without
+    # the key changing. None means it could not be read, which is not the same as owning nothing.
+    owned_organization_count: Optional[int] = Field(
+        None, description="Active OrcaHub organizations this key owns, or null when it could not be read"
+    )
+    owned_organization_slugs: List[str] = Field(
+        default_factory=list,
+        description=f"Slugs of the owned organizations the caller may see, at most {MAX_LISTED_SLUGS}",
+    )
+    owned_organization_hidden_count: int = Field(
+        0, description="Owned organizations the caller may not see, counted but not named"
+    )
 
 
 class APIKeyCreateRequest(BaseModel):
@@ -1892,6 +1909,7 @@ def _audit_api_key(
     result: str = "success",
     error_code: Optional[str] = None,
     before: Optional[List[Dict[str, Any]]] = None,
+    extra_details: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Record an API key lifecycle event.
 
@@ -1914,6 +1932,7 @@ def _audit_api_key(
                 "app_type": metadata.get("app_type"),
                 "expires_at": metadata.get("expires_at"),
                 "clusters": sorted({str(g.get("cluster_id") or "") for g in grants}),
+                **(extra_details or {}),
             },
             before_state={"cluster_permissions": before} if before is not None else None,
             after_state={"cluster_permissions": grants} if before is not None else None,
@@ -2041,6 +2060,46 @@ async def _refuse_a_grant_past_the_project_bound(
         )
 
 
+async def _refuse_ending_an_owner(
+    db: AsyncSession, key_id: str, *, action: str, audit_action: str, user: AuthenticatedUser,
+    metadata: Dict[str, Any],
+) -> None:
+    """refuse_if_key_owns_organizations, with the refusal recorded on the action it refused."""
+    try:
+        await refuse_if_key_owns_organizations(db, key_id, action=action, user=user)
+    except KeyOwnsOrganizations as refusal:
+        _audit_api_key(
+            audit_action, key_id, user, metadata, result="denied", error_code="key_owns_organizations",
+            extra_details=refusal.audit_details,
+        )
+        raise
+
+
+async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[APIKeyInfo]) -> List[APIKeyInfo]:
+    """Fill in which organizations each key owns, as this caller may see them.
+
+    note: after the list cache, never inside it. The cached list is shared by everyone with the same
+    cluster scope, while the slugs a caller may see depend on the caller, and ownership moves without
+    the key changing. A database that cannot answer leaves the counts null rather than failing the
+    list, because the refusal on revoke and delete is what enforces the rule.
+    """
+    if not keys:
+        return keys
+    try:
+        owned = await owned_by_keys(db, [info.id for info in keys])
+        visible = await visible_organization_ids(db, user) if owned else None
+    except Exception as exc:  # noqa: BLE001 - the list still renders, without ownership
+        logger.warning("Could not read which organizations the listed keys own: %s", type(exc).__name__)
+        return keys
+    for info in keys:
+        rows = owned.get(info.id, [])
+        shown = [slug for org_id, slug in rows if visible is None or org_id in visible]
+        info.owned_organization_count = len(rows)
+        info.owned_organization_slugs = shown[:MAX_LISTED_SLUGS]
+        info.owned_organization_hidden_count = len(rows) - len(shown)
+    return keys
+
+
 @router.get(
     "/api-keys",
     response_model=APIKeyListResponse,
@@ -2105,6 +2164,8 @@ async def list_api_keys(
                 user_mappings_count=len(user_mappings)
             ))
         
+        keys = await _with_ownership(db, user, keys)
+
         return APIKeyListResponse(
             total=len(keys),
             active=active_count,
@@ -2138,7 +2199,8 @@ async def get_api_key(
     try:
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         
-        return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+        (info,) = await _with_ownership(db, user, [APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))])
+        return info
         
     except HTTPException:
         raise
@@ -2204,17 +2266,19 @@ async def update_api_key_permissions(
     vault_client = get_vault_integrations_client()
     
     try:
-        metadata, secret_hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
-        
-        try:
-            metadata = await asyncio.to_thread(
-                _merge_into_key_metadata, vault_client, key_id,
-                {"cluster_permissions": [p.model_dump() for p in permissions]},
-            )
-        except Exception:
-            # important: the write may have landed with its reply lost, so drop cached copies
-            evict_api_key_cache(key_id)
-            raise
+        # note: under the key's lock, like revoke, delete and the rotation, so a decision about the
+        # key's ownership never interleaves with this write
+        async with serialize_key_ownership(db, key_id):
+            await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+            try:
+                metadata = await asyncio.to_thread(
+                    _merge_into_key_metadata, vault_client, key_id,
+                    {"cluster_permissions": [p.model_dump() for p in permissions]},
+                )
+            except Exception:
+                # important: the write may have landed with its reply lost, so drop cached copies
+                evict_api_key_cache(key_id)
+                raise
         if metadata is None:
             raise HTTPException(status_code=404, detail="API key not found")
         
@@ -2252,16 +2316,23 @@ async def revoke_api_key(
     vault_client = get_vault_integrations_client()
     
     try:
-        await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
-        try:
-            metadata = await asyncio.to_thread(
-                _merge_into_key_metadata, vault_client, key_id,
-                {"is_revoked": True, "is_active": False, "revoked_at": datetime.utcnow().isoformat()},
+        # important: after the authorization above, so an id outside the caller's reach is still
+        # 404, and inside the key's ownership lock, so a transfer to this key cannot land between
+        # the check and the write. A revoked owner freezes every organization it owns.
+        async with serialize_key_ownership(db, key_id):
+            current, _hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+            await _refuse_ending_an_owner(
+                db, key_id, action="revoke", audit_action=API_KEY_REVOKE, user=_rbac, metadata=current,
             )
-        except Exception:
-            # important: a revoke that landed with its reply lost must still end the key at once
-            evict_api_key_cache(key_id)
-            raise
+            try:
+                metadata = await asyncio.to_thread(
+                    _merge_into_key_metadata, vault_client, key_id,
+                    {"is_revoked": True, "is_active": False, "revoked_at": datetime.utcnow().isoformat()},
+                )
+            except Exception:
+                # important: a revoke that landed with its reply lost must still end the key at once
+                evict_api_key_cache(key_id)
+                raise
         if metadata is None:
             raise HTTPException(status_code=404, detail="API key not found")
         
@@ -2309,66 +2380,69 @@ async def rotate_api_key_secret(
     """
     await _authorize_api_key(key_id, _rbac, db)
     vault_client = get_vault_integrations_client()
-    metadata, _hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
-    if _api_key_is_unusable(metadata):
-        raise HTTPException(
-            status_code=409,
-            detail="A revoked, inactive or expired key cannot be rotated. Create a new key instead.",
-        )
-    # important: everything that could fail runs before the write. Once the new secret is stored
-    # the old one is dead, and a failure after it would leave a secret nobody was ever shown.
-    user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
-    try:
-        key_info = APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
-    except ValidationError:
-        raise HTTPException(
-            status_code=409,
-            detail="This key's stored grants no longer validate. Update its permissions, then rotate it.",
-        )
-    # important: revoking, deleting or narrowing a key someone else minted hands the caller nothing,
-    # but a rotation hands them a working secret. A non-admin gets one only for a key they minted
-    # (they held its secret already) or a key they could mint now: every cluster inside their scope
-    # and every project inside their bound.
-    allowed = get_current_allowed_clusters()
-    if allowed is not None and str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
-        outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
-        if outside:
-            _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="cluster_out_of_scope")
+    # important: the key is read and judged under its lock, which revoke, delete and the grant
+    # edits take too, so a read from before the lock cannot predate a revoke that landed since.
+    async with serialize_key_ownership(db, key_id):
+        metadata, _hash = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id)
+        if _api_key_is_unusable(metadata):
             raise HTTPException(
-                status_code=403,
-                detail=f"This key also grants {outside}, which you cannot reach. An administrator can rotate it.",
+                status_code=409,
+                detail="A revoked, inactive or expired key cannot be rotated. Create a new key instead.",
             )
+        # important: everything that could fail runs before the write. Once the new secret is stored
+        # the old one is dead, and a failure after it would leave a secret nobody was ever shown.
+        user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         try:
-            await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
-        except HTTPException as exc:
-            if exc.status_code == 403:
-                _audit_api_key(
-                    API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="project_out_of_bound"
+            key_info = APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+        except ValidationError:
+            raise HTTPException(
+                status_code=409,
+                detail="This key's stored grants no longer validate. Update its permissions, then rotate it.",
+            )
+        # important: revoking, deleting or narrowing a key someone else minted hands the caller nothing,
+        # but a rotation hands them a working secret. A non-admin gets one only for a key they minted
+        # (they held its secret already) or a key they could mint now: every cluster inside their scope
+        # and every project inside their bound.
+        allowed = get_current_allowed_clusters()
+        if allowed is not None and str(metadata.get("created_by") or "").lower() != (_rbac.email or "").lower():
+            outside = sorted({grant.cluster_id for grant in key_info.cluster_permissions} - set(allowed))
+            if outside:
+                _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="cluster_out_of_scope")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"This key also grants {outside}, which you cannot reach. An administrator can rotate it.",
                 )
-            raise
-    key_secret, secret_hash = generate_api_key_secret()
-    try:
-        await asyncio.to_thread(
-            vault_client.vault_kv_put,
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
-            {"hash": secret_hash, "raw": key_secret},
-        )
-    except Exception as e:
-        # note: the write may have landed before its reply was lost, so every worker still drops
-        # its cached copy and checks Vault again
+            try:
+                await _refuse_a_grant_past_the_project_bound(db, _rbac.email, key_info.cluster_permissions)
+            except HTTPException as exc:
+                if exc.status_code == 403:
+                    _audit_api_key(
+                        API_KEY_ROTATE, key_id, _rbac, metadata, result="denied", error_code="project_out_of_bound"
+                    )
+                raise
+        key_secret, secret_hash = generate_api_key_secret()
+        try:
+            await asyncio.to_thread(
+                vault_client.vault_kv_put,
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
+                {"hash": secret_hash, "raw": key_secret},
+            )
+        except Exception as e:
+            # note: the write may have landed before its reply was lost, so every worker still drops
+            # its cached copy and checks Vault again
+            evict_api_key_cache(key_id)
+            logger.error(f"Failed to rotate the secret of API key {key_id}: {e}")
+            # note: 503, so the sentence reaches the operator (other 5xx answers become a reference)
+            raise HTTPException(
+                status_code=503,
+                detail="The secret rotation did not confirm. Rotate again before using this key.",
+            )
+        # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
+        # drop its copy, so the old secret fails on the next request wherever it lands
         evict_api_key_cache(key_id)
-        logger.error(f"Failed to rotate the secret of API key {key_id}: {e}")
-        # note: 503, so the sentence reaches the operator (other 5xx answers become a reference)
-        raise HTTPException(
-            status_code=503,
-            detail="The secret rotation did not confirm. Rotate again before using this key.",
-        )
-    # note: the validation cache is keyed by id and secret, and the tombstone makes every worker
-    # drop its copy, so the old secret fails on the next request wherever it lands
-    evict_api_key_cache(key_id)
-    cache = get_cache_manager()
-    cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-    cache.delete("api_responses", f"integrations:api_key:{key_id}")
+        cache = get_cache_manager()
+        cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+        cache.delete("api_responses", f"integrations:api_key:{key_id}")
     _audit_api_key(API_KEY_ROTATE, key_id, _rbac, metadata)
     logger.info(f"API key {key_id} secret rotated")
     return APIKeyCreateResponse(api_key=key_info, api_key_id=key_id, api_key_secret=key_secret)
@@ -2392,12 +2466,16 @@ async def delete_api_key(
     vault_client = get_vault_integrations_client()
     
     try:
-        try:
-            await asyncio.to_thread(delete_api_key_from_vault, vault_client, key_id)
-        except Exception:
-            # important: part of the delete may have landed, so no worker may keep a cached copy
-            evict_api_key_cache(key_id)
-            raise
+        async with serialize_key_ownership(db, key_id):
+            await _refuse_ending_an_owner(
+                db, key_id, action="delete", audit_action=API_KEY_DELETE, user=_rbac, metadata=metadata,
+            )
+            try:
+                await asyncio.to_thread(delete_api_key_from_vault, vault_client, key_id)
+            except Exception:
+                # important: part of the delete may have landed, so no worker may keep a cached copy
+                evict_api_key_cache(key_id)
+                raise
 
         # Clear all scoped cache variants
         cache = get_cache_manager()
