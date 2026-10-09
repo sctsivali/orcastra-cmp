@@ -2301,6 +2301,8 @@ import type {
   IntegrationOrganization,
   OwnerKeyTransferRequest,
   OwnerKeyTransferResponse,
+  OwnerKeyChangeRequest,
+  OwnerSetResponse,
 } from "@/types";
 
 export const integrationsAPI = {
@@ -2415,6 +2417,30 @@ export const integrationsAPI = {
     request: OwnerKeyTransferRequest,
   ): Promise<OwnerKeyTransferResponse> => {
     return fetchAPI<OwnerKeyTransferResponse>(`/integrations/organizations/${encodeURIComponent(String(orgId))}/owner-key`, {
+      method: "PUT",
+      body: JSON.stringify(request),
+    });
+  },
+
+  // Admin only, and 404 unless INTEGRATION_MULTI_OWNER_ENABLED is on. Add a key to, remove one from,
+  // or choose the primary of a synced organization's owner set.
+  addOrganizationOwner: async (orgId: number, request: OwnerKeyChangeRequest): Promise<OwnerSetResponse> => {
+    return fetchAPI<OwnerSetResponse>(`/integrations/organizations/${encodeURIComponent(String(orgId))}/owner-keys`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  },
+
+  removeOrganizationOwner: async (orgId: number, apiKeyId: string, reason: string): Promise<OwnerSetResponse> => {
+    const query = `?reason=${encodeURIComponent(reason)}`;
+    return fetchAPI<OwnerSetResponse>(
+      `/integrations/organizations/${encodeURIComponent(String(orgId))}/owner-keys/${encodeURIComponent(apiKeyId)}${query}`,
+      { method: "DELETE" },
+    );
+  },
+
+  setOrganizationPrimary: async (orgId: number, request: OwnerKeyChangeRequest): Promise<OwnerSetResponse> => {
+    return fetchAPI<OwnerSetResponse>(`/integrations/organizations/${encodeURIComponent(String(orgId))}/primary-key`, {
       method: "PUT",
       body: JSON.stringify(request),
     });

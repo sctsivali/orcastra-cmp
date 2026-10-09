@@ -97,6 +97,7 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
 
   if (!organization) return null;
   const state = ownerKeyState(organization);
+  const coOwners = (organization.owner_keys ?? []).filter((key) => !key.is_primary);
   const ready =
     Boolean(chosen) && reason.trim().length > 0 && confirmation.trim() === organization.slug && !mutation.isPending;
 
@@ -119,8 +120,8 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
         <DialogHeader className="shrink-0">
           <DialogTitle>Transfer Owner Key</DialogTitle>
           <DialogDescription>
-            Only the new key can then sync this organization, update its members and policies, and
-            provision tenant access for it.
+            The new key replaces every owner key of this organization. Only it can then sync the
+            organization, update its members and policies, and provision tenant access for it.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
@@ -140,6 +141,12 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
                   </span>
                   <Badge variant={OWNER_KEY_STATE[state].tone}>{OWNER_KEY_STATE[state].label}</Badge>
                 </div>
+                {coOwners.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    The transfer also removes {coOwners.length === 1 ? "its co-owner" : `its ${coOwners.length} co-owners`}:{" "}
+                    {coOwners.map((key) => key.name || key.api_key_id).join(", ")}.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
