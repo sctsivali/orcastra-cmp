@@ -737,7 +737,7 @@ export function IntegrationsSettings() {
         onClose={() => setRotatedKeys((queue) => queue.slice(1))}
         response={rotatedKeys[0] ?? null}
         title="Secret Rotated"
-        description="The previous secret no longer works. Update the OrcaHub connection with this secret now. It will not be shown again."
+        description="The previous secret no longer works, and the key's callback URL was cleared until the connection syncs again. Update the OrcaHub connection with this secret now. It will not be shown again."
       />
     </div>
   );
