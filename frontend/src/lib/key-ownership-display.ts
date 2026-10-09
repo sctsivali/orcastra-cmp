@@ -109,11 +109,30 @@ const ENDING: Record<"revoke" | "delete", string> = { revoke: "Revoking it", del
  * note: mirrors _owned_message in backend/app/services/integration_key_ownership.py so the dialog
  * says what the refusal would say. The server stays the authority: a list that is out of date
  * still gets the server's own sentence in the error toast.
+ *
+ * important: with co-owners only the organizations no other key owns stop the end, and the key list
+ * counts those without saying which they are. So that sentence counts them and names none, rather
+ * than naming organizations another owner key keeps syncing as if they would freeze.
  */
 export function ownedKeySentence(key: APIKeyInfo, action: "revoke" | "delete", isAdmin: boolean): string {
   const shown = key.owned_organization_slugs ?? [];
   const hidden = key.owned_organization_hidden_count ?? 0;
   const total = key.owned_organization_count ?? shown.length + hidden;
+  const sole = key.sole_owned_organization_count;
+  if (typeof sole === "number" && sole > 0 && sole < total) {
+    const oneSole = sole === 1;
+    const solely = oneSole ? "it" : "them";
+    const others = total - sole;
+    return [
+      `This key is the only owner of ${sole} of the ${total} OrcaHub organizations it owns.`,
+      `${ENDING[action]} would leave ${oneSole ? "that organization" : "those organizations"} with an owner no other key can replace, so ${oneSole ? "its" : "their"} sync, member updates and provisioning would stop.`,
+      `${others === 1 ? "The other one has" : `The other ${others} have`} another owner key, which keeps ${others === 1 ? "it" : "them"} syncing.`,
+      isAdmin
+        ? `Transfer ${solely} to another active key first, or delete ${solely}.`
+        : `Ask an administrator to transfer ${solely} to another active key first, or to delete ${solely}.`,
+      "To stop a leaked secret now, rotate the secret instead: the key ID and its organizations stay.",
+    ].join(" ");
+  }
   // note: the list names at most 20 slugs, so "more" counts from the total, as the server does.
   const visible = Math.max(total - hidden, shown.length);
   const one = total === 1;
