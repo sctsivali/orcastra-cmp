@@ -9,8 +9,10 @@ import type {
 
 /**
  * An owner key's state as the list shows it. "hidden" is a state the list does not show: the
- * caller is neither an administrator nor a partner of the key's own organization. A buyer's
- * founder is a partner of the buyer, which carries the seller's key, and still does not see it.
+ * caller is neither an administrator nor a partner of the key's own organization, which only a
+ * sale through the key proves. A buyer's founder is a partner of the buyer, which carries the
+ * seller's key, and still does not see it; before the key's first sale nobody but an
+ * administrator does.
  */
 export type OwnerStateShown = OwnerKeyState | "hidden";
 

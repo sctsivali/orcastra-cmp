@@ -205,7 +205,7 @@ function SyncedOrganizationsContent() {
                         <TableSubText wrap>Ask an administrator to transfer this organization to an active key.</TableSubText>
                       )}
                       {state === "hidden" && (
-                        <TableSubText wrap>Only the partners of the organization this key belongs to see it.</TableSubText>
+                        <TableSubText wrap>Only administrators see this owner key, and partners of the key&apos;s own organization once it has provisioned a buyer.</TableSubText>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
