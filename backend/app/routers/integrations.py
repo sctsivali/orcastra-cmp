@@ -4677,6 +4677,8 @@ async def enroll_owner_key(
                     raise HTTPException(status_code=503, detail=owner_key_enrollment.UNREADABLE)
                 raise _refuse(403, "not_an_owner", "The calling key cannot own this organization, so it cannot add an owner key.")
             if owner_key_enrollment.locked_out(vouching, new_key):
+                logger.warning("Owner key enrollment refused: api key %s is locked out of vouching for %s "
+                               "(organization %s)", vouching, new_key, org.slug)
                 raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
             new_metadata, new_failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, new_key)
             stored_hash, hash_failure = await asyncio.to_thread(_read_key_secret_hash_blocking, vault_client, new_key)
@@ -4687,6 +4689,9 @@ async def enroll_owner_key(
             verified = verify_api_key_secret(body.new_key_secret.get_secret_value(), stored_hash or "")
             if new_metadata is None or not verified:
                 owner_key_enrollment.record_failure(vouching, new_key)
+                # note: key ids and the organization only, never the secret that was tried
+                logger.warning("Owner key enrollment refused: api key %s could not verify %s (organization %s); "
+                               "a missing key and a wrong secret read the same", vouching, new_key, org.slug)
                 raise _refuse(403, "new_key_unverified", owner_key_enrollment.UNVERIFIED)
             refused = owner_key_refusal(new_metadata, None)
             if refused is not None:
@@ -4696,9 +4701,12 @@ async def enroll_owner_key(
                 raise _refuse(status, code, message)
             if not await owner_key_enrollment.party_check(db, org, vouching_metadata or {}, new_metadata,
                                                           vouching_key_id=vouching):
+                logger.warning("Owner key enrollment refused: the minter of %s has not been a partner of "
+                               "organization %s, or of the home of %s, for a day", new_key, org.slug, vouching)
                 raise _refuse(403, "new_key_outside_organization", (
-                    "The new key was minted by someone who neither minted the calling key nor runs this "
-                    "organization, so it cannot join its owner set. Ask an Orcastra administrator to add it."
+                    "The new key's minter has not been a partner of this organization, or of the calling key's "
+                    "own organization, for a day, so the key cannot join its owner set. Ask an Orcastra "
+                    "administrator to add it."
                 ))
             before = await owner_key_ids(db, org.id)
             try:

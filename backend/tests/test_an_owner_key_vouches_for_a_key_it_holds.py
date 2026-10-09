@@ -197,19 +197,26 @@ async def test_a_key_does_not_leave_while_its_co_owner_is_unreadable(
     assert await owner_key_ids(world["db"], world["org"]) == [OWNER, NEW]
 
 
-@pytest.mark.parametrize("new_key, secret", [(NEW, "wrong"), ("oak_missing", NEW_SECRET)], ids=["wrong_secret", "missing_key"])
-async def test_a_missing_key_and_a_wrong_secret_read_the_same(world: Dict[str, Any], new_key: str, secret: str) -> None:
+@pytest.mark.parametrize("new_key, secret", [(NEW, "wrong-secret-tried"), ("oak_missing", NEW_SECRET)], ids=["wrong_secret", "missing_key"])
+async def test_a_missing_key_and_a_wrong_secret_read_the_same(
+    world: Dict[str, Any], caplog: pytest.LogCaptureFixture, new_key: str, secret: str
+) -> None:
+    caplog.set_level(logging.WARNING)
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll(new_key, secret))
     assert response.status_code == 403
     assert response.json()["detail"] == {"error": "new_key_unverified", "message": owner_key_enrollment.UNVERIFIED}
     assert await owner_key_ids(world["db"], world["org"]) == [OWNER]
+    assert f"api key {OWNER} could not verify {new_key} (organization acme-cloud)" in caplog.text
+    assert secret not in caplog.text, "the secret that was tried is never logged"
 
 
-async def test_repeated_failures_lock_the_pair_out(world: Dict[str, Any]) -> None:
+async def test_repeated_failures_lock_the_pair_out(world: Dict[str, Any], caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING)
     for _ in range(owner_key_enrollment.FAILURES_BEFORE_LOCKOUT):
         owner_key_enrollment.record_failure(OWNER, NEW)
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
     assert response.status_code == 403 and response.json()["detail"]["error"] == "new_key_unverified"
+    assert f"api key {OWNER} is locked out of vouching for {NEW} (organization acme-cloud)" in caplog.text
     assert not owner_key_enrollment.locked_out(OTHER, NEW), "another vouching key is not locked out with it"
 
 
@@ -323,16 +330,20 @@ async def test_a_key_minted_outside_the_organization_is_refused(world: Dict[str,
 
 
 @pytest.mark.parametrize("left", ["gone", "written_back_today"])
-async def test_a_minter_who_left_cannot_enroll_a_key_of_its_own(world: Dict[str, Any], left: str) -> None:
+async def test_a_minter_who_left_cannot_enroll_a_key_of_its_own(
+    world: Dict[str, Any], caplog: pytest.LogCaptureFixture, left: str
+) -> None:
     """Both keys are MINTER's, but MINTER no longer runs acme-cloud: having minted the vouching key is not enough.
 
     An owner key writes the organization's members, so a minter who left could also push itself back as a
     partner. Such a row is fresh, and a fresh row does not count for a day.
     """
+    caplog.set_level(logging.WARNING)
     minter_joined(world, None if left == "gone" else datetime.now(timezone.utc))
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
     assert response.status_code == 403 and response.json()["detail"]["error"] == "new_key_outside_organization"
     assert await owner_key_ids(world["db"], world["org"]) == [OWNER]
+    assert f"the minter of {NEW} has not been a partner of organization acme-cloud, or of the home of {OWNER}" in caplog.text
 
 
 @pytest.fixture
@@ -355,6 +366,27 @@ async def test_the_minter_enrolls_into_a_buyer_while_it_runs_the_home(buyer: Dic
     response = await call(buyer, OWNER, "POST", OWNER_KEYS, enroll(ext="ext-buyer"))
     assert response.status_code == 200 and response.json()["added"] is True, response.text
     assert await owner_key_ids(buyer["db"], buyer["buyer"]) == [OWNER, NEW]
+
+
+async def test_a_minter_whose_email_carries_capitals_is_found_in_its_home(world: Dict[str, Any]) -> None:
+    """The member row and the key record the minter as written, capitals included; the home check matches it."""
+    upper = "Partner.Lead@Example.test"
+    db = world["db"]
+    member = db.sync.query(OrganizationMember).filter_by(user_email=MINTER).one()
+    member.user_email = upper
+    db.sync.commit()
+    world["vault"].docs[path(OWNER)] = metadata(OWNER, created_by=upper)
+    world["vault"].docs[path(NEW)] = metadata(NEW, created_by=upper)
+    db.add(Organization(name="Buyer", slug="buyer-co", source="orcahub", external_id="ext-buyer", api_key_id=OWNER,
+                        created_by=upper, is_active=True))
+    db.sync.commit()
+    buyer_id = db.sync.query(Organization.id).filter(Organization.slug == "buyer-co").scalar()
+    db.add(OrganizationCluster(organization_id=world["org"], cluster_id="c-sold", registered_by=upper))
+    db.sync.commit()
+    db.add(OrganizationCluster(organization_id=buyer_id, cluster_id="c-sold", registered_by=None))
+    db.sync.commit()
+    response = await call(world, OWNER, "POST", OWNER_KEYS, enroll(ext="ext-buyer"))
+    assert response.status_code == 200 and response.json()["added"] is True, response.text
 
 
 @pytest.mark.parametrize("change", ["home_row_fresh", "no_sale"])

@@ -158,7 +158,10 @@ async def party_check(
     if minter not in {str(vouching.get("created_by") or "").strip().lower(), str(org.created_by or "").strip().lower()}:
         return False
     key_id = vouching_key_id or str(vouching.get("id") or "")
-    return bool(key_id) and key_id in await home_partner_keys(db, minter, settled_before=settled)
+    # note: the minter as the key records it. home_partner_keys matches a member's email exactly, as the
+    # rotation rule passes it; the lowercased form above would miss a row stored with capitals.
+    stored = str(new.get("created_by") or "").strip()
+    return bool(key_id) and key_id in await home_partner_keys(db, stored, settled_before=settled)
 
 
 async def partner_emails(db: AsyncSession, org: Organization) -> List[str]:
