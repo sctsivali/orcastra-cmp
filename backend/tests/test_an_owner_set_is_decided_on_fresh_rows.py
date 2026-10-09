@@ -39,6 +39,15 @@ from tests.test_a_key_that_owns_an_organization_is_not_revoked_or_deleted import
     owned,
     send,
 )
+from tests.test_an_owner_key_vouches_for_a_key_it_holds import (  # noqa: F401
+    EXT,
+    NEW,
+    OWNER,
+    OWNER_KEYS,
+    call,
+    enroll,
+    world,
+)
 
 LEAKED = "OperationalError: SQL fk_org_primary_owner_key oak_plain"
 
@@ -191,3 +200,29 @@ async def test_a_vault_delete_that_raises_still_evicts_and_names_nothing(
     assert (response.status_code, response.json()["detail"]) == (500, "Failed to delete the API key")
     assert three["evicted"] == [PLAIN]
     assert "OperationalError" not in response.text
+
+
+async def test_a_key_that_left_while_waiting_is_not_removed_again(
+    world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    """An Administrator's transfer to NEW lands while OWNER's own removal waits for the lock."""
+    db = world["db"]
+    assert (await call(world, OWNER, "POST", OWNER_KEYS, enroll())).json()["added"] is True
+    world["records"].calls.clear()
+    real = integrations.serialize_org_owners
+
+    @asynccontextmanager
+    async def transfer_lands_first(session: Any, org_ids: Any) -> AsyncIterator[None]:
+        session.sync.execute(text("UPDATE organizations SET api_key_id = :key WHERE id = :id"),
+                             {"key": NEW, "id": world["org"]})
+        session.sync.execute(text("DELETE FROM organization_owner_keys WHERE api_key_id = :key"), {"key": OWNER})
+        session.sync.commit()
+        async with real(session, org_ids):
+            yield
+
+    monkeypatch.setattr(integrations, "serialize_org_owners", transfer_lands_first)
+    response = await call(world, OWNER, "DELETE", f"/api/v1/integrations/external/organizations/{EXT}/owner-keys/self")
+    assert response.json() == {"removed": False, "primary_key_id": None, "owner_key_ids": None}
+    assert world["records"].calls == [], "nothing changed, so nothing is recorded"
+    assert await owner_key_ids(db, world["org"]) == [NEW]
+    await assert_owner_invariants(db)

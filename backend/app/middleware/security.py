@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 import os
 import time
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -64,6 +64,38 @@ def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
         if count == 1:
             client.expire(bucket, window_seconds)
         return int(count) <= limit
+    except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
+        logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
+        return None
+
+
+def _shared_consume(key: str, limit: int, window_seconds: int) -> Optional[Tuple[int, int]]:
+    """Spend one hit and report the count and the seconds left in the window.
+
+    The same operation `_shared_allow` performs, keeping the number it throws away. A caller that
+    wants to tell the client where it stands needs the count; a caller that only wants a yes or no
+    keeps using `_shared_allow`, whose contract is unchanged.
+
+    None means the store could not answer, which is the fail-open case: a caller must not invent a
+    remaining budget it does not know.
+    """
+    if limit <= 0:
+        return None
+    try:
+        from app.core.cache import get_cache_manager
+
+        client = get_cache_manager().redis_client
+        if client is None:
+            return None
+        bucket = f"orcastra:ratelimit:{key}"
+        count = int(client.incr(bucket))
+        if count == 1:
+            client.expire(bucket, window_seconds)
+        ttl = client.ttl(bucket)
+        # Redis answers -1 for a key with no expiry and -2 for one that just vanished. Neither is
+        # a window this caller can report, so both fall back to the configured length.
+        reset = window_seconds if ttl is None or ttl < 0 else int(ttl)
+        return count, reset
     except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
         logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
         return None

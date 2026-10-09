@@ -2,8 +2,8 @@
 
 The refusal that runs first decides on the same locked rows, so organization_owners.remove_owner finding
 no other owner is not expected. If it ever does, every route that ends a key answers the fixed 409 and
-writes nothing: revoke, delete and the Administrator's removal. A successor that cannot be read at that
-point answers the fixed 503.
+writes nothing: revoke, delete, the Administrator's removal and an owner key's own removal. A successor
+that cannot be read at that point answers the fixed 503.
 """
 
 from typing import Any, Dict
@@ -28,6 +28,7 @@ from tests.test_a_key_that_owns_an_organization_is_not_revoked_or_deleted import
     owned,
     send,
 )
+from tests.test_an_owner_key_vouches_for_a_key_it_holds import EXT, OWNER, OWNER_KEYS, call, enroll, world  # noqa: F401
 
 
 def _raise(error: Any) -> Any:
@@ -81,3 +82,14 @@ async def test_the_administrators_removal_answers_409(
     assert response.status_code == 409 and response.json()["detail"]["error"] == "last_owner"
     _untouched(co_owned)
     assert await owner_key_ids(co_owned["db"], co_owned["acme"]) == [PLAIN, CO]
+
+
+async def test_an_owner_keys_own_removal_answers_409(
+    world: Dict[str, Any], monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    assert (await call(world, OWNER, "POST", OWNER_KEYS, enroll())).json()["added"] is True
+    world["records"].calls.clear()
+    monkeypatch.setattr(integrations, "remove_owner", _raise(LastOwner()))
+    response = await call(world, OWNER, "DELETE", f"/api/v1/integrations/external/organizations/{EXT}/owner-keys/self")
+    assert response.status_code == 409 and response.json()["detail"]["error"] == "last_owner"
+    assert world["records"].calls == []
