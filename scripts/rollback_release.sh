@@ -107,6 +107,14 @@ if docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
     if [ -n "$stamp_now" ] && docker image inspect "$TARGET_BACKEND" >/dev/null 2>&1; then
         hist="$(docker run --rm --entrypoint alembic "$TARGET_BACKEND" history 2>/dev/null)"
         if [ -n "$hist" ] && ! printf '%s' "$hist" | grep -q "$stamp_now"; then
+            if [ "$stamp_now" = "015a_organization_owner_keys" ] && [ "$SKIP_MIGRATIONS" -eq 1 ]; then
+                echo -e "${RED}--skip-migrations cannot cross 015a_organization_owner_keys: $TARGET_BACKEND claims${NC}"
+                echo -e "${RED}organizations without their owner rows, which that revision's foreign key refuses.${NC}"
+                echo "  Downgrade the schema first, from an image that ships 015a:"
+                echo "    docker exec ${PREFIX}-backend alembic downgrade 015_session_audit_bigint"
+                echo "  then run this again without --skip-migrations. Nothing was changed."
+                exit 1
+            fi
             if [ "$SKIP_MIGRATIONS" -eq 0 ]; then
                 echo -e "${RED}The database is stamped '$stamp_now', which $TARGET_BACKEND does not ship.${NC}"
                 echo "  Starting it as-is gives a crash loop, because the entrypoint runs"
