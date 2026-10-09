@@ -10,18 +10,21 @@ force goes through and is recorded as forced. There is no restriction beyond who
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.api_key_capabilities import has_capability
 from app.services.integration_key_ownership import (
     MAX_LISTED_SLUGS,
     OWNERSHIP_UNKNOWN_DETAIL,
     name_organizations,
     owned_organizations,
+    owner_key_refusal,
     visible_organization_ids,
 )
+from app.services.organization_owners import owners_of
 
 logger = logging.getLogger(__name__)
 
@@ -46,20 +49,31 @@ def _message(total: int, slugs: List[str], hidden: int) -> str:
 
 
 async def confirm_provisioning_withdrawal(
-    db: AsyncSession, key_id: str, *, user: Any, force: bool
+    db: AsyncSession, key_id: str, *, user: Any, force: bool,
+    read_metadata: Optional[Callable[[str], Awaitable[Tuple[Optional[Dict[str, Any]], Optional[str]]]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """None when the key owns no active OrcaHub organization. Otherwise 409 without force, and with
-    it the fields the edit's audit record carries. 503 when what the key owns cannot be read.
+    """None when the key owns no active OrcaHub organization that would lose provisioning. Otherwise 409
+    without force, and with it the fields the edit's audit record carries. 503 when what the key owns
+    cannot be read.
+
+    An organization another owner key still provisions for (an active OrcaHub key holding
+    tenant.provision, read with `read_metadata`) does not lose provisioning, so it is not counted.
 
     note: names only the organizations the caller may see and counts the rest, in the answer and in
     the record alike, as a refusal does: the caller can read the record.
     """
     try:
         owned = await owned_organizations(db, key_id)
+        owners = await owners_of(db, [org.id for org in owned]) if owned else {}
         visible = await visible_organization_ids(db, user) if owned else None
     except Exception as exc:  # noqa: BLE001 - unknown ownership asks again, it never allows
         logger.warning("Could not read which organizations api key %s owns: %s", key_id, type(exc).__name__)
         raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+    provisioners = await _provisioning_owners(
+        {row.api_key_id for rows in owners.values() for row in rows if row.api_key_id != key_id}, read_metadata
+    )
+    owned = [org for org in owned
+             if not any(row.api_key_id in provisioners for row in owners.get(org.id, []) if row.api_key_id != key_id)]
     if not owned:
         return None
     shown = [org for org in owned if visible is None or org.id in visible]
@@ -84,3 +98,22 @@ async def confirm_provisioning_withdrawal(
         "hidden_organization_count": hidden,
         "proceed": "Send the same request with force set to true to withdraw it anyway.",
     })
+
+
+async def _provisioning_owners(
+    key_ids: Iterable[str],
+    read_metadata: Optional[Callable[[str], Awaitable[Tuple[Optional[Dict[str, Any]], Optional[str]]]]],
+) -> Set[str]:
+    """The keys that can provision for an organization they own now: able owners holding tenant.provision.
+    An unreadable key counts as not provisioning, so the warning errs towards asking."""
+    able: Set[str] = set()
+    if read_metadata is None:
+        return able
+    for other in sorted(set(key_ids)):
+        try:
+            metadata, failure = await read_metadata(other)
+        except Exception:  # noqa: BLE001 - unreadable reads as not provisioning
+            continue
+        if owner_key_refusal(metadata, failure) is None and has_capability(dict(metadata or {}), PROVISIONING_CAPABILITY):
+            able.add(other)
+    return able

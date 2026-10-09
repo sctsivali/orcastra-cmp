@@ -441,6 +441,15 @@ class Settings(BaseSettings):
         description="Remove members no longer in OrcaHub's pushed roster (per synced org). Destructive; default off."
     )
 
+    # Several integration keys may own one synced organization (app/services/organization_owners.py).
+    # Off: the owner-key routes answer 404, validate reports no feature and refusals offer no co-owner,
+    # so integrations see the single-owner behaviour. The owner set itself exists either way.
+    integration_multi_owner_enabled: bool = Field(
+        default=False,
+        alias="INTEGRATION_MULTI_OWNER_ENABLED",
+        description="Let more than one integration key own a synced organization (enrollment, owner-key routes).",
+    )
+
     # Observe-only mode for the member reconcile. Default ON so the FIRST time reconcile is enabled
     # it only LOGS the members it would remove (no deletes), letting ops audit a few real syncs
     # before flipping this off to actually enforce removals. Requires a container restart to flip.

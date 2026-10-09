@@ -6,7 +6,7 @@ via the external API endpoints authenticated with API key credentials.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 from sqlalchemy import select, and_
@@ -26,15 +26,26 @@ _ROLE_TO_ORCAHUB = {
 }
 
 
-async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]]:
+async def _get_orcahub_credentials(org: Organization, owner_keys: Sequence[str] = ()) -> Optional[Dict[str, Any]]:
     """
     Retrieve OrcaHub callback URL and API key credentials for an org.
     The org must have source='orcahub' and a stored api_key_id.
-    Returns dict with app_url, api_key_id, api_key_secret_hash or None.
+    Returns dict with app_url, api_key_id, api_key_secret or None.
+
+    The primary owner key is asked first. When it cannot call back (ended, or no URL stored with its
+    current secret), the other keys of the owner set (`owner_keys`, oldest first) are tried in turn, so
+    an organization another owner still serves keeps its callbacks. Nothing is written.
     """
     if org.source != "orcahub" or not org.api_key_id:
         return None
+    for key_id in [org.api_key_id, *[k for k in owner_keys if k and k != org.api_key_id]]:
+        creds = _credentials_of(org, key_id)
+        if creds:
+            return creds
+    return None
 
+
+def _credentials_of(org: Organization, key_id: str) -> Optional[Dict[str, Any]]:
     try:
         from app.routers.integrations import (
             get_vault_integrations_client,
@@ -43,7 +54,7 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
 
         vault_client = get_vault_integrations_client()
         metadata = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/metadata"
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
         )
         # important: a revoked, inactive or expired key gets no callback. Its integration is
         # gone, and the raw secret a callback carries must not leave the process for it, so the
@@ -51,11 +62,11 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
         if classify_key(metadata) != "active":
             logger.info(
                 "OrcaHub callback skipped for api key %s: the key is revoked, inactive or expired",
-                org.api_key_id,
+                key_id,
             )
             return None
         secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{org.api_key_id}/secret"
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
         )
         # important: only a URL the key's current secret stored, so a URL planted with a secret that
         # a rotation replaced never receives the new one. See services/integration_callback_url.py.
@@ -63,16 +74,16 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
         raw_secret = secret_data.get("raw")
 
         if not app_url:
-            logger.warning(f"No callback URL stored with the current secret of API key {org.api_key_id}")
+            logger.warning(f"No callback URL stored with the current secret of API key {key_id}")
             return None
 
         if not raw_secret:
-            logger.warning(f"No raw secret stored for API key {org.api_key_id}, cannot call back OrcaHub")
+            logger.warning(f"No raw secret stored for API key {key_id}, cannot call back OrcaHub")
             return None
 
         return {
             "app_url": app_url,
-            "api_key_id": org.api_key_id,
+            "api_key_id": key_id,
             "api_key_secret": raw_secret,
         }
     except Exception as e:
@@ -95,7 +106,9 @@ async def push_members_to_orcahub(
         logger.warning(f"Org {org_id} not found for OrcaHub push")
         return False
 
-    creds = await _get_orcahub_credentials(org)
+    from app.services.organization_owners import owner_key_ids
+
+    creds = await _get_orcahub_credentials(org, await owner_key_ids(db, org.id))
     if not creds:
         logger.debug(f"Org {org_id} is not OrcaHub-synced or has no callback URL, skipping push")
         return False

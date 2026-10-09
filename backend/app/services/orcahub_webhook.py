@@ -44,6 +44,14 @@ async def _orcahub_orgs_for_cluster(db, cluster_id: str):
     return result.scalars().unique().all()
 
 
+async def _owner_sets(db, orgs) -> dict:
+    """Each organization's owner keys, oldest first, for the callback fallback past a dead primary."""
+    from app.services.organization_owners import owners_of
+
+    sets = await owners_of(db, [org.id for org in orgs]) if orgs else {}
+    return {org_id: [row.api_key_id for row in rows] for org_id, rows in sets.items()}
+
+
 async def _post_signed(creds: dict, payload: dict) -> None:
     body = json.dumps(payload, separators=(",", ":"))
     ts = str(int(time.time()))
@@ -82,13 +90,14 @@ async def emit_orcahub_event_durable(
     """
     async with async_session_maker() as db:
         orgs = await _orcahub_orgs_for_cluster(db, cluster_id)
+        owner_sets = await _owner_sets(db, orgs)
     if not orgs:
         return 0
 
     occurred = occurred_at or datetime.now(timezone.utc).isoformat()
     delivered = 0
     for org in orgs:
-        creds = await _get_orcahub_credentials(org)
+        creds = await _get_orcahub_credentials(org, owner_sets.get(org.id, []))
         if not creds:
             continue
         stable_event_id = str(
@@ -117,9 +126,10 @@ async def _emit(event_type: str, cluster_id: str, project: Optional[str], name: 
             orgs = await _orcahub_orgs_for_cluster(db, cluster_id)
             if not orgs:
                 return
+            owner_sets = await _owner_sets(db, orgs)
             occurred = datetime.now(timezone.utc).isoformat()
             for org in orgs:
-                creds = await _get_orcahub_credentials(org)
+                creds = await _get_orcahub_credentials(org, owner_sets.get(org.id, []))
                 if not creds:
                     continue
                 # Stable per-org event id (idempotency key is global per source+eventId).

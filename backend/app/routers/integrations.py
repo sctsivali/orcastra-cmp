@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Annotated, Optional, List, Dict, Any, NamedTuple, Tuple, Union
+from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, NamedTuple, Tuple, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Response
 from pydantic import BaseModel, Field, StringConstraints, ValidationError, field_validator
 import requests
@@ -135,7 +135,26 @@ from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services import cluster_parties
-from app.services.organization_owners import is_owner, mark_entry, owned_by_clause, owner_key_ids
+from app.services.organization_owners import (
+    ADD_ACTION,
+    MAX_OWNER_KEYS,
+    PRIMARY_ACTION,
+    REMOVE_ACTION,
+    LastOwner,
+    NoAbleOwner,
+    OwnerSetFull,
+    add_owner,
+    is_owner,
+    mark_entry,
+    multi_owner_enabled,
+    owned_by_clause,
+    owner_key_ids,
+    owners_of,
+    record_owner_change,
+    remove_owner,
+    serialize_org_owners,
+    set_primary,
+)
 from app.services.integration_roles import apply_upsert_role, may_reconcile, stored_member_role
 from app.services.integration_cluster_rebind import (
     claimed_organization_count,
@@ -153,6 +172,11 @@ from app.services.integration_key_ownership import (
     owned_by_keys,
     owner_key_refusal,
     refuse_if_key_owns_organizations,
+    able_owners,
+    apply_owner_handoffs,
+    OwnerHandoff,
+    owned_org_ids_to_lock,
+    record_owner_handoffs,
     keys_whose_home_the_user_partners,
     partners_the_home_organization,
     release_key_locks,
@@ -362,6 +386,13 @@ class APIKeyInfo(BaseModel):
     )
     owned_organization_hidden_count: int = Field(
         0, description="Owned organizations the caller may not see, counted but not named"
+    )
+    sole_owned_organization_count: Optional[int] = Field(
+        None,
+        description=(
+            "Of those, the ones no other key co-owns, which ending this key would freeze; null when it "
+            "could not be read"
+        ),
     )
 
 
@@ -2358,6 +2389,14 @@ async def _refuse_a_grant_past_the_project_bound(
         )
 
 
+def _owner_metadata_reader(vault_client) -> Callable[[str], Awaitable[Tuple[Optional[Dict[str, Any]], Optional[str]]]]:
+    """How the ownership checks read another owner key: uncached, off the event loop."""
+    async def _read(other_key_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        return await asyncio.to_thread(_read_key_metadata_blocking, vault_client, other_key_id)
+
+    return _read
+
+
 async def _refuse_ending_an_owner(
     db: AsyncSession,
     key_id: str,
@@ -2367,11 +2406,14 @@ async def _refuse_ending_an_owner(
     user: AuthenticatedUser,
     metadata: Dict[str, Any],
     withdrawn: Tuple[str, ...] = (),
-) -> None:
-    """refuse_if_key_owns_organizations, with the refusal recorded on the action it refused."""
+    vault_client: Any = None,
+) -> List[OwnerHandoff]:
+    """refuse_if_key_owns_organizations, with the refusal recorded on the action it refused. Returns the
+    organizations another owner carries on, for apply_owner_handoffs."""
     try:
-        await refuse_if_key_owns_organizations(
-            db, key_id, action=action, user=user, metadata=metadata, withdrawn=withdrawn
+        return await refuse_if_key_owns_organizations(
+            db, key_id, action=action, user=user, metadata=metadata, withdrawn=withdrawn,
+            read_metadata=_owner_metadata_reader(vault_client) if vault_client is not None else None,
         )
     except KeyOwnsOrganizations as refusal:
         _audit_credential_lifecycle(
@@ -2394,6 +2436,7 @@ async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[
     try:
         owned = await owned_by_keys(db, [info.id for info in keys])
         visible = await visible_organization_ids(db, user) if owned else None
+        sets = await owners_of(db, {org_id for rows in owned.values() for org_id, _slug in rows})
     except Exception as exc:  # noqa: BLE001 - the list still renders, without ownership
         logger.warning("Could not read which organizations the listed keys own: %s", type(exc).__name__)
         return keys
@@ -2403,6 +2446,7 @@ async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[
         info.owned_organization_count = len(rows)
         info.owned_organization_slugs = shown[:MAX_LISTED_SLUGS]
         info.owned_organization_hidden_count = len(rows) - len(shown)
+        info.sole_owned_organization_count = sum(1 for org_id, _slug in rows if len(sets.get(org_id, [])) <= 1)
     return keys
 
 
@@ -2659,6 +2703,7 @@ async def update_api_key_capabilities(
     try:
         # important: read inside the key's lock, which revoke, delete, the permission edit and a
         # rotation take too. Read before it, this write could put back a revoke that landed between.
+        handed_off: List[Any] = []
         async with serialize_key_ownership(db, key_id):
             metadata, _secret_hash = await asyncio.to_thread(
                 get_api_key_from_vault, vault_client, key_id, use_cache=False
@@ -2673,20 +2718,28 @@ async def update_api_key_capabilities(
                 name for name in SYNC_CAPABILITIES
                 if has_capability(previous, name) and not has_capability(metadata, name)
             )
-            if withdrawn:
-                await _refuse_ending_an_owner(
-                    db, key_id, action="capabilities", audit_action=CAPABILITIES_UPDATE_ACTION,
-                    user=_rbac, metadata=previous, withdrawn=withdrawn,
+            async with serialize_org_owners(db, await owned_org_ids_to_lock(db, key_id) if withdrawn else []):
+                if withdrawn:
+                    handoffs = await _refuse_ending_an_owner(
+                        db, key_id, action="capabilities", audit_action=CAPABILITIES_UPDATE_ACTION,
+                        user=_rbac, metadata=previous, withdrawn=withdrawn, vault_client=vault_client,
+                    )
+                    # note: the key stays an owner of what another owner carries on, but not its primary
+                    handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=False)
+                # important: asked about rather than refused (services/integration_key_provisioning.py).
+                # An owner without tenant.provision stops provisioning for its organizations.
+                forced = None
+                if has_capability(previous, PROVISIONING_CAPABILITY) and not has_capability(metadata, PROVISIONING_CAPABILITY):
+                    forced = await confirm_provisioning_withdrawal(
+                        db, key_id, user=_rbac, force=request.force, read_metadata=_owner_metadata_reader(vault_client)
+                    )
+                vault_client.vault_kv_put(
+                    f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+                    metadata,
                 )
-            # important: asked about rather than refused (services/integration_key_provisioning.py).
-            # An owner without tenant.provision stops provisioning for its organizations.
-            forced = None
-            if has_capability(previous, PROVISIONING_CAPABILITY) and not has_capability(metadata, PROVISIONING_CAPABILITY):
-                forced = await confirm_provisioning_withdrawal(db, key_id, user=_rbac, force=request.force)
-            vault_client.vault_kv_put(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-                metadata,
-            )
+                if handed_off:
+                    await db.commit()
+        record_owner_handoffs(handed_off, key_id=key_id, action="capabilities", actor_email=_rbac.email, remove=False)
         logger.info(
             "Set capabilities on API key %s to %s (was %s)",
             key_id, metadata["capabilities"], "legacy/unrestricted" if was_legacy else "a set",
@@ -2732,21 +2785,27 @@ async def revoke_api_key(
         # read under the lock too, so this write does not undo an edit that held it before.
         async with serialize_key_ownership(db, key_id):
             metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
-            await _refuse_ending_an_owner(
-                db, key_id, action="revoke", audit_action="integration.api_key.revoke",
-                user=_rbac, metadata=metadata,
-            )
+            async with serialize_org_owners(db, await owned_org_ids_to_lock(db, key_id)):
+                handoffs = await _refuse_ending_an_owner(
+                    db, key_id, action="revoke", audit_action="integration.api_key.revoke",
+                    user=_rbac, metadata=metadata, vault_client=vault_client,
+                )
+                # note: a revoked key leaves every owner set another owner carries on (decision D11)
+                handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
 
-            # Mark as revoked
-            metadata["is_revoked"] = True
-            metadata["is_active"] = False
-            metadata["revoked_at"] = datetime.utcnow().isoformat()
+                # Mark as revoked
+                metadata["is_revoked"] = True
+                metadata["is_active"] = False
+                metadata["revoked_at"] = datetime.utcnow().isoformat()
 
-            # Save updated metadata
-            vault_client.vault_kv_put(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-                metadata
-            )
+                # Save updated metadata
+                vault_client.vault_kv_put(
+                    f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+                    metadata
+                )
+                if handed_off:
+                    await db.commit()
+        record_owner_handoffs(handed_off, key_id=key_id, action="revoke", actor_email=_rbac.email, remove=True)
         
         # Clear all scoped cache variants for real-time revocation
         cache = get_cache_manager()
@@ -2932,14 +2991,19 @@ async def delete_api_key(
         async with serialize_key_ownership(db, key_id):
             # Read before the delete: afterwards there is nothing left to describe what was removed.
             metadata, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
-            await _refuse_ending_an_owner(
-                db, key_id, action="delete", audit_action="integration.api_key.delete",
-                user=_rbac, metadata=metadata,
-            )
-            await refuse_delete(db, key_id, metadata)
+            async with serialize_org_owners(db, await owned_org_ids_to_lock(db, key_id)):
+                handoffs = await _refuse_ending_an_owner(
+                    db, key_id, action="delete", audit_action="integration.api_key.delete",
+                    user=_rbac, metadata=metadata, vault_client=vault_client,
+                )
+                await refuse_delete(db, key_id, metadata)
+                handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
 
-            # Delete from Vault
-            delete_api_key_from_vault(vault_client, key_id)
+                # Delete from Vault
+                delete_api_key_from_vault(vault_client, key_id)
+                if handed_off:
+                    await db.commit()
+        record_owner_handoffs(handed_off, key_id=key_id, action="delete", actor_email=_rbac.email, remove=True)
 
         # Clear all scoped cache variants
         cache = get_cache_manager()
@@ -5364,6 +5428,23 @@ class IntegrationOrgResponse(BaseModel):
     owner_key_expires_at: Optional[str] = None
     owner_key_expiry_state: Optional[str] = None
     cluster_ids: List[str] = Field(default_factory=list)
+    # Every key in the owner set, primary first; empty when the caller may not see the owner keys
+    # (the same rule as the owner_key_* fields) or the organization has no owner.
+    owner_keys: List["OwnerKeyEntry"] = Field(default_factory=list)
+
+
+class OwnerKeyEntry(BaseModel):
+    """One key in an organization's owner set."""
+    api_key_id: str
+    name: Optional[str] = None
+    state: str
+    expires_at: Optional[str] = None
+    is_primary: bool = False
+    added_at: Optional[str] = None
+    added_via: Optional[str] = None
+
+
+IntegrationOrgResponse.model_rebuild()
 
 
 async def _owner_keys(key_ids: List[str]) -> Dict[str, Tuple[Optional[Dict[str, Any]], Optional[str]]]:
@@ -5455,17 +5536,23 @@ async def list_synced_organizations(
                 )
             )
             running = {org_id for (org_id,) in partner_rows.all()}
-            homes = await keys_whose_home_the_user_partners(db, user.email, {org.api_key_id for org in orgs})
+        owner_sets = await owners_of(db, [org.id for org in orgs])
+        every_owner = {row.api_key_id for rows in owner_sets.values() for row in rows} | {
+            org.api_key_id for org in orgs if org.api_key_id}
+        if running is not None:
+            homes = await keys_whose_home_the_user_partners(db, user.email, every_owner)
 
-        # note: the owner key's metadata only, never its secret, and read live: a cached copy from
+        # note: the owner keys' metadata only, never a secret, and read live: a cached copy from
         # before a revoke would report a frozen organization as healthy.
-        owners = await _owner_keys(sorted({org.api_key_id for org in orgs if org.api_key_id}))
+        owners = await _owner_keys(sorted(every_owner))
 
         response = []
         for org in orgs:
             read = owners.get(org.api_key_id, (None, None)) if org.api_key_id else (None, None)
             meta = read[0] or {}
-            shown = running is None or (org.api_key_id in homes if org.api_key_id else org.id in running)
+            in_set = {row.api_key_id for row in owner_sets.get(org.id, [])} | ({org.api_key_id} if org.api_key_id else set())
+            # note: a partner of the home organization of any key in the set sees them
+            shown = running is None or (bool(in_set & homes) if org.api_key_id else org.id in running)
             response.append(IntegrationOrgResponse(
                 id=org.id,
                 name=org.name,
@@ -5482,6 +5569,18 @@ async def list_synced_organizations(
                 owner_key_expires_at=meta.get("expires_at") if shown else None,
                 owner_key_expiry_state=expiry_state(meta.get("expires_at")) if meta and shown else None,
                 cluster_ids=sorted(set(clusters.get(org.id, []))),
+                owner_keys=[
+                    OwnerKeyEntry(
+                        api_key_id=row.api_key_id,
+                        name=(owners.get(row.api_key_id, (None, None))[0] or {}).get("name") or None,
+                        state=_owner_state(row.api_key_id, owners.get(row.api_key_id, (None, None))),
+                        expires_at=(owners.get(row.api_key_id, (None, None))[0] or {}).get("expires_at"),
+                        is_primary=row.is_primary,
+                        added_at=row.added_at.isoformat() if row.added_at else None,
+                        added_via=row.added_via,
+                    )
+                    for row in sorted(owner_sets.get(org.id, []), key=lambda r: (not r.is_primary,))
+                ] if shown and org.api_key_id else [],
             ))
 
         return response
@@ -5608,6 +5707,9 @@ class OwnerKeyTransferResponse(BaseModel):
     # How many organizations the new owner claims after this. Anything but one stops its pushes
     # rebinding the creator's personal clusters (services/integration_cluster_rebind.py).
     claimed_organization_count: int = 0
+    # The co-owners a transfer took out of the owner set besides the previous primary: a transfer
+    # replaces the whole set with the new key.
+    removed_owner_key_ids: List[str] = Field(default_factory=list)
 
 
 def _audit_owner_transfer(
@@ -5692,11 +5794,15 @@ async def transfer_organization_owner(
 
     vault_client = get_vault_integrations_client()
     previous: Optional[str] = org.api_key_id
-    changed = previous != target
-    async with serialize_key_ownership(db, target):
+    removed: List[str] = []
+    async with serialize_key_ownership(db, target), serialize_org_owners(db, [org.id]):
         # important: the new owner is read and judged inside the lock, so a revoke of that key
         # cannot land between the check and the write and leave the organization on a dead key.
         metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, target)
+        owners_before = await owner_key_ids(db, org.id)
+        # note: a transfer replaces the whole owner set, so one to the current primary still changes
+        # an organization that has co-owners
+        changed = previous != target or any(key != target for key in owners_before)
         if changed:
             refused = owner_key_refusal(metadata, failure)
             if refused is not None:
@@ -5710,9 +5816,10 @@ async def transfer_organization_owner(
             moved, previous = await transfer_owner(db, org_id, target)
             if moved is None:
                 raise HTTPException(status_code=404, detail="Organization not found")
-            org, changed = moved, previous != target
-            if changed:
-                await db.commit()
+            org = moved
+            # note: the co-owners only; the previous primary is reported as previous_api_key_id
+            removed = [key for key in owners_before if key not in (target, previous)]
+            await db.commit()
 
     uncovered = await uncovered_clusters(db, org.id, metadata)
     claimed = await claimed_organization_count(db, target)
@@ -5735,6 +5842,7 @@ async def transfer_organization_owner(
         changed=changed,
         uncovered_cluster_ids=uncovered,
         claimed_organization_count=claimed,
+        removed_owner_key_ids=removed,
     )
     if not changed:
         return answer
@@ -5742,7 +5850,7 @@ async def transfer_organization_owner(
     # note: here rather than in a helper, so the cache ratchet sees the handler clear the key list,
     # which carries what each key owns.
     get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
-    for key_id in (previous, target):
+    for key_id in dict.fromkeys([previous, target, *removed]):
         if key_id:
             evict_api_key_cache(key_id)
     _audit_owner_transfer(
@@ -5754,14 +5862,216 @@ async def transfer_organization_owner(
             "to_key_name": answer.api_key_name,
             "to_key_app_name": answer.app_name,
             "uncovered_cluster_ids": uncovered,
+            "removed_owner_key_ids": removed,
         },
-        before={"owner_key_id": previous},
-        after={"owner_key_id": target},
+        before={"owner_key_id": previous, "owner_key_ids": ([previous] if previous else []) + removed},
+        after={"owner_key_id": target, "owner_key_ids": [target]},
     )
     logger.info(
         "Organization %s moved from api key %s to %s by %s", org.slug, previous or "<none>", target, _rbac.email
     )
     return answer
+
+
+class OwnerKeyChangeRequest(BaseModel):
+    """A key to put in, or make the primary of, an organization's owner set, and why."""
+
+    api_key_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,128}$", description="The integration key")
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] = Field(
+        ..., description="Why the owner set changes. Kept in the audit record."
+    )
+
+
+class OwnerSetResponse(BaseModel):
+    organization_id: int
+    organization_slug: str
+    external_id: Optional[str] = None
+    primary_key_id: Optional[str] = None
+    owner_key_ids: List[str] = Field(default_factory=list)
+    changed: bool
+
+
+def _require_multi_owner() -> None:
+    """404 while INTEGRATION_MULTI_OWNER_ENABLED is off, as if the route did not exist."""
+    if not multi_owner_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+async def _owned_org_or_refuse(db: AsyncSession, org_id: int) -> Organization:
+    org = (await db.execute(select(Organization).where(Organization.id == org_id))).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if org.source != "orcahub":
+        raise HTTPException(status_code=409, detail={
+            "error": "organization_not_synced",
+            "message": f"Organization '{org.slug}' was created in Orcastra, not synced from OrcaHub, so no integration key owns it.",
+        })
+    if not org.api_key_id:
+        raise HTTPException(status_code=409, detail={
+            "error": "organization_unclaimed",
+            "message": f"Organization '{org.slug}' has no owner yet. Give it its first owner with the owner key transfer.",
+        })
+    return org
+
+
+def _owner_set_answer(org: Organization, owners: List[str], changed: bool) -> OwnerSetResponse:
+    return OwnerSetResponse(
+        organization_id=org.id, organization_slug=org.slug, external_id=org.external_id,
+        primary_key_id=org.api_key_id, owner_key_ids=owners, changed=changed,
+    )
+
+
+def _evict_owner_keys(*key_ids: Optional[str]) -> None:
+    for key_id in dict.fromkeys(key_ids):
+        if key_id:
+            evict_api_key_cache(key_id)
+
+
+@router.post(
+    "/organizations/{org_id}/owner-keys",
+    response_model=OwnerSetResponse,
+    summary="Add a key to a synced organization's owner set",
+    description=(
+        "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. The key may then sync the organization, "
+        "update its members and policies and provision tenant access for it, alongside its other owners."
+    ),
+)
+async def add_organization_owner(
+    org_id: int,
+    body: OwnerKeyChangeRequest,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_multi_owner()
+    org = await _owned_org_or_refuse(db, org_id)
+    vault_client = get_vault_integrations_client()
+    async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
+        metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, body.api_key_id)
+        refused = owner_key_refusal(metadata, failure)
+        if refused is not None:
+            status, code, message = refused
+            raise HTTPException(status_code=status, detail=message if status >= 500 else {"error": code, "message": message})
+        before = await owner_key_ids(db, org.id)
+        try:
+            added = await add_owner(db, org, body.api_key_id, via="admin", by=_rbac.email)
+        except OwnerSetFull:
+            raise HTTPException(status_code=409, detail={
+                "error": "owner_set_full",
+                "message": f"Organization '{org.slug}' already has {MAX_OWNER_KEYS} owner keys. Remove one first.",
+            }) from None
+        if added:
+            await db.commit()
+        after = await owner_key_ids(db, org.id)
+    if added:
+        # note: the key list carries what each key owns (cache ratchet: cleared in the handler)
+        get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
+        _evict_owner_keys(body.api_key_id)
+        record_owner_change(ADD_ACTION, org, before=before, after=after, primary_before=org.api_key_id,
+                            primary_after=org.api_key_id, details={
+                                "owner_key_id": body.api_key_id, "reason": body.reason,
+                                "actor_email": _rbac.email, "trigger": "admin",
+                            })
+    return _owner_set_answer(org, after, added)
+
+
+@router.delete(
+    "/organizations/{org_id}/owner-keys/{key_id}",
+    response_model=OwnerSetResponse,
+    summary="Remove a key from a synced organization's owner set",
+    description=(
+        "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. Removing the primary makes the oldest "
+        "owner that can still sync the organization the primary. The last owner cannot be removed: "
+        "transfer the organization instead."
+    ),
+)
+async def remove_organization_owner(
+    org_id: int,
+    key_id: str,
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] = Query(
+        ..., description="Why the key leaves. Kept in the audit record."
+    ),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_multi_owner()
+    org = await _owned_org_or_refuse(db, org_id)
+    vault_client = get_vault_integrations_client()
+    async with serialize_key_ownership(db, key_id), serialize_org_owners(db, [org.id]):
+        before = await owner_key_ids(db, org.id)
+        if key_id not in before:
+            return _owner_set_answer(org, before, False)
+        primary_before = org.api_key_id
+        verdicts = await able_owners([k for k in before if k != key_id], _owner_metadata_reader(vault_client))
+        try:
+            await remove_owner(db, org, key_id, able=verdicts.get)
+        except LastOwner:
+            raise HTTPException(status_code=409, detail={
+                "error": "last_owner",
+                "message": "This is the organization's only owner key. Transfer the organization to another key instead.",
+            }) from None
+        except NoAbleOwner:
+            raise HTTPException(status_code=409, detail={
+                "error": "no_able_owner",
+                "message": "No other owner key can sync the organization, so none can become its primary. Add an active owner key first.",
+            }) from None
+        except LookupError:
+            raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
+        await db.commit()
+        after = await owner_key_ids(db, org.id)
+    get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
+    _evict_owner_keys(key_id, org.api_key_id)
+    record_owner_change(REMOVE_ACTION, org, before=before, after=after, primary_before=primary_before,
+                        primary_after=org.api_key_id, details={
+                            "owner_key_id": key_id, "reason": reason, "actor_email": _rbac.email, "trigger": "admin",
+                        })
+    return _owner_set_answer(org, after, True)
+
+
+@router.put(
+    "/organizations/{org_id}/primary-key",
+    response_model=OwnerSetResponse,
+    summary="Choose which owner key is a synced organization's primary",
+    description=(
+        "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. The primary is the owner key OrcaHub "
+        "callbacks are made with. It must already be in the owner set and able to sync."
+    ),
+)
+async def set_organization_primary(
+    org_id: int,
+    body: OwnerKeyChangeRequest,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_multi_owner()
+    org = await _owned_org_or_refuse(db, org_id)
+    vault_client = get_vault_integrations_client()
+    async with serialize_key_ownership(db, body.api_key_id), serialize_org_owners(db, [org.id]):
+        owners = await owner_key_ids(db, org.id)
+        if body.api_key_id not in owners:
+            raise HTTPException(status_code=409, detail={
+                "error": "key_not_an_owner",
+                "message": "This key is not one of the organization's owner keys. Add it to the owner set first.",
+            })
+        if org.api_key_id == body.api_key_id:
+            return _owner_set_answer(org, owners, False)
+        metadata, failure = await asyncio.to_thread(_read_key_metadata_blocking, vault_client, body.api_key_id)
+        refused = owner_key_refusal(metadata, failure)
+        if refused is not None:
+            status, code, message = refused
+            raise HTTPException(status_code=status, detail=message if status >= 500 else {"error": code, "message": message})
+        previous = set_primary(org, body.api_key_id)
+        await db.commit()
+    get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
+    _evict_owner_keys(previous, body.api_key_id)
+    record_owner_change(PRIMARY_ACTION, org, before=owners, after=owners, primary_before=previous,
+                        primary_after=org.api_key_id, details={
+                            "owner_key_id": body.api_key_id, "reason": body.reason,
+                            "actor_email": _rbac.email, "trigger": "admin",
+                        })
+    return _owner_set_answer(org, owners, True)
 
 
 # ============================================

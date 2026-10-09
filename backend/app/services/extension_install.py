@@ -523,15 +523,29 @@ async def uninstall(
     add-on stops it at once without that, so the refusal names suspension as the stop and a
     transfer or a delete of the organizations as the way forward.
     """
+    from app.routers.integrations import _owner_metadata_reader
+    from app.services.integration_key_ownership import (
+        apply_owner_handoffs,
+        owned_org_ids_to_lock,
+        record_owner_handoffs,
+    )
+    from app.services.organization_owners import serialize_org_owners
+
     keys = sorted(filter(None, {install.api_key_id, install.previous_api_key_id}))
+    handed_off: Dict[str, List[Any]] = {}
     async with AsyncExitStack() as held:
-        # note: sorted, so two requests that lock the same pair always take them in one order
+        # note: sorted, so two requests that lock the same pair always take them in one order; the
+        # organization locks after every key lock (organization_owners)
         for key_id in keys:
             await held.enter_async_context(serialize_key_ownership(db, key_id))
+        org_ids = sorted({org_id for key_id in keys for org_id in await owned_org_ids_to_lock(db, key_id)})
+        await held.enter_async_context(serialize_org_owners(db, org_ids))
         for key_id in keys:
-            await refuse_if_key_owns_organizations(
-                db, key_id, action="uninstall", user=user, metadata={"extension_install_id": install.id}
+            handoffs = await refuse_if_key_owns_organizations(
+                db, key_id, action="uninstall", user=user, metadata={"extension_install_id": install.id},
+                read_metadata=_owner_metadata_reader(vault_client),
             )
+            handed_off[key_id] = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
         removed = await teardown_install(
             db, vault_client,
             install_id=install.id,
@@ -539,6 +553,9 @@ async def uninstall(
             previous_api_key_id=install.previous_api_key_id,
         )
         await db.commit()
+    for key_id, changes in handed_off.items():
+        record_owner_handoffs(changes, key_id=key_id, action="uninstall", actor_email=getattr(user, "email", None),
+                              remove=True)
     return removed
 
 
