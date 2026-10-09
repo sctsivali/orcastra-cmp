@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, NamedTuple, Tuple, Union
+from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, NamedTuple, Tuple, Type, TypeVar, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request, Response
 from pydantic import BaseModel, Field, SecretStr, StringConstraints, ValidationError, field_validator
 import requests
@@ -5954,6 +5954,33 @@ def _require_multi_owner() -> None:
 
 _MULTI_OWNER_ONLY = [Depends(_require_multi_owner)]
 
+_Body = TypeVar("_Body", bound=BaseModel)
+
+
+async def _json_body(request: Request, model: Type[_Body]) -> _Body:
+    """A route's JSON body, read and validated by the route rather than by FastAPI.
+
+    important: FastAPI parses a declared body before it resolves any dependency, so malformed JSON
+    answered 422 ahead of the flag's 404 and the login. Read here, the flag and the caller come first.
+    The 422 never carries the input: FastAPI's own answer echoes each failing value.
+    """
+    try:
+        return model.model_validate_json(await request.body())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=[
+            {"type": error["type"], "loc": ["body", *error["loc"]], "msg": error["msg"]}
+            for error in exc.errors(include_url=False, include_context=False, include_input=False)
+        ]) from None
+
+
+def _body_spec(model: Type[BaseModel]) -> Dict[str, Any]:
+    """openapi_extra for a route that reads its body with _json_body, so the published spec still shows it."""
+    return {"requestBody": {"required": True, "content": {"application/json": {"schema": model.model_json_schema()}}}}
+
+
+async def _owner_change_body(request: Request) -> OwnerKeyChangeRequest:
+    return await _json_body(request, OwnerKeyChangeRequest)
+
 
 async def _owned_org_or_refuse(db: AsyncSession, org_id: int) -> Organization:
     org = (await db.execute(select(Organization).where(Organization.id == org_id))).scalar_one_or_none()
@@ -5990,6 +6017,7 @@ def _evict_owner_keys(*key_ids: Optional[str]) -> None:
     response_model=OwnerSetResponse,
     dependencies=_MULTI_OWNER_ONLY,
     summary="Add a key to a synced organization's owner set",
+    openapi_extra=_body_spec(OwnerKeyChangeRequest),
     description=(
         "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. The key may then sync the organization, "
         "update its members and policies and provision tenant access for it, alongside its other owners."
@@ -5997,9 +6025,9 @@ def _evict_owner_keys(*key_ids: Optional[str]) -> None:
 )
 async def add_organization_owner(
     org_id: int,
-    body: OwnerKeyChangeRequest,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_admin()),
+    body: OwnerKeyChangeRequest = Depends(_owner_change_body),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _owned_org_or_refuse(db, org_id)
@@ -6096,6 +6124,7 @@ async def remove_organization_owner(
     response_model=OwnerSetResponse,
     dependencies=_MULTI_OWNER_ONLY,
     summary="Choose which owner key is a synced organization's primary",
+    openapi_extra=_body_spec(OwnerKeyChangeRequest),
     description=(
         "Admin only, when INTEGRATION_MULTI_OWNER_ENABLED is on. The primary is the owner key OrcaHub "
         "callbacks are made with. It must already be in the owner set and able to sync."
@@ -6103,9 +6132,9 @@ async def remove_organization_owner(
 )
 async def set_organization_primary(
     org_id: int,
-    body: OwnerKeyChangeRequest,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_admin()),
+    body: OwnerKeyChangeRequest = Depends(_owner_change_body),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _owned_org_or_refuse(db, org_id)
@@ -6155,19 +6184,12 @@ class OwnerKeyEnrollRequest(BaseModel):
 
 
 async def _enroll_body(request: Request) -> OwnerKeyEnrollRequest:
-    """The enrollment body, validated here rather than by FastAPI.
+    """The enrollment body (_json_body).
 
-    important: a 422 never carries the input. FastAPI's own validation answer echoes each failing value,
-    and SecretStr does not stop that, so a secret one character too long would come back in the
-    response and in any proxy log of it. It also runs after the flag and the key, not before them.
+    important: its 422 never carries the input, and SecretStr alone does not stop FastAPI's own answer
+    echoing it, so a secret one character too long would come back in the response and any proxy log.
     """
-    try:
-        return OwnerKeyEnrollRequest.model_validate_json(await request.body())
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=[
-            {"type": error["type"], "loc": ["body", *error["loc"]], "msg": error["msg"]}
-            for error in exc.errors(include_url=False, include_context=False, include_input=False)
-        ]) from None
+    return await _json_body(request, OwnerKeyEnrollRequest)
 
 
 def _read_key_secret_hash_blocking(vault_client, key_id: str) -> Tuple[Optional[str], Optional[str]]:
@@ -6248,9 +6270,7 @@ async def read_organization_owner_keys(
         "its secret; when the secret verifies and the key could own the organization, it joins the owner "
         "set. Idempotent. 404 unless INTEGRATION_MULTI_OWNER_ENABLED is on."
     ),
-    # note: the body is read by _enroll_body, so its schema is stated here for the published spec
-    openapi_extra={"requestBody": {"required": True, "content": {
-        "application/json": {"schema": OwnerKeyEnrollRequest.model_json_schema()}}}},
+    openapi_extra=_body_spec(OwnerKeyEnrollRequest),
 )
 async def enroll_owner_key(
     request: Request,
