@@ -38,7 +38,7 @@ Ported from the v1.0.0-RC4-hotfix2 line, where the same module also confines a t
 (clusters_another_org_holds). That half is not part of this line.
 """
 
-from typing import Dict, Iterable, Optional, Set
+from typing import Dict, FrozenSet, Iterable, Set
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,14 +51,15 @@ from sqlalchemy.orm import aliased
 RUNNING_ROLES = ("partner",)
 
 
-async def run_orgs(db: AsyncSession, email: str) -> Dict[int, Optional[str]]:
-    """Organizations this user runs (created, or a partner row), mapped to each one's key.
+async def run_orgs(db: AsyncSession, email: str) -> Dict[int, FrozenSet[str]]:
+    """Organizations this user runs (created, or a partner row), mapped to each one's owner keys.
 
     important: not org_scope._query_user_org_ids, which counts any membership. A partner who also buys from
     another partner is a tenant of that seller's buyer organization, and counting it would put the
     seller's integration, keys and clusters on the buyer's side.
     """
     from app.models.db_models import Organization, OrganizationMember
+    from app.services.organization_owners import owners_of
 
     if not email:
         return {}
@@ -73,7 +74,8 @@ async def run_orgs(db: AsyncSession, email: str) -> Dict[int, Optional[str]]:
             ),
         )
     )).all()
-    return {org_id: key for org_id, key in rows}
+    owners = await owners_of(db, [org_id for org_id, _primary in rows])
+    return {org_id: frozenset(row.api_key_id for row in owners.get(org_id, [])) for org_id, _primary in rows}
 
 
 async def side_keys(db: AsyncSession, email: str) -> Set[str]:
@@ -90,15 +92,16 @@ async def side_keys(db: AsyncSession, email: str) -> Set[str]:
     partner row in any other keyed organization, a synced buyer founder's for one, counts that
     organization only.
     """
-    from app.models.db_models import Organization
+    from app.models.db_models import Organization, OrganizationOwnerKey
 
     if not email:
         return set()
     created = set((await db.execute(
-        select(Organization.api_key_id).where(
+        select(OrganizationOwnerKey.api_key_id)
+        .join(Organization, Organization.id == OrganizationOwnerKey.organization_id)
+        .where(
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
             Organization.created_by == email,
-            Organization.api_key_id.is_not(None),
         )
     )).scalars().all())
     return created | await home_partner_keys(db, email)
@@ -111,16 +114,18 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
     note: the half of side_keys that a current role decides. created_by is the key's minter on every
     buyer organization provisioning made, so it says nothing about who runs the seller today.
     """
-    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
+    from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 
     if not email:
         return set()
+    # note: per key in each organization's owner set. A co-owner's home is its own oldest synced
+    # organization and its own sale, judged exactly as a sole owner's.
     rows = (await db.execute(
-        select(Organization.api_key_id, Organization.id)
+        select(OrganizationOwnerKey.api_key_id, Organization.id)
+        .join(Organization, Organization.id == OrganizationOwnerKey.organization_id)
         .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
         .where(
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
-            Organization.api_key_id.is_not(None),
             OrganizationMember.user_email == email,
             OrganizationMember.role.in_(RUNNING_ROLES),
         )
@@ -128,13 +133,14 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
     if not rows:
         return set()
     homes = dict((await db.execute(
-        select(Organization.api_key_id, func.min(Organization.id))
+        select(OrganizationOwnerKey.api_key_id, func.min(Organization.id))
+        .join(Organization, Organization.id == OrganizationOwnerKey.organization_id)
         .where(
             Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
             Organization.created_by == "system",
-            Organization.api_key_id.in_(sorted({key for key, _org in rows})),
+            OrganizationOwnerKey.api_key_id.in_(sorted({key for key, _org in rows})),
         )
-        .group_by(Organization.api_key_id)
+        .group_by(OrganizationOwnerKey.api_key_id)
     )).all())
     # important: the registered cluster must also carry another organization on the same key, a
     # cluster the key sold on, and the home's binding must be the first of that key's bindings there
@@ -144,19 +150,20 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
     # buyer is the oldest synced organization on the key could otherwise bind a cluster of their own
     # to it and to a second buyer on the key, which reads as exactly this sale. (Not on the
     # v1.0.0-RC4-hotfix2 line, which counts a binding of any origin.)
-    binding, sold, home, buyer = (aliased(OrganizationCluster), aliased(OrganizationCluster),
-                                  aliased(Organization), aliased(Organization))
-    earlier, earlier_org = aliased(OrganizationCluster), aliased(Organization)
+    binding, sold = aliased(OrganizationCluster), aliased(OrganizationCluster)
+    home_owner, buyer_owner = aliased(OrganizationOwnerKey), aliased(OrganizationOwnerKey)
+    earlier, earlier_owner = aliased(OrganizationCluster), aliased(OrganizationOwnerKey)
     first = ~exists().where(
         earlier.cluster_id == binding.cluster_id,
         earlier.organization_id != binding.organization_id,
-        earlier.organization_id == earlier_org.id,
-        earlier_org.api_key_id == home.api_key_id,
+        earlier_owner.organization_id == earlier.organization_id,
+        earlier_owner.api_key_id == home_owner.api_key_id,
         earlier.id < binding.id,
     )
     registering = set((await db.execute(
-        select(binding.organization_id)
-        .join(home, home.id == binding.organization_id)
+        select(home_owner.api_key_id, binding.organization_id)
+        .select_from(binding)
+        .join(home_owner, home_owner.organization_id == binding.organization_id)
         .join(OrganizationMember, and_(
             OrganizationMember.organization_id == binding.organization_id,
             func.lower(OrganizationMember.user_email) == func.lower(binding.registered_by),
@@ -167,10 +174,17 @@ async def home_partner_keys(db: AsyncSession, email: str) -> Set[str]:
             sold.organization_id != binding.organization_id,
             sold.registered_by.is_(None),
         ))
-        .join(buyer, and_(buyer.id == sold.organization_id, buyer.api_key_id == home.api_key_id))
-        .where(binding.organization_id.in_(sorted(set(homes.values()))), first)
-    )).scalars().all())
-    return {key for key, org in rows if homes.get(key) == org and org in registering}
+        .join(buyer_owner, and_(
+            buyer_owner.organization_id == sold.organization_id,
+            buyer_owner.api_key_id == home_owner.api_key_id,
+        ))
+        .where(
+            binding.organization_id.in_(sorted(set(homes.values()))),
+            home_owner.api_key_id.in_(sorted(homes)),
+            first,
+        )
+    )).all())
+    return {key for key, org in rows if homes.get(key) == org and (key, org) in registering}
 
 
 async def run_org_keys(db: AsyncSession, email: str) -> Set[str]:
@@ -186,7 +200,8 @@ async def clusters_held_by_another_party(
     An unbound row registered by someone else counts as another holder, as it does in
     org_scope._clusters_with_several_orgs.
     """
-    from app.models.db_models import Organization, OrganizationCluster
+    from app.models.db_models import OrganizationCluster
+    from app.services.organization_owners import owners_of
 
     wanted = sorted(set(cluster_ids))
     if not wanted:
@@ -196,19 +211,18 @@ async def clusters_held_by_another_party(
             OrganizationCluster.cluster_id,
             OrganizationCluster.organization_id,
             OrganizationCluster.registered_by,
-            Organization.api_key_id,
         )
-        .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
         .where(OrganizationCluster.cluster_id.in_(wanted))
     )).all()
+    owners = await owners_of(db, [org_id for _c, org_id, _r in rows if org_id is not None])
     runs = await run_orgs(db, email)
     keys = await side_keys(db, email)
     held_elsewhere: Set[str] = set()
-    for cluster_id, org_id, registered_by, org_key in rows:
+    for cluster_id, org_id, registered_by in rows:
         if org_id is None:
             if (registered_by or "").lower() != (email or "").lower():
                 held_elsewhere.add(cluster_id)
-        elif org_id in runs or (org_key and org_key in keys):
+        elif org_id in runs or {row.api_key_id for row in owners.get(org_id, [])} & keys:
             continue
         else:
             held_elsewhere.add(cluster_id)

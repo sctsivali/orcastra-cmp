@@ -1,7 +1,7 @@
-"""Which integration key owns an OrcaHub organization, and how an Administrator moves it.
+"""Which integration keys own an OrcaHub organization, and how an Administrator moves it.
 
-`organizations.api_key_id` names the integration key that owns a synced organization. Only the
-owner may sync it (`_upsert_synced_organizations`), write its members and tenant access policies
+A synced organization is owned by a set of integration keys (app.services.organization_owners);
+`organizations.api_key_id` is its primary, the key OrcaHub callbacks use. Only an owner may sync it (`_upsert_synced_organizations`), write its members and tenant access policies
 (`_upsert_synced_members`, `sync_policies_from_external`) and provision tenant access for it
 (`provision_tenant_access`). An organization whose owner is NULL is claimable by any key that
 pushes or provisions it. That binding is what stops one integration rewriting another's
@@ -46,8 +46,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import has_capability
 from app.core.api_key_expiry import classify_key, expiry_state
-from app.models.db_models import Organization, OrganizationCluster
+from app.models.db_models import Organization, OrganizationCluster, OrganizationOwnerKey
 from app.services.add_on_credential_edits import is_add_on_credential
+from app.services.organization_owners import carry, owned_by_clause, replace_owners
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _owned_filter(key_ids: Iterable[str]) -> List[Any]:
     return [
         Organization.source == "orcahub",
         Organization.is_active.is_(True),
-        Organization.api_key_id.in_(sorted(set(key_ids))),
+        owned_by_clause(key_ids),
     ]
 
 
@@ -147,9 +148,14 @@ async def owned_by_keys(db: AsyncSession, key_ids: Iterable[str]) -> Dict[str, L
     if not wanted:
         return {}
     rows = await db.execute(
-        select(Organization.api_key_id, Organization.id, Organization.slug)
-        .where(*_owned_filter(wanted))
-        .order_by(Organization.api_key_id, Organization.slug)
+        select(OrganizationOwnerKey.api_key_id, Organization.id, Organization.slug)
+        .join(OrganizationOwnerKey, OrganizationOwnerKey.organization_id == Organization.id)
+        .where(
+            Organization.source == "orcahub",
+            Organization.is_active.is_(True),
+            OrganizationOwnerKey.api_key_id.in_(sorted(wanted)),
+        )
+        .order_by(OrganizationOwnerKey.api_key_id, Organization.slug)
     )
     owned: Dict[str, List[Tuple[int, str]]] = {}
     for key_id, org_id, slug in rows.all():
@@ -326,26 +332,24 @@ async def carry_owned_organizations(
 ) -> List[Tuple[int, str, Optional[str]]]:
     """Move every organization one key owns to another. The caller holds the lock and commits.
 
-    For an add-on credential's rotation: the new key takes the old one's organizations in the same
-    commit as the installation row, so the add-on keeps syncing them. Every organization carrying
-    the old key moves, active or not, because the old key is being retired and one left on it could
-    never be synced again. Returns (id, slug, external_id) of each one moved.
-
-    important: an ORM assignment, like transfer_owner. The claim-path ratchet finds every writer of
-    organizations.api_key_id by that shape.
+    For an add-on credential's rotation: the new key takes the old one's place in the owner set of
+    every organization it is in, in the same commit as the installation row, so the add-on keeps
+    syncing them, and keeps the primary where the old key held it. Every organization moves, active or
+    not, because the old key is being retired and one left on it could never be synced again. Returns
+    (id, slug, external_id) of each one moved. The writes are organization_owners.carry.
     """
     if not from_key_id or not to_key_id or from_key_id == to_key_id:
         return []
     rows = await db.execute(
         select(Organization)
-        .where(Organization.api_key_id == from_key_id)
+        .where(owned_by_clause([from_key_id]))
         .order_by(Organization.slug)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
     carried: List[Tuple[int, str, Optional[str]]] = []
     for org in rows.scalars().all():
-        org.api_key_id = to_key_id
+        await carry(db, org, from_key_id=from_key_id, to_key_id=to_key_id)
         carried.append((org.id, org.slug, org.external_id))
     return carried
 
@@ -493,16 +497,13 @@ async def release_key_locks(db: AsyncSession) -> None:
 async def transfer_owner(
     db: AsyncSession, organization_id: int, to_key_id: str
 ) -> Tuple[Optional[Organization], Optional[str]]:
-    """Make `to_key_id` the owner of one organization. Returns it and its previous owner.
+    """Make `to_key_id` the sole owner of one organization. Returns it and its previous primary.
 
     The caller holds serialize_key_ownership(to_key_id), has decided the key may own it, and
     commits. The row is read FOR UPDATE, so a sync or a second transfer of the same organization
-    waits for this one, and the owner it reports is the one this write replaced. An organization
-    the key already owns is returned unchanged, so the caller can answer without writing.
-
-    important: an ORM assignment, never an UPDATE statement. The claim-path ratchet in
-    tests/test_the_one_org_rule_holds_for_orcahubs_bodies_and_every_claim_path.py finds every
-    writer of organizations.api_key_id by that shape.
+    waits for this one, and the primary it reports is the one this write replaced. A transfer replaces
+    the whole owner set (organization_owners.replace_owners), so every co-owner leaves with the old
+    primary; an organization the key already solely owns is left unchanged.
     """
     # note: populate_existing, because the caller may already hold this row from an earlier read in
     # the same session, and the owner reported has to be the one the lock saw.
@@ -515,6 +516,5 @@ async def transfer_owner(
     if org is None:
         return None, None
     previous = org.api_key_id
-    if previous != to_key_id:
-        org.api_key_id = to_key_id
+    await replace_owners(db, org, to_key_id, via="transfer", by=None)
     return org, previous

@@ -4,9 +4,10 @@ SQLAlchemy ORM models for PostgreSQL.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, event, select, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Session, relationship
 from app.core.database import Base
 
 
@@ -286,9 +287,58 @@ class Organization(Base):
     # Relationships
     members = relationship("OrganizationMember", back_populates="organization", lazy="selectin", cascade="all, delete-orphan")
     clusters = relationship("OrganizationCluster", back_populates="organization", lazy="selectin", cascade="all, delete-orphan")
+    # note: never loaded through the ORM (app.services.organization_owners reads the table with queries).
+    # It exists for the delete cascade and so a new organization's first owner row follows its insert.
+    owner_keys = relationship(
+        "OrganizationOwnerKey", back_populates="organization", lazy="raise",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
 
     def __repr__(self) -> str:
         return f"<Organization(slug={self.slug}, name={self.name})>"
+
+
+# How a key entered an organization's owner set (organization_owners.OWNER_ENTRY_PATHS).
+OWNER_KEY_ADDED_VIA = ("backfill", "claim", "provision", "enroll", "admin", "transfer", "carry")
+
+
+class OrganizationOwnerKey(Base):
+    """
+    One integration key in a synced organization's owner set.
+
+    `organizations.api_key_id` is the primary owner (the key OrcaHub callbacks use) and always has a
+    row here; any key with a row may sync the organization, write its members and policies and
+    provision tenant access for it. Only app.services.organization_owners writes this table.
+    """
+    __tablename__ = "organization_owner_keys"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    api_key_id = Column(String(255), nullable=False, index=True)
+    added_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    added_via = Column(String(16), nullable=False, default="claim")
+    # an Administrator's email, or key:<id> for a key that enrolled another
+    added_by = Column(String(255), nullable=True)
+    # the owner key that vouched for an enrollment
+    proof_key_id = Column(String(255), nullable=True)
+
+    organization = relationship("Organization", back_populates="owner_keys")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "api_key_id", name="uq_org_owner_key"),
+        CheckConstraint(
+            "added_via IN ('backfill', 'claim', 'provision', 'enroll', 'admin', 'transfer', 'carry')",
+            name="ck_org_owner_key_added_via",
+        ),
+        Index("ix_org_owner_key_org_id", "organization_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<OrganizationOwnerKey(org={self.organization_id}, key={self.api_key_id}, via={self.added_via})>"
 
 
 class OrganizationMember(Base):
@@ -1109,3 +1159,45 @@ class InstanceOperationAuditOutbox(Base):
         ),
         Index("ix_instance_operation_audit_pending", "delivered_at", "created_at"),
     )
+
+
+@event.listens_for(Session, "before_flush")
+def _keep_the_primary_in_the_owner_set(session: Session, _flush_context: object, _instances: object) -> None:
+    """Whenever an organization's primary owner key is set, make sure that key has an owner row.
+
+    The primary is always in the owner set (enforced in PostgreSQL by a deferred foreign key, see
+    migration 038), so the paths that claim or move an organization keep writing api_key_id and this
+    writes the matching row in the same flush. It never removes a row: taking a key out of the set is
+    an explicit decision in app.services.organization_owners.
+
+    `_owner_added_via` and `_owner_added_by` on the organization, set by organization_owners before
+    the flush, record how the key came in; a plain claim path leaves them unset.
+    """
+    for obj in list(session.new) + list(session.dirty):
+        if not isinstance(obj, Organization) or not obj.api_key_id:
+            continue
+        state = sa_inspect(obj)
+        if not state.pending and not state.attrs.api_key_id.history.has_changes():
+            continue
+        if any(
+            isinstance(row, OrganizationOwnerKey)
+            and row.api_key_id == obj.api_key_id
+            # note: __dict__, never the attribute, which could lazy-load inside the flush
+            and (row.__dict__.get("organization") is obj or (obj.id is not None and row.organization_id == obj.id))
+            for row in session.new
+        ):
+            continue
+        via = getattr(obj, "_owner_added_via", None) or "claim"
+        by = getattr(obj, "_owner_added_by", None)
+        if state.pending:
+            session.add(OrganizationOwnerKey(organization=obj, api_key_id=obj.api_key_id, added_via=via, added_by=by))
+            continue
+        with session.no_autoflush:
+            present = session.execute(
+                select(OrganizationOwnerKey.id).where(
+                    OrganizationOwnerKey.organization_id == obj.id,
+                    OrganizationOwnerKey.api_key_id == obj.api_key_id,
+                )
+            ).first()
+        if present is None:
+            session.add(OrganizationOwnerKey(organization_id=obj.id, api_key_id=obj.api_key_id, added_via=via, added_by=by))

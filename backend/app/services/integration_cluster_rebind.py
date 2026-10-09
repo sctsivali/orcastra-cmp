@@ -65,6 +65,7 @@ from app.services.activity_logger import get_activity_logger
 from app.services.add_on_credential_edits import is_add_on_credential
 from app.services.authentik_role_reading import CurrentRoleReader
 from app.services.integration_roles import stored_member_role
+from app.services.organization_owners import owned_by_clause
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -123,7 +124,7 @@ async def claimed_organization_count(db: AsyncSession, api_key_id: str) -> int:
     if not api_key_id:
         return 0
     counted = await db.execute(
-        select(func.count()).select_from(Organization).where(Organization.api_key_id == api_key_id)
+        select(func.count()).select_from(Organization).where(owned_by_clause([api_key_id]))
     )
     return int(counted.scalar_one())
 
@@ -134,7 +135,7 @@ async def claims_organization(db: AsyncSession, api_key_id: str, external_id: st
         return False
     row = (await db.execute(
         select(Organization.id).where(
-            Organization.api_key_id == api_key_id,
+            owned_by_clause([api_key_id]),
             Organization.source == "orcahub",
             Organization.external_id == external_id,
         ).limit(1)
@@ -162,7 +163,7 @@ async def claimed_destinations(
         .where(
             Organization.source == "orcahub",
             Organization.external_id.in_(sorted(named)),
-            Organization.api_key_id == api_key_id,
+            owned_by_clause([api_key_id]),
             Organization.is_active.is_(True),
             OrganizationMember.user_email == email,
             OrganizationMember.role == "partner",
