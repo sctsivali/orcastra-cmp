@@ -2,8 +2,8 @@
 
 An owner key presents another key's id and secret; when the secret verifies, the key could own the
 organization and its minter is on the organization's side, it joins the owner set. A missing key and a
-wrong secret answer the same sentence, repeated failures lock the new key out, and the routes are
-limited per vouching key and organization. The secret appears in no response, log line or audit record.
+wrong secret answer the same sentence, repeated failures lock the (vouching key, new key) pair out, and
+the routes are limited per vouching key and organization. The secret appears in no response, log line or audit record.
 
 Everything here is 404 while INTEGRATION_MULTI_OWNER_ENABLED is off, and validate reports the feature
 only while it is on.
@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import httpx
@@ -176,17 +177,18 @@ async def test_a_missing_key_and_a_wrong_secret_read_the_same(world: Dict[str, A
     assert await owner_key_ids(world["db"], world["org"]) == [OWNER]
 
 
-async def test_repeated_failures_lock_the_new_key_out(world: Dict[str, Any]) -> None:
+async def test_repeated_failures_lock_the_pair_out(world: Dict[str, Any]) -> None:
     for _ in range(owner_key_enrollment.FAILURES_BEFORE_LOCKOUT):
-        owner_key_enrollment.record_failure(NEW)
+        owner_key_enrollment.record_failure(OWNER, NEW)
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
     assert response.status_code == 403 and response.json()["detail"]["error"] == "new_key_unverified"
+    assert not owner_key_enrollment.locked_out(OTHER, NEW), "another vouching key is not locked out with it"
 
 
 async def test_enrollment_is_rate_limited(world: Dict[str, Any]) -> None:
     for _ in range(owner_key_enrollment.PER_MINUTE):
         await call(world, OWNER, "POST", OWNER_KEYS, enroll(secret="wrong"))
-    owner_key_enrollment._local.pop(f"owner-enroll:fail:{NEW}", None)
+    owner_key_enrollment._local.pop(f"owner-enroll:fail:{OWNER}:{NEW}", None)
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
     assert response.status_code == 429 and response.json()["detail"]["error"] == "rate_limited"
 
@@ -222,8 +224,13 @@ async def test_a_key_minted_outside_the_organization_is_refused(world: Dict[str,
     world["vault"].store[_Vault._path(OWNER, "metadata")] = metadata(OWNER, created_by="old-minter@example.test")
     response = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
     assert response.status_code == 403 and response.json()["detail"]["error"] == "new_key_outside_organization"
-    # a key minted by a current partner of the organization is on its side
+    # a key minted by a partner of the organization is on its side once the partner row is a day old
     world["vault"].store[_Vault._path(NEW, "metadata")] = metadata(NEW, created_by=MINTER)
+    fresh = await call(world, OWNER, "POST", OWNER_KEYS, enroll())
+    assert fresh.status_code == 403 and fresh.json()["detail"]["error"] == "new_key_outside_organization"
+    member = world["db"].sync.query(OrganizationMember).filter_by(user_email=MINTER).one()
+    member.joined_at = datetime.now(timezone.utc) - owner_key_enrollment.PARTNER_MIN_AGE - timedelta(minutes=1)
+    world["db"].sync.commit()
     assert (await call(world, OWNER, "POST", OWNER_KEYS, enroll())).json()["added"] is True
 
 
