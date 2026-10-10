@@ -471,8 +471,9 @@ async def rotate_credential(
 
     important: decided and written under every lock (the installation row, the old key, the owner sets),
     so a second rotation or an uninstall waits for this one and then sees its new key.
-    note: a sync's first claim by the old key takes only the organization's row lock, so a claim landing
-    between the ownership read and the carry is still carried; only the add-on's own sync can make one.
+    note: a sync by an add-on credential decides each organization under the key's lock too, so its first
+    claim lands before this carry (and is carried) or after it (and is refused: only an installation's
+    current credential may claim, routers/integrations._upsert_synced_organizations).
     """
     settings = get_settings()
     install = await lock_installation(db, install)
