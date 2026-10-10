@@ -184,6 +184,7 @@ from app.services.integration_key_ownership import (
     release_key_locks,
     serialize_key_ownership,
     SYNC_CAPABILITIES,
+    sync_capabilities_missing,
     transfer_owner,
     uncovered_clusters,
     visible_organization_ids,
@@ -5725,6 +5726,20 @@ async def refresh_organizations(
             status_code=409,
             detail="This API key is revoked, inactive or expired, so it cannot be refreshed",
         )
+    # important: a refresh claims and renames organizations as this key, the writes /sync gates on
+    # org.sync, so the same key that /sync would refuse is refused here, before its secret is read or
+    # its callback called. An add-on credential is never an OrcaHub connection, whatever it holds.
+    if is_add_on_credential(metadata):
+        raise HTTPException(status_code=409, detail={
+            "error": "key_is_add_on",
+            "message": "This API key is an add-on credential, so it cannot refresh organizations.",
+        })
+    missing = sync_capabilities_missing(metadata)
+    if missing:
+        raise HTTPException(status_code=409, detail={
+            "error": "key_cannot_sync",
+            "message": f"This API key does not hold {' and '.join(missing)}, so it cannot refresh organizations.",
+        })
 
     # Retrieve API key secret for authenticating the callback
     try:
