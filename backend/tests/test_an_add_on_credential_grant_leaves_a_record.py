@@ -149,7 +149,12 @@ def surface(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
         async def _load(_db: Any, _install_id: int, _user: Any) -> tuple:
             return record, _extension(), "acme"
 
+        async def _locked(_db: Any, install: ExtensionInstallation) -> ExtensionInstallation:
+            return install
+
         monkeypatch.setattr(extension_installs, "_load", _load)
+        # note: the row lock re-reads the same object in production; this fake database has no rows
+        monkeypatch.setattr(extension_install, "lock_installation", _locked)
 
     holder["use"] = use
     holder["load"] = load

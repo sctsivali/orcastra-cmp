@@ -33,6 +33,7 @@ MODULES = [
     # These two work against Vault rather than the ORM today. Listed anyway, because the
     # coverage check below is what makes a new one impossible to forget and an exemption
     # here would be a hole rather than a saving.
+    "app.services.extension_credential_guard",
     "app.services.extension_credentials",
     "app.services.extension_settings",
     "app.routers.extensions",

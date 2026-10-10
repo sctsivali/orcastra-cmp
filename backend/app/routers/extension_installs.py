@@ -460,7 +460,9 @@ async def uninstall(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     record, extension, org_slug = await _load(db, install_id, user)
-    organization_id, api_key_id = record.organization_id, record.api_key_id
+    organization_id = record.organization_id
+    # note: record.api_key_id is read after the call: the service locks the row and reads it again, so
+    # a rotation that committed in between is the key the audit names
     try:
         removed = await extension_install.uninstall(
             db, get_vault_integrations_client(), install=record, user=user
@@ -469,7 +471,7 @@ async def uninstall(
         _audit(
             "extension.install.uninstall", install_id,
             organization_id=organization_id, organization_slug=org_slug,
-            details={"extension_slug": extension.slug, "api_key_id": api_key_id, **refusal.audit_details},
+            details={"extension_slug": extension.slug, "api_key_id": record.api_key_id, **refusal.audit_details},
             result="denied", error_code="key_owns_organizations",
         )
         raise
@@ -478,7 +480,7 @@ async def uninstall(
         organization_id=organization_id, organization_slug=org_slug,
         details={
             "extension_slug": extension.slug,
-            "api_key_id": api_key_id,
+            "api_key_id": record.api_key_id,
             "artefacts_removed": removed,
         },
     )

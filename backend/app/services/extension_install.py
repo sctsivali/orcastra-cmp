@@ -26,6 +26,7 @@ from app.models.extension_schemas import (
     capability_request_info,
 )
 from app.services import extension_service, extension_settings
+from app.services.extension_credential_guard import lock_installation, owned_org_ids_or_503
 from app.services.extension_credentials import (
     issue_install_credential,
     rotate_install_credential,
@@ -41,7 +42,7 @@ from app.services.integration_key_ownership import (
     refuse_if_key_owns_organizations,
     serialize_key_ownership,
 )
-from app.services.organization_owners import owned_org_ids, serialize_org_owners
+from app.services.organization_owners import serialize_org_owners
 
 logger = logging.getLogger(__name__)
 
@@ -460,53 +461,62 @@ async def rotate_credential(
     actor: str,
     grace_seconds: int,
 ) -> Tuple[ExtensionInstallation, str, str]:
+    """Replace the installation's credential, carrying what the old one owns to the new one.
+
+    important: decided and written under every lock (the installation row, the old key, the owner sets),
+    so a second rotation or an uninstall waits for this one and then sees its new key.
+    note: a sync's first claim by the old key takes only the organization's row lock, so a claim landing
+    between the ownership read and the carry is still carried; only the add-on's own sync can make one.
+    """
     settings = get_settings()
-
-    if install.last_scope_change_at is None:
-        last = install.updated_at
-    else:
-        last = max(install.updated_at, install.last_scope_change_at)
-    floor = timedelta(seconds=settings.extension_credential_min_rotate_seconds)
-    if install.credential_generation > 1 and last and (now_utc() - last) < floor:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                "This credential was rotated moments ago. Wait "
-                f"{settings.extension_credential_min_rotate_seconds}s before rotating again."
-            ),
-        )
-
-    grace = max(0, min(grace_seconds, settings.extension_credential_max_grace_seconds))
+    install = await lock_installation(db, install)
     old_key_id = install.api_key_id
-    new_key_id, new_secret, _metadata = rotate_install_credential(
-        vault_client,
-        old_key_id=old_key_id,
-        extension_slug=extension.slug,
-        extension_name=extension.name,
-        install_id=install.id,
-        organization_id=install.organization_id,
-        organization_slug=organization_slug,
-        capabilities=list(install.granted_capabilities or []),
-        cluster_permissions=list(install.granted_scope or []),
-        created_by=actor,
-        expire_days=settings.extension_credential_expire_days,
-        credential_generation=install.credential_generation,
-        grace_seconds=grace,
-    )
-    install.previous_api_key_id = old_key_id if grace else None
-    install.previous_key_expires_at = (
-        now_utc() + timedelta(seconds=grace) if grace else None
-    )
-    install.api_key_id = new_key_id
-    install.credential_generation += 1
-    # important: the organizations the old credential owns move to the new one in the same commit
-    # as the row. Only the owner key may sync an organization, so leaving them on a credential this
-    # rotation retires would freeze them, and the add-on's next sync with its new key would be
-    # refused for every one of them.
-    # note: and their owner sets, as every other change to a set is made (organization_owners)
-    async with serialize_key_ownership(db, old_key_id), serialize_org_owners(db, await owned_org_ids(db, old_key_id)):
-        carried = await carry_owned_organizations(db, from_key_id=old_key_id, to_key_id=new_key_id)
-        await db.commit()
+    async with serialize_key_ownership(db, old_key_id):
+        org_ids = await owned_org_ids_or_503(db, old_key_id)
+        # note: and their owner sets, as every other change to a set is made (organization_owners)
+        async with serialize_org_owners(db, org_ids):
+            if install.last_scope_change_at is None:
+                last = install.updated_at
+            else:
+                last = max(install.updated_at, install.last_scope_change_at)
+            floor = timedelta(seconds=settings.extension_credential_min_rotate_seconds)
+            if install.credential_generation > 1 and last and (now_utc() - last) < floor:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "This credential was rotated moments ago. Wait "
+                        f"{settings.extension_credential_min_rotate_seconds}s before rotating again."
+                    ),
+                )
+
+            grace = max(0, min(grace_seconds, settings.extension_credential_max_grace_seconds))
+            new_key_id, new_secret, _metadata = rotate_install_credential(
+                vault_client,
+                old_key_id=old_key_id,
+                extension_slug=extension.slug,
+                extension_name=extension.name,
+                install_id=install.id,
+                organization_id=install.organization_id,
+                organization_slug=organization_slug,
+                capabilities=list(install.granted_capabilities or []),
+                cluster_permissions=list(install.granted_scope or []),
+                created_by=actor,
+                expire_days=settings.extension_credential_expire_days,
+                credential_generation=install.credential_generation,
+                grace_seconds=grace,
+            )
+            install.previous_api_key_id = old_key_id if grace else None
+            install.previous_key_expires_at = (
+                now_utc() + timedelta(seconds=grace) if grace else None
+            )
+            install.api_key_id = new_key_id
+            install.credential_generation += 1
+            # important: the organizations the old credential owns move to the new one in the same
+            # commit as the row. Only the owner key may sync an organization, so leaving them on a
+            # credential this rotation retires would freeze them, and the add-on's next sync with its
+            # new key would be refused for every one of them.
+            carried = await carry_owned_organizations(db, from_key_id=old_key_id, to_key_id=new_key_id)
+            await db.commit()
     await db.refresh(install)
     evict_install_cache(old_key_id)
     record_carried_organizations(
@@ -532,6 +542,8 @@ async def uninstall(
         record_owner_handoffs,
     )
 
+    # note: the keys come from the locked row, so a rotation that committed first is seen (lock_installation)
+    install = await lock_installation(db, install)
     keys = sorted(filter(None, {install.api_key_id, install.previous_api_key_id}))
     handed_off: Dict[str, List[Any]] = {}
     async with AsyncExitStack() as held:

@@ -18,6 +18,8 @@ tests/test_the_one_org_rule_holds_for_orcahubs_bodies_and_every_claim_path.py pi
 
 Concurrency: a change to an organization's set runs inside serialize_org_owners for it, taken after
 any key locks (integration_key_ownership.serialize_keys), in sorted order, never the other way around.
+An add-on's installation row comes before both (extension_install.lock_installation), and no path
+locks an installation row while holding a key or organization lock.
 """
 
 import asyncio
