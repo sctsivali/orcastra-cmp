@@ -117,3 +117,70 @@ async def test_the_lock_leaves_a_foreign_key_check_free() -> None:
             assert (await asyncio.wait_for(shared, 5)).scalar_one() == world["install"]
             await other.rollback()
             await first.rollback()
+
+
+async def test_one_failed_row_does_not_end_the_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    # note: a rollback expires every object in the session; the sweep used to read the next
+    # installation's attributes after one, which raises on an AsyncSession, so one failed row ended the
+    # pass for every other installation and the orphan pass too.
+    from app.models.db_models import OrganizationCluster
+    from app.services import extension_reconcile as sweep
+
+    engine = create_async_engine(URL, poolclass=NullPool)
+    maker = async_sessionmaker(engine, expire_on_commit=False, autoflush=False, class_=AsyncSession)
+    tag = uuid.uuid4().hex[:12]
+    ids: Dict[str, list] = {"install": [], "ext": [], "org": []}
+    grant = [{"cluster_id": f"kept-{tag}", "permissions": ["read"], "projects": ["*"]},
+             {"cluster_id": f"lost-{tag}", "permissions": ["read"], "projects": ["*"]}]
+    try:
+        async with maker() as setup:
+            org = Organization(name=f"Sweep {tag}", slug=f"sweep-{tag}", source="local",
+                               created_by="qa@example.test", is_active=True)
+            setup.add(org)
+            await setup.flush()
+            setup.add(OrganizationCluster(organization_id=org.id, cluster_id=f"kept-{tag}"))
+            ids["org"].append(org.id)
+            for n in (1, 2):
+                ext = Extension(slug=f"sweep-{tag}-{n}", name="Sweep", publisher="QA", version="1.0.0",
+                                owner_email="qa@example.test", requested_capabilities=["inventory.read"],
+                                requested_scope=[], manifest={}, manifest_digest="0" * 64)
+                setup.add(ext)
+                await setup.flush()
+                row = ExtensionInstallation(extension_id=ext.id, organization_id=org.id,
+                                            granted_capabilities=["inventory.read"], granted_scope=grant,
+                                            api_key_id=f"oak_sweep_{tag}_{n}", consent_version="1.0.0",
+                                            consent_manifest_digest="0" * 64, installed_by="qa@example.test")
+                setup.add(row)
+                await setup.flush()
+                ids["ext"].append(ext.id)
+                ids["install"].append(row.id)
+            await setup.commit()
+
+        rewritten = []
+
+        def _rewrite(_client, install):
+            if install.api_key_id.endswith("_1"):
+                raise RuntimeError("vault is sealed for this one")
+            rewritten.append(install.api_key_id)
+            return {}
+
+        monkeypatch.setattr(sweep, "_rewrite_key_grant", _rewrite)
+        monkeypatch.setattr(sweep, "evict_install_cache", lambda _k: None)
+        monkeypatch.setattr(sweep.activity_logger, "log_activity", lambda **_kw: None)
+        async with maker() as db:
+            await sweep._narrow_drifted_scope(db, object())
+        assert rewritten == [f"oak_sweep_{tag}_2"], "the pass ended at the first failed row"
+        async with maker() as check:
+            scopes = dict((await check.execute(
+                select(ExtensionInstallation.api_key_id, ExtensionInstallation.granted_scope)
+                .where(ExtensionInstallation.id.in_(ids["install"]))
+            )).all())
+        assert scopes[f"oak_sweep_{tag}_2"] == grant[:1] and scopes[f"oak_sweep_{tag}_1"] == grant
+    finally:
+        async with maker() as cleanup:
+            await cleanup.execute(delete(ExtensionInstallation).where(ExtensionInstallation.id.in_(ids["install"])))
+            await cleanup.execute(delete(Extension).where(Extension.id.in_(ids["ext"])))
+            await cleanup.execute(delete(OrganizationCluster).where(OrganizationCluster.organization_id.in_(ids["org"])))
+            await cleanup.execute(delete(Organization).where(Organization.id.in_(ids["org"])))
+            await cleanup.commit()
+        await engine.dispose()

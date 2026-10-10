@@ -51,13 +51,15 @@ class FakeInstall:
     api_key_id = "oak_current"
     granted_capabilities = ["inventory.read"]
     granted_scope = [{"cluster_id": "nuc2", "permissions": ["read"], "projects": ["default"]}]
+    previous_api_key_id = None
+    previous_key_expires_at = None
 
 
-def _fail_read(_client, _key_id):
+def _fail_read(_client, _key_id, **_kw):
     raise RuntimeError("vault is sealed")
 
 
-def _ok_read(_client, _key_id):
+def _ok_read(_client, _key_id, **_kw):
     return ({"capabilities": ["inventory.read", "lxd.proxy"], "expires_at": None}, "hash")
 
 

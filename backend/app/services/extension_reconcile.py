@@ -37,17 +37,20 @@ administrator can transfer them.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Set
+from contextlib import AsyncExitStack
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.db_models import OrganizationCluster
 from app.models.extension_models import ExtensionInstallation
 from app.services.activity_logger import get_activity_logger
+from app.services.extension_credential_guard import live_credentials, lock_installation_id
 from app.services.extension_credentials import revoke_install_credential
 from app.services.extension_install import _rewrite_key_grant
 from app.services.extension_scope import evict_install_cache
-from app.services.integration_key_ownership import owned_organizations
+from app.services.integration_key_ownership import owned_organizations, serialize_key_ownership
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -123,91 +126,117 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
     Each row is its own transaction with its own guard: a Vault outage or a bad row delays that
     installation to the next tick instead of ending the pass for everyone.
     """
-    installs = (
-        await db.execute(select(ExtensionInstallation))
-    ).scalars().all()
+    # important: candidates as plain values, read once. Each change below is made on the row read
+    # again under lock_installation_id with the keys' locks held, so a rotation or a rescope in
+    # between is seen rather than overwritten (a stale row rewrote the retired key, and the new one
+    # kept the dropped cluster for good, since the next tick compared the row with itself). And no
+    # ORM object is touched after a rollback, which expires them all: one failing row used to make
+    # the next attribute read raise and end the pass, the orphan pass included.
+    candidates: List[Tuple[int, int, List[Any]]] = [
+        (row.id, row.organization_id, list(row.granted_scope or []))
+        for row in (await db.execute(select(ExtensionInstallation))).scalars().all()
+    ]
 
     changed = 0
     bound_by_org: Dict[int, Set[str]] = {}
 
-    for install in installs:
-        org_id = install.organization_id
+    for install_id, org_id, seen_scope in candidates:
         if org_id not in bound_by_org:
             bound_by_org[org_id] = await _bound_clusters(db, org_id)
-        reachable = bound_by_org[org_id]
-
-        granted: List[Any] = list(install.granted_scope or [])
-        kept = [
-            grant
-            for grant in granted
-            if isinstance(grant, dict) and grant.get("cluster_id") in reachable
-        ]
-        if len(kept) == len(granted):
+        if all(isinstance(g, dict) and g.get("cluster_id") in bound_by_org[org_id] for g in seen_scope):
             continue
 
-        dropped = sorted(
-            {
-                grant.get("cluster_id")
-                for grant in granted
-                if isinstance(grant, dict) and grant.get("cluster_id") not in reachable
-            }
-        )
-        # important: an empty grant is NEVER written. `ck_ext_install_scope_nonempty` refuses it,
-        # so the old code's total-loss branch raised IntegrityError on commit, rolled the
-        # suspension back with it, and escaped to the loop's blanket handler: one totally-drifted
-        # installation aborted the entire scope pass on every tick, forever, taking unrelated
-        # partial narrowings with it. The constraint is right - an installation with no reach is a
-        # contradiction - so the row keeps its last grant as the record of what was withdrawn and
-        # the credential is revoked instead.
-        total_loss = not kept
         key_change: Dict[str, Any] = {}
         try:
-            if total_loss:
-                revoke_install_credential(vault_client, install.api_key_id)
-            else:
-                install.granted_scope = kept
-                key_change = _rewrite_key_grant(vault_client, install)
-            if total_loss and install.status == "active":
-                install.status = "suspended"
-                install.suspend_reason = (
-                    "Reconcile: this organization no longer reaches any cluster in the grant"
+            async with AsyncExitStack() as held:
+                install = await lock_installation_id(db, install_id)
+                # note: the bindings read again too, under the row's lock; a narrowing is not undone
+                reachable = await _bound_clusters(db, install.organization_id)
+                granted: List[Any] = list(install.granted_scope or [])
+                kept = [
+                    grant
+                    for grant in granted
+                    if isinstance(grant, dict) and grant.get("cluster_id") in reachable
+                ]
+                if len(kept) == len(granted):
+                    await db.commit()
+                    continue
+                dropped = sorted(
+                    {
+                        grant.get("cluster_id")
+                        for grant in granted
+                        if isinstance(grant, dict) and grant.get("cluster_id") not in reachable
+                    }
                 )
-            await db.commit()
+                keys = live_credentials(install)
+                for key_id in keys:
+                    await held.enter_async_context(serialize_key_ownership(db, key_id))
+                # important: an empty grant is NEVER written. `ck_ext_install_scope_nonempty` refuses
+                # it, so the old code's total-loss branch raised IntegrityError on commit, rolled the
+                # suspension back with it, and escaped to the loop's blanket handler: one
+                # totally-drifted installation aborted the entire scope pass on every tick, forever,
+                # taking unrelated partial narrowings with it. The constraint is right - an
+                # installation with no reach is a contradiction - so the row keeps its last grant as
+                # the record of what was withdrawn and every live credential is revoked instead.
+                total_loss = not kept
+                if total_loss:
+                    for key_id in keys:
+                        revoke_install_credential(vault_client, key_id)
+                else:
+                    install.granted_scope = kept
+                    key_change = _rewrite_key_grant(vault_client, install)
+                if total_loss and install.status == "active":
+                    install.status = "suspended"
+                    install.suspend_reason = (
+                        "Reconcile: this organization no longer reaches any cluster in the grant"
+                    )
+                api_key_id = install.api_key_id
+                await db.commit()
+        except HTTPException as exc:
+            await db.rollback()
+            if exc.status_code == 404:
+                continue  # uninstalled since the candidates were read
+            logger.warning(
+                "Reconcile could not narrow installation %s, retrying next tick: %s", install_id, exc.detail,
+            )
+            continue
         except Exception as exc:  # noqa: BLE001 - one row must not end the pass
             await db.rollback()
             logger.warning(
                 "Reconcile could not narrow installation %s, retrying next tick: %s",
-                install.id, exc,
+                install_id, exc,
             )
             continue
         # The row moved without the Vault key moving, so only the install tombstone carries it.
-        evict_install_cache(install.api_key_id)
+        for key_id in keys:
+            evict_install_cache(key_id)
         changed += 1
 
         frozen: Dict[str, Any] = {}
         if total_loss:
-            frozen = _frozen_fields(await _owned_by(db, install.api_key_id))
+            frozen = _frozen_fields(await _owned_by(db, api_key_id))
             if frozen.get("warning"):
                 logger.warning(
                     "Reconcile revoked credential %s of installation %s, which owns OrcaHub organizations",
-                    install.api_key_id, install.id,
+                    api_key_id, install_id,
                 )
         activity_logger.log_activity(
             action="extension.install.scope_narrowed",
             target_type="extension_installation",
-            target_id=str(install.id),
+            target_id=str(install_id),
             details={
                 "dropped_clusters": dropped,
                 "remaining": len(kept),
                 "suspended": not kept,
-                "api_key_id": install.api_key_id,
+                "api_key_id": api_key_id,
+                "revoked_api_key_ids": keys if total_loss else [],
                 **key_change,
                 **frozen,
             },
         )
         logger.info(
             "Reconcile narrowed installation %s: dropped %s, %s remaining",
-            install.id,
+            install_id,
             ",".join(dropped),
             len(kept),
         )

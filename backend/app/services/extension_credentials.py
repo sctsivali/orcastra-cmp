@@ -281,7 +281,8 @@ def _retire_key(vault_client, key_id: str, *, grace_seconds: int) -> None:
     # `api_key_id` pointing at the old key, which still works, and the newly written key is
     # claimed by nothing and reclaimed by the reconcile sweep's orphan pass.
     try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
+        # note: uncached: rotation holds this key's lock, and the write below is the whole document
+        metadata, _ = get_api_key_from_vault(vault_client, key_id, use_cache=False)
     except Exception as exc:
         logger.warning("Could not read %s to retire it: %s", key_id, exc)
         raise HTTPException(

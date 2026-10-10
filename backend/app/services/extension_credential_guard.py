@@ -1,12 +1,14 @@
 """Who may hand an add-on's organizations to a new secret, and the installation row lock that decides it.
 
-Split from extension_install: rotation and uninstall decide on the installation row read again under
-lock_installation, and a rotation, which carries what the old credential owns, is refused to anyone who
-does not run the installation's organization (RotationNeedsAPartner).
+Split from extension_install: rotation, uninstall, rescope and the reconcile sweep decide on the
+installation row read again under lock_installation, and a rotation, which carries what the old
+credential owns, is refused to anyone who does not run the installation's organization
+(RotationNeedsAPartner).
 """
 
 import logging
-from typing import List
+from datetime import datetime, timezone
+from typing import Any, List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -14,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import Organization
 from app.models.extension_models import ExtensionInstallation
+from app.core.api_key_expiry import now_utc
 from app.services.integration_key_ownership import OWNERSHIP_UNKNOWN_DETAIL
 from app.services.organization_owners import owned_org_ids
 
@@ -35,9 +38,14 @@ class RotationNeedsAPartner(HTTPException):
 
 
 async def lock_installation(db: AsyncSession, install: ExtensionInstallation) -> ExtensionInstallation:
+    """lock_installation_id for an installation already loaded (see there)."""
+    return await lock_installation_id(db, install.id)
+
+
+async def lock_installation_id(db: AsyncSession, install_id: int) -> ExtensionInstallation:
     """The installation row, locked and read again, for a decision about its credentials.
 
-    important: rotation and uninstall decide on this row, never on the copy _load read before. Two
+    important: rotation, uninstall, rescope and the sweep decide on this row, never on a copy read before. Two
     rotations, or a rotation and an uninstall, each read the same api_key_id before either wrote, so the
     second carried or checked a key the first had already retired, and organizations were left on a
     credential no installation claims.
@@ -49,13 +57,25 @@ async def lock_installation(db: AsyncSession, install: ExtensionInstallation) ->
     """
     locked = (await db.execute(
         select(ExtensionInstallation)
-        .where(ExtensionInstallation.id == install.id)
+        .where(ExtensionInstallation.id == install_id)
         .with_for_update(key_share=True)
         .execution_options(populate_existing=True)
     )).scalar_one_or_none()
     if locked is None:
         raise HTTPException(status_code=404, detail="Installation not found")
     return locked
+
+
+def live_credentials(install: Any, now: Optional[datetime] = None) -> List[str]:
+    """The installation's credentials that still authenticate, sorted: its current key, and the previous
+    one while its grace window lasts. A grant change or a revocation must reach every one of them."""
+    keys = {install.api_key_id}
+    previous, until = getattr(install, "previous_api_key_id", None), getattr(install, "previous_key_expires_at", None)
+    if previous and until is not None:
+        until = until if until.tzinfo else until.replace(tzinfo=timezone.utc)
+        if until > (now or now_utc()):
+            keys.add(previous)
+    return sorted(k for k in keys if k)
 
 
 async def owned_org_ids_or_503(db: AsyncSession, key_id: str) -> List[int]:

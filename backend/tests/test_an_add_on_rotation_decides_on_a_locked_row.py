@@ -289,7 +289,9 @@ def test_only_lock_installation_locks_an_installation_row() -> None:
         if "with_for_update" not in text or "ExtensionInstallation" not in text:
             continue
         for node in ast.walk(ast.parse(text)):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != "lock_installation":
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name not in (
+                "lock_installation", "lock_installation_id",
+            ):
                 body = ast.get_source_segment(text, node) or ""
                 if "with_for_update" in body and "ExtensionInstallation" in body:
                     offenders.append(f"{path.relative_to(APP)}:{node.name}")
