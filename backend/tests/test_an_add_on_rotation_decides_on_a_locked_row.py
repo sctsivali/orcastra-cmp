@@ -1,8 +1,12 @@
-"""An add-on rotation and uninstall decide on the locked installation row.
+"""An add-on rotation and uninstall decide on the locked installation row, and only those who run the
+installation hand its organizations to a new secret.
 
 Two rotations, or a rotation and an uninstall, each read the same api_key_id before either wrote, so
 the second carried or checked a key the first had already retired, and organizations were left on a
-credential no installation claims (lock_installation).
+credential no installation claims (lock_installation). And since a rotation carries what the old
+credential owns, the secret it returns owns those organizations, so it is limited the way an
+integration key's rotation is: an Administrator, a partner of the installation's organization, or the
+creator of an organization made in this dashboard.
 """
 
 import ast
@@ -10,20 +14,24 @@ import inspect
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Sequence, Tuple
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from app.core.api_key_expiry import now_utc
+from app.models.db_models import Organization, OrganizationMember
+from app.routers import extension_installs
 from app.services import extension_credential_guard, extension_install, integration_key_ownership
 from app.services.integration_key_ownership import OWNERSHIP_UNKNOWN_DETAIL, KeyOwnsOrganizations
-from tests.test_a_capability_grant_leaves_a_record import _FakeVault
+from tests.test_a_capability_grant_leaves_a_record import _FakeVault, _RecordingLogger
 from tests.test_an_add_on_credential_keeps_its_organizations import (  # noqa: F401 - fixtures
     ADMIN,
     NEW,
     OLD,
+    PARTNER,
+    Session,
     addon_key,
     install,
     own,
@@ -33,6 +41,22 @@ from tests.test_an_add_on_credential_keeps_its_organizations import (  # noqa: F
     teardown,
     world_db,
 )
+
+DENIED = "not_a_partner_of_the_installation_organization"
+
+
+def home(db: Session, *, rows: Sequence[Tuple[str, str]] = (), created_by: str = "someone@example.test",
+         source: str = "local") -> None:
+    """The installation's organization: id 1, as install() names it, so made before any it may own."""
+    org = Organization(name="Acme", slug="acme", source=source, created_by=created_by, is_active=True,
+                       external_id="ext-acme" if source == "orcahub" else None)
+    db.add(org)
+    db.sync.flush()
+    assert org.id == 1
+    for email, role in rows:
+        db.add(OrganizationMember(organization_id=org.id, user_email=email, role=role))
+    db.sync.commit()
+
 
 def committed_meanwhile(stale: SimpleNamespace, **changes: Any):
     """A lock_installation answering what another request committed after _load read the row."""
@@ -56,7 +80,7 @@ async def test_a_rotation_retires_and_carries_from_the_key_the_locked_row_names(
     vault = _FakeVault(addon_key(NEW))
     record, newest, _secret = await extension_install.rotate_credential(
         db, vault, install=stale, extension=SimpleNamespace(slug="backup-bot", name="Backup Bot"),
-        organization_slug="acme", actor=ADMIN.email, grace_seconds=0,
+        organization_slug="acme", actor=ADMIN.email, is_admin=True, grace_seconds=0,
     )
     assert rotation["locks"] == [NEW], "the old key locked was the stale copy's"
     assert newest not in (OLD, NEW) and record.api_key_id == newest
@@ -150,6 +174,60 @@ async def test_a_row_deleted_meanwhile_answers_404() -> None:
     assert gone.value.status_code == 404
 
 
+# note: L2, who may take the organizations with a new secret
+
+@pytest.mark.parametrize("rows, created_by, source", [
+    ([(PARTNER.email, "member")], "someone@example.test", "local"),
+    ([(PARTNER.email, "admin")], "someone@example.test", "local"),
+    ([], PARTNER.email, "orcahub"),
+], ids=["member-row", "stale-admin-row", "minter-of-an-orcahub-org"])
+async def test_who_does_not_run_the_installation_cannot_take_its_organizations(
+    rotation: Dict[str, Any], rows: List[Tuple[str, str]], created_by: str, source: str
+) -> None:
+    db = world_db()
+    home(db, rows=rows, created_by=created_by, source=source)
+    own(db, OLD, "addon-org")
+    with pytest.raises(extension_install.RotationNeedsAPartner) as refused:
+        await rotate(db, rotation["vault"], install(), actor=PARTNER.email, is_admin=False)
+    assert refused.value.status_code == 403 and refused.value.detail["error"] == DENIED
+    assert "addon-org" not in refused.value.detail["message"]
+    assert rotation["vault"].writes == [], "a refused rotation still minted or retired a key"
+    assert owners(db)["addon-org"] == OLD
+
+
+@pytest.mark.parametrize("rows, created_by, actor, is_admin", [
+    ([(PARTNER.email, "partner")], "someone@example.test", PARTNER.email, False),
+    ([("Partner@Example.TEST", "partner")], "someone@example.test", PARTNER.email, False),
+    ([(PARTNER.email, "member")], PARTNER.email.upper(), PARTNER.email, False),
+    ([], "someone@example.test", ADMIN.email, True),
+], ids=["partner-row", "partner-row-in-other-case", "creator-of-a-local-org", "administrator"])
+async def test_who_runs_the_installation_rotates_and_carries(
+    rotation: Dict[str, Any], rows: List[Tuple[str, str]], created_by: str, actor: str, is_admin: bool
+) -> None:
+    db = world_db()
+    home(db, rows=rows, created_by=created_by)
+    own(db, OLD, "addon-org")
+    new_key = await rotate(db, rotation["vault"], install(), actor=actor, is_admin=is_admin)
+    assert owners(db)["addon-org"] == new_key != OLD
+
+
+async def test_an_inactive_organization_it_owns_still_needs_a_partner(rotation: Dict[str, Any]) -> None:
+    db = world_db()
+    home(db, rows=[(PARTNER.email, "member")])
+    own(db, OLD, "retired", active=False)
+    with pytest.raises(extension_install.RotationNeedsAPartner):
+        await rotate(db, rotation["vault"], install(), actor=PARTNER.email, is_admin=False)
+    assert owners(db)["retired"] == OLD
+
+
+async def test_an_add_on_that_owns_nothing_rotates_for_a_member_as_before(rotation: Dict[str, Any]) -> None:
+    db = world_db()
+    home(db, rows=[(PARTNER.email, "member")])
+    own(db, "oak_someone_else", "theirs")
+    new_key = await rotate(db, rotation["vault"], install(), actor=PARTNER.email, is_admin=False)
+    assert new_key != OLD and owners(db)["theirs"] == "oak_someone_else"
+
+
 async def test_ownership_that_cannot_be_read_rotates_nothing(
     rotation: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,6 +239,29 @@ async def test_ownership_that_cannot_be_read_rotates_nothing(
         await rotate(world_db(), rotation["vault"], install())
     assert (refused.value.status_code, refused.value.detail) == (503, OWNERSHIP_UNKNOWN_DETAIL)
     assert rotation["vault"].writes == []
+
+
+async def test_the_route_records_the_refusal_on_the_rotate_action(
+    rotation: Dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = world_db()
+    home(db, rows=[(PARTNER.email, "member")])
+    own(db, OLD, "addon-org")
+    log = _RecordingLogger()
+    monkeypatch.setattr(extension_installs, "activity_logger", log)
+    monkeypatch.setattr(extension_installs, "get_vault_integrations_client", lambda: rotation["vault"])
+
+    async def _load(_db: Any, _install_id: int, _user: Any) -> tuple:
+        return install(), SimpleNamespace(slug="backup-bot", name="Backup Bot"), "acme"
+
+    monkeypatch.setattr(extension_installs, "_load", _load)
+    with pytest.raises(extension_install.RotationNeedsAPartner):
+        await extension_installs.rotate(7, 0, None, PARTNER, db)
+    (record,) = log.calls
+    assert (record["action"], record["result"], record["error_code"]) == (
+        "extension.install.credential.rotate", "denied", DENIED,
+    )
+    assert record["details"]["api_key_id"] == OLD
 
 
 # note: ratchets, so the order and the one lock site hold
@@ -200,3 +301,8 @@ def test_the_row_is_locked_before_any_key_or_organization(function_name: str) ->
     lines = _first_calls(function_name)
     first_serialize = min(line for name, line in lines.items() if name.startswith("serialize_"))
     assert lines["lock_installation"] < first_serialize
+
+
+def test_who_may_take_the_organizations_is_decided_before_anything_is_minted() -> None:
+    lines = _first_calls("rotate_credential")
+    assert lines["runs_installation_organization"] < lines["rotate_install_credential"]

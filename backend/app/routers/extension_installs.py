@@ -391,11 +391,20 @@ async def rotate(
 ) -> InstallCreateResponse:
     record, extension, org_slug = await _load(db, install_id, user)
     vault_client = get_vault_integrations_client()
-    record, key_id, key_secret = await extension_install.rotate_credential(
-        db, vault_client,
-        install=record, extension=extension, organization_slug=org_slug,
-        actor=user.email, grace_seconds=grace_seconds,
-    )
+    try:
+        record, key_id, key_secret = await extension_install.rotate_credential(
+            db, vault_client,
+            install=record, extension=extension, organization_slug=org_slug,
+            actor=user.email, is_admin=_is_admin(user), grace_seconds=grace_seconds,
+        )
+    except extension_install.RotationNeedsAPartner:
+        _audit(
+            "extension.install.credential.rotate", install_id,
+            organization_id=record.organization_id, organization_slug=org_slug,
+            details={"extension_slug": extension.slug, "api_key_id": record.api_key_id},
+            result="denied", error_code="not_a_partner_of_the_installation_organization",
+        )
+        raise
     from app.services.extension_credentials import rotate_signing_secret
 
     signing_secret = rotate_signing_secret(vault_client, record.id)

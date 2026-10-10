@@ -26,7 +26,12 @@ from app.models.extension_schemas import (
     capability_request_info,
 )
 from app.services import extension_service, extension_settings
-from app.services.extension_credential_guard import lock_installation, owned_org_ids_or_503
+from app.services.extension_credential_guard import (
+    RotationNeedsAPartner,
+    lock_installation,
+    owned_org_ids_or_503,
+    runs_installation_organization,
+)
 from app.services.extension_credentials import (
     issue_install_credential,
     rotate_install_credential,
@@ -459,6 +464,7 @@ async def rotate_credential(
     extension: Extension,
     organization_slug: Optional[str],
     actor: str,
+    is_admin: bool,
     grace_seconds: int,
 ) -> Tuple[ExtensionInstallation, str, str]:
     """Replace the installation's credential, carrying what the old one owns to the new one.
@@ -475,6 +481,14 @@ async def rotate_credential(
         org_ids = await owned_org_ids_or_503(db, old_key_id)
         # note: and their owner sets, as every other change to a set is made (organization_owners)
         async with serialize_org_owners(db, org_ids):
+            # important: the new secret owns every organization below (inactive ones too: a sync
+            # reactivates them), so only those who run the installation may take it, as only an
+            # integration key's home may rotate an owner key (routers/integrations.py).
+            if org_ids and not is_admin and not await runs_installation_organization(
+                db, install.organization_id, actor
+            ):
+                raise RotationNeedsAPartner()
+
             if install.last_scope_change_at is None:
                 last = install.updated_at
             else:

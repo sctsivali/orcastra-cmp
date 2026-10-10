@@ -104,10 +104,11 @@ def rotation(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
     return {"vault": vault, "log": log, "locks": locks}
 
 
-async def rotate(db: Session, vault: Any, record: SimpleNamespace, grace: int = 0) -> str:
+async def rotate(db: Session, vault: Any, record: SimpleNamespace, grace: int = 0, *,
+                 actor: str = ADMIN.email, is_admin: bool = True) -> str:
     _record, new_key, _secret = await extension_install.rotate_credential(
         db, vault, install=record, extension=SimpleNamespace(slug="backup-bot", name="Backup Bot"),
-        organization_slug="acme", actor=PARTNER.email, grace_seconds=grace,
+        organization_slug="acme", actor=actor, is_admin=is_admin, grace_seconds=grace,
     )
     return new_key
 
