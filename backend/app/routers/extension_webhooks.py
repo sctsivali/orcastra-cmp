@@ -22,7 +22,7 @@ from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.extension_manifest import EXTENSION_EVENTS
 from app.core.org_scope import get_user_org_ids, org_scope_dependency
-from app.core.rbac import Role
+from app.core.rbac import is_admin
 from app.core.url_safety import assert_url_is_fetchable
 from app.models.extension_models import (
     ExtensionInstallation,
@@ -138,7 +138,7 @@ async def _install_for(
     ).scalar_one_or_none()
     if install is None:
         raise HTTPException(status_code=404, detail="Installation not found")
-    if Role.ADMIN.value not in (user.roles or []):
+    if not is_admin(user):
         if install.organization_id not in await get_user_org_ids(user, db):
             raise HTTPException(status_code=404, detail="Installation not found")
     return install
