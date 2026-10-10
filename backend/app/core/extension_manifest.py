@@ -103,7 +103,7 @@ SETTING_TYPES: Dict[str, str] = {
 # already answers on, so they are reserved rather than merely ordered around.
 RESERVED_SLUGS: FrozenSet[str] = frozenset({
     "orcastra", "orca", "orcahub", "admin", "system", "internal", "official", "verified",
-    "self", "installations", "install-preview", "vocabulary",
+    "self", "installations", "install-preview", "vocabulary", "manageable-organizations",
 })
 
 

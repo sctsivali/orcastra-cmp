@@ -31,10 +31,10 @@ from app.core.api_key_permissions import PERMISSION_LEVELS, granted_level
 from app.core.cache import get_cache_manager
 from app.core.org_scope import (
     get_current_allowed_clusters,
-    get_user_org_ids,
     resolve_cluster_orgs,
 )
 from app.models.extension_models import Extension, ExtensionInstallation
+from app.services.extension_credential_guard import orgs_the_user_runs
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ async def assert_install_scope_within_partner(
 
     # 2. The target organization has to be one the operator actually holds.
     if not is_admin:
-        own_orgs = await get_user_org_ids(user, db)
+        own_orgs = await orgs_the_user_runs(db, user.email)
         if organization_id not in own_orgs:
             # 404 rather than 403, matching how an out-of-scope key id is answered: an
             # organization the caller cannot see must not be distinguishable from one that does

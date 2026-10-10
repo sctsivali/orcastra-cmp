@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { currentQuery, replaceQuery } from "@/lib/url-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,7 +26,6 @@ import { InstalledTable } from "@/components/extensions/installed-table";
 import { PublishAddonDialog } from "@/components/extensions/publish-addon-dialog";
 import { InstallConsentDialog } from "@/components/extensions/install-consent-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { api } from "@/lib/api";
 import { extensionsAPI } from "@/lib/extensions-api";
 import type {
   ExtensionDetail,
@@ -80,11 +79,19 @@ function ExtensionsOverviewContent() {
   const [pendingUninstall, setPendingUninstall] = useState<ExtensionInstall | null>(null);
   const [uninstallError, setUninstallError] = useState<string | null>(null);
 
+  // note: only the organizations the caller may install into. The general list included ones it is a
+  // buyer or a plain member of, where every install answers "Organization not found".
   const organizations = useQuery({
-    queryKey: ["organizations"],
-    queryFn: () => api.organizations.list(),
+    queryKey: ["extensions", "manageable-organizations"],
+    queryFn: () => extensionsAPI.manageableOrganizations(),
     staleTime: 60000,
   });
+
+  // A shared or bookmarked ?org= that this caller may not install into is cleared, not kept selected.
+  useEffect(() => {
+    if (!organizations.data || !organizationId) return;
+    if (!organizations.data.some((org) => String(org.id) === organizationId)) setOrganizationId("");
+  }, [organizations.data, organizationId, setOrganizationId]);
 
   const catalogue = useQuery({
     queryKey: ["extensions", "catalogue"],
@@ -198,6 +205,13 @@ function ExtensionsOverviewContent() {
   }
 
   const orgs = organizations.data ?? [];
+  const orgPlaceholder = organizations.isError
+    ? "Could not load organizations"
+    : !organizations.data
+      ? "Loading organizations"
+      : orgs.length === 0
+        ? "No organization you run"
+        : "Choose an organization";
   const installedSlugs = new Set((installs.data ?? []).map((i) => i.extension_slug));
   // A draft is visible only to its owner, which is exactly the step that used to strand people:
   // publishing produced one, the operator saw an empty catalogue, and nobody got an error.
@@ -237,7 +251,7 @@ function ExtensionsOverviewContent() {
           <div>
             <h2 className="text-lg font-semibold">Available Add-ons</h2>
             <p className="text-sm text-muted-foreground">
-              Published add-ons you can install into an organization you hold
+              Published add-ons you can install into an organization you run
             </p>
           </div>
           <div className="flex items-end gap-2">
@@ -245,9 +259,13 @@ function ExtensionsOverviewContent() {
               <label htmlFor="install-org" className="text-sm font-medium">
                 Install into
               </label>
-              <Select value={organizationId} onValueChange={setOrganizationId}>
+              <Select
+                value={organizationId}
+                onValueChange={setOrganizationId}
+                disabled={!organizations.data || orgs.length === 0}
+              >
                 <SelectTrigger id="install-org" className="w-56">
-                  <SelectValue placeholder="Choose an organization" />
+                  <SelectValue placeholder={orgPlaceholder} />
                 </SelectTrigger>
                 <SelectContent>
                   {orgs.map((org) => (

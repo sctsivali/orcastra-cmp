@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db_models import Organization
@@ -86,33 +86,50 @@ async def owned_org_ids_or_503(db: AsyncSession, key_id: str) -> List[int]:
         raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
 
 
-async def runs_installation_organization(db: AsyncSession, organization_id: int, email: str) -> bool:
-    """Whether this user runs the installation's organization: a partner row, or its creator if made here.
+def _runs(email: str):
+    """The organizations a user runs: a partner row there, or its creator when it was made in this dashboard.
 
     note: a creator is stored with a "member" row (OrganizationService.create_organization), so it is
-    counted through created_by, but only for an organization made in this dashboard: an OrcaHub one's
-    created_by is the minter of the key that provisioned it (cluster_parties.home_partner_keys).
+    counted through created_by, but only for a local organization: an OrcaHub one's created_by is the
+    minter of the key that provisioned it (cluster_parties.home_partner_keys), a seller, not its runner.
+    A "member" or "tenant" row is a buyer's or a teammate's, and an "admin" row is one a demotion left
+    behind (cluster_parties.RUNNING_ROLES).
     """
     from app.models.db_models import OrganizationMember
     from app.services.cluster_parties import RUNNING_ROLES
 
+    partner = (
+        select(OrganizationMember.id)
+        .where(
+            OrganizationMember.organization_id == Organization.id,
+            func.lower(OrganizationMember.user_email) == email,
+            OrganizationMember.role.in_(RUNNING_ROLES),
+        )
+        .exists()
+    )
+    return or_(partner, and_(Organization.source == "local", func.lower(Organization.created_by) == email))
+
+
+async def runs_installation_organization(db: AsyncSession, organization_id: int, email: str) -> bool:
+    """Whether this user runs the installation's organization (_runs)."""
     wanted = (email or "").strip().lower()
     if not wanted:
         return False
-    partner = await db.execute(
-        select(OrganizationMember.id).where(
-            OrganizationMember.organization_id == organization_id,
-            func.lower(OrganizationMember.user_email) == wanted,
-            OrganizationMember.role.in_(RUNNING_ROLES),
-        )
+    row = await db.execute(
+        select(Organization.id).where(Organization.id == organization_id, _runs(wanted)).limit(1)
     )
-    if partner.first() is not None:
-        return True
-    creator = await db.execute(
-        select(Organization.id).where(
-            Organization.id == organization_id,
-            Organization.source == "local",
-            func.lower(Organization.created_by) == wanted,
-        )
+    return row.first() is not None
+
+
+async def orgs_the_user_runs(db: AsyncSession, email: str) -> List[int]:
+    """The active organizations this user runs (_runs): the only ones whose add-ons it may install,
+    read or manage, unless it is an Administrator."""
+    wanted = (email or "").strip().lower()
+    if not wanted:
+        return []
+    rows = await db.execute(
+        select(Organization.id)
+        .where(Organization.is_active == True, _runs(wanted))  # noqa: E712 - SQLAlchemy column comparison
+        .order_by(Organization.id)
     )
-    return creator.first() is not None
+    return [row[0] for row in rows.all()]

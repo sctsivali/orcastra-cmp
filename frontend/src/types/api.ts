@@ -2937,6 +2937,13 @@ export interface ExtensionDetail {
 }
 
 /** The consent screen's source of truth. Every field here was computed by the server. */
+/** An organization whose add-ons the caller may install and manage (GET /extensions/manageable-organizations). */
+export interface ManageableOrganization {
+  id: number;
+  name: string;
+  slug: string;
+}
+
 export interface ExtensionInstallPreview {
   extension: ExtensionDetail;
   organization_id: number;

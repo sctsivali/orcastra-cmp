@@ -21,7 +21,7 @@ from app.core.config import webhook_requires_https
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.extension_manifest import EXTENSION_EVENTS
-from app.core.org_scope import get_user_org_ids, org_scope_dependency
+from app.core.org_scope import org_scope_dependency
 from app.core.rbac import is_admin
 from app.core.url_safety import assert_url_is_fetchable
 from app.models.extension_models import (
@@ -31,6 +31,7 @@ from app.models.extension_models import (
 )
 from app.routers.integrations import get_vault_integrations_client
 from app.services.activity_logger import get_activity_logger
+from app.services.extension_credential_guard import orgs_the_user_runs
 from app.services.extension_credentials import (
     SIGNING_OVERLAP_SECONDS,
     read_signing_secret,
@@ -139,7 +140,7 @@ async def _install_for(
     if install is None:
         raise HTTPException(status_code=404, detail="Installation not found")
     if not is_admin(user):
-        if install.organization_id not in await get_user_org_ids(user, db):
+        if install.organization_id not in await orgs_the_user_runs(db, user.email):
             raise HTTPException(status_code=404, detail="Installation not found")
     return install
 
