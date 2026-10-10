@@ -27,6 +27,7 @@ from app.models import extension_models  # noqa: F401
 from app.models import migration_models  # noqa: F401
 from app.models import snapshot_schedule_models  # noqa: F401
 from app.models import task_journal_models  # noqa: F401
+from app.models import trust_cleanup_models  # noqa: F401
 
 # Alembic Config object
 config = context.config

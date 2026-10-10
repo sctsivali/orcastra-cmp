@@ -47,6 +47,10 @@ from app.core.type_utils import (
     resolve_clustered,
 )
 from app.services.activity_logger import get_activity_logger
+from app.core.cert_fingerprint import lxd_fingerprint
+from app.services.lxd_certs import rotation as cert_rotation
+from app.services.lxd_certs import trust_cleanup
+from app.services.lxd_certs import trust_cleanup_store as trust_store
 from app.services.region_catalog import get_region_catalog
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -378,10 +382,24 @@ async def register_cluster(
         certificate_pem = None
         try:
             logger.info(f"Generating certificate for cluster {cluster_id}")
-            cert_data = cert_manager.generate_and_store_certificate(
-                cluster_id=cluster_id,
-                ttl=settings.vault_cert_ttl
-            )
+            # The owning organization may re-register a cluster, which replaces a certificate the
+            # cluster can still trust: recorded first and under the lock, as regenerate does.
+            try:
+                async with trust_store.cluster_cert_lock(db, cluster_id):
+                    await cert_rotation.record_current_superseded(
+                        db, cert_manager, cluster_id, reason="register"
+                    )
+                    cert_data = await asyncio.to_thread(
+                        cert_manager.generate_and_store_certificate,
+                        cluster_id=cluster_id,
+                        ttl=settings.vault_cert_ttl,
+                    )
+                    await db.commit()
+            except trust_store.CertificateOperationBusy:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Another certificate change on this cluster is in progress. Try again in a moment.",
+                )
             logger.info(f"Certificate generated and stored for {cluster_id}")
             
             # Get certificate PEM for user to copy-paste
@@ -1054,7 +1072,9 @@ async def get_cluster(
     - Certificates
     - Secrets
     
-    This does NOT remove the certificate from the LXD server's trust store.
+    The dashboard first removes its own trust entries from the cluster (superseded ones, the
+    pending certificate, then the current one). Whatever it cannot remove is returned in
+    `manual_trust_commands`, and the deletion proceeds either way.
     """
 )
 async def delete_cluster(
@@ -1070,6 +1090,27 @@ async def delete_cluster(
         await assert_cluster_not_migration_fenced(cluster_id=cluster_id, db=db)
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
+    # Step 0: revoke our own access while the key still exists. Before any Vault delete, because
+    # removing a trust entry needs the current certificate. Best effort: it never blocks the delete.
+    manual_trust_commands: list = []
+    trust_cleanup_complete = False
+    try:
+        async with trust_store.cluster_cert_lock(db, cluster_id):
+            revoked = await trust_cleanup.remove_trust_for_deregistration(db, cluster_id)
+            manual_trust_commands, trust_cleanup_complete = revoked.commands, revoked.complete
+            await trust_store.delete_for_cluster(db, cluster_id)
+            await db.commit()
+    except trust_store.CertificateOperationBusy:
+        raise HTTPException(
+            status_code=409,
+            detail="Another certificate change on this cluster is in progress. Try again in a moment.",
+        )
+    except Exception as exc:
+        logger.warning(f"Could not remove trust entries for {cluster_id} before deletion: {exc}")
+        try:
+            await db.rollback()
+        except Exception:
+            pass
     try:
         # Delete all cluster data from Vault
         vault = cert_manager.vault
@@ -1149,6 +1190,9 @@ async def delete_cluster(
                 result = await db.execute(
                     sql_delete(OrganizationCluster).where(OrganizationCluster.cluster_id == cluster_id)
                 )
+                # Again here, in case step 0 rolled back: a row for a cluster with no Vault entry
+                # would wait on a certificate that will never be read.
+                await trust_store.delete_for_cluster(db, cluster_id)
                 await db.commit()
                 return result.rowcount
 
@@ -1229,7 +1273,9 @@ async def delete_cluster(
         return ClusterDeleteResponse(
             success=True,
             message=f"Cluster {cluster_id} deleted successfully",
-            cluster_id=cluster_id
+            cluster_id=cluster_id,
+            manual_trust_commands=manual_trust_commands,
+            trust_cleanup_complete=trust_cleanup_complete,
         )
         
     except Exception as e:
@@ -1269,6 +1315,7 @@ async def delete_cluster(
 async def regenerate_certificate(
     cluster_id: str,
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    db: AsyncSession = Depends(get_db),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
@@ -1307,11 +1354,25 @@ async def regenerate_certificate(
                 f"{detected_type or 'undetermined, keeping ' + str(stored_type)}"
             )
         
-        # Generate new certificate (let default FQDN logic apply: cluster_id.domain)
-        cert_data = cert_manager.generate_and_store_certificate(
-            cluster_id=cluster_id,
-            ttl=settings.vault_cert_ttl
-        )
+        # Generate new certificate (let default FQDN logic apply: cluster_id.domain). The one it
+        # overwrites is recorded first, under the cluster's certificate lock, so its trust entry
+        # is removed once the cluster trusts the new one.
+        try:
+            async with trust_store.cluster_cert_lock(db, cluster_id):
+                previous_fp = await cert_rotation.record_current_superseded(
+                    db, cert_manager, cluster_id, reason="regenerate"
+                )
+                cert_data = await asyncio.to_thread(
+                    cert_manager.generate_and_store_certificate,
+                    cluster_id=cluster_id,
+                    ttl=settings.vault_cert_ttl,
+                )
+                await db.commit()
+        except trust_store.CertificateOperationBusy:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Another certificate change on this cluster is in progress. Try again in a moment.",
+            )
         
         # Get the certificate to return in response
         certificate_pem = cert_data.get("cert", "")
@@ -1323,6 +1384,14 @@ async def regenerate_certificate(
         # connect uses the superseded material and the cluster reports not_authorized.
         from app.core.cache import get_cache_manager
         get_cache_manager().invalidate_cluster_cache(cluster_id)
+        try:
+            new_fp = lxd_fingerprint(certificate_pem) if certificate_pem else None
+        except ValueError:
+            new_fp = None
+        cert_rotation.audit(
+            "cluster.certificate.regenerate", cluster_id,
+            fingerprint=new_fp, previous_fingerprint=previous_fp,
+        )
         return ClusterRegisterResponse(
             success=True,
             message=f"Certificate regenerated! Run the {cli_tool} command to re-add trust. Detected: {cluster_type}.",

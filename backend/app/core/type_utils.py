@@ -277,6 +277,15 @@ def build_trust_add_command(cluster_type: Optional[str], cert_content: str, iden
     return f'cat <<EOF | {cli_prefix} config trust {trust_subcommand} - --name="{identity_name}"\n{cert_content}\nEOF'
 
 
+def build_trust_remove_command(cluster_type: Optional[str], fingerprint: str) -> str:
+    """The CLI line that removes one trust entry, for when the dashboard could not.
+
+    Both LXD and Incus spell it `config trust remove`. The full fingerprint is used on purpose:
+    the CLI matches a prefix, and a short one can name a different entry.
+    """
+    return f"{get_cli_command_prefix(cluster_type)} config trust remove {fingerprint}"
+
+
 def _pre_auth_type_from_payload(metadata: Dict[str, Any]) -> Optional[str]:
     """What an unauthenticated `/1.0` body can honestly say about the hypervisor family.
 

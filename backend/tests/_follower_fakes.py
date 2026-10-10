@@ -137,6 +137,10 @@ class ScriptedSleep:
 class NoIdentities:
     """No certificate read: every host has no dashboard identity."""
 
+    def __init__(self, **_: object) -> None:
+        # The follower builds its default with read_tracked=...; the fake ignores it.
+        pass
+
     async def for_host(self, host: str) -> frozenset:
         return frozenset()
 
