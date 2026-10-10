@@ -87,6 +87,20 @@ def refuse_secret_rotation(metadata: Mapping[str, Any]) -> None:
         raise HTTPException(status_code=409, detail=ROTATE_DETAIL)
 
 
+async def is_current_add_on_credential(db: AsyncSession, key_id: str) -> bool:
+    """Whether this add-on credential is still some installation's current key.
+
+    important: only a current credential may first-claim an organization. A key a rotation replaced
+    still authenticates for its grace window, and an organization it claimed then would stay on a key
+    that expires; one rotated with no grace, rotated twice, or whose installation was deleted is not
+    any installation's current key either.
+    """
+    row = (await db.execute(
+        select(ExtensionInstallation.id).where(ExtensionInstallation.api_key_id == key_id).limit(1)
+    )).first()
+    return row is not None
+
+
 async def installation_claims(db: AsyncSession, key_id: str) -> bool:
     """Whether an installation still uses this key, as its live credential or its rotation's previous one."""
     row = (await db.execute(

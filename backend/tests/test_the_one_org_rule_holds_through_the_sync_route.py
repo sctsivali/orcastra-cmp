@@ -27,7 +27,7 @@ from app.services import integration_cluster_rebind
 from app.services.integration_cluster_rebind import REBIND_ACTION
 from app.services.integration_roles import ROLE_ADMIN, ROLE_PARTNER, ROLE_TENANT
 from app.services.lxd_service import get_lxd_service
-from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
+from tests._sqlite_session import AsyncSessionFacade, installation_rows, org_tables, sqlite_session
 from tests.test_a_push_rebinds_only_into_the_org_its_key_claimed import (
     K_ATTACKER,
     K_PARTNER,
@@ -169,6 +169,9 @@ def expect(hub: Dict[str, Any], placed_now: Dict[str, Optional[str]], dest: Opti
 async def run(hub: Dict[str, Any], seeds: Sequence[Tuple[str, Dict[str, Any]]],
               pushes: Sequence[Tuple[Sequence[OrgRef], List[Dict[str, Any]]]], **key_extra: Any) -> AsyncSessionFacade:
     db = sqlite_session(*org_tables())
+    if key_extra.get("extension_install_id") is not None:
+        # note: an add-on credential claims only while it is its installation's current key
+        installation_rows(db, (K_PARTNER, None))
     for name, kw in seeds:
         await seed(db, name, **kw)
     await personal_cluster(db, "c-cluster", C)

@@ -28,7 +28,7 @@ from app.routers import integrations
 from app.services import integration_cluster_rebind
 from app.services.integration_cluster_rebind import REBIND_ACTION
 from app.services.lxd_service import get_lxd_service
-from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
+from tests._sqlite_session import AsyncSessionFacade, installation_rows, org_tables, sqlite_session
 from tests.test_a_push_rebinds_only_into_the_org_its_key_claimed import (
     ATTACKER,
     K_ATTACKER,
@@ -379,6 +379,8 @@ async def test_a_key_without_a_usable_creator_rebinds_nothing(world: Dict[str, A
 @pytest.mark.parametrize("install_id", [*INSTALL_IDS, None], ids=[repr(v) for v in [*INSTALL_IDS, None]])
 async def test_an_add_on_credential_never_rebinds(world: Dict[str, Any], install_id: Any) -> None:  # noqa: F811
     db = sqlite_session(*org_tables())
+    if install_id is not None:
+        installation_rows(db, (K_PARTNER, None))
     await personal_cluster(db, "c-cluster", C)
     assert (await push(db, K_PARTNER, [P], [m(C, P, "PARTNER")], extension_install_id=install_id)).status_code == 200
     if install_id is None:

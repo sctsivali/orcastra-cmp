@@ -11,6 +11,7 @@ import hmac
 import logging
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, NamedTuple, Tuple, Type, TypeVar, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request, Response
@@ -189,6 +190,7 @@ from app.services.integration_key_ownership import (
 )
 from app.services.add_on_credential_edits import (
     is_add_on_credential,
+    is_current_add_on_credential,
     refuse_delete,
     refuse_grant_edit,
     refuse_secret_rotation,
@@ -1573,6 +1575,8 @@ async def _upsert_synced_organizations(
     db: AsyncSession,
     organizations: List["SyncOrganization"],
     api_key_id: str,
+    *,
+    add_on: bool = False,
 ) -> int:
     """
     Persist organizations pushed from OrcaHub. Idempotent by design: this endpoint is
@@ -1601,121 +1605,152 @@ async def _upsert_synced_organizations(
     # identities are safe to re-link).
     incoming_ids = {o.id for o in organizations}
 
+    # important: an add-on credential may first-claim an organization only while it is its
+    # installation's current key (is_current_add_on_credential). Each organization is decided under
+    # the key's lock, taken before its row as everywhere else, so a rotation's carry either sees this
+    # claim or this claim sees the rotation. Answered lazily, once per claim, and a refusal sticks.
+    replaced = False
+
+    async def _replaced() -> bool:
+        nonlocal replaced
+        if add_on and not replaced:
+            replaced = not await is_current_add_on_credential(db, api_key_id)
+        return replaced
+
+    async def _refuse_replaced(org_data: "SyncOrganization") -> None:
+        logger.warning(
+            "Refusing a first claim of organization %s (external_id=%s): api key %s is no longer its "
+            "add-on installation's current credential", org_data.slug, org_data.id, api_key_id,
+        )
+        await db.commit()
+
     # Pass 1: reconcile known identities. Updating here frees any slug the org renamed away
     # from, so Pass 2's inserts/re-links see the post-rename slug map.
     for org_data in organizations:
-        try:
-            # note: FOR UPDATE (PostgreSQL; SQLite omits it), so two keys claiming one unclaimed
-            # organization at once take turns: the second reads the first's claim and is refused,
-            # rather than both claiming it and the loser staying in its owner set unseen. A transfer
-            # reads the row the same way, so it waits for this sync or this sync waits for it.
-            existing = (await db.execute(
-                select(Organization).where(
-                    and_(
-                        Organization.source == "orcahub",
-                        Organization.external_id == org_data.id,
+        async with (serialize_key_ownership(db, api_key_id) if add_on else nullcontext()):
+            try:
+                # note: FOR UPDATE (PostgreSQL; SQLite omits it), so two keys claiming one unclaimed
+                # organization at once take turns: the second reads the first's claim and is refused,
+                # rather than both claiming it and the loser staying in its owner set unseen. A transfer
+                # reads the row the same way, so it waits for this sync or this sync waits for it.
+                existing = (await db.execute(
+                    select(Organization).where(
+                        and_(
+                            Organization.source == "orcahub",
+                            Organization.external_id == org_data.id,
+                        )
                     )
-                )
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )).scalar_one_or_none()
-            if not existing:
-                continue
-            # important: `api_key_id` records which key synced an org, and the upsert wrote it
-            # without ever reading it, so any valid key could claim and rewrite an org another
-            # integration owned, including its members' roles. A key may only update what it
-            # already owns, or an org not yet claimed by one.
-            # note: any key in the owner set may sync it. Only an unclaimed org gets this key as its
-            # primary; an owned org keeps its primary, so a co-owner's push never moves the callbacks.
-            if existing.api_key_id and not await is_owner(db, existing, api_key_id):
-                logger.warning(
-                    "Refusing sync of organization %s (external_id=%s): owned by api key %s, "
-                    "caller is %s",
-                    existing.slug, org_data.id, existing.api_key_id, api_key_id,
-                )
-                handled.add(org_data.id)
-                # important: nothing changed, so end the transaction now. Kept open, the row read
-                # FOR UPDATE above stays locked into the rest of the sync, which takes this key's
-                # lock; a transfer or owner-set change for this key holds that lock while it waits
-                # on this row, and PostgreSQL answers one of the two with a deadlock.
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalar_one_or_none()
+                if not existing:
+                    continue
+                # important: `api_key_id` records which key synced an org, and the upsert wrote it
+                # without ever reading it, so any valid key could claim and rewrite an org another
+                # integration owned, including its members' roles. A key may only update what it
+                # already owns, or an org not yet claimed by one.
+                # note: any key in the owner set may sync it. Only an unclaimed org gets this key as its
+                # primary; an owned org keeps its primary, so a co-owner's push never moves the callbacks.
+                if existing.api_key_id and not await is_owner(db, existing, api_key_id):
+                    logger.warning(
+                        "Refusing sync of organization %s (external_id=%s): owned by api key %s, "
+                        "caller is %s",
+                        existing.slug, org_data.id, existing.api_key_id, api_key_id,
+                    )
+                    handled.add(org_data.id)
+                    # important: nothing changed, so end the transaction now. Kept open, the row read
+                    # FOR UPDATE above stays locked into the rest of the sync, which takes this key's
+                    # lock; a transfer or owner-set change for this key holds that lock while it waits
+                    # on this row, and PostgreSQL answers one of the two with a deadlock.
+                    await db.commit()
+                    continue
+                if not existing.api_key_id and await _replaced():
+                    handled.add(org_data.id)
+                    await _refuse_replaced(org_data)
+                    continue
+                existing.name = org_data.name
+                existing.slug = org_data.slug
+                existing.description = org_data.description
+                if not existing.api_key_id:
+                    existing.api_key_id = api_key_id
+                existing.is_active = True
                 await db.commit()
-                continue
-            existing.name = org_data.name
-            existing.slug = org_data.slug
-            existing.description = org_data.description
-            if not existing.api_key_id:
-                existing.api_key_id = api_key_id
-            existing.is_active = True
-            await db.commit()
-            handled.add(org_data.id)
-            synced += 1
-        except Exception as e:
-            await db.rollback()
-            logger.warning(f"Skipped organization {org_data.id} (slug={org_data.slug}) during sync update: {e}")
+                handled.add(org_data.id)
+                synced += 1
+            except Exception as e:
+                await db.rollback()
+                logger.warning(f"Skipped organization {org_data.id} (slug={org_data.slug}) during sync update: {e}")
 
     # Pass 2: create or re-link the orgs not matched by identity above.
     for org_data in organizations:
         if org_data.id in handled:
             continue
-        try:
-            slug_owner = (await db.execute(
-                select(Organization).where(Organization.slug == org_data.slug)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )).scalar_one_or_none()
+        async with (serialize_key_ownership(db, api_key_id) if add_on else nullcontext()):
+            try:
+                slug_owner = (await db.execute(
+                    select(Organization).where(Organization.slug == org_data.slug)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalar_one_or_none()
 
-            if slug_owner is None:
-                db.add(Organization(
-                    name=org_data.name,
-                    slug=org_data.slug,
-                    description=org_data.description,
-                    created_by="system",
-                    source="orcahub",
-                    external_id=org_data.id,
-                    api_key_id=api_key_id,
-                    is_active=True,
-                ))
-            elif (
-                slug_owner.source == "orcahub"
-                and slug_owner.external_id not in incoming_ids
-                and (not slug_owner.api_key_id or await is_owner(db, slug_owner, api_key_id))
-            ):
-                # The row's OrcaHub identity is RETIRED (its external_id is absent from this
-                # push) and OrcaHub slugs are globally unique, so this row is the deleted
-                # predecessor of the incoming org that reused the slug. Re-link it in place.
-                #
-                # important: the ownership term is load-bearing and was missing. Pass 1 refuses to
-                # touch an organisation owned by another key, with a comment saying why; this
-                # branch reassigns `api_key_id` outright, so without the same test any key could
-                # take over another integration's organisation by pushing an org that merely
-                # reused its slug with a fresh external_id. Owning it then passes every later
-                # check, including the member sync that pushes roles into Authentik.
-                slug_owner.name = org_data.name
-                slug_owner.description = org_data.description
-                slug_owner.external_id = org_data.id
-                if not slug_owner.api_key_id:
-                    slug_owner.api_key_id = api_key_id
-                slug_owner.is_active = True
-            else:
-                # important: the slug is held by a row we must NOT steal - either a non-OrcaHub
-                # org (ex; a partner's local org) or another OrcaHub org whose identity is still
-                # live in this push (a Pass-1 rename that could not land yet). Overwriting it
-                # would hijack that org and re-parent its members. Surface the clash and skip;
-                # the next sync retries once the clash is resolved.
-                logger.warning(
-                    f"Skipped organization {org_data.id}: slug '{org_data.slug}' is held by a live "
-                    f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}); "
-                    f"resolve the slug clash to sync it"
-                )
-                # note: as in Pass 1, the row read FOR UPDATE is released before going on
+                if slug_owner is None:
+                    if await _replaced():
+                        await _refuse_replaced(org_data)
+                        continue
+                    db.add(Organization(
+                        name=org_data.name,
+                        slug=org_data.slug,
+                        description=org_data.description,
+                        created_by="system",
+                        source="orcahub",
+                        external_id=org_data.id,
+                        api_key_id=api_key_id,
+                        is_active=True,
+                    ))
+                elif (
+                    slug_owner.source == "orcahub"
+                    and slug_owner.external_id not in incoming_ids
+                    and (not slug_owner.api_key_id or await is_owner(db, slug_owner, api_key_id))
+                ):
+                    # The row's OrcaHub identity is RETIRED (its external_id is absent from this
+                    # push) and OrcaHub slugs are globally unique, so this row is the deleted
+                    # predecessor of the incoming org that reused the slug. Re-link it in place.
+                    #
+                    # important: the ownership term is load-bearing and was missing. Pass 1 refuses to
+                    # touch an organisation owned by another key, with a comment saying why; this
+                    # branch reassigns `api_key_id` outright, so without the same test any key could
+                    # take over another integration's organisation by pushing an org that merely
+                    # reused its slug with a fresh external_id. Owning it then passes every later
+                    # check, including the member sync that pushes roles into Authentik.
+                    if not slug_owner.api_key_id and await _replaced():
+                        await _refuse_replaced(org_data)
+                        continue
+                    slug_owner.name = org_data.name
+                    slug_owner.description = org_data.description
+                    slug_owner.external_id = org_data.id
+                    if not slug_owner.api_key_id:
+                        slug_owner.api_key_id = api_key_id
+                    slug_owner.is_active = True
+                else:
+                    # important: the slug is held by a row we must NOT steal - either a non-OrcaHub
+                    # org (ex; a partner's local org) or another OrcaHub org whose identity is still
+                    # live in this push (a Pass-1 rename that could not land yet). Overwriting it
+                    # would hijack that org and re-parent its members. Surface the clash and skip;
+                    # the next sync retries once the clash is resolved.
+                    logger.warning(
+                        f"Skipped organization {org_data.id}: slug '{org_data.slug}' is held by a live "
+                        f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}); "
+                        f"resolve the slug clash to sync it"
+                    )
+                    # note: as in Pass 1, the row read FOR UPDATE is released before going on
+                    await db.commit()
+                    continue
+
                 await db.commit()
-                continue
-
-            await db.commit()
-            synced += 1
-        except Exception as e:
-            await db.rollback()
-            logger.warning(f"Skipped organization {org_data.id} (slug={org_data.slug}) during sync insert: {e}")
+                synced += 1
+            except Exception as e:
+                await db.rollback()
+                logger.warning(f"Skipped organization {org_data.id} (slug={org_data.slug}) during sync insert: {e}")
 
     if synced > 0:
         logger.info(f"Synced {synced} organizations from OrcaHub (api_key={api_key_id})")
@@ -3329,7 +3364,7 @@ async def sync_data(
         # ── Sync organizations from external app ──
         if request.organizations:
             orgs_synced = await _upsert_synced_organizations(
-                db, request.organizations, api_key_id
+                db, request.organizations, api_key_id, add_on=is_add_on_credential(api_key)
             )
             result.organizations_synced = orgs_synced
 
@@ -6927,6 +6962,16 @@ async def provision_tenant_access(
                     "key has claimed."
                 ),
             )
+        # important: as in a sync, only an add-on installation's current credential may claim a new
+        # organization (add_on_credential_edits.is_current_add_on_credential)
+        if is_add_on_credential(api_key) and not await is_current_add_on_credential(db, api_key_id):
+            raise HTTPException(status_code=409, detail={
+                "error": "superseded_credential",
+                "message": (
+                    "This add-on credential was replaced by a rotation, so it cannot create an "
+                    "organization. Provision with the installation's current credential."
+                ),
+            })
 
         org = Organization(
             name=body.organization_name,

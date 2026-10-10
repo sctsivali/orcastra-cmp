@@ -85,6 +85,25 @@ def sqlite_session(*models: Type[Any]) -> AsyncSessionFacade:
     return AsyncSessionFacade(Session(engine, expire_on_commit=False))
 
 
+def installation_rows(db: "AsyncSessionFacade", *claims: tuple) -> "AsyncSessionFacade":
+    """The two key columns of extension_installations, one (api_key_id, previous_api_key_id) row each.
+
+    note: the full model has Postgres-only columns (ARRAY, JSONB), so SQLite holds only the columns the
+    claim and the current-credential lookups name (services/add_on_credential_edits.py).
+    """
+    db.sync.execute(text(
+        "CREATE TABLE IF NOT EXISTS extension_installations "
+        "(id INTEGER PRIMARY KEY, api_key_id TEXT NOT NULL UNIQUE, previous_api_key_id TEXT)"
+    ))
+    for current, previous in claims:
+        db.sync.execute(
+            text("INSERT INTO extension_installations (api_key_id, previous_api_key_id) VALUES (:c, :p)"),
+            {"c": current, "p": previous},
+        )
+    db.sync.commit()
+    return db
+
+
 def org_tables() -> tuple:
     """Organization, the two tables its relationships load eagerly, the assignment table a member
     delete cascades to through the ORM, and the owner set every claimed organization has."""

@@ -14,12 +14,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers import integrations
-from sqlalchemy import text
 
 from app.services import add_on_credential_edits, extension_install
 from app.services.add_on_credential_edits import CLAIM_UNKNOWN_DETAIL, DELETE_DETAIL, GRANT_EDIT_DETAIL
 from app.services.extension_credentials import build_install_metadata, rotate_install_credential
-from tests._sqlite_session import AsyncSessionFacade, org_tables, sqlite_session
+from tests._sqlite_session import AsyncSessionFacade, installation_rows, org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER, SECRETS, _FakeVault, _RecordingLogger
 
 ADDON = "oak_addon"
@@ -113,18 +112,7 @@ def installations(*claims: Tuple[str, Optional[str]]) -> AsyncSessionFacade:
     The organization tables are there too, empty, because revoke and delete first read which
     organizations the key owns (services/integration_key_ownership.py).
     """
-    db = sqlite_session(*org_tables())
-    db.sync.execute(text(
-        "CREATE TABLE extension_installations "
-        "(id INTEGER PRIMARY KEY, api_key_id TEXT NOT NULL UNIQUE, previous_api_key_id TEXT)"
-    ))
-    for current, previous in claims:
-        db.sync.execute(
-            text("INSERT INTO extension_installations (api_key_id, previous_api_key_id) VALUES (:c, :p)"),
-            {"c": current, "p": previous},
-        )
-    db.sync.commit()
-    return db
+    return installation_rows(sqlite_session(*org_tables()), *claims)
 
 
 async def delete(key_id: str, db: Any) -> Any:
