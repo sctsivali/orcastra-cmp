@@ -1,0 +1,7 @@
+# Lint settings for the isolated-lab helpers (`make lint-qa-artifacts`).
+#
+# note: target-version is pinned because ruff 0.17 raised its default from py310 to py311, which
+# turns on rewrites such as UP017 and FURB162 for files whose hashes are recorded by the phase B
+# manifests (phase_b_pg_dependencies.json pins phase_b_dependencies.py), so they cannot simply be
+# rewritten. py310 is what these files were linted against while the gate was green.
+target-version = "py310"
