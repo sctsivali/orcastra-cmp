@@ -38,10 +38,13 @@ administrator can transfer them.
 import asyncio
 import logging
 from contextlib import AsyncExitStack
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import select
+
+from app.core.api_key_expiry import now_utc, parse_expiry
 
 from app.models.db_models import OrganizationCluster
 from app.models.extension_models import ExtensionInstallation
@@ -56,6 +59,12 @@ logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
 _task: Optional[asyncio.Task] = None
+
+# important: how old a credential no installation claims must be before it is revoked. An install or a
+# rotation writes the key to Vault before its row commits, so a key minted moments ago can be missing
+# from the rows read below without being an orphan. A real orphan is refused at authentication anyway
+# (extension_scope.assert_install_is_live); this revocation is the backstop, so waiting costs nothing.
+ORPHAN_MIN_AGE = timedelta(minutes=10)
 
 
 async def _bound_clusters(db, organization_id: int) -> Set[str]:
@@ -244,10 +253,21 @@ async def _narrow_drifted_scope(db, vault_client) -> int:
     return changed
 
 
+def _old_enough(created_at: Any, cutoff: datetime) -> bool:
+    """Minted before the cutoff. A missing or unreadable time counts as old: nothing new lacks one."""
+    try:
+        minted = parse_expiry(created_at)
+    except Exception:  # noqa: BLE001 - an unreadable time must not shield a key from revocation
+        return True
+    return minted is None or minted <= cutoff
+
+
 async def _revoke_orphaned_credentials(db, vault_client) -> int:
     """Revoke install credentials no live installation claims. Returns keys revoked."""
     from app.routers.integrations import list_api_keys_from_vault
 
+    # note: taken before the rows are read, so any key minted earlier than it has its row visible below
+    cutoff = now_utc() - ORPHAN_MIN_AGE
     live: Set[str] = set()
     rows = await db.execute(
         select(ExtensionInstallation.api_key_id, ExtensionInstallation.previous_api_key_id)
@@ -270,6 +290,8 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
         if not key_id or key_id in live:
             continue
         if key.get("is_revoked"):
+            continue
+        if not _old_enough(key.get("created_at"), cutoff):
             continue
 
         try:
