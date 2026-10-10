@@ -64,6 +64,11 @@ def addon_key(key_id: str) -> Dict[str, Any]:
             "cluster_permissions": [], "extension_install_id": 7}
 
 
+async def unchanged(_db: Any, record: Any) -> Any:
+    """lock_installation as production sees it here: the same object, nothing committed in between."""
+    return record
+
+
 def install(api_key_id: str = OLD, previous: Optional[str] = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=7, organization_id=1, api_key_id=api_key_id, previous_api_key_id=previous,
@@ -87,6 +92,7 @@ def rotation(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
             yield
 
     monkeypatch.setattr(extension_install, "serialize_key_ownership", _seam)
+    monkeypatch.setattr(extension_install, "lock_installation", unchanged)
     monkeypatch.setattr(activity_logger_module, "get_activity_logger", lambda: log)
     monkeypatch.setattr(extension_install, "evict_install_cache", lambda _k: None)
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: SimpleNamespace(set=lambda *a, **k: None))
@@ -160,6 +166,7 @@ def teardown(monkeypatch: pytest.MonkeyPatch) -> List[str]:
         return ["vault:api_key_metadata"]
 
     monkeypatch.setattr(extension_install, "teardown_install", _teardown)
+    monkeypatch.setattr(extension_install, "lock_installation", unchanged)
     return torn
 
 
