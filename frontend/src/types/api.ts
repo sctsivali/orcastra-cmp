@@ -1425,6 +1425,10 @@ export interface ClusterDeleteResponse {
   success: boolean;
   message: string;
   cluster_id: string;
+  /** Trust entries the dashboard could not remove from the cluster, as CLI lines. */
+  manual_trust_commands?: string[];
+  /** False when the dashboard could not prove its own trust entries removed. */
+  trust_cleanup_complete?: boolean;
 }
 
 // Version Information
@@ -1979,9 +1983,47 @@ export interface CertificateInfo {
   expires_at?: string | null;
   days_until_expiry?: number | null;
   status: CertificateStatus;
+  /** LXD fingerprint: lowercase sha256 of the DER, as `lxc config trust list` prints it. */
   fingerprint?: string | null;
   has_pending_renewal: boolean;
   serial_number?: string | null;
+  pending_fingerprint?: string | null;
+  /** Trust entries of certificates this dashboard replaced on the cluster. */
+  superseded?: SupersededTrust[];
+}
+
+export type SupersededTrustState = "pending" | "failed" | "removed" | "cancelled";
+
+export interface SupersededTrust {
+  fingerprint: string;
+  reason: string;
+  state: SupersededTrustState;
+  identity_name?: string | null;
+  superseded_at: string;
+  due_at?: string | null;
+  removed_at?: string | null;
+  already_gone: boolean;
+  attempts: number;
+  last_error?: string | null;
+  /** CLI line that removes the entry by hand, while it is still on the cluster. */
+  manual_command?: string | null;
+}
+
+export interface PendingCertificateResponse {
+  cluster_id: string;
+  pending_cert_id?: string | null;
+  fingerprint?: string | null;
+  certificate: string;
+  cli_command: string;
+  identity_name?: string | null;
+  created_at?: string | null;
+}
+
+export interface TrustCleanupResponse {
+  cluster_id: string;
+  message: string;
+  outcomes: Record<string, string>;
+  superseded: SupersededTrust[];
 }
 
 export interface CertificateListResponse {
@@ -2006,6 +2048,8 @@ export interface CertificateRenewalResponse {
   certificate?: string;
   cli_command?: string;
   pending_cert_id?: string;
+  fingerprint?: string | null;
+  previous_fingerprint?: string | null;
 }
 
 export interface CertificateVerifyRequest {
@@ -2019,6 +2063,8 @@ export interface CertificateVerifyResponse {
   cluster_id: string;
   verified: boolean;
   activated: boolean;
+  fingerprint?: string | null;
+  previous_fingerprint?: string | null;
 }
 
 export interface CertificateWarning {

@@ -11,7 +11,7 @@ import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { formatContinent, formatDateTime } from "@/lib/utils";
 import { MapPin } from "lucide-react";
 import type { ClusterInfo } from "@/types/api";
-import { inventoryLinks } from "@/lib/inventory-links";
+import { ClusterCertificatePanel } from "./cluster-certificate-panel";
 
 // Everything the clusters table already receives and shows none of.
 //
@@ -130,29 +130,7 @@ export function ClusterDetailDialog({
         {
           value: "certificate",
           label: "Certificate",
-          content: (
-            <DetailSection
-              title="Trust"
-              description="Expiry and renewal live on the certificates page; this is what the registration knows."
-            >
-              <DetailGrid cols={2}>
-                <DetailField label="Certificate Present" value={cluster.has_certificate ? "Yes" : "No"} />
-                <DetailField label="Common Name" value={cluster.certificate_common_name} mono />
-                <DetailField
-                  label="Certificates Page"
-                  span="full"
-                  value={
-                    <TableLink
-                      href={inventoryLinks.certificates({ q: cluster.cluster_id })}
-                      title="Open this cluster in Certificates"
-                    >
-                      Open in Certificates
-                    </TableLink>
-                  }
-                />
-              </DetailGrid>
-            </DetailSection>
-          ),
+          content: <ClusterCertificatePanel clusterId={cluster.cluster_id} />,
         },
       ]}
     />

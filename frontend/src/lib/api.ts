@@ -2225,7 +2225,9 @@ import type {
   CertificateRenewalResponse,
   CertificateVerifyRequest,
   CertificateVerifyResponse,
+  PendingCertificateResponse,
   SystemWarningsResponse,
+  TrustCleanupResponse,
 } from "@/types";
 
 export const monitoringAPI = {
@@ -2271,6 +2273,21 @@ export const certificateAPI = {
     return fetchAPI(`/certificates/${encodeURIComponent(clusterId)}/pending`, {
       method: "DELETE",
     });
+  },
+
+  /** The pending certificate, its fingerprint and the trust command, to resume Verify. */
+  getPending: async (clusterId: string): Promise<PendingCertificateResponse> => {
+    return fetchUncachedRead<PendingCertificateResponse>(
+      `/certificates/${encodeURIComponent(clusterId)}/pending`,
+    );
+  },
+
+  /** Remove superseded trust entries now; without a fingerprint, every open one on the cluster. */
+  removeTrust: async (clusterId: string, fingerprint?: string): Promise<TrustCleanupResponse> => {
+    return fetchAPI<TrustCleanupResponse>(
+      `/certificates/${encodeURIComponent(clusterId)}/trust-cleanup`,
+      { method: "POST", body: JSON.stringify(fingerprint ? { fingerprint } : {}) },
+    );
   },
 
   getSystemWarnings: async (opts: ReadOptions = {}): Promise<SystemWarningsResponse> => {

@@ -92,6 +92,18 @@ export interface OverflowTextProps {
   /** Monospace at rest and revealed. `font-mono` on the span, never a <code> element. */
   mono?: boolean;
   /**
+   * Characters kept visible at rest on one line, ex; 12 for a certificate fingerprint, which is
+   * exactly what `lxc config trust list` prints, so the two can be matched by eye.
+   *
+   * important: a CSS width, not a cut. The span is capped at exactly this many `ch` and the whole
+   * value stays in the DOM, which is the difference from the slice this component replaced. The
+   * clip carries no ellipsis: the trust list prints its 12 characters bare, the reveal control
+   * beside the value already says there is more, and the ellipsis glyph is wider than one cell in
+   * the house mono face, so it would eat the twelfth character. Only meaningful with `mono` and
+   * `lines={1}`: `ch` is a glyph width only in a monospace face.
+   */
+  visibleChars?: number;
+  /**
    * When the copy button appears. "expanded" costs nothing at rest, which is what keeps a table
    * at its current rows per screen. "always" is the detail-field preset, where copying the value
    * is the reason the field is on screen.
@@ -144,6 +156,7 @@ export function OverflowText({
   mode = "inline",
   lines = 1,
   mono,
+  visibleChars,
   copy = "expanded",
   reveal = "auto",
   tone = "surface",
@@ -214,6 +227,11 @@ export function OverflowText({
       : cn("whitespace-normal", mono ? "break-all" : "break-words"),
   );
 
+  const valueStyle: React.CSSProperties | undefined =
+    clamped && lines === 1 && mono && visibleChars
+      ? { maxWidth: `${visibleChars}ch`, textOverflow: "clip" }
+      : undefined;
+
   const copyButton = showCopy ? (
     <Button
       type="button"
@@ -246,7 +264,7 @@ export function OverflowText({
     if (!showToggle) {
       return (
         <span className={rootClass} data-slot="overflow-text">
-          <span ref={spanRef} className={valueClass}>
+          <span ref={spanRef} className={valueClass} style={valueStyle}>
             {renderValue(false)}
           </span>
         </span>
@@ -255,7 +273,7 @@ export function OverflowText({
     return (
       <Popover>
         <span className={rootClass} data-slot="overflow-text">
-          <span ref={spanRef} className={valueClass}>
+          <span ref={spanRef} className={valueClass} style={valueStyle}>
             {renderValue(false)}
           </span>
           <PopoverTrigger asChild>
@@ -298,7 +316,7 @@ export function OverflowText({
 
   return (
     <span className={rootClass} data-slot="overflow-text" data-expanded={expanded ? "" : undefined}>
-      <span ref={spanRef} id={valueId} className={valueClass}>
+      <span ref={spanRef} id={valueId} className={valueClass} style={valueStyle}>
         {renderValue(expanded)}
       </span>
       {showToggle ? (

@@ -35,6 +35,7 @@ import {
 import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { ClusterDetailDialog } from "./components/cluster-detail-dialog";
+import { LeftoverTrustDialog, type LeftoverTrust } from "./components/leftover-trust-dialog";
 import {
   Dialog,
   DialogContent,
@@ -121,6 +122,7 @@ function ClustersContent() {
   const [regenerateModal, setRegenerateModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const [regeneratedCert, setRegeneratedCert] = React.useState<{identityName: string, certificate: string, cluster_type?: string} | null>(null);
   const [deleteConfirmModal, setDeleteConfirmModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
+  const [leftoverTrust, setLeftoverTrust] = React.useState<LeftoverTrust | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
   const [locationModal, setLocationModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const { isReadOnly } = useReadOnlyMode();
@@ -218,12 +220,15 @@ function ClustersContent() {
     const clusterId = deleteConfirmModal.cluster.cluster_id;
     
     try {
-      await deleteCluster.mutateAsync(clusterId);
+      const result = await deleteCluster.mutateAsync(clusterId);
       toast({
         title: "Cluster Removed",
         description: `Cluster ${clusterId} has been removed` });
       setDeleteConfirmModal({ open: false, cluster: null });
       setDeleteConfirmText("");
+      if (result?.manual_trust_commands?.length || result?.trust_cleanup_complete === false) {
+        setLeftoverTrust({ clusterId, commands: result.manual_trust_commands ?? [] });
+      }
       // useDeleteCluster.onSuccess invalidates ["clusters"] with refetchType:'all',
       // which refetches this page's active query - no full-page reload needed.
     } catch (error: any) {
@@ -280,6 +285,10 @@ function ClustersContent() {
                 <AlertDescription className="space-y-3">
                   <p className="text-sm font-medium">
                     Run this command on your hypervisor server:
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    If the cluster still trusts the replaced certificate, that entry is removed
+                    automatically once the cluster trusts this one.
                   </p>
                   
                   {/* Dynamic CLI Command based on detected type */}
@@ -635,7 +644,8 @@ function ClustersContent() {
             <DialogDescription>
               This will remove the cluster 
               <strong className="text-foreground"> {deleteConfirmModal.cluster?.display_name || deleteConfirmModal.cluster?.cluster_id}</strong> from 
-              this dashboard. Only the connection settings, certificates, and metadata stored in the dashboard will be deleted.
+              this dashboard. Only the connection settings, certificates, and metadata stored in the dashboard will be deleted,
+              and the dashboard removes its own trust entries from the cluster when it can reach it.
               <span className="block mt-2 text-muted-foreground text-xs">
                 Note: Your actual instances, VMs, containers, and data on the hypervisor server will NOT be affected.
               </span>
@@ -692,6 +702,8 @@ function ClustersContent() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <LeftoverTrustDialog leftover={leftoverTrust} onClose={() => setLeftoverTrust(null)} />
 
       {/* Location Edit Modal */}
       <ClusterLocationDialog
