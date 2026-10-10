@@ -41,6 +41,13 @@ ACTION_CATEGORIES = {
     "cluster.register": EventCategory.LXD_INFRA,
     "cluster.delete": EventCategory.LXD_INFRA,
     "cluster.auth_check": EventCategory.LXD_INFRA,
+    # The dashboard's own client certificate on a cluster: replacing it, and removing the trust
+    # entry of one it replaced.
+    "cluster.certificate.renew": EventCategory.LXD_INFRA,
+    "cluster.certificate.activate": EventCategory.LXD_INFRA,
+    "cluster.certificate.cancel": EventCategory.LXD_INFRA,
+    "cluster.certificate.regenerate": EventCategory.LXD_INFRA,
+    "cluster.certificate.trust_remove": EventCategory.LXD_INFRA,
     "instance.create": EventCategory.LXD_INFRA,
     "instance.start": EventCategory.LXD_INFRA,
     "instance.stop": EventCategory.LXD_INFRA,
@@ -217,6 +224,10 @@ ACTION_CATEGORIES = {
 HIGH_SEVERITY_ACTIONS = {
     "cluster.register",
     "cluster.delete",
+    # Both change who the cluster trusts: a regenerate cuts the dashboard off until trust is added,
+    # and a removal revokes a certificate on a live cluster.
+    "cluster.certificate.regenerate",
+    "cluster.certificate.trust_remove",
     "instance.delete",
     "instance.snapshot.restore",
     "instance.snapshot.delete",

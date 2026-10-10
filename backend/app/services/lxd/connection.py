@@ -18,6 +18,7 @@ from urllib3.util.retry import Retry
 
 from app.core.config import get_settings
 from . import cert_files, health
+from .cert_rotation import CertificateRotationMixin
 from .exceptions import (
     LXDAuthorizationError,
     LXDConnectionError,
@@ -193,7 +194,7 @@ def require_client_server_fingerprint(client: pylxd.Client, expected_fingerprint
     require_https_session_fingerprint(session, endpoint, expected_fingerprint)
 
 
-class LXDConnectionManager:
+class LXDConnectionManager(CertificateRotationMixin):
     """
     Manages LXD client connections with pooling and automatic reconnection.
     """
@@ -845,7 +846,8 @@ class LXDConnectionManager:
         FLOW:
         1. Check if connection info exists in memory
         2. Use stored cert content to reconnect
-        3. NO Vault or Redis calls here (memory only)
+        3. Memory only, except one Vault read when the cluster refuses the held certificate
+           (see cert_rotation: it may have been rotated by another worker)
         """
         if cluster_id not in self._connection_info:
             # important: do NOT trip the breaker here. An empty in-process cache is not evidence
@@ -905,6 +907,13 @@ class LXDConnectionManager:
             if data:
                 if data.get("metadata", {}).get("auth") != "trusted":
                     logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
+                    # A certificate rotated by another worker is one Vault read away; see
+                    # cert_rotation. Same certificate or no answer from Vault: unchanged below.
+                    rotated = self._try_rotated_certificate(
+                        cluster_id, info, expected_server_fingerprint=expected_server_fingerprint
+                    )
+                    if rotated is not None:
+                        return rotated
                     # important: evict the cached credentials before recording. This method
                     # rebuilds the client from the copy held in _connection_info, so leaving a
                     # refused certificate there means every later attempt re-presents the same

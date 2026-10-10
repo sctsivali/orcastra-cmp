@@ -116,3 +116,17 @@ def _isolate_ws_tickets():
     yield
     set_ws_ticket_store(None)
     forget_identities()
+
+
+@pytest.fixture(autouse=True)
+def _rotated_certificate_reads_stay_hermetic(monkeypatch):
+    """The refusal branch of _auto_reconnect reads the active certificate from Vault once.
+
+    Settings load backend/.env, so on a machine whose .env enables Vault every refusal test would
+    reach for a real Vault. Tests of the rotation itself replace this stub with their own reader.
+    """
+    from app.services.lxd.cert_rotation import CertificateRotationMixin
+
+    monkeypatch.setattr(
+        CertificateRotationMixin, "_read_active_certificate", lambda self, cluster_id: None
+    )

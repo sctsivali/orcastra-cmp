@@ -311,7 +311,7 @@ async def get_all_system_warnings(
             from app.core.config import get_settings
             from app.core.vault_client import get_vault_client
             from app.services.lxd_cert_manager import LXDCertificateManager
-            from app.routers.cert_manager import (
+            from app.services.lxd_certs.inspect import (
                 parse_certificate_pem,
                 get_warning_severity,
                 WARNING_THRESHOLDS

@@ -31,9 +31,22 @@ CLIENT_DEFINED = {
 }
 
 
+class _NoCertificateYet:
+    """Vault for a cluster registered for the first time: nothing at its certs path."""
+
+    def vault_read(self, path, use_cache=True):
+        from app.core.vault_client import VaultClientError
+
+        raise VaultClientError(f"404 {path}")
+
+
 class _Cert:
+    # Registration reads the cluster's current certificate first, to record it if it replaces one.
+    clusters_path = "secret/data/clusters"
+
     def __init__(self):
         self.saved = []
+        self.vault = _NoCertificateYet()
 
     def save_cluster_metadata(self, **kwargs):
         self.saved.append(kwargs)

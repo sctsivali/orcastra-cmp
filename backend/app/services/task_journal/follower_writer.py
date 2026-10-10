@@ -11,12 +11,11 @@ the outage hid.
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
+from app.core.cert_fingerprint import lxd_fingerprint
 from app.services.task_journal import repository
 from app.services.task_journal.follower_frames import (
     is_progress_only,
@@ -35,52 +34,65 @@ RETRY_DELAYS_S = (0.5, 1.0, 2.0, 4.0, 8.0)
 RETRY_ATTEMPTS = 10
 STOP_DRAIN_S = 5.0
 IDENTITY_RETRY_S = 60.0
+IDENTITY_REFRESH_S = 60.0
 _STATUS_MEMO_MAX = 10000
 
 OpKey = Tuple[str, str]
 
 
-def _der_from_pem(pem: str) -> bytes:
-    body = "".join(
-        line.strip()
-        for line in pem.splitlines()
-        if line.strip() and not line.startswith("-----")
-    )
-    return base64.b64decode(body)
-
-
-def fingerprint(pem: str) -> str:
-    """The lower-cased sha256 hex of the certificate's DER bytes, which is how LXD names a TLS
-    client in a `requestor` block."""
-    return hashlib.sha256(_der_from_pem(pem)).hexdigest().lower()
+# The lower-cased sha256 hex of the certificate's DER bytes, which is how LXD names a TLS client
+# in a `requestor` block. One implementation for the whole backend, see core/cert_fingerprint.
+fingerprint = lxd_fingerprint
 
 
 class DashboardIdentities:
-    """Per-cluster set of the identities that are this dashboard, computed once off the loop."""
+    """Per-cluster set of the identities that are this dashboard, computed off the loop.
 
-    def __init__(self, read_certificate: Optional[Callable[[str], Dict[str, str]]] = None):
+    note: rebuilt every IDENTITY_REFRESH_S. A renewal or regenerate replaces the certificate in
+    Vault while workers that have not switched yet still present the old one, and an operation
+    started under the old certificate can finish after its trust entry is gone. Memoising the first
+    fingerprint forever attributed every operation under the new certificate to an external actor
+    until a restart. The set is the current certificate plus the superseded ones still legitimately
+    ours (`read_tracked`: in their grace period, or removed within the day). It is rebuilt rather
+    than grown, so a certificate that stops being ours stops being counted as the dashboard.
+    """
+
+    def __init__(
+        self,
+        read_certificate: Optional[Callable[[str], Dict[str, str]]] = None,
+        read_tracked: Optional[Callable[[str], Awaitable[Set[str]]]] = None,
+    ):
         self._read = read_certificate or _read_cluster_certificate
+        self._read_tracked = read_tracked
         self._known: Dict[str, frozenset] = {}
+        self._known_at: Dict[str, float] = {}
         self._failed_at: Dict[str, float] = {}
 
     async def for_host(self, host: str) -> frozenset:
+        now = time.monotonic()
         cached = self._known.get(host)
-        if cached is not None:
+        if cached is not None and now - self._known_at.get(host, 0.0) < IDENTITY_REFRESH_S:
             return cached
         failed = self._failed_at.get(host)
-        if failed is not None and time.monotonic() - failed < IDENTITY_RETRY_S:
-            return frozenset()
+        if failed is not None and now - failed < IDENTITY_RETRY_S:
+            return cached if cached is not None else frozenset()
         try:
-            identities = await asyncio.to_thread(self._compute, host)
+            identities = set(await asyncio.to_thread(self._compute, host))
+            if self._read_tracked is not None:
+                identities |= set(await self._read_tracked(host))
         except Exception as exc:  # noqa: BLE001 - a missing cert only blurs the actor kind
-            self._failed_at[host] = time.monotonic()
+            self._failed_at[host] = now
             logger.warning("Could not fingerprint the client certificate for %s: %s", host, exc)
-            return frozenset()
-        self._known[host] = identities
-        return identities
+            return cached if cached is not None else frozenset()
+        merged = frozenset(identities)
+        self._known[host] = merged
+        self._known_at[host] = now
+        self._failed_at.pop(host, None)
+        return merged
 
     def forget(self, host: str) -> None:
         self._known.pop(host, None)
+        self._known_at.pop(host, None)
         self._failed_at.pop(host, None)
 
     def _compute(self, host: str) -> frozenset:

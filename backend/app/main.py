@@ -506,6 +506,26 @@ async def lifespan(app: FastAPI):
     except Exception as journal_err:
         logger.error("Could not start the task journal follower: %s", journal_err, exc_info=True)
 
+    # Removing the LXD trust entries of certificates the dashboard replaced. Every worker runs the
+    # loop; a per-cluster Postgres lock decides who acts on a cluster each pass, and each worker
+    # also moves its own pooled connection onto the current certificate first. Its own try, for
+    # the reason the blocks above give.
+    try:
+        if settings.lxd_trust_cleanup_enabled and settings.vault_enabled:
+            from app.core.database import async_session_maker
+            from app.services.lxd_certs.trust_cleanup import start_trust_cleanup_loop
+
+            start_trust_cleanup_loop(
+                async_session_maker, interval=float(settings.lxd_trust_cleanup_tick_seconds)
+            )
+            logger.info(
+                "LXD trust cleanup loop started (%ss, grace %ss)",
+                settings.lxd_trust_cleanup_tick_seconds,
+                settings.lxd_trust_cleanup_grace_seconds,
+            )
+    except Exception as cleanup_err:
+        logger.error("Could not start the LXD trust cleanup loop: %s", cleanup_err, exc_info=True)
+
     # Fill the admin chart's history before the first read: the previous release's string key
     # once, then what Postgres holds that the store lacks. Both merge by timestamp, so neither
     # can overwrite a point the collector already wrote.
@@ -651,6 +671,12 @@ async def lifespan(app: FastAPI):
 
         await get_ws_ticket_store().aclose()
         logger.info("Session tracker cleanup and publisher stopped")
+    except Exception:
+        pass
+
+    try:
+        from app.services.lxd_certs.trust_cleanup import stop_trust_cleanup_loop
+        stop_trust_cleanup_loop()
     except Exception:
         pass
 

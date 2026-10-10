@@ -20,6 +20,7 @@ from app.models.cluster_status import (  # noqa: F401
     derive_status,
 )
 from app.models.vm_status import VMStatus  # noqa: F401
+from app.models.cert_trust_schemas import SupersededTrust  # noqa: F401
 from app.models.instance_metrics import InstanceMetrics  # noqa: F401
 
 
@@ -1375,6 +1376,14 @@ class ClusterDeleteResponse(BaseModel):
     success: bool = Field(..., description="Whether deletion succeeded")
     message: str = Field(..., description="Status message")
     cluster_id: str = Field(..., description="Deleted cluster identifier")
+    manual_trust_commands: List[str] = Field(
+        default_factory=list,
+        description="Trust entries the dashboard could not remove from the cluster, as CLI lines",
+    )
+    trust_cleanup_complete: bool = Field(
+        True,
+        description="False when the dashboard could not prove its own trust entries removed from the cluster",
+    )
 
 
 # ========== Certificate Management Models ==========
@@ -1409,9 +1418,15 @@ class CertificateInfo(BaseModel):
     expires_at: Optional[datetime] = Field(None, description="Certificate expiry date")
     days_until_expiry: Optional[int] = Field(None, description="Days until certificate expires")
     status: CertificateStatus = Field(CertificateStatus.UNKNOWN, description="Certificate status")
-    fingerprint: Optional[str] = Field(None, description="Certificate SHA256 fingerprint")
+    fingerprint: Optional[str] = Field(
+        None, description="LXD fingerprint: lowercase sha256 hex of the DER, as `lxc config trust list` prints it"
+    )
     has_pending_renewal: bool = Field(False, description="Whether there's a pending renewal")
     serial_number: Optional[str] = Field(None, description="Certificate serial number")
+    pending_fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the pending certificate")
+    superseded: List[SupersededTrust] = Field(
+        default_factory=list, description="Trust entries of certificates this dashboard replaced"
+    )
 
 
 class CertificateListResponse(BaseModel):
@@ -1445,6 +1460,8 @@ class CertificateRenewalResponse(BaseModel):
     certificate: Optional[str] = Field(None, description="New certificate PEM (for manual trust)")
     cli_command: Optional[str] = Field(None, description="CLI command for manual trust")
     pending_cert_id: Optional[str] = Field(None, description="ID for pending verification")
+    fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the new certificate")
+    previous_fingerprint: Optional[str] = Field(None, description="LXD fingerprint it replaces")
 
 
 class CertificateVerifyRequest(BaseModel):
@@ -1460,6 +1477,8 @@ class CertificateVerifyResponse(BaseModel):
     cluster_id: str = Field(..., description="Cluster identifier")
     verified: bool = Field(False, description="Whether new cert is trusted")
     activated: bool = Field(False, description="Whether new cert replaced old cert")
+    fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the pending certificate")
+    previous_fingerprint: Optional[str] = Field(None, description="LXD fingerprint it replaced")
 
 
 class CertificateWarning(BaseModel):

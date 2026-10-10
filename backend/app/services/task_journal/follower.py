@@ -109,7 +109,7 @@ class JournalFollower:
         self._engine_factory = engine_factory or _default_engine
         self._excluded = excluded_clusters() if excluded is None else excluded
         self._warned_unknown_exclusions: List[str] = []
-        self._identities = identities or DashboardIdentities()
+        self._identities = identities or DashboardIdentities(read_tracked=_tracked_reader(session_maker))
         self._writer = JournalWriter(
             session_maker, identities=self._identities, on_db_recovered=self._reseed_connected
         )
@@ -515,3 +515,17 @@ async def stop_follower() -> None:
 
 def get_follower() -> Optional[JournalFollower]:
     return _follower
+
+
+def _tracked_reader(session_maker: Callable[[], Any]) -> Callable[[str], Awaitable[Set[str]]]:
+    """Fingerprints this dashboard superseded on a cluster and still tracks (lxd_trust_cleanup)."""
+
+    async def read(host: str) -> Set[str]:
+        from app.services.lxd_certs.trust_cleanup_store import tracked_fingerprints
+
+        async with session_maker() as db:
+            found = await tracked_fingerprints(db, host)
+            await db.rollback()
+            return found
+
+    return read

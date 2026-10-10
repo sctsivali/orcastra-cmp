@@ -212,6 +212,30 @@ class Settings(BaseSettings):
         description="How many due schedules one worker claims per tick."
     )
 
+    # Removing the LXD trust entries of client certificates the dashboard replaced.
+    #
+    # note: on by default, unlike the two loops above, because what it deletes is narrow: only a
+    # fingerprint this dashboard recorded superseding on that cluster, only once the cluster has
+    # been shown to trust the current certificate, and only after the grace period. The flag gates
+    # the timed sweep alone. Recording, "Remove now" and removal at deregistration always work.
+    lxd_trust_cleanup_enabled: bool = Field(
+        default=True,
+        alias="LXD_TRUST_CLEANUP_ENABLED",
+        description="Remove superseded dashboard certificates from LXD trust once the grace period ends."
+    )
+    lxd_trust_cleanup_grace_seconds: int = Field(
+        default=600,
+        ge=60,
+        alias="LXD_TRUST_CLEANUP_GRACE_SECONDS",
+        description="How long a superseded certificate stays trusted after the current one is proven."
+    )
+    lxd_trust_cleanup_tick_seconds: int = Field(
+        default=60,
+        ge=10,
+        alias="LXD_TRUST_CLEANUP_TICK_SECONDS",
+        description="How often each worker looks for superseded trust entries that are due."
+    )
+
     # Durable instance and project migration. This gates only new plan/job admission. Recovery,
     # audit delivery, retention, and authorized actions stay available for already durable jobs.
     migration_center_enabled: bool = Field(
