@@ -264,15 +264,15 @@ export function safeRandomUUID(): string {
 // The `--name` an operator pastes into `lxc config trust add`, identifying the certificate on
 // the hypervisor's trust list.
 //
-// important: this is generated in the browser and never sent to the backend, which is why two
-// screens grew byte-identical copies of it. The cluster regenerate flow and node registration
-// both label the certificate this way, and the string has to stay stable because it is what an
+// important: this is generated in the browser and never sent to the backend. Node registration
+// labels the certificate this way, and the string has to stay stable because it is what an
 // operator matches against when auditing or removing trust later. The random suffix only breaks
 // ties between two registrations inside the same millisecond, so a non-cryptographic source is
 // the right one; nothing authenticates on this value.
 //
-// note: the `/certificates/renew` flow does NOT use this. The backend builds that identity
-// itself, in a different shape, and returns the whole command ready to paste.
+// note: renew and regenerate do NOT use this. The backend builds their identity in this same
+// shape (`trust_identity_name` in services/lxd_certs/rotation.py) and returns the whole command
+// ready to paste, so every entry in a trust list reads alike.
 export function generateIdentityName(clusterId: string): string {
   const now = new Date();
   const year = now.getFullYear();

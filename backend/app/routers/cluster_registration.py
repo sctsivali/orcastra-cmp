@@ -47,8 +47,7 @@ from app.core.type_utils import (
     resolve_clustered,
 )
 from app.services.activity_logger import get_activity_logger
-from app.core.cert_fingerprint import lxd_fingerprint
-from app.services.lxd_certs import rotation as cert_rotation
+from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import trust_cleanup
 from app.services.lxd_certs import trust_cleanup_store as trust_store
 from app.services.region_catalog import get_region_catalog
@@ -386,7 +385,7 @@ async def register_cluster(
             # cluster can still trust: recorded first and under the lock, as regenerate does.
             try:
                 async with trust_store.cluster_cert_lock(db, cluster_id):
-                    await cert_rotation.record_current_superseded(
+                    await pending_certs.record_current_superseded(
                         db, cert_manager, cluster_id, reason="register"
                     )
                     cert_data = await asyncio.to_thread(
@@ -1309,7 +1308,10 @@ async def delete_cluster(
     - Certificate was compromised
     - Need to rotate certificates
     
-    **Note:** You will need to re-add trust to the LXD server after regeneration.
+    **Note:** the new certificate is issued as PENDING and the current one stays active. Add it
+    to the server's trust with the returned command, then activate it with
+    `POST /certificates/verify` (pending_cert_id). A cluster with no certificate at all gets the
+    new one active at once.
     """
 )
 async def regenerate_certificate(
@@ -1327,8 +1329,6 @@ async def regenerate_certificate(
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     try:
-        settings = get_settings()
-
         # Get cluster info to retrieve endpoint and detect type
         info = cert_manager.get_cluster_info(cluster_id)
         if not info:
@@ -1354,55 +1354,46 @@ async def regenerate_certificate(
                 f"{detected_type or 'undetermined, keeping ' + str(stored_type)}"
             )
         
-        # Generate new certificate (let default FQDN logic apply: cluster_id.domain). The one it
-        # overwrites is recorded first, under the cluster's certificate lock, so its trust entry
-        # is removed once the cluster trusts the new one.
+        # A pending certificate, not a replacement: the active one keeps working until the cluster
+        # trusts the new one and Verify activates it (services/lxd_certs/pending.py). Overwriting
+        # it at once cut off every worker that reconnected before trust was added.
         try:
-            async with trust_store.cluster_cert_lock(db, cluster_id):
-                previous_fp = await cert_rotation.record_current_superseded(
-                    db, cert_manager, cluster_id, reason="regenerate"
-                )
-                cert_data = await asyncio.to_thread(
-                    cert_manager.generate_and_store_certificate,
-                    cluster_id=cluster_id,
-                    ttl=settings.vault_cert_ttl,
-                )
-                await db.commit()
+            issued = await pending_certs.regenerate(db, cert_manager, cluster_id, cluster_type=cluster_type)
         except trust_store.CertificateOperationBusy:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Another certificate change on this cluster is in progress. Try again in a moment.",
             )
-        
-        # Get the certificate to return in response
-        certificate_pem = cert_data.get("cert", "")
-        
-        # Build CLI-friendly message based on detected type
+        if issued.activated:
+            # The cluster had no certificate at all, so the new one is active and the Vault cache
+            # must not keep serving the absence.
+            from app.core.cache import get_cache_manager
+            get_cache_manager().invalidate_cluster_cache(cluster_id)
         cli_tool = "incus" if cluster_type == "Incus" else "lxc"
-        
-        # The rotated certificate is what the Vault cache holds. Leaving it means the next
-        # connect uses the superseded material and the cluster reports not_authorized.
-        from app.core.cache import get_cache_manager
-        get_cache_manager().invalidate_cluster_cache(cluster_id)
-        try:
-            new_fp = lxd_fingerprint(certificate_pem) if certificate_pem else None
-        except ValueError:
-            new_fp = None
-        cert_rotation.audit(
-            "cluster.certificate.regenerate", cluster_id,
-            fingerprint=new_fp, previous_fingerprint=previous_fp,
+        message = (
+            f"Certificate issued and active. Run the {cli_tool} command to add trust. Detected: {cluster_type}."
+            if issued.activated
+            else f"New certificate issued as pending; the current one stays active. Run the {cli_tool} "
+                 f"command on the host, then Verify to activate it. Detected: {cluster_type}."
         )
+        # note: `status` describes the NEW certificate, which the cluster does not trust yet; the
+        # cluster's own status is unchanged until Verify.
         return ClusterRegisterResponse(
             success=True,
-            message=f"Certificate regenerated! Run the {cli_tool} command to re-add trust. Detected: {cluster_type}.",
+            message=message,
             cluster_id=cluster_id,
             status=ClusterStatus.NOT_AUTHORIZED,
             certificate_generated=True,
             trust_added=False,
-            certificate=certificate_pem,
-            cluster_type=cluster_type
+            certificate=issued.certificate,
+            cluster_type=cluster_type,
+            pending_cert_id=None if issued.activated else issued.pending_cert_id,
+            cli_command=issued.cli_command,
+            identity_name=issued.identity_name,
+            fingerprint=issued.fingerprint,
+            previous_fingerprint=issued.previous_fingerprint,
         )
-        
+
     except LXDCertManagerError as e:
         logger.error(f"Failed to regenerate certificate for {cluster_id}: {e}")
         raise HTTPException(
