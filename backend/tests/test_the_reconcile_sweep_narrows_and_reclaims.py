@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from app.core.api_key_capability_audit import capability_audit_fields
@@ -116,8 +117,20 @@ class CredentialStore:
         self.revoked.append(key_id)
 
 
+def lock_from(installs: List[Any]):
+    """sweep.lock_installation_id over a fake's rows: the row with that id, or 404 once it is gone."""
+    async def _lock(_db, install_id: int):
+        for install in installs:
+            if install.id == install_id:
+                return install
+        raise HTTPException(status_code=404, detail="Installation not found")
+
+    return _lock
+
+
 def _run_scope_pass(db: ScopeDB, monkeypatch, store: Optional[CredentialStore] = None):
     store = store or CredentialStore()
+    monkeypatch.setattr(sweep, "lock_installation_id", lock_from(db.installs))
 
     async def _bound(_db, organization_id: int):
         return db.bindings.get(organization_id, set())

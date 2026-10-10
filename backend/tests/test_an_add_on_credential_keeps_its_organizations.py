@@ -287,7 +287,7 @@ def test_an_orphan_that_owned_organizations_is_revoked_and_recorded(monkeypatch:
 
 
 def test_a_credential_left_reaching_nothing_is_revoked_and_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tests.test_the_reconcile_sweep_narrows_and_reclaims import CredentialStore, FakeInstall, ScopeDB
+    from tests.test_the_reconcile_sweep_narrows_and_reclaims import CredentialStore, FakeInstall, ScopeDB, lock_from
 
     log = _RecordingLogger()
     store = CredentialStore()
@@ -305,6 +305,7 @@ def test_a_credential_left_reaching_nothing_is_revoked_and_recorded(monkeypatch:
     monkeypatch.setattr(sweep, "_rewrite_key_grant", store.rewrite)
     monkeypatch.setattr(sweep, "revoke_install_credential", store.revoke)
     monkeypatch.setattr(sweep, "_owned_by", _owned)
+    monkeypatch.setattr(sweep, "lock_installation_id", lock_from([record]))
     assert asyncio.run(sweep._narrow_drifted_scope(ScopeDB(installs=[record], bindings={}), object())) == 1
     assert store.revoked == [OLD]
     (narrowed,) = log.calls

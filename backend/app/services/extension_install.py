@@ -28,6 +28,7 @@ from app.models.extension_schemas import (
 from app.services import extension_service, extension_settings
 from app.services.extension_credential_guard import (
     RotationNeedsAPartner,
+    live_credentials,
     lock_installation,
     owned_org_ids_or_503,
     runs_installation_organization,
@@ -344,76 +345,100 @@ async def rescope_install(
     )
 
     grant_dicts = [g.model_dump() if hasattr(g, "model_dump") else dict(g) for g in grants]
-    install.granted_capabilities = sorted(set(capabilities))
-    install.granted_scope = grant_dicts
-    install.consent_version = consent_version
-    install.consent_manifest_digest = consent_digest
-    # Rescoping is a fresh consent, so the snapshot moves with it. Leaving the old one would make
-    # the record claim agreement to a document this operator never saw.
-    install.consented_manifest = dict(extension.manifest or {})
-    install.last_scope_change_at = now_utc()
+    # important: decided and written on the locked row, under the lock of every credential it rewrites
+    # (lock_installation). From a copy read before a rotation, this rewrote the retired key and the new
+    # one kept the old scope, which the sweep never notices because it compares the row with itself.
+    install = await lock_installation(db, install)
+    keys = live_credentials(install)
+    async with AsyncExitStack() as held:
+        for key_id in keys:
+            await held.enter_async_context(serialize_key_ownership(db, key_id))
+        install.granted_capabilities = sorted(set(capabilities))
+        install.granted_scope = grant_dicts
+        install.consent_version = consent_version
+        install.consent_manifest_digest = consent_digest
+        # Rescoping is a fresh consent, so the snapshot moves with it. Leaving the old one would make
+        # the record claim agreement to a document this operator never saw.
+        install.consented_manifest = dict(extension.manifest or {})
+        install.last_scope_change_at = now_utc()
 
-    # The Vault key carries the same grant, because that is what the request path reads.
-    key_change = _rewrite_key_grant(vault_client, install)
-    if audit_fields is not None:
-        audit_fields.update(key_change)
+        # The Vault key carries the same grant, because that is what the request path reads.
+        key_change = _rewrite_key_grant(vault_client, install)
+        if audit_fields is not None:
+            audit_fields.update(key_change)
 
-    from app.services.webhooks.emitter import emit_installation_event
+        from app.services.webhooks.emitter import emit_installation_event
 
-    await emit_installation_event(
-        db, event_type="orcastra.install.scope_changed.v1", installation=install
-    )
-    await db.commit()
+        await emit_installation_event(
+            db, event_type="orcastra.install.scope_changed.v1", installation=install
+        )
+        await db.commit()
     await db.refresh(install)
-    evict_install_cache(install.api_key_id)
+    for key_id in keys:
+        evict_install_cache(key_id)
     return install
 
 
 def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> Dict[str, Any]:
+    """Write the row's grant onto every credential that still authenticates. Returns the current key's
+    capability change for the caller's audit record.
+
+    note: the caller holds the installation row and the keys' locks (lock_installation,
+    serialize_key_ownership), so each key is read uncached and written whole without overwriting a
+    revoke or another edit; only `capabilities` and `cluster_permissions` change, so `is_revoked` and
+    an expiry a rotation shortened survive.
+    """
     from app.routers.integrations import (
         VAULT_INTEGRATIONS_PATH,
         evict_api_key_cache,
         get_api_key_from_vault,
     )
 
+    unavailable = HTTPException(
+        status_code=503,
+        detail=(
+            "The credential store is unavailable, so this change was not applied. "
+            "Nothing was altered. Try again once it is reachable."
+        ),
+    )
     # important: this must fail the whole rescope rather than be skipped. The request path reads
     # capabilities and clusters from the Vault key, not from the row, so swallowing a Vault error
     # here committed the narrower grant to the database while the credential kept the wider one.
     # A narrowing is a security control, and it reported success while doing nothing: the operator
     # saw the reduced scope and the add-on kept the old reach. Raising leaves the row uncommitted,
     # since the caller commits immediately after this returns.
-    try:
-        metadata, _ = get_api_key_from_vault(vault_client, install.api_key_id)
-    except Exception as exc:
-        logger.warning("Could not read %s to rewrite its grant: %s", install.api_key_id, exc)
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The credential store is unavailable, so this change was not applied. "
-                "Nothing was altered. Try again once it is reachable."
-            ),
-        ) from exc
-    # important: the key's own set before the write, not the row's. A key edited through the
-    # integration capabilities route differs from its row, and this rewrite then withdraws that.
-    previous = dict(metadata)
-    metadata["capabilities"] = list(install.granted_capabilities or [])
-    metadata["cluster_permissions"] = list(install.granted_scope or [])
-    try:
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{install.api_key_id}/metadata",
-            metadata,
-        )
-    except Exception as exc:
-        logger.warning("Could not rewrite the grant on %s: %s", install.api_key_id, exc)
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The credential store is unavailable, so this change was not applied. "
-                "Nothing was altered. Try again once it is reachable."
-            ),
-        ) from exc
-    evict_api_key_cache(install.api_key_id)
-    return capability_audit_fields(metadata, previous)
+    documents: List[Tuple[str, Dict[str, Any]]] = []
+    for key_id in live_credentials(install):
+        try:
+            metadata, _ = get_api_key_from_vault(vault_client, key_id, use_cache=False)
+        except Exception as exc:
+            if key_id != install.api_key_id:
+                # note: the previous key may already have been deleted; the current one carries the grant
+                logger.warning("Could not read the previous credential %s to rewrite its grant: %s", key_id, exc)
+                continue
+            logger.warning("Could not read %s to rewrite its grant: %s", key_id, exc)
+            raise unavailable from exc
+        documents.append((key_id, metadata))
+
+    change: Dict[str, Any] = {}
+    for key_id, metadata in documents:
+        # important: the key's own set before the write, not the row's. A key edited through the
+        # integration capabilities route differs from its row, and this rewrite then withdraws that.
+        previous = dict(metadata)
+        metadata["capabilities"] = list(install.granted_capabilities or [])
+        metadata["cluster_permissions"] = list(install.granted_scope or [])
+        try:
+            vault_client.vault_kv_put(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+                metadata,
+            )
+        except Exception as exc:
+            logger.warning("Could not rewrite the grant on %s: %s", key_id, exc)
+            raise unavailable from exc
+        evict_api_key_cache(key_id)
+        if key_id == install.api_key_id:
+            change = capability_audit_fields(metadata, previous)
+    return change
 
 
 async def set_install_status(

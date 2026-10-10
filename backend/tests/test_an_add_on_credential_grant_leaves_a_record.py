@@ -296,12 +296,15 @@ def test_a_narrowing_records_the_capability_change(monkeypatch: pytest.MonkeyPat
         return {"nuc1"}
 
     monkeypatch.setattr(extension_reconcile, "_bound_clusters", _bound)
+    from tests.test_the_reconcile_sweep_narrows_and_reclaims import lock_from
+
     vault = _FakeVault({
         "id": KEY, "capabilities": ["inventory.read", "org.sync"],
         "cluster_permissions": [_grant(), _grant("sold-on")],
     })
     install = _install(["inventory.read"])
     install.granted_scope = [_grant(), _grant("sold-on")]
+    monkeypatch.setattr(extension_reconcile, "lock_installation_id", lock_from([install]))
 
     changed = asyncio.run(extension_reconcile._narrow_drifted_scope(_ScopeDB([install]), vault))
 
