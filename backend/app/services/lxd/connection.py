@@ -17,7 +17,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.core.config import get_settings
-from . import cert_files, health
+from . import breaker_sync, cert_files, health
 from .cert_rotation import CertificateRotationMixin
 from .exceptions import (
     LXDAuthorizationError,
@@ -618,6 +618,7 @@ class LXDConnectionManager(CertificateRotationMixin):
             
             # Verify connection and authentication
             response = client.api.get(timeout=(2, 5))
+            proven = False
             if response.status_code == 200:
                 data = response.json()
                 auth_status = data.get("metadata", {}).get("auth", "")
@@ -625,6 +626,7 @@ class LXDConnectionManager(CertificateRotationMixin):
                     raise LXDAuthorizationError(
                         f"Certificate not trusted by {cluster_id} (auth={auth_status})"
                     )
+                proven = True
             
             # Configure session with larger connection pool for parallel operations
             self._configure_client_session(
@@ -638,6 +640,9 @@ class LXDConnectionManager(CertificateRotationMixin):
             self._connection_times[cluster_id] = time.time()
             self._slow_validations.pop(cluster_id, None)
             health.clear(cluster_id)
+            if proven:
+                # The other workers may still hold a trip for this cluster; see breaker_sync.
+                breaker_sync.announce_proven(cluster_id)
             logger.info(f"Connected to cluster {cluster_id} using Vault certificate")
 
             # audit: connection established

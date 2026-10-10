@@ -49,6 +49,8 @@ INVALIDATORS = {
     "invalidate_instance_cache",
     "invalidate_resource_cache",
     "invalidate_cluster_cache",
+    # Check Authentication and a verified adopt: clusters, projects, regions, nodes, instances.
+    "invalidate_cluster_reachability",
     "invalidate_node_cache",
     "invalidate_all_node_caches",
     "delete_pattern",

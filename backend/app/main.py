@@ -526,6 +526,18 @@ async def lifespan(app: FastAPI):
     except Exception as cleanup_err:
         logger.error("Could not start the LXD trust cleanup loop: %s", cleanup_err, exc_info=True)
 
+    # Releasing this worker's breaker once another worker proves a cluster reachable again, so a
+    # repaired cluster stops answering 503 here within seconds instead of after the trip and the
+    # next healer pass. Every worker runs it; it does no I/O while nothing has failed here.
+    try:
+        if settings.vault_enabled:
+            from app.services.lxd.breaker_sync import start_breaker_sync_loop
+
+            start_breaker_sync_loop()
+            logger.info("LXD breaker sync loop started")
+    except Exception as sync_err:
+        logger.error("Could not start the LXD breaker sync loop: %s", sync_err, exc_info=True)
+
     # Fill the admin chart's history before the first read: the previous release's string key
     # once, then what Postgres holds that the store lacks. Both merge by timestamp, so neither
     # can overwrite a point the collector already wrote.
@@ -677,6 +689,12 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.lxd_certs.trust_cleanup import stop_trust_cleanup_loop
         stop_trust_cleanup_loop()
+    except Exception:
+        pass
+
+    try:
+        from app.services.lxd.breaker_sync import stop_breaker_sync_loop
+        stop_breaker_sync_loop()
     except Exception:
         pass
 
