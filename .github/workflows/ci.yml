@@ -358,11 +358,18 @@ jobs:
         working-directory: frontend
         run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
 
+  # One job per Playwright project (viewport and theme), run in parallel. The whole suite in one job
+  # had grown to 29m23s against this 30 minute timeout; each project alone runs in about 6-8 minutes
+  # plus the build. Roles are chosen inside each test, so a project is the natural split.
   browser-e2e:
-    name: Browser role and behavior QA
+    name: Browser role and behavior QA (${{ matrix.project }})
     runs-on: ubuntu-latest
     needs: frontend
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [desktop-light, mobile-dark, desktop-dark, mobile-light]
     permissions:
       contents: read
     env:
@@ -410,13 +417,13 @@ jobs:
         env:
           ORCASTRA_E2E_OUTPUT_DIR: ${{ runner.temp }}/orcastra-e2e/test-results
           ORCASTRA_E2E_REPORT_DIR: ${{ runner.temp }}/orcastra-e2e/playwright-report
-        run: NODE_PATH="$RUNNER_TEMP/orcastra-playwright/node_modules" "$RUNNER_TEMP/orcastra-playwright/node_modules/.bin/playwright" test --config=playwright.config.cjs
+        run: NODE_PATH="$RUNNER_TEMP/orcastra-playwright/node_modules" "$RUNNER_TEMP/orcastra-playwright/node_modules/.bin/playwright" test --config=playwright.config.cjs --project=${{ matrix.project }}
 
       - name: Upload browser QA artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-e2e-artifacts
+          name: browser-e2e-artifacts-${{ matrix.project }}
           path: |
             ${{ runner.temp }}/orcastra-e2e/playwright-report
             ${{ runner.temp }}/orcastra-e2e/test-results
