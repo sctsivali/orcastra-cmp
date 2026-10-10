@@ -193,6 +193,16 @@ def get_highest_role(roles: list[Role]) -> Role:
     return max(roles, key=lambda r: ROLE_HIERARCHY.get(r, 0))
 
 
+def is_admin(user: AuthenticatedUser) -> bool:
+    """Whether the caller is an Administrator, from its groups as require_admin decides it.
+
+    important: not `Role.ADMIN.value in user.roles`. AuthenticatedUser.roles holds the token's raw
+    "role_*" group names ("role_admin"), so that test was never true and an Administrator was treated
+    as a partner of its own organizations only.
+    """
+    return get_highest_role(resolve_roles(user)) == Role.ADMIN
+
+
 def get_user_permissions(roles: list[Role]) -> set[Permission]:
     """Merge permissions across all user roles."""
     perms: set[Permission] = set()

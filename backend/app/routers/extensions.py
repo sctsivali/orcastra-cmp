@@ -15,7 +15,7 @@ from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.extension_manifest import EXTENSION_EVENTS, MANIFEST_MAX_BYTES, SETTING_TYPES
 from app.core.org_scope import get_user_org_ids, org_scope_dependency
-from app.core.rbac import Role
+from app.core.rbac import is_admin
 from app.models.extension_schemas import (
     ExtensionManifest,
     ExtensionResponse,
@@ -33,10 +33,6 @@ router = APIRouter(
     tags=["Extensions"],
     dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
-
-
-def _is_admin(user: AuthenticatedUser) -> bool:
-    return Role.ADMIN.value in (user.roles or [])
 
 
 def _audit(action: str, slug: str, details: Optional[Dict[str, Any]] = None) -> None:
@@ -136,7 +132,7 @@ async def list_extensions(
     db: AsyncSession = Depends(get_db),
 ) -> List[ExtensionResponse]:
     rows = await extension_service.list_extensions(
-        db, caller_email=user.email, is_admin=_is_admin(user), status=status, mine=mine
+        db, caller_email=user.email, is_admin=is_admin(user), status=status, mine=mine
     )
     return [extension_service.to_response(row) for row in rows]
 
@@ -152,7 +148,7 @@ async def get_extension(
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:
     extension = await extension_service.get_extension_or_404(
-        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+        db, slug, caller_email=user.email, is_admin=is_admin(user)
     )
     return extension_service.to_response(extension)
 
@@ -174,10 +170,10 @@ async def update_extension(
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:
     extension = await extension_service.get_extension_or_404(
-        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+        db, slug, caller_email=user.email, is_admin=is_admin(user)
     )
     await extension_service.assert_owned(
-        extension, caller_email=user.email, is_admin=_is_admin(user)
+        extension, caller_email=user.email, is_admin=is_admin(user)
     )
     extension = await extension_service.update_extension(db, extension, update)
     _audit("extension.update", slug, {"status": extension.status})
@@ -205,7 +201,7 @@ async def publish_extension_version(
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:
     extension = await extension_service.get_extension_or_404(
-        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+        db, slug, caller_email=user.email, is_admin=is_admin(user)
     )
     previous = extension.version
     extension = await extension_service.publish_version(
@@ -236,10 +232,10 @@ async def delete_extension(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     extension = await extension_service.get_extension_or_404(
-        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+        db, slug, caller_email=user.email, is_admin=is_admin(user)
     )
     await extension_service.assert_owned(
-        extension, caller_email=user.email, is_admin=_is_admin(user)
+        extension, caller_email=user.email, is_admin=is_admin(user)
     )
     await extension_service.delete_extension(db, extension)
     _audit("extension.delete", slug)

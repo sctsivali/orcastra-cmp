@@ -15,7 +15,7 @@ from app.core.api_key_capability_audit import issued_credential_audit_fields
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.org_scope import get_user_org_ids, org_scope_dependency
-from app.core.rbac import Role
+from app.core.rbac import is_admin
 from app.models.db_models import Organization
 from app.models.extension_models import Extension, ExtensionInstallation
 from app.models.extension_schemas import (
@@ -40,13 +40,9 @@ router = APIRouter(
 )
 
 
-def _is_admin(user: AuthenticatedUser) -> bool:
-    return Role.ADMIN.value in (user.roles or [])
-
-
 async def _allowed_org_ids(user: AuthenticatedUser, db: AsyncSession) -> Optional[List[int]]:
     """None means every organization, which only an admin gets."""
-    if _is_admin(user):
+    if is_admin(user):
         return None
     return await get_user_org_ids(user, db)
 
@@ -117,7 +113,7 @@ async def install_preview(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     extension = await extension_service.get_extension_or_404(
-        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+        db, slug, caller_email=user.email, is_admin=is_admin(user)
     )
     allowed = await _allowed_org_ids(user, db)
     if allowed is not None and organization_id not in allowed:
@@ -149,7 +145,7 @@ async def install(
     db: AsyncSession = Depends(get_db),
 ) -> InstallCreateResponse:
     extension = await extension_service.get_extension_or_404(
-        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+        db, slug, caller_email=user.email, is_admin=is_admin(user)
     )
     vault_client = get_vault_integrations_client()
 
@@ -157,7 +153,7 @@ async def install(
         db, vault_client,
         extension=extension,
         user=user,
-        is_admin=_is_admin(user),
+        is_admin=is_admin(user),
         organization_id=request.organization_id,
         consent_version=request.consent.version,
         consent_digest=request.consent.manifest_digest,
@@ -297,7 +293,7 @@ async def rescope(
         install=record,
         extension=extension,
         user=user,
-        is_admin=_is_admin(user),
+        is_admin=is_admin(user),
         consent_version=request.consent.version,
         consent_digest=request.consent.manifest_digest,
         capabilities=request.capabilities,
@@ -395,7 +391,7 @@ async def rotate(
         record, key_id, key_secret = await extension_install.rotate_credential(
             db, vault_client,
             install=record, extension=extension, organization_slug=org_slug,
-            actor=user.email, is_admin=_is_admin(user), grace_seconds=grace_seconds,
+            actor=user.email, is_admin=is_admin(user), grace_seconds=grace_seconds,
         )
     except extension_install.RotationNeedsAPartner:
         _audit(
