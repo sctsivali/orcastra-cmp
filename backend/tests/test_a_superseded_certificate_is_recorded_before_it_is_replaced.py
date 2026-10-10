@@ -12,7 +12,9 @@ import pytest
 
 from app.core.cert_fingerprint import lxd_fingerprint
 from app.models.schemas import CertificateRenewalRequest
-from app.services.lxd_certs import rotation
+import re
+
+from app.services.lxd_certs import pending, rotation
 from app.services.lxd_certs import trust_cleanup_store as store
 from tests._cert_rotation_fakes import FakeCertManager, SessionMaker, rows
 
@@ -29,7 +31,11 @@ def _quiet(monkeypatch, db):
     monkeypatch.setattr(rotation, "_default_session_maker", lambda: SessionMaker(db))
     monkeypatch.setattr(rotation, "_adopt", lambda *a, **k: None)
     monkeypatch.setattr("app.core.cache.get_cache_manager", lambda: None)
-    monkeypatch.setattr(rotation, "audit", lambda action, cid, result="success", **d: audits.append((action, d)))
+    def record(action, cid, result="success", **d):
+        audits.append((action, d))
+
+    monkeypatch.setattr(rotation, "audit", record)
+    monkeypatch.setattr(pending, "audit", record)
     return audits
 
 
@@ -155,7 +161,7 @@ async def test_cancel_without_a_pending_certificate_records_nothing(db):
 async def test_regenerate_records_the_certificate_it_overwrites(db):
     manager = FakeCertManager()
     async with store.cluster_cert_lock(db, manager.cluster_id):
-        previous = await rotation.record_current_superseded(db, manager, manager.cluster_id, reason="regenerate")
+        previous = await pending.record_current_superseded(db, manager, manager.cluster_id, reason="regenerate")
     assert previous == lxd_fingerprint(manager.current[0])
     assert [(r.fingerprint, r.reason) for r in rows(db)] == [(previous, "regenerate")]
 
@@ -197,3 +203,66 @@ async def test_the_same_certificate_recorded_twice_is_one_row(db):
 async def test_a_malformed_fingerprint_is_never_stored(db):
     assert await store.record_superseded(db, cluster_id="c1", fingerprint="7e8ffe6ae3b6", reason="renew", grace_seconds=600) is None
     assert rows(db) == []
+
+
+IDENTITY = re.compile(r"^orca-nuc9-\d{8}-\d{9}-[a-z0-9]{4}$")
+
+
+async def test_regenerate_issues_a_pending_certificate_and_leaves_the_active_one(db, _quiet):
+    manager = FakeCertManager()
+    issued = await pending.regenerate(db, manager, manager.cluster_id, cluster_type="LXD")
+
+    active = manager.vault.data[manager.path("certs")]["client.crt"]
+    waiting = manager.vault.data[manager.path("pending_certs")]
+    assert active == manager.current[0], "the active certificate keeps working until Verify"
+    assert waiting["origin"] == "regenerate" and waiting["pending_cert_id"] == issued.pending_cert_id
+    assert issued.fingerprint == lxd_fingerprint(waiting["client.crt"]) != lxd_fingerprint(active)
+    assert issued.previous_fingerprint == lxd_fingerprint(active) and not issued.activated
+    assert IDENTITY.match(issued.identity_name), issued.identity_name
+    assert issued.cli_command.startswith(f'cat <<EOF | lxc config trust add - --name="{issued.identity_name}"')
+    assert rows(db) == [], "nothing is replaced yet"
+    assert [a for a, _ in _quiet] == ["cluster.certificate.regenerate"]
+
+
+async def test_verify_after_regenerate_records_the_old_certificate_as_regenerated(db):
+    manager = FakeCertManager()
+    old_fp = lxd_fingerprint(manager.current[0])
+    issued = await pending.regenerate(db, manager, manager.cluster_id, cluster_type="Incus")
+    assert "incus config trust add-certificate" in issued.cli_command
+
+    result = await rotation.verify(db, manager, manager.cluster_id, issued.pending_cert_id)
+
+    assert result.activated and result.fingerprint == issued.fingerprint
+    assert [(r.fingerprint, r.reason) for r in rows(db)] == [(old_fp, "regenerate")]
+
+
+async def test_a_second_regenerate_remembers_the_pending_one_it_replaces(db):
+    manager = FakeCertManager()
+    first = await pending.regenerate(db, manager, manager.cluster_id, cluster_type="LXD")
+    second = await pending.regenerate(db, manager, manager.cluster_id, cluster_type="LXD")
+    assert first.pending_cert_id != second.pending_cert_id
+    assert [(r.fingerprint, r.reason) for r in rows(db)] == [(first.fingerprint, "pending_replaced")]
+
+
+async def test_regenerate_with_no_certificate_at_all_activates_at_once(db):
+    manager = FakeCertManager()
+    del manager.vault.data[manager.path("certs")]
+    issued = await pending.regenerate(db, manager, manager.cluster_id, cluster_type="LXD")
+    assert issued.activated and issued.previous_fingerprint is None
+    assert manager.vault.data[manager.path("certs")]["client.crt"] == issued.certificate
+    assert manager.path("pending_certs") not in manager.vault.data
+
+
+async def test_renew_names_its_trust_entry_the_way_registration_does(db):
+    manager = FakeCertManager()
+    manager.trust_with_existing = False
+    result = await rotation.renew(db, manager, _renew(manager))
+    name = manager.vault.data[manager.path("pending_certs")]["identity_name"]
+    assert IDENTITY.match(name) and f'--name="{name}"' in result.cli_command
+
+
+def test_the_identity_name_shape_is_stable():
+    from datetime import datetime, timezone
+
+    name = rotation.trust_identity_name("nuc9", datetime(2026, 10, 7, 9, 41, 54, 353000, tzinfo=timezone.utc))
+    assert name.startswith("orca-nuc9-20261007-094154353-") and len(name.rsplit("-", 1)[-1]) == 4

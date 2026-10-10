@@ -1368,6 +1368,12 @@ export interface ClusterRegisterResponse {
   trust_added: boolean;
   certificate?: string;
   cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
+  /** Regenerate: the new certificate is pending until POST /certificates/verify activates it. */
+  pending_cert_id?: string | null;
+  cli_command?: string | null;
+  identity_name?: string | null;
+  fingerprint?: string | null;
+  previous_fingerprint?: string | null;
 }
 
 export interface ClusterAuthCheckRequest {

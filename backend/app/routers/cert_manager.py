@@ -39,6 +39,7 @@ from app.models.schemas import (
     SystemWarningsResponse,
 )
 from app.services.lxd_cert_manager import LXDCertificateManager
+from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import rotation, trust_cleanup
 from app.services.lxd_certs import trust_cleanup_store as store
 from app.services.lxd_certs.inspect import (
@@ -185,7 +186,7 @@ async def get_pending_certificate(
 ):
     verify_cluster_access(cluster_id)
     try:
-        return await rotation.pending_view(cert_manager, cluster_id)
+        return await pending_certs.pending_view(cert_manager, cluster_id)
     except rotation.CertificateNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -470,7 +471,7 @@ async def cleanup_pending_certificates(
                 )
             except Exception:  # noqa: BLE001 - no certificate, or Vault did not answer
                 continue
-            if not state.pending or not rotation.pending_is_stale(state.pending, now):
+            if not state.pending or not pending_certs.pending_is_stale(state.pending, now):
                 continue
             try:
                 # One transaction per cluster, so each lock is released before the next.

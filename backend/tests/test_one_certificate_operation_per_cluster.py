@@ -14,6 +14,7 @@ from tests.test_a_background_run_does_not_inherit_a_request_scope import FORBIDD
 
 APP = Path(__file__).resolve().parents[1] / "app"
 ROTATION = APP / "services" / "lxd_certs" / "rotation.py"
+PENDING = APP / "services" / "lxd_certs" / "pending.py"
 CLEANUP = APP / "services" / "lxd_certs" / "trust_cleanup.py"
 STORE = APP / "services" / "lxd_certs" / "trust_cleanup_store.py"
 HTTP = APP / "services" / "lxd_certs" / "trust_http.py"
@@ -36,12 +37,22 @@ def _mentions(node: ast.AST, name: str) -> bool:
 def test_every_rotation_entry_point_takes_the_cluster_lock():
     for name in ("renew", "verify", "cancel"):
         assert _mentions(_function(ROTATION, name), "cluster_cert_lock"), name
+    assert _mentions(_function(PENDING, "regenerate"), "cluster_cert_lock")
     assert _mentions(_function(CLEANUP, "sweep_cluster"), "cluster_cert_lock")
 
 
 def test_regenerate_and_delete_take_the_cluster_lock():
-    for name in ("regenerate_certificate", "delete_cluster"):
+    assert _mentions(_function(REGISTRATION, "regenerate_certificate"), "regenerate")
+    for name in ("delete_cluster", "register_cluster"):
         assert _mentions(_function(REGISTRATION, name), "cluster_cert_lock"), name
+
+
+def test_regenerate_never_overwrites_the_active_certificate():
+    """It issues a pending certificate; only Verify, once the cluster trusts it, replaces /certs."""
+    names = {name for name, _ in _names(_function(REGISTRATION, "regenerate_certificate"))}
+    assert "generate_and_store_certificate" not in names
+    source = ast.unparse(_function(PENDING, "regenerate"))
+    assert "pending_certs" in source and "_activate" in source, "activates only when nothing is active"
 
 
 def test_every_mutating_route_answers_409_when_the_cluster_is_busy():
@@ -64,9 +75,8 @@ def test_the_overwrite_comes_after_a_committed_record():
         source = ast.unparse(_function(ROTATION, name))
         assert source.index("_record(") < source.index("_activate"), name
     assert "record_superseded_now" in ast.unparse(_function(ROTATION, "_record"))
-    for name in ("regenerate_certificate", "register_cluster"):
-        source = ast.unparse(_function(REGISTRATION, name))
-        assert source.index("record_current_superseded") < source.index("generate_and_store_certificate"), name
+    source = ast.unparse(_function(REGISTRATION, "register_cluster"))
+    assert source.index("record_current_superseded") < source.index("generate_and_store_certificate")
 
 
 def _emitted(paths, prefix="cluster.certificate."):
@@ -79,7 +89,7 @@ def _emitted(paths, prefix="cluster.certificate."):
 
 
 def test_every_certificate_action_is_registered_and_the_revoking_ones_are_high():
-    emitted = _emitted([ROTATION, CLEANUP, REGISTRATION])
+    emitted = _emitted([ROTATION, PENDING, CLEANUP, REGISTRATION])
     assert emitted >= {
         "cluster.certificate.renew",
         "cluster.certificate.activate",

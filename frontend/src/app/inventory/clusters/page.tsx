@@ -3,7 +3,7 @@
 import * as React from "react";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { formatHypervisorType, generateIdentityName } from "@/lib/utils";
+import { formatHypervisorType } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -15,7 +15,6 @@ import {
   Users,
   Box,
   KeyRound,
-  Terminal,
   Shield,
   MapPin,
   Loader2
@@ -24,7 +23,6 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CodeBlock } from "@/components/ui/code-block";
 import {
   Table,
   TableBody,
@@ -36,6 +34,7 @@ import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/ta
 import { TableLink } from "@/components/ui/table-link";
 import { ClusterDetailDialog } from "./components/cluster-detail-dialog";
 import { LeftoverTrustDialog, type LeftoverTrust } from "./components/leftover-trust-dialog";
+import { RegenerateCertificateDialog } from "./components/regenerate-certificate-dialog";
 import {
   Dialog,
   DialogContent,
@@ -46,7 +45,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
-import { ClusterInfo, ClusterStatus } from "@/types/api";
+import { ClusterInfo, ClusterStatus, type ClusterRegisterResponse } from "@/types/api";
 import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
@@ -119,8 +118,7 @@ function ClustersContent() {
   const clusters = React.useMemo(() => (data as any)?.clusters || [], [data]);
   const [detailCluster, setDetailCluster] = React.useState<ClusterInfo | null>(null);
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
-  const [regenerateModal, setRegenerateModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
-  const [regeneratedCert, setRegeneratedCert] = React.useState<{identityName: string, certificate: string, cluster_type?: string} | null>(null);
+  const [regenerated, setRegenerated] = React.useState<{ cluster: ClusterInfo; issued: ClusterRegisterResponse } | null>(null);
   const [deleteConfirmModal, setDeleteConfirmModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const [leftoverTrust, setLeftoverTrust] = React.useState<LeftoverTrust | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
@@ -186,21 +184,20 @@ function ClustersContent() {
   };
 
 
-  const handleRegenerateCert = async (cluster: any) => {
+  const handleRegenerateCert = async (cluster: ClusterInfo) => {
     try {
       const response = await regenerateCert.mutateAsync(cluster.cluster_id);
-      
       if (response.success && response.certificate) {
-        const identityName = generateIdentityName(cluster.cluster_id);
-        setRegeneratedCert({
-          identityName,
-          certificate: response.certificate,
-          cluster_type: cluster.cluster_type || response.cluster_type  // Use existing or newly detected type
+        setRegenerated({
+          cluster,
+          // The type this page already knows wins over the unauthenticated probe's answer.
+          issued: { ...response, cluster_type: cluster.cluster_type || response.cluster_type },
         });
-        setRegenerateModal({open: true, cluster});
         toast({
           title: "Certificate Regenerated",
-          description: "Copy and run the command on your hypervisor server to add trust" });
+          description: response.pending_cert_id
+            ? "The current certificate stays active. Run the command on your hypervisor server, then verify."
+            : "Copy and run the command on your hypervisor server to add trust" });
       }
     } catch (error: any) {
       toast({
@@ -261,120 +258,15 @@ function ClustersContent() {
   return (
     <div className="container py-8">
       <ReadOnlyBanner />
-      {/* Regenerate Certificate Modal */}
-      <Dialog open={regenerateModal.open} onOpenChange={(open) => {
-        if (!open) {
-          setRegenerateModal({open: false, cluster: null});
-          setRegeneratedCert(null);
-        }
-      }}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader className="pb-4">
-            <DialogTitle>
-              Certificate Regenerated
-            </DialogTitle>
-            <DialogDescription>
-              Add trust to complete the authentication for {regenerateModal.cluster?.display_name}
-            </DialogDescription>
-          </DialogHeader>
-          
-          {regeneratedCert && (
-            <div className="space-y-4">
-              <Alert>
-                <Terminal className="h-4 w-4" />
-                <AlertDescription className="space-y-3">
-                  <p className="text-sm font-medium">
-                    Run this command on your hypervisor server:
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    If the cluster still trusts the replaced certificate, that entry is removed
-                    automatically once the cluster trusts this one.
-                  </p>
-                  
-                  {/* Dynamic CLI Command based on detected type */}
-                  {(() => {
-                    const isIncus = regeneratedCert.cluster_type === "Incus";
-                    const cliTool = isIncus ? "incus" : "lxc";
-                    const trustSubCmd = isIncus ? "add-certificate" : "add";
-                    const typeLabel = formatHypervisorType(regeneratedCert.cluster_type);
-                    const badgeVariant = isIncus ? "secondary" : "outline";
-                    
-                    return (
-                      <CodeBlock
-                        value={`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${regeneratedCert.identityName}"\n${regeneratedCert.certificate}\nEOF`}
-                        label={
-                          <>
-                            <Badge variant={badgeVariant} className="mr-2">{typeLabel}</Badge>
-                            Identity: <span className="font-mono">{regeneratedCert.identityName}</span>
-                          </>
-                        }
-                        copyLabel="CLI command"
-                      />
-                    );
-                  })()}
-                </AlertDescription>
-              </Alert>
-              
-              <div className="flex gap-3">
-                <Button
-                  onClick={async () => {
-                    if (regenerateModal.cluster) {
-                      setCheckingAuth(regenerateModal.cluster.cluster_id);
-                      try {
-                        const response = await checkClusterAuth.mutateAsync(regenerateModal.cluster.cluster_id);
-                        
-                        if (response.authenticated) {
-                          toast({
-                            title: "Authentication Successful",
-                            description: `Cluster ${regenerateModal.cluster.cluster_id} is now online` });
-                          // Only close modal if authentication successful
-                          setRegenerateModal({open: false, cluster: null});
-                          setRegeneratedCert(null);
-                          await refetch();
-                        } else {
-                          toast({
-                            title: "Not Authenticated Yet",
-                            description: response.message || "Certificate not yet trusted. Please run the command on your hypervisor server.",
-                            variant: "destructive" });
-                          // Keep modal open for retry
-                        }
-                      } catch (error: any) {
-                        toast({
-                          title: "Check Failed",
-                          description: error.message || "Failed to check authentication",
-                          variant: "destructive" });
-                        // Keep modal open for retry
-                      } finally {
-                        setCheckingAuth(null);
-                      }
-                    }
-                  }}
-                  disabled={checkingAuth === regenerateModal.cluster?.cluster_id}
-                  className="flex-1"
-                >
-                  {checkingAuth === regenerateModal.cluster?.cluster_id ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Checking...
-                    </>
-                  ) : (
-                    "Verify Connection"
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setRegenerateModal({open: false, cluster: null});
-                    setRegeneratedCert(null);
-                  }}
-                >
-                  Close
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <RegenerateCertificateDialog
+        cluster={regenerated?.cluster ?? null}
+        issued={regenerated?.issued ?? null}
+        onClose={() => setRegenerated(null)}
+        onActivated={() => {
+          setRegenerated(null);
+          void refetch();
+        }}
+      />
 
       <div className="flex items-center justify-between mb-6">
         <div>

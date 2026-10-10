@@ -11,11 +11,16 @@ instead of a trusted certificate nothing remembers. Paths that let go of a certi
 - cancel and the 24 hour pending cleanup: the pending certificate, which the operator may already
   have added to trust.
 
+Regenerate issues a pending certificate too (`regenerate`), so the active one keeps working until
+the cluster trusts its replacement and Verify activates it; it used to overwrite the active
+certificate at once, cutting off any worker that reconnected before trust was added.
+
 Vault and LXD calls block, so each goes through run_blocking with its own executor.
 """
 
 import logging
 import secrets
+import string
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,7 +34,6 @@ from app.core.config import get_settings
 from app.core.request_context import get_current_user_id
 from app.core.type_utils import build_trust_add_command
 from app.core.vault_client import VaultClientError
-from app.models.cert_trust_schemas import PendingCertificateResponse
 from app.models.schemas import (
     CertificateRenewalRequest,
     CertificateRenewalResponse,
@@ -92,6 +96,21 @@ def _default_session_maker() -> Any:
 
 async def _record(session_maker: Optional[Any], **record: Any) -> None:
     await store.record_superseded_now(session_maker or _default_session_maker(), **record)
+
+
+_SUFFIX_ALPHABET = string.ascii_lowercase + string.digits
+
+
+def trust_identity_name(cluster_id: str, now: Optional[datetime] = None) -> str:
+    """The `--name` of a trust entry: `orca-<id>-YYYYMMDD-HHMMSSmmm-xxxx`.
+
+    The shape registration has always used, now shared by renew and regenerate, because it is what
+    an operator reads in `lxc config trust list` when auditing which entry is whose. The suffix only
+    breaks ties inside one millisecond; nothing authenticates on it.
+    """
+    now = now or datetime.now(timezone.utc)
+    suffix = "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(4))
+    return f"orca-{cluster_id}-{now:%Y%m%d}-{now:%H%M%S}{now.microsecond // 1000:03d}-{suffix}"
 
 
 async def _blocking(fn: Any, *args: Any, timeout: float = VAULT_TIMEOUT_S, label: str) -> Any:
@@ -211,7 +230,7 @@ async def renew(
         expires = parse_certificate_pem(state.current_pem).get("not_after")
         current_valid = bool(expires and expires > datetime.now(timezone.utc))
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        identity_name = f"orca-{cluster_id}-{stamp}"
+        identity_name = trust_identity_name(cluster_id)
         pending_cert_id = f"pending-{stamp}-{secrets.token_hex(4)}"
 
         if state.pending:
@@ -334,7 +353,8 @@ async def verify(
                 previous_fingerprint=state.current_fp,
             )
         await _record(
-            session_maker, cluster_id=cluster_id, fingerprint=state.current_fp or "", reason="verify",
+            session_maker, cluster_id=cluster_id, fingerprint=state.current_fp or "",
+            reason="regenerate" if pending.get("origin") == "regenerate" else "verify",
             grace_seconds=grace, requested_by=get_current_user_id(),
         )
         material = {
@@ -399,64 +419,3 @@ async def cancel(
         await db.commit()
     audit("cluster.certificate.cancel", cluster_id, fingerprint=state.pending_fp, reason=reason)
     return True
-
-
-def pending_is_stale(pending: Dict[str, Any], now: datetime) -> bool:
-    created = pending.get("created_at")
-    if not created:
-        return False
-    try:
-        created_at = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    return (now - created_at).total_seconds() > PENDING_MAX_AGE_HOURS * 3600
-
-
-async def pending_view(cert_manager: Any, cluster_id: str) -> PendingCertificateResponse:
-    state = await _blocking(read_rotation_state, cert_manager, cluster_id, label="cert.pending.read")
-    pending = state.pending
-    if not pending:
-        raise CertificateNotFound(cluster_id)
-    identity_name = pending.get("identity_name") or f"orca-{cluster_id}"
-    created = pending.get("created_at")
-    try:
-        created_at = datetime.fromisoformat(str(created).replace("Z", "+00:00")) if created else None
-    except ValueError:
-        created_at = None
-    return PendingCertificateResponse(
-        cluster_id=cluster_id,
-        pending_cert_id=pending.get("pending_cert_id"),
-        fingerprint=state.pending_fp,
-        certificate=pending["client.crt"],
-        cli_command=build_trust_add_command(_cli_type(state), pending["client.crt"], identity_name),
-        identity_name=identity_name,
-        created_at=created_at,
-    )
-
-
-async def record_current_superseded(
-    db: AsyncSession,
-    cert_manager: Any,
-    cluster_id: str,
-    *,
-    reason: str,
-    session_maker: Optional[Any] = None,
-) -> Optional[str]:
-    """Record the active certificate before something overwrites it outside renew (regenerate).
-
-    Called under cluster_cert_lock. Returns the fingerprint recorded, or None when there was none.
-    """
-    try:
-        state = await _blocking(read_rotation_state, cert_manager, cluster_id, label=f"cert.{reason}.read")
-    except CertificateNotFound:
-        return None
-    previous = state.current_fp
-    if previous:
-        await _record(
-            session_maker, cluster_id=cluster_id, fingerprint=previous, reason=reason,
-            grace_seconds=int(get_settings().lxd_trust_cleanup_grace_seconds),
-            requested_by=get_current_user_id(),
-        )
-    return previous

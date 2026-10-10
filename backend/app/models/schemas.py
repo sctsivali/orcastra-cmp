@@ -1346,6 +1346,12 @@ class ClusterRegisterResponse(BaseModel):
     certificate_generated: bool = Field(False, description="Whether certificate was generated")
     trust_added: bool = Field(False, description="Whether trust was added to LXD")
     cluster_type: Optional[str] = Field(None, description="Auto-detected hypervisor type (LXD, MicroCloud, or Incus)")
+    # Regenerate issues a pending certificate; Verify (POST /certificates/verify) activates it.
+    pending_cert_id: Optional[str] = Field(None, description="Pending certificate to verify, after a regenerate")
+    cli_command: Optional[str] = Field(None, description="Command that adds the new certificate to trust")
+    identity_name: Optional[str] = Field(None, description="Trust entry name the command uses")
+    fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the new certificate")
+    previous_fingerprint: Optional[str] = Field(None, description="LXD fingerprint of the certificate still active")
 
 
 class ClusterAuthCheckRequest(BaseModel):
