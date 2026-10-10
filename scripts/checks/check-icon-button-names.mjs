@@ -56,7 +56,9 @@ const src = join(root, 'frontend', 'src');
 // Lowered 48 -> 46 when the terminal and console back controls were named. Those two are the only
 // navigational control on their pages, because MainLayout hides the sidebar, header and footer on
 // both prefixes, so an unnamed arrow was the entire way out for anyone who could not see it.
-const BASELINE = 46;
+// Lowered 46 -> 45 when the certificate row's cancel-renewal control was named. It sat beside a
+// Verify button on the same row and discarded a pending certificate, so "button" was not enough.
+const BASELINE = 45;
 
 // Empty since the dead components/vm-table.tsx was deleted; kept so a future dead file has a
 // documented place to go rather than a baseline bump.

@@ -248,7 +248,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     apiCalls: [
       "api.clusters.regenerateCert", "api.certificates.initiateRenewal",
       "api.certificates.verifyRenewal", "api.certificates.cancelPending",
-      "api.certificates.cleanupPending",
+      "api.certificates.cleanupPending", "api.certificates.removeTrust",
     ],
   },
   "cluster.location": {

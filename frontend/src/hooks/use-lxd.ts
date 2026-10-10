@@ -2158,6 +2158,27 @@ export function useCancelPendingCert() {
   });
 }
 
+/** The pending certificate behind a row's Verify, fetched only while the dialog shows it. */
+export function usePendingCertificate(clusterId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["certificate", clusterId, "pending"],
+    queryFn: () => api.certificates.getPending(clusterId as string),
+    enabled: enabled && !!clusterId,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+export function useRemoveSupersededTrust() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ clusterId, fingerprint }: { clusterId: string; fingerprint?: string }) =>
+      api.certificates.removeTrust(clusterId, fingerprint),
+    onSuccess: () => reconcile(queryClient, "cluster.certificate"),
+  });
+}
+
 export function useSystemWarnings(options: { enabled?: boolean } = {}) {
   // the same 403 as useWarnings: /warnings/system/all sits behind require_partner()
   const { isPartner } = usePermissions();
