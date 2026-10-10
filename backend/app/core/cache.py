@@ -513,6 +513,26 @@ class CacheManager:
 
         logger.info(f"Invalidated cluster list cache{f' for {cluster_id}' if cluster_id else ' (all)'}")
 
+    def invalidate_cluster_reachability(self, *cluster_ids: str) -> None:
+        """Drop every cached view that says whether a cluster answers us.
+
+        For the moments a cluster is proven reachable again: Check Authentication, a verified
+        certificate adopted, a worker's breaker released by breaker_sync. Verify used to clear only
+        the Vault layer, so the cluster list kept showing Pending Trust for its 180s TTL after a
+        repair that had already worked.
+
+        note: the lists it clears are fleet-wide, so a caller that recovered several clusters calls
+        it once with all of them; the ids only name the event in the log.
+        """
+        from app.core.config import get_settings
+
+        self.invalidate_resource_cache("clusters", "projects", "regions")
+        self.delete("vault_list", get_settings().vault_clusters_path.replace("/data/", "/metadata/"))
+        self.invalidate_instance_cache()
+        self.delete_pattern("api_responses", "nodes:*")
+        self.delete_pattern("api_responses", "regions:*")
+        logger.info("Invalidated reachability caches for %s", ", ".join(cluster_ids))
+
     def invalidate_instance_cache(self):
         """Invalidate cached responses an instance lifecycle change makes stale.
 

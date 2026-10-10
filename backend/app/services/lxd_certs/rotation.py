@@ -188,10 +188,18 @@ def _activate(cert_manager: Any, cluster_id: str, material: Dict[str, str]) -> N
 
 
 def _adopt(cluster_id: str, endpoint: str, cert: str, key: str) -> None:
-    """Blocking. Switch the worker that served this request; the others follow on their own."""
+    """Blocking. Switch the worker that served this request. Its trusted connect announces the
+    cluster, and services/lxd/breaker_sync.py moves the other workers within seconds.
+
+    note: the reachability caches are dropped here, after the connect, not in _activate. A list
+    rebuilt between the two would otherwise be cached again with the old Pending Trust status.
+    """
+    from app.core.cache import get_cache_manager
     from app.services.lxd_service import get_lxd_service
 
-    get_lxd_service().connection_manager.adopt_vault_certificate(cluster_id, endpoint, cert, key)
+    client = get_lxd_service().connection_manager.adopt_vault_certificate(cluster_id, endpoint, cert, key)
+    if client is not None:
+        get_cache_manager().invalidate_cluster_reachability(cluster_id)
 
 
 def audit(action: str, cluster_id: str, result: str = "success", **details: Any) -> None:

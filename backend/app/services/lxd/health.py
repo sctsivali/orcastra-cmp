@@ -24,6 +24,10 @@ KIND_UNAUTHORIZED = "unauthorized"
 _lock = threading.Lock()
 # cluster_id -> (failed_at_epoch, reason, kind)
 _failed: Dict[str, Tuple[float, str, str]] = {}
+# cluster_id -> epoch of the last failure, kept past the TTL until a success clears it. A worker
+# that lost its connection stays disconnected after the trip expires (until the healer retries),
+# and breaker_sync needs to know that window too.
+_last_failed: Dict[str, float] = {}
 
 
 def record_failure(cluster_id: str, reason: str = "", *, kind: str = KIND_OFFLINE) -> None:
@@ -33,13 +37,16 @@ def record_failure(cluster_id: str, reason: str = "", *, kind: str = KIND_OFFLIN
     paths that know the host answered pass KIND_UNAUTHORIZED.
     """
     with _lock:
-        _failed[cluster_id] = (time.time(), reason or "unreachable", kind)
+        now = time.time()
+        _failed[cluster_id] = (now, reason or "unreachable", kind)
+        _last_failed[cluster_id] = now
 
 
 def clear(cluster_id: str) -> None:
     """Un-trip a cluster after a successful connect so recovery is immediate."""
     with _lock:
         _failed.pop(cluster_id, None)
+        _last_failed.pop(cluster_id, None)
 
 
 def is_tripped(cluster_id: str, ttl: float = DEFAULT_TTL) -> bool:
@@ -70,3 +77,9 @@ def get_kind(cluster_id: str) -> Optional[str]:
     with _lock:
         entry = _failed.get(cluster_id)
         return entry[2] if entry else None
+
+
+def failure_times() -> Dict[str, float]:
+    """Snapshot of cluster_id -> last failure epoch for every cluster not cleared since."""
+    with _lock:
+        return dict(_last_failed)

@@ -634,21 +634,10 @@ async def check_cluster_authentication(
                 except Exception as conn_err:
                     logger.warning(f"Failed to add connection to LXD service: {conn_err}")
                 
-                # Invalidate clusters list cache so status updates appear immediately
-                # Also invalidate instances and projects caches so new cluster data loads
                 from app.core.cache import get_cache_manager
                 cache = get_cache_manager()
                 if cache:
-                    cache.invalidate_resource_cache("clusters", "projects", "regions")
-                    # CRITICAL: Also invalidate vault_list cache for cluster list
-                    vault_list_path = settings.vault_clusters_path.replace("/data/", "/metadata/")
-                    cache.delete("vault_list", vault_list_path)
-                    # Invalidate instances and projects cache patterns
-                    cache.invalidate_instance_cache()
-                    cache.delete_pattern("api_responses", "nodes:*")
-                    # Regions overview too so the inventory/monitoring overview updates immediately
-                    cache.delete_pattern("api_responses", "regions:*")
-                    logger.info(f"Invalidated all relevant caches (scoped + vault_list + regions) after authenticating {cluster_id}")
+                    cache.invalidate_cluster_reachability(cluster_id)
                 
                 return ClusterAuthCheckResponse(
                     cluster_id=cluster_id,
