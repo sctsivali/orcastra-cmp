@@ -16,6 +16,7 @@ import type {
   ExtensionManifestInput,
   ExtensionUpdateInput,
   ExtensionVocabulary,
+  ManageableOrganization,
   WebhookDelivery,
   WebhookDeliveryPage,
   WebhookSubscription,
@@ -37,6 +38,11 @@ export const extensionsAPI = {
   vocabulary: () => fetchAPI<ExtensionVocabulary>(`${base}/vocabulary`),
 
   list: (opts: ReadOptions = {}) => fetchRead<ExtensionDetail[]>(base, opts),
+  /**
+   * Where add-ons may be installed and managed: every active organization for an Administrator,
+   * otherwise those the caller runs (a partner of it, or its creator when it was made here).
+   */
+  manageableOrganizations: () => fetchAPI<ManageableOrganization[]>(`${base}/manageable-organizations`),
   get: (slug: string) => fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}`),
 
   /**

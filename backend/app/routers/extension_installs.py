@@ -8,13 +8,14 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capability_audit import issued_credential_audit_fields
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
-from app.core.org_scope import get_user_org_ids, org_scope_dependency
+from app.core.org_scope import org_scope_dependency
 from app.core.rbac import is_admin
 from app.models.db_models import Organization
 from app.models.extension_models import Extension, ExtensionInstallation
@@ -26,6 +27,7 @@ from app.models.extension_schemas import (
     SettingsUpdate,
 )
 from app.routers.integrations import get_vault_integrations_client
+from app.services.extension_credential_guard import orgs_the_user_runs
 from app.services import extension_install, extension_service
 from app.services.activity_logger import get_activity_logger
 from app.services.integration_key_ownership import KeyOwnsOrganizations
@@ -44,7 +46,7 @@ async def _allowed_org_ids(user: AuthenticatedUser, db: AsyncSession) -> Optiona
     """None means every organization, which only an admin gets."""
     if is_admin(user):
         return None
-    return await get_user_org_ids(user, db)
+    return await orgs_the_user_runs(db, user.email)
 
 
 def _audit(
@@ -93,6 +95,36 @@ async def _load(
         )
     ).scalar_one_or_none()
     return install, extension, organization.slug if organization else None
+
+
+# ── where add-ons can be managed ───────────────────────────────────────────────────────────────
+
+class ManageableOrganization(BaseModel):
+    id: int
+    name: str
+    slug: str
+
+
+@router.get(
+    "/manageable-organizations",
+    response_model=List[ManageableOrganization],
+    summary="Organizations whose add-ons you may install and manage",
+    description=(
+        "An Administrator manages every active organization. Anyone else manages those it runs: a "
+        "partner of the organization, or its creator when it was made in this dashboard. The install "
+        "dialog offers only these."
+    ),
+)
+async def manageable_organizations(
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+) -> List[ManageableOrganization]:
+    query = select(Organization).where(Organization.is_active == True)  # noqa: E712 - SQLAlchemy column comparison
+    allowed = await _allowed_org_ids(user, db)
+    if allowed is not None:
+        query = query.where(Organization.id.in_(allowed))
+    rows = (await db.execute(query.order_by(Organization.name, Organization.id))).scalars().all()
+    return [ManageableOrganization(id=org.id, name=org.name, slug=org.slug) for org in rows]
 
 
 # ── the consent preview ────────────────────────────────────────────────────────────────────────

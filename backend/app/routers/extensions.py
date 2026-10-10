@@ -14,7 +14,7 @@ from app.core.api_key_capabilities import CAPABILITIES
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
 from app.core.extension_manifest import EXTENSION_EVENTS, MANIFEST_MAX_BYTES, SETTING_TYPES
-from app.core.org_scope import get_user_org_ids, org_scope_dependency
+from app.core.org_scope import org_scope_dependency
 from app.core.rbac import is_admin
 from app.models.extension_schemas import (
     ExtensionManifest,
@@ -23,6 +23,7 @@ from app.models.extension_schemas import (
     capability_request_info,
 )
 from app.services import extension_service
+from app.services.extension_credential_guard import orgs_the_user_runs
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,8 @@ async def register_extension(
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:
-    org_ids = await get_user_org_ids(user, db)
+    # note: published from an organization the author runs, never a buyer's or a teammate's one
+    org_ids = await orgs_the_user_runs(db, user.email)
     extension = await extension_service.create_extension(
         db,
         manifest=manifest,

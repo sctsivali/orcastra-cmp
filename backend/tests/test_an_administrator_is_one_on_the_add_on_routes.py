@@ -37,10 +37,10 @@ def test_is_admin_reads_the_groups_of_a_real_token(user: AuthenticatedUser, expe
 
 
 async def test_an_administrator_reaches_every_installation(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _members_only(_user: Any, _db: Any) -> List[int]:
+    async def _members_only(_db: Any, _email: str) -> List[int]:
         return [6]
 
-    monkeypatch.setattr(extension_installs, "get_user_org_ids", _members_only)
+    monkeypatch.setattr(extension_installs, "orgs_the_user_runs", _members_only)
     assert await extension_installs._allowed_org_ids(ADMIN, None) is None
     assert await extension_installs._allowed_org_ids(PARTNER, None) == [6]
 
@@ -54,10 +54,10 @@ async def test_an_administrator_reaches_an_installation_s_webhooks_outside_its_o
         async def execute(self, _statement: Any) -> Any:
             return SimpleNamespace(scalar_one_or_none=lambda: row)
 
-    async def _members_only(_user: Any, _db: Any) -> List[int]:
+    async def _members_only(_db: Any, _email: str) -> List[int]:
         return [6]
 
-    monkeypatch.setattr(extension_webhooks, "get_user_org_ids", _members_only)
+    monkeypatch.setattr(extension_webhooks, "orgs_the_user_runs", _members_only)
     assert await extension_webhooks._install_for(_DB(), 7, ADMIN) is row
     with pytest.raises(HTTPException) as hidden:
         await extension_webhooks._install_for(_DB(), 7, PARTNER)

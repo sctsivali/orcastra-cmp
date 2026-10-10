@@ -87,7 +87,7 @@ def _install(
 ):
     monkeypatch.setattr(scope, "get_current_allowed_clusters", lambda: allowed_clusters)
 
-    async def _orgs(_user, _db):
+    async def _orgs(_db, _email):
         return user_orgs
 
     async def _cluster_orgs(cluster_id, _db):
@@ -96,7 +96,7 @@ def _install(
     async def _consent(_db, _cluster_id):
         return consent, refused_by
 
-    monkeypatch.setattr(scope, "get_user_org_ids", _orgs)
+    monkeypatch.setattr(scope, "orgs_the_user_runs", _orgs)
     monkeypatch.setattr(scope, "resolve_cluster_orgs", _cluster_orgs)
     monkeypatch.setattr("app.services.desktop_policy.consent_for_cluster", _consent)
 

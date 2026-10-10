@@ -220,7 +220,7 @@ async def test_an_inactive_organization_it_owns_still_needs_a_partner(rotation: 
     assert owners(db)["retired"] == OLD
 
 
-async def test_an_add_on_that_owns_nothing_rotates_for_a_member_as_before(rotation: Dict[str, Any]) -> None:
+async def test_an_add_on_that_owns_nothing_needs_no_partner_check_at_the_service(rotation: Dict[str, Any]) -> None:
     db = world_db()
     home(db, rows=[(PARTNER.email, "member")])
     own(db, "oak_someone_else", "theirs")
