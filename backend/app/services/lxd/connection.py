@@ -1009,6 +1009,9 @@ class LXDConnectionManager(CertificateRotationMixin):
         to keep the in-memory whitelist in sync with Vault.
         """
         self._registered_clusters = set(cluster_ids)
+        # Every caller passes the whole fleet, and the 30 s sweep reaches every worker, so this
+        # is where a worker learns a cluster was deregistered while its breaker still held it.
+        health.forget_unregistered(self._registered_clusters)
         logger.debug(f"Synced registered clusters whitelist: {self._registered_clusters}")
 
     def register_cluster(self, cluster_id: str) -> None:
