@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/ui/code-block";
 
 import { toast } from "@/hooks/use-toast";
-import { formatHypervisorType, generateIdentityName } from "@/lib/utils";
+import { formatHypervisorType, generateIdentityName, trustPickupHint } from "@/lib/utils";
 import { ClusterStatus, APIError } from "@/types/api";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
 import { loadRegionCatalog, resolveRegion, toGeoLocation } from "@/lib/regions/catalog";
@@ -331,7 +331,7 @@ export function NodeRegisterForm() {
                 Step 2: Verify Connection
               </Label>
               <p className="text-sm text-muted-foreground">
-                After adding trust, verify the connection is working:
+                {trustPickupHint("Check Authentication")}
               </p>
               <Button
                 onClick={() => registrationResult.cluster_id && handleCheckAuth(registrationResult.cluster_id)}

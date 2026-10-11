@@ -287,6 +287,14 @@ export function generateIdentityName(clusterId: string): string {
   return `orca-${clusterId}-${datetime}`;
 }
 
+// note: after trust is added on the host, nothing proves it until a check runs. The backend keeps a
+// refused cluster tripped for 60 s per worker and the healer passes every 30 s, so on its own the
+// cluster can stay Pending Trust for a minute or more. Check Authentication or Verify proves it at
+// once and releases every worker within seconds.
+export function trustPickupHint(action: string): string {
+  return `Once the command has run, press ${action}. On its own, the dashboard can take a minute or more to notice the new trust.`;
+}
+
 // standardize known hypervisor type display while preserving future providers
 export function formatHypervisorType(type: string | null | undefined): string {
   if (!type) return "Hypervisor";
