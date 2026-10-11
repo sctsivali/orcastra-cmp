@@ -317,6 +317,24 @@ def test_a_worker_with_nothing_failed_reads_no_cache(cache):
     assert cache.gets == 0
 
 
+def test_a_deregistered_cluster_stops_costing_reads(cache, clock):
+    """The lab deleted a cluster while it failed and every worker kept reading its marker.
+
+    The 30 s sweep hands every worker the whole fleet; a cluster gone from it is forgotten.
+    """
+    kept = "still-registered"
+    _failed_now()
+    _failed_now(kept)
+
+    LXDConnectionManager().sync_registered_clusters([kept])
+
+    assert not health.is_tripped(CLUSTER)
+    assert set(health.failure_times()) == {kept}
+    assert health.is_tripped(kept), "a registered cluster keeps its trip"
+    breaker_sync.due_for_retry()
+    assert cache.gets == 1, "only the registered cluster's marker is read"
+
+
 def test_the_loop_does_no_work_while_nothing_failed_and_sheds_a_stuck_pass(monkeypatch):
     runs = []
 

@@ -10,7 +10,7 @@ immediately on any successful connect.
 
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 # How long a cluster stays "tripped" after a failure before it is probed again.
 DEFAULT_TTL = 60.0
@@ -83,3 +83,16 @@ def failure_times() -> Dict[str, float]:
     """Snapshot of cluster_id -> last failure epoch for every cluster not cleared since."""
     with _lock:
         return dict(_last_failed)
+
+
+def forget_unregistered(registered: Iterable[str]) -> None:
+    """Drop everything recorded for clusters outside the registry.
+
+    note: _last_failed outlives the TTL, so a cluster deregistered while failing would otherwise
+    cost breaker_sync one marker read per pass in this worker until a restart.
+    """
+    keep = set(registered)
+    with _lock:
+        for cluster_id in (set(_failed) | set(_last_failed)) - keep:
+            _failed.pop(cluster_id, None)
+            _last_failed.pop(cluster_id, None)
