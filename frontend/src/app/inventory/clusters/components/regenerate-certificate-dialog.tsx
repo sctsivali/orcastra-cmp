@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { useCancelPendingCert, useCheckClusterAuth, useVerifyCertRenewal } from "@/hooks/use-lxd";
-import { formatHypervisorType } from "@/lib/utils";
+import { formatHypervisorType, trustPickupHint } from "@/lib/utils";
 import type { ClusterInfo, ClusterRegisterResponse } from "@/types/api";
 
 import { FingerprintField, TRUST_LIST_CHARS } from "../certificates/components/certificate-fingerprint";
@@ -175,11 +175,11 @@ export function RegenerateCertificateDialog({
                   Close
                 </Button>
               </div>
-              {pendingId && (
-                <p className="text-xs text-muted-foreground">
-                  Closing keeps the new certificate pending; finish or cancel it later from the Certificates page.
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground">
+                {pendingId
+                  ? "Closing keeps the new certificate pending; finish or cancel it later from the Certificates page."
+                  : trustPickupHint("Verify Connection")}
+              </p>
             </div>
           )}
         </DialogContent>

@@ -463,7 +463,11 @@ function ClustersContent() {
                             size="sm"
                             onClick={() => handleCheckAuth(cluster.cluster_id)}
                             disabled={checkingAuth === cluster.cluster_id}
-                            title="Check Authentication"
+                            title={
+                              cluster.status === ClusterStatus.NOT_AUTHORIZED
+                                ? "Check Authentication after adding trust on the host"
+                                : "Check Authentication"
+                            }
                           >
                             {checkingAuth === cluster.cluster_id ? (
                               <RefreshCw className="h-4 w-4 animate-spin" />
