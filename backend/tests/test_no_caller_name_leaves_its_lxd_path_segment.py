@@ -101,6 +101,10 @@ ENCODER_MODULES = {APP / "core" / "lxd_segment.py", APP / "core" / "lxd_path.py"
 LXD_PATH_HELPERS = {
     ("app/core/cloud_init_config.py", "cloud_init_compared_at"),
     ("app/core/cloud_init_config.py", "proxy_cloud_init_compared_at"),
+    # Reached from GET /integrations/instances/{name} through _projects_holding and
+    # list_across_projects. Both read the fixed /1.0/projects path; no caller value reaches it.
+    ("app/services/lxd/project_scope.py", "list_project_configs"),
+    ("app/services/lxd/project_scope.py", "list_project_names"),
     ("app/services/lxd/proxy_path_params.py", "assert_path_params"),
     ("app/services/lxd/utils.py", "InstanceWrapper"),
     ("app/services/lxd/utils.py", "find_instance_in_projects"),

@@ -1292,15 +1292,18 @@ def _fetch_instance_detail(
     # 1 + N round trips on the shared proxy pool for a key that may be allowed to see one of
     # them, and the caller chooses the name. Narrowing is both the cheap and the correct answer.
     search = [project] if project else sorted((granted or {}).get(cluster_id) or []) or [None]
-    instance = found_in = None
+    if search == [None]:
+        search = _projects_holding(client, name)
+    # important: EVERY match, not the first. A name is unique per project, and stopping at the
+    # first hit returned one of two same-named instances in silence, so the 409 the caller
+    # documents for an ambiguous name never fired within one cluster and an agent could act on the
+    # instance it did not mean.
+    details = []
     for candidate in search:
         instance, found_in = find_instance_in_projects(client, name, candidate)
-        if instance is not None:
-            break
-    if instance is None:
-        return []
-    return [
-        instance_detail(
+        if instance is None:
+            continue
+        details.append(instance_detail(
             name=instance.name,
             cluster_id=cluster_id,
             project=found_in,
@@ -1318,8 +1321,25 @@ def _fetch_instance_detail(
             description=getattr(instance, "description", None),
             created_at=getattr(instance, "created_at", None),
             last_used_at=getattr(instance, "last_used_at", None),
-        )
-    ]
+        ))
+    return details
+
+
+def _projects_holding(client: Any, name: str) -> List[Optional[str]]:
+    """Every project on the cluster holding an instance called `name`, for a key granted all.
+
+    One all-projects listing instead of a GET per project, which on a cluster with forty projects
+    was forty round trips for every miss. [None] when the listing fails, which falls back to the
+    first-match search rather than answering "not found" for a cluster that did not say.
+    """
+    from app.services.lxd.project_scope import list_across_projects
+
+    try:
+        rows, _complete = list_across_projects(client, "instances", recursion=1)
+    except Exception as exc:  # noqa: BLE001 - the per-project search below still answers
+        logger.warning("All-projects instance listing failed, searching by project: %s", exc)
+        return [None]
+    return sorted({row.get("project") or "default" for row in rows if row.get("name") == name})
 
 
 class ClusterFanout(NamedTuple):
