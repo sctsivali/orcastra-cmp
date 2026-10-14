@@ -392,3 +392,25 @@ def test_every_registered_tool_module_keeps_a_registry_shape() -> None:
         registry = ToolRegistry()
         module.register(registry)
         assert registry.tools, module.__name__
+
+
+_VAULT_TEXT = "Failed to read https://vault.internal:8200/v1/secret/data/lxd/clusters/c1/certs"
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_a_server_refusal_reaches_the_model_without_its_url(status: int) -> None:
+    """A breaker reason is raw exception text. REST strips it; MCP sent it verbatim."""
+    text = _text(refusal_result(HTTPException(status_code=status, detail=f"Cluster c1 down: {_VAULT_TEXT}")))
+    assert "Cluster c1 down" in text
+    assert "vault.internal" not in text and "/v1/secret" not in text
+
+
+def test_an_unexpected_fault_reaches_the_model_as_a_reference() -> None:
+    text = _text(refusal_result(HTTPException(status_code=500, detail=_VAULT_TEXT)))
+    assert "Reference:" in text and "vault" not in text.lower()
+
+
+def test_a_structured_server_refusal_keeps_its_message() -> None:
+    detail = {"error": "identity_provider_unavailable", "message": "Retry shortly."}
+    refused = HTTPException(status_code=503, detail=detail, headers={"Retry-After": "30"})
+    assert _text(refusal_result(refused)) == f"[{error_code_for(refused)}] Retry shortly. Retry after 30s."

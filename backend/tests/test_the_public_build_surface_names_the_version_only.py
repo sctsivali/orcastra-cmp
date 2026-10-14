@@ -27,7 +27,7 @@ WITHHELD = ("commit", "built_at", "build_commit", "build_date")
 # What `/health` is allowed to answer, exactly. A denylist of four names fails open on a rename, on
 # a fifth field nobody thought of, and on anything nested; this fails closed and the failure names
 # the new key. Monitoring keys on `status` and `service`, so widening this is a contract change.
-HEALTH_KEYS = {"status", "service", "version", "temp_storage", "vault"}
+HEALTH_KEYS = {"status", "service", "version", "temp_storage", "vault", "identity_provider"}
 
 
 def _every_key(node) -> set:
@@ -93,3 +93,13 @@ def test_health_keeps_the_identifier_monitoring_keys_on() -> None:
 def test_the_public_shape_is_the_version_and_nothing_else() -> None:
     """Asserted on the helper as well, so a future caller cannot widen it by reaching past `public()`."""
     assert set(build_identity.public()) == {"version"}
+
+
+def test_the_identity_provider_field_says_only_what_it_should() -> None:
+    """A class name and counters, never the issuer, the JWKS URL or a key."""
+    body = _client().get("/health").json()["identity_provider"]
+    assert set(body) in (
+        {"enabled"},
+        {"enabled", "keys_held", "key_count", "age_seconds", "serving_stale", "max_stale_seconds", "last_error"},
+    ), body
+    assert "http" not in str(body).lower()

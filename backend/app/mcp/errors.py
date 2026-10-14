@@ -25,6 +25,7 @@ from fastapi import HTTPException
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from app.core.blocking import BlockingPoolFull
+from app.core.error_sanitizer import public_server_detail, reference_for
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +79,19 @@ def refusal_result(exc: HTTPException) -> CallToolResult:
 
     A `Retry-After` the handler set (the desktop budget does) is carried into the text, because a
     tool result has no headers and "overloaded" without a wait is an invitation to retry at once.
+
+    important: a 5xx is shown exactly as REST shows it (`public_server_detail`): a 500 becomes a
+    reference, and a 502/503/504 keeps its message with URLs and paths stripped. It went out raw
+    before, so a tripped breaker's reason (an exception string that can name a Vault URL or a
+    certificate path) reached the model verbatim.
     """
-    message = str(exc.detail)
+    if exc.status_code >= 500:
+        reference, full = reference_for(exc)
+        logger.warning("MCP tool refused with %s, reference %s: %s", exc.status_code, reference, full)
+        shown = public_server_detail(exc.status_code, exc.detail, reference)
+        message = str(shown.get("message", "")) if isinstance(shown, dict) else str(shown)
+    else:
+        message = str(exc.detail)
     retry_after = (exc.headers or {}).get("Retry-After")
     if retry_after:
         message = f"{message} Retry after {retry_after}s."

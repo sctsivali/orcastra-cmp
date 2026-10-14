@@ -44,7 +44,7 @@ def test_health_publishes_only_allowlisted_storage_fields(
     response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"status", "service", "version", "temp_storage", "vault"}
+    assert set(body) == {"status", "service", "version", "temp_storage", "vault", "identity_provider"}
     assert set(body["temp_storage"]) == PUBLIC_FIELDS
     assert SCRATCH not in response.text and "private" not in response.text
 

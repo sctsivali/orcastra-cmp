@@ -6,6 +6,7 @@ Main FastAPI application entry point.
 import asyncio
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any, Dict
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +14,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.error_sanitizer import client_detail, reference_for, sanitize_error
+from app.core.error_sanitizer import public_server_detail, reference_for, sanitize_error
 from app.middleware.security import apply_security_headers
 import uvicorn
 import urllib3
@@ -1083,8 +1084,19 @@ Ensure your client certificates are properly configured.
             **build_identity.public(),
             "temp_storage": cert_files.public_usage(temp_storage),
             "vault": vault,
+            # Whether signed-in requests are being verified from keys the IdP could not refresh,
+            # and for how long. A field, never a status, like `vault`: the error is a class name.
+            "identity_provider": _identity_provider_health(),
         }
     
+    def _identity_provider_health() -> Dict[str, Any]:
+        settings = get_settings()
+        if not (settings.auth_enabled and settings.authentik_issuer):
+            return {"enabled": False}
+        from app.core.auth import _jwks_client
+
+        return {"enabled": True, **_jwks_client.snapshot(settings)}
+
     # Root endpoint
     @app.get("/", tags=["Root"])
     async def root():
@@ -1134,39 +1146,9 @@ Ensure your client certificates are properly configured.
         # outright. A 502/503/504 is a deliberate answer this application wrote: "cluster X
         # recently unreachable: certificate not trusted", "proxy saturated, retry shortly". That
         # is exactly what an operator needs, and replacing it turned a diagnosis into a shrug.
-        # Those keep their message with URLs and paths stripped out of it.
-        if exc.status_code in (502, 503, 504):
-            # important: these are the only structured 5xx contracts the browser acts on. A
-            # create can reach LXD and then lose its response, while a settled daemon rejection is
-            # safe to retry. Flattening both envelopes makes those outcomes indistinguishable.
-            # Preserve only the allowlisted discriminator and a sanitised human message, never
-            # arbitrary fields supplied by another handler.
-            snapshot_error_codes = {
-                "snapshot_outcome_unknown",
-                "snapshot_terminal_failure",
-            }
-            if (
-                exc.status_code == 502
-                and isinstance(exc.detail, dict)
-                and exc.detail.get("error") in snapshot_error_codes
-            ):
-                error_code = exc.detail["error"]
-                raw_message = exc.detail.get("message")
-                default_message = (
-                    "Check this instance's snapshots before trying again."
-                    if error_code == "snapshot_outcome_unknown"
-                    else "The cluster did not complete the snapshot."
-                )
-                detail = {
-                    "error": error_code,
-                    "message": sanitize_error(
-                        raw_message if isinstance(raw_message, str) else default_message
-                    ),
-                }
-            else:
-                detail = sanitize_error(str(exc.detail))
-        else:
-            detail = client_detail(reference)
+        # Those keep their message with URLs and paths stripped out of it, and the allowlisted
+        # structured codes keep their shape (`public_server_detail`).
+        detail = public_server_detail(exc.status_code, exc.detail, reference)
 
         response = JSONResponse(
             status_code=exc.status_code,

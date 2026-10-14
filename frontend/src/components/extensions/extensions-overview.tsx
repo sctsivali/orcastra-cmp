@@ -27,6 +27,7 @@ import { PublishAddonDialog } from "@/components/extensions/publish-addon-dialog
 import { InstallConsentDialog } from "@/components/extensions/install-consent-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { extensionsAPI } from "@/lib/extensions-api";
+import { isVaultUnavailable } from "@/lib/read-error";
 import type {
   ExtensionDetail,
   ExtensionInstall,
@@ -34,15 +35,6 @@ import type {
   ExtensionInstallResponse,
   ExtensionManifestInput,
 } from "@/types/api";
-
-/** Duck-typed: instanceof breaks across Next chunks, so the status is read off the error. */
-function isVaultUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "status" in error &&
-    (error as unknown as Record<string, unknown>).status === 503
-  );
-}
 
 /**
  * The query key the organization picker rides in.

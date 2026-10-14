@@ -44,10 +44,10 @@ function compileReadError() {
     module,
     module.exports,
   );
-  return module.exports.describeReadError;
+  return module.exports;
 }
 
-const describeReadError = compileReadError();
+const { describeReadError, isVaultUnavailable, retryUnlessUnavailable } = compileReadError();
 const serverDiagnostic = "sensitive-upstream-identity-diagnostic";
 
 assert.deepEqual(
@@ -116,6 +116,7 @@ for (const error of [
   { error: "identity_binding_required", status: 403 },
   { error: "current_role_denied", status: 403 },
   { error: "authority_unavailable", status: 503 },
+  { error: "identity_provider_unavailable", status: 503 },
 ]) {
   const rendered = JSON.stringify(
     describeReadError(
@@ -128,3 +129,58 @@ for (const error of [
   assert.equal(rendered.includes(serverDiagnostic), false);
   assert.equal(rendered.includes("unsafe server message"), false);
 }
+
+// An identity-provider outage is a 503 too, and it must not be read as "Vault is not configured".
+assert.deepEqual(
+  describeReadError(
+    new TestAPIError("unsafe server message", 503, {
+      error: "identity_provider_unavailable",
+      message: serverDiagnostic,
+    }),
+  ),
+  {
+    kind: "failed",
+    reason: "the sign-in service could not be reached to verify this session; retry shortly",
+  },
+);
+assert.equal(
+  isVaultUnavailable(new TestAPIError("x", 503, { error: "identity_provider_unavailable", message: "m" })),
+  false,
+);
+assert.equal(isVaultUnavailable(new TestAPIError("x", 503, "Vault is not configured")), true);
+assert.equal(
+  isVaultUnavailable(new TestAPIError("x", 503, "Vault is not configured. Enable Vault for integrations.")),
+  true,
+);
+assert.equal(
+  isVaultUnavailable(new TestAPIError("x", 503, "Authentication is enabled but not configured on this server")),
+  false,
+);
+assert.equal(isVaultUnavailable(new TestAPIError("x", 500, "Vault is not configured")), false);
+
+// Every page that swaps itself for the Vault notice must decide that with the shared helper.
+for (const file of [
+  "frontend/src/components/integrations-settings.tsx",
+  "frontend/src/components/extensions/extensions-overview.tsx",
+]) {
+  const source = readFileSync(join(root, file), "utf8");
+  assert.ok(source.includes("isVaultUnavailable("), `${file} must use isVaultUnavailable`);
+  assert.ok(!/status\)?\s*===\s*503/.test(source.replace(/retry:[^\n]*\n(?:[^\n]*\n){0,4}/g, "")),
+    `${file} must not read a bare 503 as Vault`);
+}
+
+// react-query runs a shared query with whichever observer's options it holds, so every observer of
+// the API key list must carry the same no-retry-on-503 rule. One without it retried an admin's 503.
+assert.equal(retryUnlessUnavailable(0, new TestAPIError("x", 503, "Vault is not configured")), false);
+assert.equal(retryUnlessUnavailable(0, new TestAPIError("x", 502, "upstream")), true);
+assert.equal(retryUnlessUnavailable(2, new TestAPIError("x", 502, "upstream")), false);
+for (const file of [
+  "frontend/src/components/integrations-settings.tsx",
+  "frontend/src/components/integrations/synced-organizations-panel.tsx",
+]) {
+  const source = readFileSync(join(root, file), "utf8");
+  assert.ok(source.includes('queryKey: ["integrations", "api-keys"]'), `${file} no longer observes the key list`);
+  assert.ok(source.includes("retry: retryUnlessUnavailable"), `${file} must pass retryUnlessUnavailable`);
+}
+
+console.log("read errors: authority, identity-provider and Vault answers are told apart");

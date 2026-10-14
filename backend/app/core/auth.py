@@ -5,209 +5,20 @@ Validates access tokens from Authentik OIDC provider by fetching
 the provider's public keys and verifying JWT signatures locally.
 """
 
-import asyncio
 import logging
-import time
 from typing import Optional
 
-import httpx
 import jwt
 from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
+from app.core.jwks import JWKSClient
 
 logger = logging.getLogger(__name__)
 
 # reusable FastAPI security scheme
 oauth2_scheme = HTTPBearer(auto_error=False)
-
-
-class JWKSClient:
-    """
-    Caches JWKS (public keys) from the Authentik OIDC provider.
-    Keys are refreshed after `cache_ttl` seconds or on key-not-found.
-    Uses async httpx for non-blocking HTTP calls.
-    """
-
-    def __init__(self) -> None:
-        self._jwks: dict = {}
-        self._jwks_uri: str = ""
-        self._last_fetched: float = 0.0
-        self._cache_ttl: int = 3600  # default 1h
-        self._lock = asyncio.Lock()
-        self._warmed_up: bool = False
-        # kid -> when a fresh JWKS was confirmed not to contain it. See _remember_absent_kid.
-        self._absent_kids: dict = {}
-
-    def _discover_jwks_uri_sync(self, issuer: str) -> str:
-        """Fetch JWKS URI synchronously (fallback for non-async contexts)."""
-        import requests as _requests
-        discovery_url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
-        try:
-            resp = _requests.get(discovery_url, timeout=5)
-            resp.raise_for_status()
-            data = resp.json()
-            jwks_uri = data.get("jwks_uri", "")
-            if not jwks_uri:
-                raise ValueError("jwks_uri not found in OIDC discovery document")
-            logger.info(f"Discovered JWKS URI: {jwks_uri}")
-            return jwks_uri
-        except Exception as e:
-            logger.error(f"Failed to fetch OIDC discovery from {discovery_url}: {e}")
-            raise
-
-    async def _discover_jwks_uri_async(self, issuer: str) -> str:
-        """Fetch JWKS URI asynchronously using httpx."""
-        discovery_url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(discovery_url)
-                resp.raise_for_status()
-                data = resp.json()
-            jwks_uri = data.get("jwks_uri", "")
-            if not jwks_uri:
-                raise ValueError("jwks_uri not found in OIDC discovery document")
-            logger.info(f"Discovered JWKS URI: {jwks_uri}")
-            return jwks_uri
-        except Exception as e:
-            logger.error(f"Failed to fetch OIDC discovery from {discovery_url}: {e}")
-            raise
-
-    async def _fetch_jwks_async(self, jwks_uri: str) -> dict:
-        """Fetch JWKS asynchronously using httpx."""
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(jwks_uri)
-                resp.raise_for_status()
-                jwks = resp.json()
-            logger.info(f"Fetched {len(jwks.get('keys', []))} keys from JWKS endpoint")
-            return jwks
-        except Exception as e:
-            logger.error(f"Failed to fetch JWKS from {jwks_uri}: {e}")
-            raise
-
-    def _fetch_jwks_sync(self, jwks_uri: str) -> dict:
-        """Fetch JWKS synchronously (fallback)."""
-        import requests as _requests
-        try:
-            resp = _requests.get(jwks_uri, timeout=5)
-            resp.raise_for_status()
-            jwks = resp.json()
-            logger.info(f"Fetched {len(jwks.get('keys', []))} keys from JWKS endpoint")
-            return jwks
-        except Exception as e:
-            logger.error(f"Failed to fetch JWKS from {jwks_uri}: {e}")
-            raise
-
-    async def warm_up(self, settings: Settings) -> None:
-        """Pre-warm JWKS cache at startup to avoid first-request latency."""
-        if not settings.authentik_issuer:
-            return
-        try:
-            async with self._lock:
-                self._cache_ttl = settings.auth_jwks_cache_ttl
-                self._jwks_uri = await self._discover_jwks_uri_async(settings.authentik_issuer)
-                self._jwks = await self._fetch_jwks_async(self._jwks_uri)
-                self._last_fetched = time.time()
-                self._warmed_up = True
-            logger.info("JWKS cache pre-warmed successfully")
-        except Exception as e:
-            logger.warning(f"JWKS pre-warm failed (will retry on first request): {e}")
-
-    def get_signing_key(self, token: str, settings: Settings) -> jwt.algorithms.RSAAlgorithm:
-        """
-        Get the signing key for a given JWT token.
-        Fetches/caches JWKS and matches by 'kid' header.
-        Uses sync calls as fallback if not pre-warmed.
-        """
-        self._cache_ttl = settings.auth_jwks_cache_ttl
-
-        # discover jwks_uri if not yet known
-        if not self._jwks_uri:
-            self._jwks_uri = self._discover_jwks_uri_sync(settings.authentik_issuer)
-
-        # refresh cache if expired
-        now = time.time()
-        if not self._jwks or (now - self._last_fetched) > self._cache_ttl:
-            self._jwks = self._fetch_jwks_sync(self._jwks_uri)
-            self._last_fetched = now
-
-        # decode header to get kid
-        try:
-            unverified_header = jwt.get_unverified_header(token)
-        except jwt.exceptions.DecodeError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid token header: {e}",
-            )
-
-        kid = unverified_header.get("kid")
-        if not kid:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token header missing 'kid' claim",
-            )
-
-        # find matching key
-        for key_data in self._jwks.get("keys", []):
-            if key_data.get("kid") == kid:
-                return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
-
-        # important: the refresh below runs BEFORE any signature is verified, on a blocking HTTP
-        # client, from inside the async request path. Without a memory of what has already been
-        # asked for, a stream of tokens carrying random `kid` values turns each unauthenticated
-        # request into an outbound round trip to the identity provider and a parked worker: a
-        # denial of service against this server and an amplifier pointed at Authentik.
-        #
-        # A kid that was absent from a freshly fetched JWKS is remembered for a short window and
-        # refused without refetching. The window is deliberately shorter than the JWKS cache TTL,
-        # so a genuine key rotation is still picked up promptly; it only collapses the repeats.
-        if self._kid_is_known_absent(kid):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to find the token's signing key",
-            )
-
-        # key not found - try refreshing JWKS once (key rotation scenario)
-        logger.warning(f"Key '{kid}' not found in cached JWKS, refreshing...")
-        self._jwks = self._fetch_jwks_sync(self._jwks_uri)
-        self._last_fetched = time.time()
-
-        for key_data in self._jwks.get("keys", []):
-            if key_data.get("kid") == kid:
-                self._forget_absent_kid(kid)
-                return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
-
-        self._remember_absent_kid(kid)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            # note: the kid is the caller's own input echoed back; it is not secret, but it is
-            # also not useful to them, and leaving it out keeps the reply uniform.
-            detail="Unable to find the token's signing key",
-        )
-
-    # A bounded set of kids that a fresh JWKS did not contain, with the time each was recorded.
-    _ABSENT_KID_TTL = 60.0
-    _ABSENT_KID_MAX = 512
-
-    def _kid_is_known_absent(self, kid: str) -> bool:
-        recorded = self._absent_kids.get(kid)
-        if recorded is None:
-            return False
-        if time.time() - recorded > self._ABSENT_KID_TTL:
-            self._absent_kids.pop(kid, None)
-            return False
-        return True
-
-    def _remember_absent_kid(self, kid: str) -> None:
-        # Bounded so the negative cache cannot itself become the memory exhaustion it prevents.
-        if len(self._absent_kids) >= self._ABSENT_KID_MAX:
-            self._absent_kids.clear()
-        self._absent_kids[kid] = time.time()
-
-    def _forget_absent_kid(self, kid: str) -> None:
-        self._absent_kids.pop(kid, None)
 
 
 # module-level singleton
@@ -371,6 +182,9 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # The keys are refreshed here, asynchronously and never raising, so validate_jwt below makes
+    # no network call and an IdP outage cannot block this worker's event loop.
+    await _jwks_client.ensure_keys(credentials.credentials, settings)
     user = validate_jwt(credentials.credentials, settings)
 
     # attach user to request state for access by middleware/logging
@@ -421,9 +235,19 @@ async def get_ws_user(
         logger.warning("WebSocket connection rejected: no token in query params")
         return None
 
+    await _jwks_client.ensure_keys(token, settings)
     try:
         user = validate_jwt(token, settings)
         return user
     except HTTPException as exc:
+        if exc.status_code >= 500:
+            # important: a server that cannot verify the token is not a refused token. Returning
+            # None closed the socket with 1008 (policy), which tells the client its credentials
+            # were rejected; 1011 says the fault is on this side and a retry may succeed.
+            logger.warning(f"WebSocket JWT validation could not run: {exc.detail}")
+            raise WebSocketException(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason="The identity provider could not be reached; retry shortly",
+            )
         logger.warning(f"WebSocket JWT validation failed: {exc.detail}")
         return None

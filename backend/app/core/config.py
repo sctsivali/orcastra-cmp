@@ -505,6 +505,16 @@ class Settings(BaseSettings):
         alias="AUTH_JWKS_CACHE_TTL",
         description="JWKS cache TTL in seconds (default: 1 hour)"
     )
+    auth_jwks_max_stale: int = Field(
+        default=86400,
+        ge=60,
+        alias="AUTH_JWKS_MAX_STALE",
+        description=(
+            "How long, in seconds, the last successfully fetched JWKS keeps verifying tokens while "
+            "the identity provider cannot be reached (default: 24 hours). Past it, signed-in "
+            "requests answer 503 until a fetch succeeds. Never shorter than AUTH_JWKS_CACHE_TTL."
+        ),
+    )
     ws_query_token_enabled: bool = Field(
         default=False,
         alias="WS_QUERY_TOKEN_ENABLED",

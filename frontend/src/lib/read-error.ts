@@ -25,6 +25,11 @@ const AUTHORITY_READ_ERRORS = {
     kind: "failed",
     reason: "current access could not be verified; retry shortly or ask an administrator to check the identity service",
   },
+  identity_provider_unavailable: {
+    status: 503,
+    kind: "failed",
+    reason: "the sign-in service could not be reached to verify this session; retry shortly",
+  },
 } as const satisfies Record<
   string,
   { status: number; kind: ReadErrorKind; reason: string }
@@ -85,4 +90,28 @@ export function describeReadError(error: unknown): ReadError {
     return { kind: "failed", reason: error.message };
   }
   return { kind: "failed", reason: "an unknown error" };
+}
+
+/**
+ * Whether a failed request means Vault is not available, as opposed to any other 503.
+ *
+ * important: every 503 used to read as "Vault is not configured", so an identity-provider outage
+ * replaced the Integrations page with Vault setup instructions. Every Vault 503 the backend writes
+ * names Vault in its detail; nothing else does. Duck-typed, because `instanceof` breaks across
+ * Next chunks.
+ */
+/**
+ * The retry rule for a read whose 503 will not clear within a retry (Vault missing, or the sign-in
+ * service down). Every observer of one query key must pass the same rule, because react-query runs
+ * a shared query with whichever observer's options it holds.
+ */
+export function retryUnlessUnavailable(failureCount: number, error: unknown): boolean {
+  if (error instanceof Error && "status" in error && (error as { status?: unknown }).status === 503) return false;
+  return failureCount < 2;
+}
+
+export function isVaultUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error) || !("status" in error)) return false;
+  const { status, detail } = error as unknown as { status?: unknown; detail?: unknown };
+  return status === 503 && typeof detail === "string" && /\bvault\b/i.test(detail);
 }

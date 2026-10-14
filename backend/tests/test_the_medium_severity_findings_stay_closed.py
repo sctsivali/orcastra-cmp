@@ -170,8 +170,15 @@ def test_an_availability_status_keeps_its_diagnosis() -> None:
     unexpected fault whose text is a driver exception and is replaced outright.
     """
     source = (ROUTERS.parent / "main.py").read_text()
-    assert "if exc.status_code in (502, 503, 504):" in source
-    assert "sanitize_error(str(exc.detail))" in source
+    assert "public_server_detail(exc.status_code, exc.detail, reference)" in source
+
+    from app.core.error_sanitizer import public_server_detail
+
+    kept = public_server_detail(
+        503, "Cluster c1 recently unreachable: certificate not trusted at https://10.0.5.12:8443/1.0", "ab12cd34"
+    )
+    assert "certificate not trusted" in kept and "10.0.5.12" not in kept
+    assert public_server_detail(500, "connect to 10.0.5.12 failed", "ab12cd34") == client_detail("ab12cd34")
 
 
 # ── access-log redaction ───────────────────────────────────────────────────────────────────────

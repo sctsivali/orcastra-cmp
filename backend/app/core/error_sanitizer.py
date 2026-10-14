@@ -18,7 +18,7 @@ their report to the full text in the server log.
 
 import re
 import uuid
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
 # URLs, and any path-looking run of two or more segments. Deliberately blunt: this runs on text
 # nobody controls the shape of, so it favours removing something harmless over keeping something
@@ -85,6 +85,48 @@ def reference_for(exc: BaseException) -> Tuple[str, str]:
 
 def client_detail(reference: str) -> str:
     return f"{GENERIC_SERVER_ERROR}. Reference: {reference}"
+
+
+# The structured 5xx answers a client acts on, by status, each with the message used when the
+# raising handler gave none. Only these keep their `{error, message}` shape; any other detail is
+# flattened to sanitized text, so a handler cannot ship arbitrary fields to a client.
+_STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
+    502: {
+        "snapshot_outcome_unknown": "Check this instance's snapshots before trying again.",
+        "snapshot_terminal_failure": "The cluster did not complete the snapshot.",
+    },
+    503: {
+        "authority_unavailable": "Current access could not be verified. Retry shortly.",
+        "identity_provider_unavailable": (
+            "The identity provider could not be reached to verify this sign-in. Retry shortly."
+        ),
+    },
+}
+
+
+def public_server_detail(status_code: int, detail: Any, reference: str) -> Any:
+    """What a client is shown for a 5xx, decided in one place for REST and MCP alike.
+
+    A 500 is an unexpected fault whose text is a driver or database exception, so it becomes a
+    reference. A 502/503/504 is an answer this application wrote ("cluster X recently
+    unreachable"), so its message stays with URLs and paths stripped. An allowlisted structured
+    code keeps its shape so the client can act on it.
+
+    important: the 503 codes were flattened to a string here before, so Migration Center's
+    `authority_unavailable` reached the browser as a Python dict repr and the client's mapping for
+    it never matched.
+    """
+    if status_code not in (502, 503, 504):
+        return client_detail(reference)
+    codes = _STRUCTURED_5XX.get(status_code, {})
+    if isinstance(detail, dict) and detail.get("error") in codes:
+        code = detail["error"]
+        message = detail.get("message")
+        return {
+            "error": code,
+            "message": sanitize_error(message if isinstance(message, str) else codes[code]),
+        }
+    return sanitize_error(str(detail))
 
 
 def is_sensitive_param(name: str) -> bool:

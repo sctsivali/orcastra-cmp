@@ -84,6 +84,8 @@ import type {
   ClusterPermission,
 } from "@/types";
 import { copyText } from "@/lib/clipboard";
+import { isVaultUnavailable, retryUnlessUnavailable } from "@/lib/read-error";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 
 // API Key Secret Dialog
 function APIKeySecretDialog({
@@ -314,18 +316,13 @@ function IntegrationsSettingsContent() {
     queryFn: ({ fresh, signal }) => api.integrations.listAPIKeys({ fresh, signal }),
     enabled: mounted,
     staleTime: 30000,
-    retry: (failureCount, error) => {
-      // Don't retry on 503 (Vault not configured). It won't resolve on its own.
-      if (error instanceof Error && "status" in error && (error as Record<string, unknown>).status === 503) return false;
-      return failureCount < 2;
-    },
+    // A 503 (Vault not configured, or the identity provider unreachable) does not clear within a
+    // retry, and the page says which one it is.
+    retry: retryUnlessUnavailable,
   });
 
-  // Detect Vault-not-configured state. Duck-typed because instanceof breaks across chunks.
-  const vaultUnavailable =
-    keysError instanceof Error &&
-    "status" in keysError &&
-    (keysError as Record<string, unknown>).status === 503;
+  // Vault-not-configured, told apart from every other 503 (an identity-provider outage too).
+  const vaultUnavailable = isVaultUnavailable(keysError);
 
   // Fetch available clusters
   const { data: clustersData } = useQuery({
@@ -356,10 +353,9 @@ function IntegrationsSettingsContent() {
       });
     },
     onError: (error: Error) => {
-      const is503 = "status" in error && (error as Record<string, unknown>).status === 503;
       toast({
         title: "Failed to create API key",
-        description: is503
+        description: isVaultUnavailable(error)
           ? "Vault is not configured. Enable Vault in backend settings for API key management."
           : error.message,
         variant: "destructive",
@@ -502,6 +498,21 @@ function IntegrationsSettingsContent() {
           </p>
         </div>
         <VaultUnavailableNotice surface="API key management" />
+      </div>
+    );
+  }
+
+  // Any other failed read says so, rather than rendering zero totals over an empty table.
+  if (keysError && !apiKeysData) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold">Integrations</h2>
+          <p className="text-sm text-muted-foreground">
+            Manage API keys for external applications
+          </p>
+        </div>
+        <ReadErrorState noun="API keys" error={keysError} onRetry={() => refetchKeys()} />
       </div>
     );
   }

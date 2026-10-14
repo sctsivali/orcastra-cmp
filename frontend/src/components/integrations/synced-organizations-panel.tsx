@@ -31,6 +31,7 @@ import {
   ownerKeyState,
 } from "@/lib/key-ownership-display";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { retryUnlessUnavailable } from "@/lib/read-error";
 import type { IntegrationOrganization } from "@/types/api";
 
 const COLUMN_COUNT = 5;
@@ -105,6 +106,9 @@ function SyncedOrganizationsContent() {
     queryFn: () => api.integrations.listAPIKeys(),
     enabled: isAdmin,
     staleTime: 30000,
+    // important: the same rule as the key list's own observer. Without it an admin's 503 was
+    // retried with react-query's default while a partner's was not.
+    retry: retryUnlessUnavailable,
   });
 
   const rows = useMemo(() => orgsQuery.data ?? [], [orgsQuery.data]);
