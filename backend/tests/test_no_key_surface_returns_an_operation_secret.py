@@ -33,6 +33,7 @@ from app.mcp import tools_inventory
 from app.routers import integrations, lxd_operations
 from app.routers.integrations import ProxyRequest
 from app.services.lxd import operation_metadata, proxy_operations
+from app.services.lxd.raw_proxy_operations import LXD_OPERATION_NOT_FOUND, addressed_operation_id
 from app.services.lxd.operation_metadata import (
     EXEC_REQUEST_KEYS,
     OPERATION_SECRET_KEYS,
@@ -253,7 +254,12 @@ SERIALIZING_SURFACES = {
 }
 
 
-@pytest.mark.parametrize("kind", sorted(OPERATIONS))
+# Operations whose resources name one project. The token operation names none, so no key surface
+# may hand it out at all (see the ownership tests below).
+OWNED = sorted(kind for kind, operation in OPERATIONS.items() if operation["resources"])
+
+
+@pytest.mark.parametrize("kind", OWNED)
 @pytest.mark.parametrize("surface", sorted(SERIALIZING_SURFACES))
 async def test_a_serializing_key_surface_returns_no_secret(
     surface: str, kind: str, monkeypatch: pytest.MonkeyPatch
@@ -279,6 +285,99 @@ async def test_the_allowlisted_progress_is_returned_as_is(monkeypatch: pytest.Mo
     payload = await _via_operations_route(service, monkeypatch)
 
     assert payload["metadata"] == {"migration_progress": "rootfs: 12%"}
+
+
+# ── ownership: an operation id is cluster-wide ─────────────────────────────────────────────────
+#
+# LXD answers GET /1.0/operations/{id} whatever ?project= says. Observed on nuc2 on 2026-10-14: a
+# key granted only `default` read the create, start, snapshot and delete operations of another
+# project, with resource URLs naming that project's instances.
+
+
+async def _refused_everywhere(operation: Dict[str, Any], api_key: Dict[str, Any],
+                              monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from app.mcp import dispatch as mcp_dispatch
+    from app.mcp import tools_read
+
+    service = _service(operation)
+    response = await integrations.proxy_operation(
+        request=ProxyRequest(cluster_id=CLUSTER_ID, operation="get_operation", params={"operation_id": OP_ID}),
+        api_key=api_key, lxd_service=service, _=None,
+    )
+    assert (response.success, response.error_code) == (False, "not_found"), response
+    with pytest.raises(HTTPException) as refused:
+        await integrations.get_integration_operation(
+            operation_id=OP_ID, cluster_id=CLUSTER_ID, project="default", api_key=api_key, lxd_service=service,
+        )
+    assert refused.value.status_code == 404 and str(refused.value.detail).startswith(f"No operation {OP_ID}")
+
+    registry = _Registry()
+    tools_inventory.register(registry)
+    tools_read.register(registry)
+    monkeypatch.setattr(tools_inventory, "get_lxd_service", lambda: service)
+    monkeypatch.setattr(mcp_dispatch, "get_lxd_service", lambda: service)
+    token = mcp_auth._CURRENT_KEY.set(api_key)
+    try:
+        for tool in ("orcastra_get_operation", "lxd_get_operation"):
+            result = await registry.tools[tool](operation_id=OP_ID, cluster_id=CLUSTER_ID)
+            text = " ".join(block.text for block in result.content)
+            assert result.is_error and text.startswith("[not_found]"), (tool, text)
+            assert "web-1" not in text and "tenant-b" not in text
+    finally:
+        mcp_auth._CURRENT_KEY.reset(token)
+
+
+async def test_an_ownerless_operation_is_not_found_on_every_key_surface(monkeypatch) -> None:
+    await _refused_everywhere(OPERATIONS["token"], READ_KEY, monkeypatch)
+
+
+async def test_another_projects_operation_reads_as_a_reaped_one(monkeypatch) -> None:
+    elsewhere = {**OPERATIONS["exec"], "resources": {"instances": ["/1.0/instances/web-1?project=tenant-b"]}}
+    await _refused_everywhere(elsewhere, READ_KEY, monkeypatch)
+
+
+async def test_a_wildcard_key_sees_any_owned_operation_but_not_an_ownerless_one(monkeypatch) -> None:
+    elsewhere = {**OPERATIONS["exec"], "resources": {"instances": ["/1.0/instances/web-1?project=tenant-b"]}}
+    payload = await integrations.get_integration_operation(
+        operation_id=OP_ID, cluster_id=CLUSTER_ID, project="default",
+        api_key=READ_EVERY_PROJECT, lxd_service=_service(elsewhere),
+    )
+    assert payload["resources"] == elsewhere["resources"]
+    await _refused_everywhere(OPERATIONS["token"], READ_EVERY_PROJECT, monkeypatch)
+
+
+async def test_a_snapshot_operation_is_owned_as_lxd_names_it(monkeypatch) -> None:
+    """LXD 5.21 writes `instances_snapshots`; the table only knew `instance-snapshots`."""
+    snapshot = {**OPERATIONS["exec"], "description": "Snapshotting instance", "resources": {
+        "instances": ["/1.0/instances/web-1"],
+        "instances_snapshots": ["/1.0/instances/web-1/snapshots/s1"],
+    }}
+    payload = await integrations.get_integration_operation(
+        operation_id=OP_ID, cluster_id=CLUSTER_ID, project="default", api_key=READ_KEY,
+        lxd_service=_service(snapshot),
+    )
+    assert payload["description"] == "Snapshotting instance"
+
+
+async def test_description_and_error_are_sanitized(monkeypatch) -> None:
+    failed = {**OPERATIONS["exec"], "status": "Failure", "description": "Creating instance",
+              "err": "Failed getting image from https://images.internal.example/streams: open "
+                     "/var/snap/lxd/common/lxd/images/abc: no such file"}
+    payload = await integrations.get_integration_operation(
+        operation_id=OP_ID, cluster_id=CLUSTER_ID, project="default", api_key=READ_KEY,
+        lxd_service=_service(failed),
+    )
+    assert payload["error"] and "images.internal.example" not in payload["error"]
+    assert "/var/snap" not in payload["error"]
+
+
+def test_every_surface_reads_one_ownership_function() -> None:
+    from app.services.lxd import operation_ownership
+
+    assert lxd_operations._operation_ownership is operation_ownership.operation_ownership
+    assert proxy_operations.visible_to is operation_ownership.visible_to
 
 
 def test_every_serializing_surface_reads_the_dashboards_allowlist() -> None:
@@ -326,7 +425,11 @@ def _without_secrets(operation: Dict[str, Any]) -> Dict[str, Any]:
 async def _raw_get(path: str, body: Dict[str, Any], api_key: Dict[str, Any] = READ_KEY) -> Any:
     session = _AnsweringSession(body)
     outcome, _ = await call_raw_proxy(api_key, "GET", path, session=session)
-    assert len(session.calls) == 1, outcome
+    # note: a project-limited key's call to one operation is preceded by the ownership read
+    # (test_a_raw_operation_read_is_bounded_by_its_owner.py). Everything else is one call.
+    limited = all("*" not in grant["projects"] for grant in api_key["cluster_permissions"])
+    one_operation = addressed_operation_id(canonical_proxy_path(path)) is not None
+    assert len(session.calls) == (2 if limited and one_operation else 1), outcome
     return outcome.data
 
 
@@ -339,7 +442,7 @@ ONE_OPERATION_PATHS = [
 ]
 
 
-@pytest.mark.parametrize("kind", sorted(OPERATIONS))
+@pytest.mark.parametrize("kind", OWNED)
 @pytest.mark.parametrize("path", ONE_OPERATION_PATHS)
 async def test_a_raw_operation_read_returns_no_secret(path: str, kind: str) -> None:
     operation = OPERATIONS[kind]
@@ -348,6 +451,16 @@ async def test_a_raw_operation_read_returns_no_secret(path: str, kind: str) -> N
 
     _no_secret_in(data)
     assert data == _sync(_without_secrets(operation))
+
+
+@pytest.mark.parametrize("path", ONE_OPERATION_PATHS)
+async def test_a_raw_read_of_an_ownerless_operation_is_not_found(path: str) -> None:
+    """The token operation names no resource, so no project owns it and a limited key gets 404."""
+    session = _AnsweringSession(_sync(OPERATIONS["token"]))
+    outcome, _ = await call_raw_proxy(READ_KEY, "GET", path, session=session)
+    assert outcome.status_code == 404 and outcome.data == LXD_OPERATION_NOT_FOUND
+    assert len(session.calls) == 1
+    _no_secret_in(outcome.data)
 
 
 @pytest.mark.parametrize(

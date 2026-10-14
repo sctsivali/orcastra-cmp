@@ -106,6 +106,9 @@ LXD_PATH_HELPERS = {
     ("app/services/lxd/project_scope.py", "list_project_configs"),
     ("app/services/lxd/project_scope.py", "list_project_names"),
     ("app/services/lxd/proxy_path_params.py", "assert_path_params"),
+    # Reached from POST /integrations/raw-proxy for a limited key's call to one operation. The id
+    # goes through lxd_segment, which the encoder scan above checks.
+    ("app/services/lxd/raw_proxy_operations.py", "operation_is_visible"),
     ("app/services/lxd/utils.py", "InstanceWrapper"),
     ("app/services/lxd/utils.py", "find_instance_in_projects"),
     ("app/services/lxd/utils.py", "wait_for_lxd_operation"),

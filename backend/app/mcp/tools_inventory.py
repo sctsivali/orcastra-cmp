@@ -114,7 +114,9 @@ def register(mcp: MCPServer) -> None:
         annotations=_READ_ONLY,
         description=(
             "Status of an LXD operation started earlier. This is how a tool called with "
-            "wait=false is followed up: it returns an operation id, and this reports on it."
+            "wait=false is followed up: it returns an operation id, and this reports on it. An "
+            "operation in a project this key was not granted answers not_found, like one LXD "
+            "has already reaped."
         ),
     )
     async def orcastra_get_operation(

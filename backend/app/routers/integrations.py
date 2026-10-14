@@ -13,7 +13,7 @@ import threading
 import time
 from contextlib import nullcontext
 from datetime import datetime, timedelta
-from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, NamedTuple, Tuple, Type, TypeVar, Union
+from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, FrozenSet, NamedTuple, Tuple, Type, TypeVar, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request, Response
 from pydantic import BaseModel, Field, SecretStr, StringConstraints, ValidationError, field_validator
 import requests
@@ -52,6 +52,12 @@ from app.services.lxd.limited_write_reach import (
 )
 from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
+from app.services.lxd.raw_proxy_operations import (
+    LXD_OPERATION_NOT_FOUND,
+    OwnerUnknown,
+    addressed_operation_id,
+    operation_is_visible,
+)
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
     GUEST_ACCESS_OPERATIONS,
@@ -4031,6 +4037,12 @@ def _clusters_for_key(api_key: Dict[str, Any], cluster_id: Optional[str]) -> set
     return allowed
 
 
+def _frozen_grant(api_key: Dict[str, Any], cluster_id: str) -> Optional[FrozenSet[str]]:
+    """`_granted_projects` in the shape an operation answer is filtered by (None means `*`)."""
+    granted = _granted_projects(api_key, cluster_id)
+    return None if granted is None else frozenset(granted)
+
+
 def _granted_projects(api_key: Dict[str, Any], cluster_id: str) -> Optional[set]:
     """The projects this key may see on one cluster, or None for the `*` wildcard.
 
@@ -4315,6 +4327,7 @@ async def get_integration_operation(
             cluster_id,
             operation_id,
             project,
+            visible_projects=_frozen_grant(api_key, cluster_id),
             timeout=RAW_PROXY_TIMEOUT,
             label=f"integration_operation[{cluster_id}]",
             executor=proxy_executor,
@@ -4694,6 +4707,37 @@ async def raw_proxy(
                     executor=proxy_executor,
                     max_in_flight=PROXY_MAX_IN_FLIGHT,
                 )
+            # important: LXD ignores ?project= on a single operation, so the project forced into
+            # the URL above bounds nothing there. A limited key reaches an operation only when its
+            # resources name a granted project; anything else reads as an id LXD does not hold
+            # (services/lxd/raw_proxy_operations.py).
+            operation_id = addressed_operation_id(canonical_proxy_path(request.path))
+            if operation_id is not None and not project_grant_is_unrestricted(allowed_projects):
+                try:
+                    visible = await run_blocking(
+                        operation_is_visible,
+                        client.api.session,
+                        endpoint,
+                        operation_id,
+                        frozenset(allowed_projects),
+                        socket_timeout_for(client),
+                        timeout=RAW_PROXY_TIMEOUT,
+                        label=f"raw_proxy[operation owner {request.cluster_id}]",
+                        executor=proxy_executor,
+                        max_in_flight=PROXY_MAX_IN_FLIGHT,
+                    )
+                except OwnerUnknown as unknown:
+                    _audit_raw_refusal(api_key, request, method, project, unknown, "operation_owner_unknown")
+                    return RawProxyResponse(
+                        status_code=502, data=None,
+                        error="The cluster did not say whose operation this is, so nothing was sent",
+                    )
+                if not visible:
+                    _audit_raw_refusal(
+                        api_key, request, method, project, LookupError("Operation not found"),
+                        "operation_not_visible",
+                    )
+                    return RawProxyResponse(status_code=404, data=dict(LXD_OPERATION_NOT_FOUND), headers={})
             response = await run_blocking(
                 raw_request,
                 client.api.session,
@@ -5164,6 +5208,7 @@ async def proxy_operation(
                     request.params or {},
                     request.project,
                     request.wait,
+                    visible_projects=_frozen_grant(api_key, request.cluster_id),
                     # note: a guest-reaching call holds a worker for as long as it runs, so it gets
                     # its own budget rather than the operation one. A command that needs longer is a
                     # job.

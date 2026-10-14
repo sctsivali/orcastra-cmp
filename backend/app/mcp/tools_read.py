@@ -116,7 +116,8 @@ def register(mcp: MCPServer) -> None:
             "Status of an LXD operation on one cluster, ex; one a tool called with wait=false "
             "returned. Costs `read` on that cluster, so any key that started the operation can "
             "follow it. Completed operations are reaped by LXD, so a late poll is not_found: "
-            "check the resource itself then."
+            "check the resource itself then. An operation in a project this key was not granted "
+            "is not_found too."
         ),
     )
     async def lxd_get_operation(

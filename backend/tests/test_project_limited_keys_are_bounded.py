@@ -223,9 +223,29 @@ async def test_a_wildcard_key_still_cannot_change_the_server_or_cluster(method: 
     assert session.calls == []
 
 
+class _OwnOperationCluster(RecordingSession):
+    """Answers the ownership read raw_proxy makes before a narrow key reaches one operation."""
+
+    def _answer(self, verb: str, url: str, **kwargs: Any) -> requests.Response:
+        if verb == "GET" and "/operations/" in url:
+            self.calls.append((verb, url, kwargs))
+            response = requests.Response()
+            response.status_code = 200
+            response._content = (
+                b'{"type": "sync", "metadata": {"resources": '
+                b'{"instances": ["/1.0/instances/web?project=tenant-a"]}}}'
+            )
+            return response
+        return super()._answer(verb, url, **kwargs)
+
+
 @pytest.mark.parametrize("method,path", BOUNDED_WRITES)
 async def test_a_narrow_key_may_change_what_its_project_bounds(method: str, path: str) -> None:
-    outcome, session = await call_raw_proxy(NARROW, method, path, project="tenant-a")
+    # note: an operation id is cluster-wide, so for /operations/<id> the bound is the operation's
+    # owner, read first (test_a_raw_operation_read_is_bounded_by_its_owner.py), not ?project=.
+    outcome, session = await call_raw_proxy(
+        NARROW, method, path, project="tenant-a", session=_OwnOperationCluster()
+    )
     assert outcome.status_code == 200
     # note: a create first reads the profile it applies, see test_an_applied_profile_cannot_reach_the_host
     writes = [url for verb, url, _ in session.calls if verb == method]
@@ -257,7 +277,7 @@ async def _proxy_list_projects(api_key: Dict[str, Any], project: str, monkeypatc
     executed: List[Tuple[str, str]] = []
 
     def fake_execute(lxd_service: Any, cluster_id: str, operation: str, params: Dict[str, Any],
-                     project_name: str, wait: bool = True) -> List[Dict[str, str]]:
+                     project_name: str, wait: bool = True, **_: Any) -> List[Dict[str, str]]:
         executed.append((operation, project_name))
         return [{"name": name, "description": f"{name} project"} for name in PROJECTS]
 

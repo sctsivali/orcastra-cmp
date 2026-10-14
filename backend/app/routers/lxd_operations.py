@@ -7,10 +7,8 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, TypeVar
-from urllib.parse import parse_qs, unquote, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -48,6 +46,15 @@ from app.services.lxd_service import (
     get_lxd_service,
     require_client,
 )
+from app.services.lxd.operation_ownership import (  # noqa: F401 - the router's names, kept for its tests
+    INSTANCE_ROOTS as _INSTANCE_ROOTS,
+    MAX_RESOURCE_URL_LENGTH as _MAX_RESOURCE_URL_LENGTH,
+    PROJECT_RESOURCE_ROOTS as _PROJECT_RESOURCE_ROOTS,
+    OperationOwnership as _OperationOwnership,
+    operation_ownership as _operation_ownership,
+    operation_value as _operation_value,
+    resource_project as _resource_project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,34 +82,6 @@ _OPERATION_LOOKUP_TIMEOUT_SECONDS = 12.0
 _OPERATION_CANCEL_TIMEOUT_SECONDS = 12.0
 _OPERATION_WAIT_GRACE_SECONDS = 10.0
 _OperationResult = TypeVar("_OperationResult")
-
-# An operation is project-owned only when every resource URL names one of these API families.
-# Cluster members, certificates, storage pools themselves, and any future/unknown family are
-# deliberately absent. A query parameter on a cluster-wide URL must never turn it into a
-# project-owned resource by assertion alone.
-_PROJECT_RESOURCE_ROOTS = {
-    "instances": frozenset({"instances", "containers", "virtual-machines"}),
-    "containers": frozenset({"instances", "containers"}),
-    "virtual-machines": frozenset({"instances", "virtual-machines"}),
-    "instance-snapshots": frozenset({"instances", "containers", "virtual-machines"}),
-    "instance-backups": frozenset({"instances", "containers", "virtual-machines"}),
-    "images": frozenset({"images"}),
-    "profiles": frozenset({"profiles"}),
-    "networks": frozenset({"networks"}),
-    "network-acls": frozenset({"network-acls"}),
-    "network-address-sets": frozenset({"network-address-sets"}),
-    "network-zones": frozenset({"network-zones"}),
-    "projects": frozenset({"projects"}),
-}
-_INSTANCE_ROOTS = frozenset({"instances", "containers", "virtual-machines"})
-_MAX_RESOURCE_URL_LENGTH = 4096
-
-
-@dataclass(frozen=True)
-class _OperationOwnership:
-    project: str
-    instance_name: str = ""
-
 
 async def _operation_io(
     call: Callable[[], _OperationResult],
@@ -161,94 +140,6 @@ async def _wait_for_operation(
         timeout=timeout + _OPERATION_WAIT_GRACE_SECONDS,
     )
     return _response_operation(response)
-
-
-def _operation_value(operation: Any, key: str, default: Any = None) -> Any:
-    if isinstance(operation, Mapping):
-        return operation.get(key, default)
-    return getattr(operation, key, default)
-
-
-def _resource_project(kind: str, raw_url: Any) -> Optional[tuple[str, str]]:
-    """Return a resource's project and optional instance, or None when ownership is unsafe."""
-    if not isinstance(raw_url, str) or not raw_url or len(raw_url) > _MAX_RESOURCE_URL_LENGTH:
-        return None
-
-    parsed = urlsplit(raw_url)
-    if parsed.scheme or parsed.netloc or parsed.fragment or not parsed.path.startswith("/1.0/"):
-        return None
-
-    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
-    if len(segments) < 3 or segments[0] != "1.0":
-        return None
-    if any(segment in {".", ".."} or "/" in segment for segment in segments):
-        return None
-
-    normalized_kind = kind.replace("_", "-")
-    root = segments[1]
-    if normalized_kind in {"storage-volumes", "storage-volume-snapshots"}:
-        if root != "storage-pools" or len(segments) < 6 or segments[3] != "volumes":
-            return None
-    elif normalized_kind == "storage-buckets":
-        if root != "storage-pools" or len(segments) < 5 or segments[3] != "buckets":
-            return None
-    elif root not in _PROJECT_RESOURCE_ROOTS.get(normalized_kind, frozenset()):
-        return None
-
-    try:
-        query = parse_qs(
-            parsed.query,
-            keep_blank_values=True,
-            strict_parsing=False,
-            max_num_fields=32,
-        )
-    except ValueError:
-        return None
-    project_values = query.get("project", [])
-    if len(project_values) > 1 or (project_values and not project_values[0].strip()):
-        return None
-
-    if normalized_kind == "projects":
-        project = segments[2].strip()
-        if project_values and project_values[0] != project:
-            return None
-    else:
-        project = project_values[0].strip() if project_values else "default"
-    if not project:
-        return None
-
-    instance_name = segments[2] if root in _INSTANCE_ROOTS else ""
-    return project, instance_name
-
-
-def _operation_ownership(operation: Any) -> Optional[_OperationOwnership]:
-    """Derive one unambiguous project from all resources named by an operation."""
-    resources = _operation_value(operation, "resources")
-    if not isinstance(resources, Mapping) or not resources:
-        return None
-
-    projects: set[str] = set()
-    instances: set[str] = set()
-    resource_count = 0
-    for kind, urls in resources.items():
-        if not isinstance(kind, str) or not isinstance(urls, list):
-            return None
-        for raw_url in urls:
-            ownership = _resource_project(kind, raw_url)
-            if ownership is None:
-                return None
-            project, instance_name = ownership
-            projects.add(project)
-            if instance_name:
-                instances.add(instance_name)
-            resource_count += 1
-
-    if resource_count == 0 or len(projects) != 1:
-        return None
-    return _OperationOwnership(
-        project=next(iter(projects)),
-        instance_name=next(iter(instances)) if len(instances) == 1 else "",
-    )
 
 
 def _operation_not_found() -> HTTPException:

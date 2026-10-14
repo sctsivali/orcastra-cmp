@@ -16,7 +16,7 @@ less.
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, Tuple
+from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -26,6 +26,7 @@ from .guest_exec import exec_instance
 from .guest_files import get_file, put_file
 from .instance_view import instance_detail, instance_summary, status_name
 from .operation_metadata import sanitize_operation_metadata
+from .operation_ownership import visible_to
 from ..desktop.entry import desktop_action, desktop_probe
 from ..desktop.runtime import (
     DESKTOP_ACTION_TIMEOUT,
@@ -43,6 +44,7 @@ from .proxy import (
     exec_executor,
     proxy_executor,
 )
+from app.core.error_sanitizer import sanitize_error
 from app.core.lxd_segment import lxd_segment
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ __all__ = [
     "assert_required_params",
     "execute_proxy_operation",
     "SNAPSHOT_MUTATIONS",
+    "OperationNotVisible",
     "fetch_operation_status",
     # Re-exported so the router keeps one import site for the whole proxy vocabulary.
     "instance_detail",
@@ -259,13 +262,47 @@ def _attr(item: Any, name: str) -> Any:
     return dict(value) if isinstance(value, dict) else list(value) if isinstance(value, list) else value
 
 
-def _serialize_operation(operation: Any) -> Dict[str, Any]:
+class OperationNotVisible(LookupError):
+    """An operation this caller may not see, answered exactly as one LXD no longer holds.
+
+    `status_code` makes `classify_proxy_error` read it as `not_found`, and the operations route
+    turns that into the same 404 it gives a reaped operation. An id must not be an ownership
+    oracle.
+    """
+
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Operation not found")
+
+
+def _serialize_operation(
+    operation: Any, visible_projects: Optional[FrozenSet[str]] = frozenset()
+) -> Dict[str, Any]:
+    """One operation as a key may see it.
+
+    `visible_projects` is None for a key granted every project (`*`), otherwise the projects it
+    holds on this cluster. The default sees nothing, so a caller that forgets it fails closed.
+
+    important: an operation id is cluster-wide. LXD answers GET /1.0/operations/{id} whatever
+    ?project= says (observed on nuc2, 2026-10-14), so a key granted only `default` read the create,
+    start, snapshot and delete operations of another tenant's project, with resource URLs naming
+    that project's instances and snapshots. Ownership is now read off the resources, the same
+    rule the dashboard's own operations routes apply, and anything else is not found.
+    """
+    if not visible_to(operation, visible_projects):
+        raise OperationNotVisible()
     payload = {name: _attr(operation, name) for name in _OPERATION_FIELDS}
     # important: the dashboard's allowlist, the same function. An exec or console operation holds
     # its websocket secrets in `metadata.fds`, and a read key polls any operation id in its
     # projects, so passing metadata through let it attach to another caller's session.
     payload["metadata"] = sanitize_operation_metadata(getattr(operation, "metadata", None))
-    payload["error"] = getattr(operation, "err", None) or None
+    # Daemon text, which can name host paths and image-server URLs. Same treatment as the
+    # dashboard's operation answers.
+    description = getattr(operation, "description", None)
+    payload["description"] = sanitize_error(str(description), limit=500) if description else description
+    error = getattr(operation, "err", None)
+    payload["error"] = sanitize_error(str(error), limit=500) if error else None
     return payload
 
 
@@ -420,6 +457,8 @@ def execute_proxy_operation(
     params: Dict[str, Any],
     project: str,
     wait: bool = True,
+    *,
+    visible_projects: Optional[FrozenSet[str]] = frozenset(),
 ) -> Any:
     """Blocking half of ``proxy_operation``. Only ever runs on ``proxy_executor``.
 
@@ -511,7 +550,8 @@ def execute_proxy_operation(
         return _serialize_operation(
             client.operations.get(
                 lxd_segment(_required(params, "operation_id", "Operation id"), what="Operation id")
-            )
+            ),
+            visible_projects,
         )
 
     # ── writes ─────────────────────────────────────────────────────────────────────────────
@@ -686,7 +726,12 @@ def execute_proxy_operation(
 
 
 def fetch_operation_status(
-    lxd_service: Any, cluster_id: str, operation_id: str, project: str = "default"
+    lxd_service: Any,
+    cluster_id: str,
+    operation_id: str,
+    project: str = "default",
+    *,
+    visible_projects: Optional[FrozenSet[str]] = frozenset(),
 ) -> Dict[str, Any]:
     """Blocking half of the operations endpoint. Only ever runs on ``proxy_executor``."""
     # important: reuse _client_for rather than falling back to the pooled client when scoping
@@ -695,4 +740,6 @@ def fetch_operation_status(
     # `tenant-a`, including the resource URLs it names. _client_for raises 503 instead.
     assert_path_params("get_operation", {"operation_id": operation_id})
     client = _client_for(lxd_service, cluster_id, project, "get_operation")
-    return _serialize_operation(client.operations.get(lxd_segment(operation_id, what="Operation id")))
+    return _serialize_operation(
+        client.operations.get(lxd_segment(operation_id, what="Operation id")), visible_projects
+    )
