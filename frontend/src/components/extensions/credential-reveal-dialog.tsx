@@ -14,18 +14,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { publicApiBaseUrl, UNSET_PUBLIC_API_URL } from "@/lib/public-api-url";
 import type { ExtensionInstallResponse } from "@/types/api";
 
 const MASKED_KEY = "oas_••••••••••••••••••••••••";
 const MASKED_SIGNING = "whsec_••••••••••••••••••••••••";
-
-function resolveBaseUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_API_URL;
-  // note: no fallback to window.location.origin. That is the dashboard, and every integration
-  // behind it shares one per-IP rate-limit bucket with every browser user, so a guess here
-  // produces an add-on that works in testing and gets throttled in production.
-  return configured || "<your Orcastra API URL>";
-}
 
 /**
  * The credential and the signing secret, shown once.
@@ -51,7 +44,7 @@ export function CredentialRevealDialog({
   const [revealed, setRevealed] = useState(false);
   if (!result) return null;
 
-  const base = resolveBaseUrl();
+  const base = publicApiBaseUrl() ?? UNSET_PUBLIC_API_URL;
   const curl = [
     `curl -s "${base}/api/v1/extensions/self" \\`,
     `  -H "X-API-Key-ID: ${result.api_key_id}" \\`,

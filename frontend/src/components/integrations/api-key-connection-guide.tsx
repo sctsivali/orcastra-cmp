@@ -23,23 +23,9 @@ import {
   formatApplicationType,
   isLegacyUnscopedKey,
 } from "@/lib/integration-display";
+import { publicApiBaseUrl, UNSET_PUBLIC_API_URL } from "@/lib/public-api-url";
 import type { APIKeyCreateResponse, APIKeyValidateResponse } from "@/types";
 
-// The base an integration should call.
-//
-// important: NEXT_PUBLIC_API_URL is the browser-visible BACKEND origin, and that is what belongs
-// here. The dashboard origin also happens to work, because the Next proxy forwards the key
-// headers and needs no session, but it is the wrong answer: every integration behind it shares
-// one per-IP rate-limit bucket with every browser user.
-//
-// When it is unset the guide says so rather than guessing, because the obvious guess,
-// window.location.origin, is precisely the dashboard.
-function resolveBaseUrl(): string | null {
-  const configured = process.env.NEXT_PUBLIC_API_URL;
-  return configured ? configured.replace(/\/+$/, "") : null;
-}
-
-const UNSET_BASE = "<your Orcastra API URL>";
 const MASKED_SECRET = "oas_••••••••••••••••••••••••";
 
 interface ApiKeyConnectionGuideProps {
@@ -57,8 +43,8 @@ export function ApiKeyConnectionGuide({
   // Copy always copies the real value: hiding is about what is on screen, not what is pasted.
   const [revealed, setRevealed] = useState(false);
 
-  const baseUrl = resolveBaseUrl();
-  const base = baseUrl ?? UNSET_BASE;
+  const baseUrl = publicApiBaseUrl();
+  const base = baseUrl ?? UNSET_PUBLIC_API_URL;
   const key = response.api_key;
 
   const build = (secret: string) => {
