@@ -251,7 +251,7 @@ function ActiveSessionsTab() {
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
   const [sessions, setSessions] = useState<SessionData[]>([]);
-  const [sessionsActorScope, setSessionsActorScope] = useState(actorScope);
+  const [sessionsRequestScope, setSessionsRequestScope] = useState(`${actorScope}:self`);
   const [scope, setScope] = useState<SessionScope>("self");
   const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -264,14 +264,17 @@ function ActiveSessionsTab() {
   const resetPage = useCallback(() => setPage(1), []);
   const previousActorScopeRef = useRef(actorScope);
   const activeActorScopeRef = useRef(actorScope);
-  const activeRequestScopeRef = useRef(`${actorScope}:${scope}`);
+  const requestScopeKey = `${actorScope}:${scope}`;
+  const activeRequestScopeRef = useRef(requestScopeKey);
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
-  activeRequestScopeRef.current = `${actorScope}:${scope}`;
+  activeRequestScopeRef.current = requestScopeKey;
 
   // Session routes survive a same-document sign-out/sign-in. Gate actor-owned state during
   // render so the next actor cannot see the previous rows while effect cleanup is pending.
-  const sessionsAreCurrent = sessionsActorScope === actorScope;
+  // The scope is part of the key for the same reason: rows fetched for Mine are not the
+  // Organization list, and showing them under that label until the new fetch lands was wrong.
+  const sessionsAreCurrent = sessionsRequestScope === requestScopeKey;
   const currentSessions = sessionsAreCurrent ? sessions : [];
   const currentSelectedSession =
     selectedSessionActorScope === actorScope ? selectedSession : null;
@@ -285,7 +288,7 @@ function ActiveSessionsTab() {
     previousActorScopeRef.current = actorScope;
     requestControllerRef.current?.abort();
     requestControllerRef.current = null;
-    setSessionsActorScope(actorScope);
+    setSessionsRequestScope(`${actorScope}:self`);
     setSelectedSessionActorScope(actorScope);
     setSessions([]);
     setSelectedSession(null);
@@ -303,6 +306,22 @@ function ActiveSessionsTab() {
     },
     [],
   );
+
+  // The rows, the error and the refresh time all belong to one scope, so a switch starts from
+  // a loader on page one rather than from the other scope's rows.
+  const changeScope = useCallback((next: SessionScope) => {
+    if (next === scope) return;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+    setScope(next);
+    setSessionsRequestScope(`${actorScope}:${next}`);
+    setSessions([]);
+    setDegraded(false);
+    setLoading(true);
+    setError(null);
+    setLastRefresh(null);
+    setPage(1);
+  }, [actorScope, scope]);
 
   const filters = useTableFilters(ACTIVE_SESSIONS, currentSessions, {
     onFilterChange: resetPage,
@@ -341,7 +360,7 @@ function ActiveSessionsTab() {
       // readable without any CORS work.
       setDegraded(res.headers.get("X-Session-Registry-Degraded") === "1");
       setSessions(payload);
-      setSessionsActorScope(requestActorScope);
+      setSessionsRequestScope(requestScope);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
@@ -430,7 +449,7 @@ function ActiveSessionsTab() {
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">Active Sessions</CardTitle>
             <div className="flex items-center gap-2">
-              <SessionScopeToggle scope={scope} onChange={setScope} />
+              <SessionScopeToggle scope={scope} onChange={changeScope} />
               <Button
                 variant={autoRefresh ? "default" : "outline"}
                 size="sm"
@@ -616,7 +635,7 @@ function SessionHistoryTab() {
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [selectedSessionActorScope, setSelectedSessionActorScope] = useState(actorScope);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
-  const [logsActorScope, setLogsActorScope] = useState(actorScope);
+  const [logsRequestScope, setLogsRequestScope] = useState(`${actorScope}:self`);
   // What the server says the whole trail holds, which is not always what we fetched.
   const [trailTotal, setTrailTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -627,12 +646,14 @@ function SessionHistoryTab() {
   const [scope, setScope] = useState<SessionScope>("self");
   const previousActorScopeRef = useRef(actorScope);
   const activeActorScopeRef = useRef(actorScope);
-  const activeRequestScopeRef = useRef(`${actorScope}:${scope}`);
+  const requestScopeKey = `${actorScope}:${scope}`;
+  const activeRequestScopeRef = useRef(requestScopeKey);
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
-  activeRequestScopeRef.current = `${actorScope}:${scope}`;
+  activeRequestScopeRef.current = requestScopeKey;
 
-  const logsAreCurrent = logsActorScope === actorScope;
+  // Keyed on actor and scope, as on the Active tab.
+  const logsAreCurrent = logsRequestScope === requestScopeKey;
   const currentLogs = logsAreCurrent ? logs : [];
   const currentSelectedSession =
     selectedSessionActorScope === actorScope ? selectedSession : null;
@@ -646,7 +667,7 @@ function SessionHistoryTab() {
     previousActorScopeRef.current = actorScope;
     requestControllerRef.current?.abort();
     requestControllerRef.current = null;
-    setLogsActorScope(actorScope);
+    setLogsRequestScope(`${actorScope}:self`);
     setSelectedSessionActorScope(actorScope);
     setLogs([]);
     setTrailTotal(0);
@@ -664,6 +685,20 @@ function SessionHistoryTab() {
     },
     [],
   );
+
+  const changeScope = useCallback((next: SessionScope) => {
+    if (next === scope) return;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+    setScope(next);
+    setLogsRequestScope(`${actorScope}:${next}`);
+    setLogs([]);
+    setTrailTotal(0);
+    setLoading(true);
+    setError(null);
+    setLastRefresh(null);
+    setCurrentPage(1);
+  }, [actorScope, scope]);
 
   const resetPage = () => setCurrentPage(1);
   const filters = useTableFilters(SESSION_HISTORY, currentLogs, { onFilterChange: resetPage });
@@ -723,7 +758,7 @@ function SessionHistoryTab() {
         activeRequestScopeRef.current !== requestScope
       ) return;
       setLogs(collected);
-      setLogsActorScope(requestActorScope);
+      setLogsRequestScope(requestScope);
       setTrailTotal(total);
       setLastRefresh(new Date());
       setError(null);
@@ -818,7 +853,7 @@ function SessionHistoryTab() {
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <SessionScopeToggle scope={scope} onChange={setScope} />
+              <SessionScopeToggle scope={scope} onChange={changeScope} />
               <RefreshButton
                 iconClassName="h-3.5 w-3.5"
                 label="Refresh session history"

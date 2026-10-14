@@ -44,6 +44,7 @@ export function TableToolbar<F extends string>({
     chips,
     totalCount,
     filteredCount,
+    activeFilterCount,
     setFilterState,
     toggleFacetValue,
     setFacet,
@@ -143,14 +144,15 @@ export function TableToolbar<F extends string>({
 
       {/* aria-atomic so the whole sentence is announced rather than a diff. The count updates
           only after the search debounce settles, so it speaks once per settled query rather
-          than once per character. */}
+          than once per character. "N of M" follows whether a search or filter is active, not
+          whether it removed a row: a search every row matches still read as unfiltered. */}
       <p
         role="status"
         aria-live="polite"
         aria-atomic="true"
         className="text-sm text-muted-foreground"
       >
-        {filteredCount === totalCount
+        {activeFilterCount === 0
           ? `${totalCount} ${noun}`
           : `${filteredCount} of ${totalCount} ${noun}`}
       </p>

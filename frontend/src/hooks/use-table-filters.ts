@@ -79,6 +79,8 @@ export interface TableToolbarState<F extends string> {
   chips: FilterChip<F>[];
   totalCount: number;
   filteredCount: number;
+  /** Active filter chips plus one for a settled search. */
+  activeFilterCount: number;
   setFilterState: (field: F, next: FilterState) => void;
   toggleFacetValue: (field: F, value: string) => void;
   setFacet: (field: F, values: readonly string[]) => void;
