@@ -22,12 +22,13 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException
 
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from app.core.config import Settings
 
 from .auth import credentials_from_headers
+from .limits import request_body_limit
 from .scope import SCOPE_API_KEY
 from .server import build_mcp_server
 
@@ -120,8 +121,9 @@ class _McpEndpoint:
         # A credential failure is an HTTP status; an AUTHORIZATION failure stays a tool result,
         # because that is the one a model can act on. That split is the whole reason this is
         # here and the capability gate is not.
+        budget = Response()
         try:
-            api_key = await self._authenticate(key_id, secret)
+            api_key = await self._authenticate(key_id, secret, budget)
         except HTTPException as exc:
             # note: the key id is logged, never the secret, matching the REST surface.
             logger.warning("MCP authentication failed for key %s: %s", key_id, exc.status_code)
@@ -152,15 +154,17 @@ class _McpEndpoint:
         # per-key budget twice would silently halve every integration's allowance.
         scope[SCOPE_API_KEY] = api_key
 
-        await self._manager.handle_request(scope, receive, send)
+        await self._manager.handle_request(scope, receive, _with_budget_headers(send, budget))
 
     @staticmethod
-    async def _authenticate(key_id: str, secret: str) -> Any:
+    async def _authenticate(key_id: str, secret: str, budget: Response) -> Any:
         # Imported here because `app.routers.integrations` imports this package's server at
         # module scope, and at build time that circle is not yet closed.
         from app.routers.integrations import validate_api_key
 
-        return await validate_api_key(x_api_key_id=key_id, x_api_key_secret=secret)
+        return await validate_api_key(
+            x_api_key_id=key_id, x_api_key_secret=secret, response=budget
+        )
 
     @staticmethod
     async def _refuse(
@@ -179,6 +183,30 @@ class _McpEndpoint:
         )
 
 
+def _with_budget_headers(send: Any, budget: Response) -> Any:
+    """`send`, adding the per-key budget headers `validate_api_key` computed to the response.
+
+    The REST surface has carried `X-RateLimit-*` on every answer since the budget existed. This
+    door spent the same budget and never said how much was left, so an agent could only learn
+    its ceiling by hitting it. Absent when the limiter is off or its store could not answer,
+    exactly as on REST.
+    """
+    extra = [
+        (name.encode("latin-1"), value.encode("latin-1"))
+        for name, value in budget.headers.items()
+        if name.lower().startswith("x-ratelimit-")
+    ]
+    if not extra:
+        return send
+
+    async def _send(message: Dict[str, Any]) -> None:
+        if message.get("type") == "http.response.start":
+            message = {**message, "headers": [*message.get("headers", []), *extra]}
+        await send(message)
+
+    return _send
+
+
 def build_mcp_route(settings: Settings) -> Tuple[Route, Any]:
     """The route to append, and the session manager `main.py`'s lifespan must run."""
     mcp = build_mcp_server(settings)
@@ -192,6 +220,7 @@ def build_mcp_route(settings: Settings) -> Tuple[Route, Any]:
         stateless_http=True,
         json_response=True,
         transport_security=_transport_security(settings),
+        max_request_body_size=request_body_limit(),
     )
     manager = mcp.session_manager
 

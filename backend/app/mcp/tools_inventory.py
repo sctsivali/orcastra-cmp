@@ -2,7 +2,7 @@
 
 These are the tools a model reaches for first: what may I see, and what is on it. They cost
 `inventory.read`, which every application-type preset seeds, so they are the tier most keys can
-actually use.
+actually use. whoami costs nothing beyond a key that authenticates, as its REST route does.
 """
 
 from typing import Annotated, Optional
@@ -40,12 +40,16 @@ def register(mcp: MCPServer) -> None:
         # for an agent under prompt injection. orcastra_list_clusters already discloses the same
         # cluster map, so withholding this buys nothing and costs the model the only way it has to
         # explain a refusal instead of retrying blindly.
-        return await run_inventory("whoami")
+        return await run_inventory("whoami", capability=None)
 
     @mcp.tool(
         name="orcastra_list_clusters",
         annotations=_READ_ONLY,
-        description="Clusters this key may reach, with the permission level held on each.",
+        description=(
+            "Clusters this key may reach: name, endpoint, server type and location. Clusters that "
+            "did not answer are listed under `unreachable`. orcastra_whoami reports the level this "
+            "key holds on each."
+        ),
     )
     async def orcastra_list_clusters(cluster_id: ClusterId = None) -> CallToolResult:
         return await run_inventory("list_integration_clusters", cluster_id=cluster_id)

@@ -279,12 +279,16 @@ def test_a_key_without_the_proxy_capability_sees_only_inventory(mcp_app, monkeyp
 
 
 def test_a_key_with_an_empty_grant_is_shown_no_proxy_tools(mcp_app, monkeypatch) -> None:
-    """An explicit empty list is a decision the operator expressed, and it grants nothing."""
+    """An explicit empty list is a decision the operator expressed, and it grants nothing.
+
+    It is still shown whoami, exactly as REST `/whoami` answers it: that tool reports only what the
+    key holds, which here is nothing, and that is the explanation its operator needs.
+    """
     _authenticated_as(monkeypatch, _key([], clusters=[]))
     with TestClient(mcp_app) as client:
         _initialize(client)
         names = _tool_names(_rpc(client, "tools/list"))
-    assert names == [], f"a key granted nothing was shown {names}"
+    assert names == ["orcastra_whoami"], f"a key granted nothing was shown {names}"
 
 
 # ── calling a tool the key may not use ─────────────────────────────────────────────────────────
@@ -454,7 +458,7 @@ def test_a_legacy_key_is_refused_every_guest_tool(mcp_app_full, monkeypatch, too
 def test_a_legacy_key_is_not_shown_the_guest_tools(mcp_app_full, monkeypatch) -> None:
     _authenticated_as(
         monkeypatch,
-        _key(legacy=True, clusters=[{"cluster_id": "nuc2", "permissions": ["admin"]}]),
+        _key(legacy=True, clusters=[{"cluster_id": "nuc2", "permissions": ["admin"], "projects": ["*"]}]),
     )
     with TestClient(mcp_app_full) as client:
         _initialize(client)

@@ -5,12 +5,15 @@ cluster cannot use them to look at another. The inventory tier answers "what is 
 answer "what does this cluster say".
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
+from app.core.api_key_capabilities import project_grant_is_unrestricted
+
+from .auth import current_api_key
 from .dispatch import call_proxy
 
 __all__ = ["register"]
@@ -30,6 +33,24 @@ _RESOURCE_OPERATIONS = {
     "storage_pools": "list_storage_pools",
     "profiles": "list_profiles",
 }
+
+
+def _a_granted_project(cluster_id: str) -> str:
+    """A project this key may name on `cluster_id`, for a read whose answer does not depend on it.
+
+    `proxy_operation` authorises the request's project before anything else, and `list_projects`
+    then narrows its answer to the grant whichever project was named. Sending `default` therefore
+    refused every key limited to other projects, the keys this tool's narrowing exists for.
+    """
+    for grant in current_api_key().get("cluster_permissions") or []:
+        if not isinstance(grant, dict) or grant.get("cluster_id") != cluster_id:
+            continue
+        projects = grant.get("projects", ["default"]) or ["default"]
+        if project_grant_is_unrestricted(projects) or "default" in projects:
+            return "default"
+        return sorted(str(p) for p in projects)[0]
+    # No grant on that cluster: the proxy refuses it by name, which is the useful answer.
+    return "default"
 
 
 def register(mcp: MCPServer) -> None:
@@ -59,8 +80,16 @@ def register(mcp: MCPServer) -> None:
             "granted, so it lists what the key may use rather than what exists."
         ),
     )
-    async def lxd_list_projects(cluster_id: Cluster) -> CallToolResult:
-        return await call_proxy("list_projects", cluster_id)
+    async def lxd_list_projects(
+        cluster_id: Cluster,
+        project: Annotated[
+            Optional[str],
+            Field(default=None, description="A project you were granted. Omit to use one of them."),
+        ] = None,
+    ) -> CallToolResult:
+        return await call_proxy(
+            "list_projects", cluster_id, project=project or _a_granted_project(cluster_id)
+        )
 
     @mcp.tool(
         name="lxd_list_images",
@@ -79,6 +108,25 @@ def register(mcp: MCPServer) -> None:
         cluster_id: Cluster, name: InstanceName, project: Project = "default"
     ) -> CallToolResult:
         return await call_proxy("list_snapshots", cluster_id, project=project, params={"name": name})
+
+    @mcp.tool(
+        name="lxd_get_operation",
+        annotations=_READ_ONLY,
+        description=(
+            "Status of an LXD operation on one cluster, ex; one a tool called with wait=false "
+            "returned. Costs `read` on that cluster, so any key that started the operation can "
+            "follow it. Completed operations are reaped by LXD, so a late poll is not_found: "
+            "check the resource itself then."
+        ),
+    )
+    async def lxd_get_operation(
+        cluster_id: Cluster,
+        operation_id: Annotated[str, Field(description="The operation id to poll.")],
+        project: Project = "default",
+    ) -> CallToolResult:
+        return await call_proxy(
+            "get_operation", cluster_id, project=project, params={"operation_id": operation_id}
+        )
 
     @mcp.tool(
         name="lxd_list_resources",

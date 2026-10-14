@@ -138,6 +138,8 @@ async def test_mcp_refuses_a_dot_snapshot_on_delete_and_a_dot_operation(door: An
                             snapshot_name=value))
     _refused(await door.mcp(tools_inventory, "orcastra_get_operation", EVERY, cluster_id=CLUSTER_ID,
                             operation_id=value))
+    _refused(await door.mcp(tools_read, "lxd_get_operation", EVERY, cluster_id=CLUSTER_ID,
+                            operation_id=value))
 
 
 @pytest.mark.parametrize("spelled", ["%2E", "%2E%2E", "%2e%2e"])

@@ -2,16 +2,16 @@
 
 MCP's spec-blessed authorization is OAuth 2.1. This deployment authenticates integrations with an
 HMAC-verified key pair in two headers, and the whole capability system is built on the metadata
-that check returns. So the bridge authenticates every inbound message against the existing
-`validate_api_key` and enforces the tool contract before the handler runs.
+that check returns. The transport endpoint (`mount.py`) verifies the key once per HTTP request with
+the existing `validate_api_key`, and this middleware reads that verdict for every message, refuses
+the methods this server does not serve, and enforces the tool contract before the handler runs.
 
-important: `validate_api_key` is called, not reimplemented. Its parameters carry `Header(...)`
-DEFAULTS, so invoking it with keyword arguments runs the identical body: the HMAC digest, the
-30-second credential cache, the offload onto `auth_executor`, the revoked, inactive and expiry
-checks, and `consume_api_key_budget`. That last one matters most. It means the MCP surface
-inherits the per-key rate limit rather than quietly sitting outside it, and it keeps the deliberate
-ordering that spends budget only AFTER the secret verifies, so a public key id cannot be used to
-exhaust a named integration's allowance.
+important: `validate_api_key` is called, not reimplemented, and it is called once. Its parameters
+carry `Header(...)` DEFAULTS, so invoking it with keyword arguments runs the identical body: the
+HMAC digest, the 30-second credential cache, the offload onto `auth_executor`, the revoked,
+inactive and expiry checks, and `consume_api_key_budget`. That last one is why it runs exactly
+once: the MCP surface inherits the per-key rate limit, and validating again here would charge
+every call twice.
 
 note: a middleware runs before params validation and wraps every inbound message, which is what
 makes this the right layer. The alternative is a check inside each tool function, and that is the
@@ -33,6 +33,7 @@ from app.core.api_key_capabilities import (
     assert_explicit_capability,
     has_capability,
     has_explicit_capability,
+    project_grant_is_unrestricted,
 )
 from app.core.api_key_permissions import PERMISSION_LEVELS, granted_level
 
@@ -42,11 +43,42 @@ from .scope import SCOPE_API_KEY
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ApiKeyMiddleware", "current_api_key", "credentials_from_headers"]
+__all__ = [
+    "SERVED_METHODS",
+    "ApiKeyMiddleware",
+    "credentials_from_headers",
+    "current_api_key",
+    "current_tool_name",
+]
 
 # The validated key for the message being handled. Tools read it rather than taking it as an
 # argument, because a tool argument is model-supplied and this must not be.
 _CURRENT_KEY: ContextVar[Optional[Dict[str, Any]]] = ContextVar("mcp_current_api_key", default=None)
+
+# The tool a tools/call named, for the audit record. Set here because only the message knows it:
+# the dispatchers see an operation, and three desktop tools share one.
+_CURRENT_TOOL: ContextVar[Optional[str]] = ContextVar("mcp_current_tool", default=None)
+
+# Every request method this server answers. Anything else is refused before the SDK sees it.
+#
+# important: an allow-list, not a refusal of the one method that hurt. SDK 2.2 registers
+# `subscriptions/listen` on every server, and on the 2026-07-28 wire it is served as an SSE stream
+# that pings every 15 s until the client hangs up, whatever `json_response` says. Nothing here
+# publishes to it, so every such stream held a connection slot for no function, and any key that
+# authenticated could open them, one capability-free key filling a worker's
+# `--limit-concurrency` within a minute. The next default handler an SDK release adds is refused
+# the same way rather than discovered the same way. The resource and prompt lists stay, empty,
+# because clients ask for them after the handshake and treat an error as a broken server.
+SERVED_METHODS = frozenset({
+    "initialize",
+    "ping",
+    "server/discover",
+    "tools/list",
+    "tools/call",
+    "resources/list",
+    "resources/templates/list",
+    "prompts/list",
+})
 
 # Notifications carry no request id and expect no reply, so there is no channel to refuse them
 # on. They are still authenticated: the endpoint verifies the credential before the manager sees
@@ -66,6 +98,11 @@ def current_api_key() -> Dict[str, Any]:
             message="no authenticated API key on this request",
         )
     return key
+
+
+def current_tool_name() -> Optional[str]:
+    """The tool the message being handled called, or None outside a tools/call."""
+    return _CURRENT_TOOL.get()
 
 
 def credentials_from_headers(headers: Any) -> Tuple[Optional[str], Optional[str]]:
@@ -122,7 +159,7 @@ def _may_see(api_key: Dict[str, Any], tool_name: str) -> bool:
     requirement = requirement_for(tool_name)
     if requirement is None:
         return False
-    if not has_capability(api_key, requirement.capability):
+    if requirement.capability is not None and not has_capability(api_key, requirement.capability):
         return False
     guest = requirement.guest_capability
     if guest is not None and not has_explicit_capability(api_key, guest):
@@ -130,7 +167,26 @@ def _may_see(api_key: Dict[str, Any], tool_name: str) -> bool:
     if requirement.level is not None:
         if _max_granted_level(api_key) < PERMISSION_LEVELS.get(requirement.level, 0):
             return False
+    if requirement.cluster_wide and not _holds_a_whole_cluster(api_key, requirement.level):
+        return False
     return True
+
+
+def _holds_a_whole_cluster(api_key: Dict[str, Any], level: Optional[str]) -> bool:
+    """Whether some grant reaches `level` on a cluster with every project (`*`).
+
+    A cluster-wide operation targets something no project contains, so `proxy_operation` refuses
+    it to a key limited to named projects whatever its level. Without this a project-limited admin
+    key was shown six tools it could never use.
+    """
+    needed = PERMISSION_LEVELS.get(level or "", 0)
+    for grant in api_key.get("cluster_permissions") or []:
+        if not isinstance(grant, dict):
+            continue
+        unrestricted = project_grant_is_unrestricted(grant.get("projects", ["default"]))
+        if unrestricted and granted_level(grant.get("permissions")) >= needed:
+            return True
+    return False
 
 
 def _enforce_tool_call(
@@ -165,7 +221,8 @@ def _enforce_tool_call(
         )
 
     try:
-        assert_capability(api_key, requirement.capability)
+        if requirement.capability is not None:
+            assert_capability(api_key, requirement.capability)
         guest = requirement.guest_capability
         if guest is not None:
             # important: the EXPLICIT variant. `assert_capability` reads an absent capabilities
@@ -204,9 +261,16 @@ class ApiKeyMiddleware:
                 ),
             )
 
+        if ctx.request_id is not None and ctx.method not in SERVED_METHODS:
+            raise MCPError(code=METHOD_NOT_FOUND, message=f"method not served: {ctx.method}")
+
         token = _CURRENT_KEY.set(api_key)
+        tool_token = _CURRENT_TOOL.set(None)
         try:
             if ctx.method == "tools/call":
+                params = ctx.params or {}
+                name = params.get("name") if isinstance(params, dict) else None
+                _CURRENT_TOOL.set(name if isinstance(name, str) else None)
                 refusal = _enforce_tool_call(ctx, api_key)
                 if refusal is not None:
                     return refusal
@@ -215,6 +279,7 @@ class ApiKeyMiddleware:
                 result = self._narrow_tool_list(result, api_key)
             return result
         finally:
+            _CURRENT_TOOL.reset(tool_token)
             _CURRENT_KEY.reset(token)
 
     @staticmethod

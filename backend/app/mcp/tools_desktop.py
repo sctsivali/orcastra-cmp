@@ -1,6 +1,6 @@
 """Seeing and driving a guest's graphical session.
 
-Five tools rather than one, split along the capability boundaries rather than by convenience. A
+Six tools rather than one, split along the capability boundaries rather than by convenience. A
 single `desktop` tool with an `action` discriminator would be a smaller list and would mean the
 one thing the capability split exists to prevent: a host allow-rule, and an operator's grant,
 could not tell "look at this screen" apart from "type into it".

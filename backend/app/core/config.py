@@ -363,8 +363,9 @@ class Settings(BaseSettings):
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
     # On, with an off switch kept for an operator who wants one.
     #
-    # important: none of these four is the security boundary, and reading them as one would be a
-    # mistake. The endpoint refuses any request without a valid integration API key, and
+    # important: none of these five (MCP_GUEST_TOOLS_ENABLED sits below the extensions block) is
+    # the security boundary, and reading them as one would be a mistake. The endpoint refuses any
+    # request without a valid integration API key, and
     # `tools/list` is already narrowed per key, so a key lacking a capability never sees the tools
     # that cost it. What actually stands in the way is the capability itself (explicit, never
     # inherited by a legacy key), the per-cluster grant, the project allow-list, and for the

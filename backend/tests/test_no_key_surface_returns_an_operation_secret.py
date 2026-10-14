@@ -227,10 +227,29 @@ async def _via_mcp(service: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) ->
     return result.structured_content
 
 
+async def _via_mcp_proxy_tool(service: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """`lxd_get_operation`, the poll a key without inventory.read uses, through call_proxy."""
+    from app.mcp import dispatch as mcp_dispatch
+    from app.mcp import tools_read
+
+    registry = _Registry()
+    tools_read.register(registry)
+    monkeypatch.setattr(mcp_dispatch, "get_lxd_service", lambda: service)
+    token = mcp_auth._CURRENT_KEY.set(READ_KEY)
+    try:
+        result = await registry.tools["lxd_get_operation"](cluster_id=CLUSTER_ID, operation_id=OP_ID)
+    finally:
+        mcp_auth._CURRENT_KEY.reset(token)
+    assert result.is_error is False, result.content
+    _no_secret_in([json.loads(block.text) for block in result.content])
+    return result.structured_content["data"]
+
+
 SERIALIZING_SURFACES = {
     "proxy_get_operation": _via_proxy_operation,
     "integrations_operations_route": _via_operations_route,
     "mcp_orcastra_get_operation": _via_mcp,
+    "mcp_lxd_get_operation": _via_mcp_proxy_tool,
 }
 
 

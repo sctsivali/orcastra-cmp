@@ -14,7 +14,10 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
+from app.services.lxd import proxy as lxd_proxy
+
 from .dispatch import call_proxy
+from .limits import request_body_limit
 
 __all__ = ["register"]
 
@@ -31,7 +34,24 @@ _UNTRUSTED = (
 )
 
 
+def _size(n: int) -> str:
+    for unit, scale in (("MiB", 1024 * 1024), ("KiB", 1024)):
+        if n >= scale and n % scale == 0:
+            return f"{n // scale} {unit}"
+    return f"{n} bytes"
+
+
 def register(mcp: MCPServer) -> None:
+    # note: read at registration, from the same constants the guest paths enforce. These limits
+    # are all tunable by environment, and a description that stated the defaults would promise a
+    # model sizes the deployment then refuses.
+    exec_budget = f"{lxd_proxy.EXEC_TIMEOUT:g}s"
+    exec_output = _size(lxd_proxy.EXEC_OUTPUT_LIMIT)
+    exec_stdin = _size(lxd_proxy.EXEC_STDIN_LIMIT)
+    read_limit = _size(lxd_proxy.FILE_READ_LIMIT)
+    write_limit = _size(lxd_proxy.FILE_WRITE_LIMIT)
+    body_limit = _size(request_body_limit())
+
     @mcp.tool(
         name="lxd_exec_instance",
         annotations=ToolAnnotations(
@@ -40,9 +60,9 @@ def register(mcp: MCPServer) -> None:
         description=(
             "Run one command inside a guest. The command is an argv LIST, never a shell string: "
             'for a shell, pass ["/bin/sh", "-c", "<script>"] so the audit record says that is '
-            "what ran. Runs as root unless `user` is given. Hard 30s budget, output truncated at "
-            "256 KiB with `truncated` set. A non-zero exit code is a SUCCESSFUL call reporting a "
-            "failed command, not an infrastructure fault." + _UNTRUSTED
+            f"what ran. Runs as root unless `user` is given. Hard {exec_budget} budget, output "
+            f"truncated at {exec_output} with `truncated` set. A non-zero exit code is a "
+            "SUCCESSFUL call reporting a failed command, not an infrastructure fault." + _UNTRUSTED
         ),
     )
     async def lxd_exec_instance(
@@ -57,7 +77,7 @@ def register(mcp: MCPServer) -> None:
             Optional[Dict[str, str]], Field(default=None, description="Extra environment variables.")
         ] = None,
         stdin: Annotated[
-            Optional[str], Field(default=None, description="Standard input, up to 64 KiB.")
+            Optional[str], Field(default=None, description=f"Standard input, up to {exec_stdin}.")
         ] = None,
     ) -> CallToolResult:
         params: Dict[str, object] = {"name": name, "command": command}
@@ -77,7 +97,7 @@ def register(mcp: MCPServer) -> None:
         description=(
             "Read one absolute path inside a guest. Returns base64 always, plus `text` when the "
             "bytes are valid UTF-8. A directory returns its entries instead of content. Bounded "
-            "at 4 MiB with `truncated` set." + _UNTRUSTED
+            f"at {read_limit} with `truncated` set." + _UNTRUSTED
         ),
     )
     async def lxd_read_file(
@@ -97,8 +117,10 @@ def register(mcp: MCPServer) -> None:
         ),
         description=(
             "Write one absolute path inside a guest, creating or replacing it. Give exactly one "
-            "of `content` (text) or `content_base64` (binary), up to 4 MiB decoded. `mode` is "
-            'octal, ex; "0644".'
+            f"of `content` (text) or `content_base64` (binary), up to {write_limit} decoded. "
+            f"The whole request is capped at {body_limit}: base64 always fits at the full size, "
+            "but `content` travels JSON-escaped and can pass the cap sooner, so send a large or "
+            'non-ASCII file as content_base64. `mode` is octal, ex; "0644".'
         ),
     )
     async def lxd_write_file(

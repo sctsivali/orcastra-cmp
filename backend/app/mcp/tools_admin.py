@@ -4,9 +4,11 @@ Registered only when MCP_ADMIN_TOOLS_ENABLED. A key's own grant always decides w
 the flag decides whether a model is ever shown them, which is a different question and worth
 answering separately for a surface a model drives.
 
-Every tool here carries `destructive_hint=True` so a host can prompt for confirmation. Four of
-them target a resource the per-key project allow-list cannot bound, and the handler refuses those
-to a key not granted the wildcard.
+Every delete carries `destructive_hint=True` so a host can prompt for confirmation, and so does
+creating a storage pool, which can format the device it is given. Creating a network or a project
+is marked non-destructive but never read-only. Six of these tools target a resource the per-key
+project allow-list cannot bound: the handler refuses those to a key not granted the wildcard, and
+`tools/list` does not offer them to one.
 """
 
 from typing import Annotated, Any, Dict, Optional
@@ -96,8 +98,12 @@ def register(mcp: MCPServer) -> None:
 
     @mcp.tool(
         name="lxd_create_storage_pool",
-        annotations=_CLUSTER_WIDE,
-        description="Create a storage pool. Cluster-wide.",
+        # important: destructive. A zfs or lvm pool given `config.source` as a block device formats
+        # it, and a host may only auto-approve a tool that says it cannot do that.
+        annotations=_DESTRUCTIVE,
+        description=(
+            "Create a storage pool. Cluster-wide. A pool on an existing block device formats it."
+        ),
     )
     async def lxd_create_storage_pool(
         cluster_id: Cluster,

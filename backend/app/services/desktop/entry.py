@@ -5,6 +5,7 @@ underneath it is pylxd. The router hands it an instance and validated params and
 dict, which is the same contract the rest of that vocabulary keeps.
 """
 
+import asyncio
 import logging
 import time
 from dataclasses import asdict
@@ -15,16 +16,25 @@ from fastapi import HTTPException
 from .actions import CAPTURE_ACTIONS, CLIPBOARD_ACTIONS, INPUT_ACTIONS, build_action
 from .guest.provider import GuestExecProvider
 from .protocol import ActionResult, DesktopProvider, ProbeReport, Target
-from .runtime import DESKTOP_CONTROL_ENABLED
+from app.core.blocking import BlockingPoolFull
+
+from .runtime import DESKTOP_CONTROL_ENABLED, DESKTOP_MAX_IN_FLIGHT
 from . import session_store
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "OPERATION_CAPABILITY",
-        "desktop_action",
+    "desktop_action",
     "desktop_probe",
+    "serve_wait",
+    "wait_seconds",
 ]
+
+# Waits in progress on this worker. The pool a wait used to occupy bounded them; on the event loop
+# nothing did, and the per-instance budget is keyed on a caller-chosen name, so one key with
+# consent and a grant could hold an HTTP slot per made-up name. Same ceiling as the pool.
+_WAIT_SLOTS = asyncio.Semaphore(DESKTOP_MAX_IN_FLIGHT)
 
 # One proxy operation per capability, rather than one `desktop_action` operation covering all of
 # them.
@@ -153,6 +163,35 @@ def _assert_action_matches(operation: str, action_name: str) -> None:
         )
 
 
+def wait_seconds(operation: str, params: Dict[str, Any]) -> Optional[float]:
+    """How long a `wait` asks for, validated as `desktop_action` validates it; None otherwise.
+
+    important: the proxy route serves a wait on the event loop with this answer instead of handing
+    it to `desktop_action` on the desktop pool. That pool has four workers, and the branch below
+    slept on one of them after fetching the instance from the cluster, so four agents waiting the
+    maximum refused every other desktop action on the deployment while they did.
+    """
+    if operation not in ("desktop_view", "desktop_input", "desktop_clipboard"):
+        return None
+    if str(params.get("action") or "") != "wait":
+        return None
+    _require_enabled()
+    return build_action("wait", params).duration
+
+
+async def serve_wait(seconds: float) -> Dict[str, Any]:
+    """A validated wait, served on the event loop and bounded per worker.
+
+    Raises BlockingPoolFull when the worker already holds its share, which the proxy route answers
+    as `overloaded`, exactly as it answers a full desktop pool.
+    """
+    if _WAIT_SLOTS.locked():
+        raise BlockingPoolFull("desktop wait", DESKTOP_MAX_IN_FLIGHT)
+    async with _WAIT_SLOTS:
+        await asyncio.sleep(seconds)
+    return {"ok": True, "action": "wait", "waited_seconds": seconds}
+
+
 def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_view") -> Dict[str, Any]:
     """Perform one desktop action, re-checking the guest's readiness first."""
     _require_enabled()
@@ -161,8 +200,9 @@ def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_
     target = _target(params, inst)
 
     if action.name == "wait":
-        # note: served here and never sent to the guest. A wait that occupies a pool thread is a
-        # self-inflicted denial of service, and there is nothing for the guest to do anyway.
+        # note: never sent to the guest. The proxy route answers a wait itself (`wait_seconds`),
+        # so this is reached only by a caller that skipped that, and sleeping is still the truthful
+        # answer for one.
         time.sleep(action.duration)
         return {"ok": True, "action": "wait", "waited_seconds": action.duration}
 

@@ -4250,9 +4250,10 @@ async def get_integration_operation(
             max_in_flight=PROXY_MAX_IN_FLIGHT,
         )
     except BlockingTimeout as timeout_error:
-        raise HTTPException(status_code=504, detail=str(timeout_error))
+        raise HTTPException(status_code=504, detail=str(timeout_error)) from timeout_error
     except BlockingPoolFull as pool_error:
-        raise HTTPException(status_code=503, detail=str(pool_error))
+        # note: chained so MCP can tell a busy server from a down cluster; both are 503 here.
+        raise HTTPException(status_code=503, detail=str(pool_error)) from pool_error
     except HTTPException:
         raise
     except Exception as e:
@@ -5073,31 +5074,41 @@ async def proxy_operation(
         # operation to completion. Inline on the loop that is the same failure mode as the
         # raw proxy, with a longer tail.
         _operation_executor, _operation_in_flight = operation_pool(operation)
+        from app.services.desktop.entry import serve_wait, wait_seconds
+
+        _desktop_wait = wait_seconds(operation, request.params or {})
         try:
-            result_data = await run_blocking(
-                execute_proxy_operation,
-                lxd_service,
-                request.cluster_id,
-                operation,
-                request.params or {},
-                request.project,
-                request.wait,
-                # note: a guest-reaching call holds a worker for as long as it runs, so it gets
-                # its own budget rather than the operation one. A command that needs longer is a
-                # job.
-                #
-                # important: THREE tiers, chosen by `operation_pool` beside the vocabulary rather
-                # than by a condition here. Written as a two-way choice on GUEST_ACCESS_OPERATIONS
-                # it put every desktop action on exec's four workers, which is exactly the
-                # starvation the desktop pool was built to prevent, and that pool was then never
-                # used. `_client_for` derives its socket window from the same selector, so the
-                # budget and the window cannot disagree.
-                timeout=operation_timeout(operation),
-                label=f"proxy_operation[{operation} {request.cluster_id}]",
-                executor=_operation_executor,
-                max_in_flight=_operation_in_flight,
-            )
-            health.clear(request.cluster_id)
+            if _desktop_wait is not None:
+                # important: on the event loop, after every permission, consent and budget check
+                # above, and still through the audit below. Handed to the pool it held one of the
+                # desktop pool's four workers for up to ten seconds doing nothing. Bounded per
+                # worker inside serve_wait; a full share is the BlockingPoolFull answer below.
+                result_data = await serve_wait(_desktop_wait)
+            else:
+                result_data = await run_blocking(
+                    execute_proxy_operation,
+                    lxd_service,
+                    request.cluster_id,
+                    operation,
+                    request.params or {},
+                    request.project,
+                    request.wait,
+                    # note: a guest-reaching call holds a worker for as long as it runs, so it gets
+                    # its own budget rather than the operation one. A command that needs longer is a
+                    # job.
+                    #
+                    # important: THREE tiers, chosen by `operation_pool` beside the vocabulary rather
+                    # than by a condition here. Written as a two-way choice on GUEST_ACCESS_OPERATIONS
+                    # it put every desktop action on exec's four workers, which is exactly the
+                    # starvation the desktop pool was built to prevent, and that pool was then never
+                    # used. `_client_for` derives its socket window from the same selector, so the
+                    # budget and the window cannot disagree.
+                    timeout=operation_timeout(operation),
+                    label=f"proxy_operation[{operation} {request.cluster_id}]",
+                    executor=_operation_executor,
+                    max_in_flight=_operation_in_flight,
+                )
+                health.clear(request.cluster_id)
             if operation in SNAPSHOT_MUTATIONS:
                 # The upstream product mutates snapshots through this proxy rather than through
                 # the dashboard's own routes, and the fleet listing is cached for 30s. Without

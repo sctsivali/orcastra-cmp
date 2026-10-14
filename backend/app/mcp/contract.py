@@ -29,8 +29,9 @@ class ToolRequirement:
     """The gate a tool passes through, and what a host should be told about it."""
 
     # The endpoint-family capability, checked with the INHERITING gate. A legacy key satisfies it,
-    # which is deliberate: these are powers that existed when those keys were issued.
-    capability: str
+    # which is deliberate: these are powers that existed when those keys were issued. None only for
+    # a tool whose REST route takes no capability (whoami): any key that authenticates may use it.
+    capability: Optional[str]
 
     # The proxy operation this tool dispatches to, or None for the inventory tier, which reads
     # across the key's whole grant rather than acting on one cluster.
@@ -81,7 +82,10 @@ def _inventory() -> ToolRequirement:
 # of the ratchet that keeps a REST endpoint from skipping `require_capability`.
 TOOL_CONTRACT: Dict[str, ToolRequirement] = {
     # ── inventory: reads across the whole grant, no single target cluster ──────────────────────
-    "orcastra_whoami": ToolRequirement(capability="inventory.read", read_only=True),
+    # note: no capability, like REST `/whoami`. It reports only what the presented key already
+    # holds, and it is the tool the server instructions say to call first and the one a refusal
+    # points at, so a key granted `lxd.proxy` alone has to be able to reach it.
+    "orcastra_whoami": ToolRequirement(capability=None, read_only=True),
     "orcastra_list_clusters": _inventory(),
     "orcastra_list_projects": _inventory(),
     "orcastra_list_instances": _inventory(),
@@ -99,6 +103,9 @@ TOOL_CONTRACT: Dict[str, ToolRequirement] = {
     # share a branch and are deliberately NOT collapsed: three verbs, three blast radii, and an
     # operator will want to allow one without the others.
     "lxd_list_resources": _proxy("list_networks", read_only=True),
+    # The poll for a `wait=false` write, priced like the write's own cluster. orcastra_get_operation
+    # answers the same question at `inventory.read`, which a custom key may not hold.
+    "lxd_get_operation": _proxy("get_operation", read_only=True),
 
     # ── proxy writes: `write` on the named cluster ─────────────────────────────────────────────
     "lxd_create_instance": _proxy("create_instance"),

@@ -21,15 +21,70 @@ endpoint, which is the channel a client acts on, and nothing renders one as a pr
 import logging
 from typing import Any, Dict, Optional
 
+from fastapi import HTTPException
 from mcp.types import CallToolResult, ImageContent, TextContent
+
+from app.core.blocking import BlockingPoolFull
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "desktop_result",
+    "error_code_for",
+    "refusal_result",
     "tool_error",
     "tool_result",
 ]
+
+# The code a caller acts on, read from the status the REST route would have answered. Every value
+# but "forbidden" is one of PROXY_ERROR_CODES, so a model sees one vocabulary whichever check
+# answered. Decided by status and never by detail text: the prose is written for a person and
+# changes with the next rewording.
+_STATUS_CODES: Dict[int, str] = {
+    400: "invalid_request",
+    401: "forbidden",
+    403: "forbidden",
+    404: "not_found",
+    409: "conflict",
+    422: "invalid_request",
+    429: "overloaded",
+    # The cluster answered, but not with anything usable. Not "down", so not cluster_unavailable.
+    502: "operation_failed",
+    503: "cluster_unavailable",
+    504: "timeout",
+}
+
+def error_code_for(exc: HTTPException) -> str:
+    """The error_code for an HTTPException raised by a handler a tool dispatched into.
+
+    important: this used to be "forbidden" for every status. A tripped circuit breaker (503), a
+    malformed name (400), an instance that does not exist (404) and an ambiguous one (409) all
+    read as "this key may not do that", which sends a model to ask an operator for a grant it
+    already holds instead of waiting for the cluster, fixing its arguments, or giving up.
+
+    note: a 503 caused by a full worker pool is the server being busy, not the cluster being down,
+    so it is `overloaded`, matching what `proxy_operation` already answers for the same cause.
+    """
+    if exc.status_code == 503 and isinstance(exc.__cause__, BlockingPoolFull):
+        return "overloaded"
+    code = _STATUS_CODES.get(exc.status_code)
+    if code is not None:
+        return code
+    return "invalid_request" if 400 <= exc.status_code < 500 else "operation_failed"
+
+
+def refusal_result(exc: HTTPException) -> CallToolResult:
+    """An HTTPException from a dispatched handler, as a tool result the model can act on.
+
+    A `Retry-After` the handler set (the desktop budget does) is carried into the text, because a
+    tool result has no headers and "overloaded" without a wait is an invitation to retry at once.
+    """
+    message = str(exc.detail)
+    retry_after = (exc.headers or {}).get("Retry-After")
+    if retry_after:
+        message = f"{message} Retry after {retry_after}s."
+    return tool_error(message, error_code=error_code_for(exc))
+
 
 def tool_error(message: str, *, error_code: Optional[str] = None) -> CallToolResult:
     """A failure the model should read and act on.
