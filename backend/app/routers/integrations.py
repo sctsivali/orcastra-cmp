@@ -42,6 +42,7 @@ from app.services.lxd.proxy import (
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.availability import require_client, unreachable_detail
 from app.services.lxd.lazy_client import connect_or_get_client
+from app.services.lxd.failover_config import project_failover_config
 from app.services.lxd.limited_write_reach import (
     ChecksNotFinished,
     assert_plan_segments,
@@ -1227,6 +1228,20 @@ def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]
     ]
 
 
+def _fetch_cluster_failover(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
+    """Blocking half of the failover fan-out. Only ever runs on proxy_executor.
+
+    important: a fresh GET /1.0, not the pooled client's `host_info`. That is read once when the
+    client connects and the pool keeps clients for hours, so an operator who turned healing off
+    would have been reported as still having it on. The raw body never leaves this function:
+    project_failover_config keeps numbers and one boolean, nothing that addresses the server.
+    """
+    client = require_client(connect_or_get_client(lxd_service, cluster_id), cluster_id)
+    payload = client.api.get().json()
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    return [{"cluster_id": cluster_id, **project_failover_config(metadata)}]
+
+
 def _fetch_cluster_instances(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
     """Blocking half of the instances fan-out. Only ever runs on proxy_executor.
 
@@ -2162,11 +2177,16 @@ async def validate_api_key(
 
 
 OWNER_KEYS_FEATURE = "organization_owner_keys.v1"
+# GET /integrations/clusters/failover. Advertised so a client can tell "this deployment predates
+# the read" from "this cluster did not answer" without spending a call on a 404.
+FAILOVER_CONFIG_FEATURE = "cluster_failover_config.v1"
 
 
 def _integration_features() -> Optional[List[str]]:
-    """The optional contracts this deployment speaks (APIKeyValidateResponse.features), None for none."""
-    return [OWNER_KEYS_FEATURE] if multi_owner_enabled() else None
+    """The optional contracts this deployment speaks (APIKeyValidateResponse.features)."""
+    features = [OWNER_KEYS_FEATURE] if multi_owner_enabled() else []
+    features.append(FAILOVER_CONFIG_FEATURE)
+    return features
 
 
 def require_capability(capability: str):
@@ -4111,6 +4131,37 @@ async def list_integration_clusters(
     return {
         "clusters": fanout.items,
         "total": len(fanout.items),
+        "partial": fanout.partial,
+        "unreachable": fanout.unreachable,
+    }
+
+
+@external_router.get(
+    "/clusters/failover",
+    summary="Read how the clusters this key may reach recover from a lost member",
+    description=(
+        "Whether each cluster is clustered, and its automatic healing and offline thresholds and "
+        "database voter limits, read live. Numbers only: the rest of the server configuration "
+        "is never returned. A threshold of 0 means automatic healing is off."
+    ),
+)
+async def list_integration_cluster_failover(
+    cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    """The one server setting a marketplace needs before it may call a cluster highly available.
+
+    note: inventory.read, the gate of every other read here. It adds no reach: the key could
+    already list these clusters, and the answer names no host, address or credential.
+    """
+    fanout = await _gather_per_cluster(
+        _fetch_cluster_failover, lxd_service, _clusters_for_key(api_key, cluster_id), "failover_config"
+    )
+    clusters = sorted(fanout.items, key=lambda row: row["cluster_id"])
+    return {
+        "clusters": clusters,
+        "total": len(clusters),
         "partial": fanout.partial,
         "unreachable": fanout.unreachable,
     }

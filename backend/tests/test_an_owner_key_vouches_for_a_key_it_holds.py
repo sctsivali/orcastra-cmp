@@ -119,14 +119,14 @@ async def test_everything_is_404_while_the_flag_is_off(world: Dict[str, Any], mo
     assert (await call(world, OWNER, "GET", f"/api/v1/integrations/external/organizations/{EXT}/owner-keys")).status_code == 404
     assert (await call(world, OWNER, "POST", OWNER_KEYS, enroll())).status_code == 404
     assert (await call(world, OWNER, "DELETE", f"/api/v1/integrations/external/organizations/{EXT}/owner-keys/self")).status_code == 404
-    assert integrations._integration_features() is None
+    assert "organization_owner_keys.v1" not in integrations._integration_features()
     monkeypatch.setattr(integrations, "multi_owner_enabled", lambda: True)
-    assert integrations._integration_features() == ["organization_owner_keys.v1"]
+    assert integrations._integration_features() == ["organization_owner_keys.v1", "cluster_failover_config.v1"]
 
 
 async def test_whoami_reports_the_feature(world: Dict[str, Any]) -> None:
     response = await call(world, OWNER, "GET", "/api/v1/integrations/whoami")
-    assert response.json()["features"] == ["organization_owner_keys.v1"]
+    assert response.json()["features"] == ["organization_owner_keys.v1", "cluster_failover_config.v1"]
 
 
 async def test_the_read_answers_each_caller_only_what_it_may_know(world: Dict[str, Any]) -> None:

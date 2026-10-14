@@ -177,8 +177,9 @@ def test_every_project_bearing_read_narrows_to_the_grant() -> None:
     original hole. Handlers that fan out over clusters and return per-project rows have to
     reach the filter.
     """
-    # Rows here are cluster-level, not project-level, so there is no project to narrow to.
-    exempt = {"list_integration_clusters"}
+    # Rows here are cluster-level, not project-level, so there is no project to narrow to. The
+    # failover read answers server settings of the cluster itself, which no project owns.
+    exempt = {"list_integration_clusters", "list_integration_cluster_failover"}
 
     tree = ast.parse(SOURCE.read_text())
     offenders = []

@@ -48,6 +48,8 @@ PINNED_OPERATION_IDS = {
     "post_integrations_external_organizations_owner_keys",
     "get_extensions_self",
     "get_integrations_clusters",
+    # the failover read (cluster_failover_config.v1): numbers only, never the server configuration
+    "get_integrations_clusters_failover",
     "get_integrations_external_policies",
     "get_integrations_image_uploads_by_session_id",
     "get_integrations_instances",
