@@ -80,6 +80,11 @@ def get_current_visible_projects() -> Optional[dict[str, set[str]]]:
     return {cluster_id: set(projects) for cluster_id, projects in mapping.items()}
 
 
+def unscoped_cache_key(base_key: str) -> str:
+    """The key admin and background readers share: every cluster, no tenant ACL."""
+    return f"{base_key}:scope=all"
+
+
 def get_scope_cache_key(base_key: str) -> str:
     """
     Return a cache key that includes the current org-scope AND tenant ACL.
@@ -93,7 +98,7 @@ def get_scope_cache_key(base_key: str) -> str:
     """
     allowed = _allowed_clusters_var.get(None)
     if allowed is None:
-        return f"{base_key}:scope=all"
+        return unscoped_cache_key(base_key)
     if not allowed:
         return f"{base_key}:scope=empty"
     scope_digest = hashlib.sha256(",".join(sorted(allowed)).encode()).hexdigest()[:12]

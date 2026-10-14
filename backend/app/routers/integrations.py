@@ -40,6 +40,7 @@ from app.services.lxd.proxy import (
     socket_timeout_for,
 )
 from app.services.activity_logger import get_activity_logger
+from app.services.integration_cluster_state import server_type_name, stamp_cluster_rows
 from app.services.lxd.availability import require_client, unreachable_detail
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.failover_config import project_failover_config
@@ -125,6 +126,7 @@ from app.core.lxd_segment import lxd_segment
 from app.core.lxd_body_names import assert_body_names_addressable
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
+from app.core.error_sanitizer import sanitize_error
 from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import (
@@ -1197,9 +1199,11 @@ def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
     zone_name = location_data.get("region_name") or location_data.get("city") or None
     return [{
         "id": cluster_id,
-        "name": metadata.get("name", cluster_id),
+        # important: Vault stores `display_name` and `type`. Reading `name` and `server_type`,
+        # which nothing writes, answered every cluster as its raw id and as LXD.
+        "name": lxd_status.resolve_display_name(cluster_id, metadata.get("display_name")),
         "endpoint": metadata.get("endpoint"),
-        "server_type": metadata.get("server_type", "lxd"),
+        "server_type": server_type_name(metadata.get("type")),
         "registered_at": metadata.get("registered_at"),
         "zone": zone_name,
         "location_data": public_location or None,
@@ -1388,7 +1392,7 @@ class ClusterFanout(NamedTuple):
 
 
 async def _gather_per_cluster(
-    fn, ctx, cluster_ids, label: str, *extra
+    fn, ctx, cluster_ids, label: str, *extra, skip_tripped: bool = True
 ) -> ClusterFanout:
     """Run a blocking per-cluster fetch across clusters concurrently and off the event loop.
 
@@ -1396,18 +1400,22 @@ async def _gather_per_cluster(
     blocked the whole process for the sum of every cluster's timeout. Measured on dev before
     the change, a single POST /integrations/sync held the loop for 35.7s, which is what made
     /health spike to 11s. Now the cost is the slowest cluster, paid on a worker thread, and a
-    cluster the breaker has already tripped is skipped entirely.
+    cluster the breaker has already tripped is skipped entirely. `skip_tripped=False` is for a
+    fetch that never contacts the cluster, where the breaker has nothing to save.
+
+    important: every `unreachable` reason is sanitized. Raw exception text carries the Vault
+    address, KV paths and certificate paths, and this body goes to an external key holder.
     """
     misses: List[Dict[str, str]] = []
 
+    def missed(cluster_id: str, reason: Any) -> List[Dict[str, Any]]:
+        misses.append({"cluster_id": cluster_id, "reason": sanitize_error(reason, limit=200)})
+        return []
+
     async def one(cluster_id: str) -> List[Dict[str, Any]]:
-        if health.is_tripped(cluster_id):
+        if skip_tripped and health.is_tripped(cluster_id):
             logger.debug(f"sync: skipping {label} for tripped cluster {cluster_id}")
-            misses.append({
-                "cluster_id": cluster_id,
-                "reason": health.get_reason(cluster_id) or "recently unreachable",
-            })
-            return []
+            return missed(cluster_id, health.get_reason(cluster_id) or "recently unreachable")
         try:
             return await run_blocking(
                 fn,
@@ -1429,24 +1437,16 @@ async def _gather_per_cluster(
                 f"sync: {label} for {cluster_id} timed out after {SYNC_CLUSTER_TIMEOUT}s; "
                 "returning partial results for this cluster"
             )
-            misses.append({
-                "cluster_id": cluster_id,
-                "reason": f"timed out after {SYNC_CLUSTER_TIMEOUT:g}s",
-            })
-            return []
+            return missed(cluster_id, f"timed out after {SYNC_CLUSTER_TIMEOUT:g}s")
         except BlockingPoolFull:
             logger.warning(f"sync: {label} for {cluster_id} shed, proxy pool saturated")
-            misses.append({"cluster_id": cluster_id, "reason": "proxy pool saturated"})
-            return []
+            return missed(cluster_id, "proxy pool saturated")
         except Exception as e:
             logger.warning(f"Could not get {label} for {cluster_id}: {e}")
             # note: str(HTTPException) renders as "503: <detail>". The status is already
             # implied by the row being in `unreachable`, and the doubled prefix made two
             # clusters with the same cause read as two different failures.
-            misses.append({
-                "cluster_id": cluster_id, "reason": getattr(e, "detail", None) or str(e)
-            })
-            return []
+            return missed(cluster_id, getattr(e, "detail", None) or str(e))
 
     batches = await asyncio.gather(*[one(c) for c in cluster_ids])
     return ClusterFanout([item for batch in batches for item in batch], misses)
@@ -3483,9 +3483,7 @@ async def sync_data(
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                result.clusters = (await _gather_per_cluster(
-                    _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info"
-                )).items
+                result.clusters = (await _gather_cluster_rows(api_key, cert_manager, cluster_ids)).items
         
         if request.include_projects:
             projects = await _gather_per_cluster(
@@ -4117,10 +4115,30 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
     )
 
 
+async def _gather_cluster_rows(api_key: Dict[str, Any], cert_manager, cluster_ids) -> ClusterFanout:
+    """Every cluster row a key's listing returns: registration, last known state, its own access.
+
+    important: `skip_tripped=False` because the fetch reads only Vault. A tripped cluster used to
+    vanish into `unreachable` with the breaker's raw text, which read as "this cluster may not
+    exist" to an integration. It now stays a row whose status says offline or not_authorized.
+    """
+    fanout = await _gather_per_cluster(
+        _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info", skip_tripped=False
+    )
+    stamp_cluster_rows(api_key, fanout.items)
+    return fanout
+
+
 @external_router.get(
     "/clusters",
     summary="List the clusters this key may reach",
-    description="The clusters in the key's grant, with their live status.",
+    description=(
+        "The clusters in the key's grant. Each row carries `status`, `reason_code`, `reason` and "
+        "`checked_at` from the last check the server already holds (all null when nothing "
+        "checked the cluster recently; this read never probes a cluster), and `access`, the "
+        "level and projects this key holds on it. `unreachable` lists clusters whose "
+        "registration could not be read."
+    ),
 )
 async def list_integration_clusters(
     cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
@@ -4137,9 +4155,7 @@ async def list_integration_clusters(
         vault_client=get_vault_client(settings.vault_addr, settings.vault_token),
         clusters_path=settings.vault_clusters_path,
     )
-    fanout = await _gather_per_cluster(
-        _fetch_cluster_info, cert_manager, _clusters_for_key(api_key, cluster_id), "cluster_info"
-    )
+    fanout = await _gather_cluster_rows(api_key, cert_manager, _clusters_for_key(api_key, cluster_id))
     return {
         "clusters": fanout.items,
         "total": len(fanout.items),

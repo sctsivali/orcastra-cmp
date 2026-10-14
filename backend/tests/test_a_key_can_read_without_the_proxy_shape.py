@@ -88,11 +88,14 @@ def test_a_read_scopes_through_the_shared_helper(name: str) -> None:
 
 @pytest.mark.parametrize("name", READS)
 def test_a_read_reuses_the_fetch_helper_sync_already_uses(name: str) -> None:
+    # note: the cluster list reaches the helper through _gather_cluster_rows, the row builder it
+    # shares with sync, which keeps a tripped cluster as a row because its fetch reads only Vault.
     source = inspect.getsource(getattr(integrations, name))
-    assert "_gather_per_cluster" in source, (
+    assert "_gather_per_cluster" in source or "_gather_cluster_rows" in source, (
         f"{name} fetches its own way; the shared helper is what skips a tripped cluster and "
         f"keeps the fan-out off the event loop"
     )
+    assert "_gather_per_cluster" in inspect.getsource(integrations._gather_cluster_rows)
 
 
 # ── whoami ─────────────────────────────────────────────────────────────────────────────────────

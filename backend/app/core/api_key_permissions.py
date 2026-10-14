@@ -34,6 +34,12 @@ def granted_level(permissions: Optional[List[str]]) -> int:
     return max(PERMISSION_LEVELS.get(name, 0) for name in permissions)
 
 
+def granted_level_name(permissions: Optional[List[str]]) -> Optional[str]:
+    """The name of the level `granted_level` enforces, or None when the grant holds nothing."""
+    level = granted_level(permissions)
+    return next((name for name, rank in PERMISSION_LEVELS.items() if rank == level), None)
+
+
 def assert_cluster_permission(
     api_key: Dict[str, Any], cluster_id: str, required: str
 ) -> Dict[str, Any]:

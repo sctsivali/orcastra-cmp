@@ -15,7 +15,7 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.core.blocking import run_blocking
 from app.core.cache import (
@@ -160,6 +160,33 @@ def project_from_nodes_body(body: Dict[str, Any]) -> List[ClusterAvailability]:
     return rows
 
 
+def breaker_availability(
+    cluster_id: str,
+    *,
+    display_name: Optional[str] = None,
+    endpoint: str = "unknown",
+    node_type: Optional[str] = None,
+) -> Optional[ClusterAvailability]:
+    """This worker's breaker verdict on one cluster as an availability row, or None without one.
+
+    `checked_at` is when the breaker tripped: replaying a verdict is not a fresh check, so it must
+    not be stamped now. The breaker's own reason never reaches the row (see `_availability`).
+    """
+    if not health.is_tripped(cluster_id):
+        return None
+    failed_at = health.failure_times().get(cluster_id)
+    return _availability(
+        cluster_id,
+        display_name=display_name,
+        endpoint=endpoint,
+        connected=False,
+        reachable=health.get_kind(cluster_id) == health.KIND_UNAUTHORIZED,
+        error=health.get_reason(cluster_id),
+        node_type=node_type,
+        collected_at=datetime.fromtimestamp(failed_at, timezone.utc) if failed_at else None,
+    )
+
+
 def probe_cluster(
     cluster_id: str,
     *,
@@ -198,17 +225,12 @@ def probe_cluster(
             checked_at=_now(),
         )
 
-    if not force and health.is_tripped(cluster_id):
-        answered = health.get_kind(cluster_id) == health.KIND_UNAUTHORIZED
-        return _availability(
-            cluster_id,
-            display_name=vault_display_name,
-            endpoint=endpoint,
-            connected=False,
-            reachable=answered,
-            error=health.get_reason(cluster_id),
-            node_type=node_type,
+    if not force:
+        tripped = breaker_availability(
+            cluster_id, display_name=vault_display_name, endpoint=endpoint, node_type=node_type
         )
+        if tripped is not None:
+            return tripped
 
     try:
         pooled = None if force else connection_manager.get_client(cluster_id)
@@ -348,13 +370,43 @@ def _build_response(cache, cache_key: str, rows, source: str) -> ClusterAvailabi
         generated_at=_now(),
     )
     if cache:
-        cache.set(
-            "api_responses",
-            cache_key,
-            response.model_dump(mode="json"),
-            ttl=NODES_AVAILABILITY_CACHE_TTL,
-        )
+        _store(cache, cache_key, response)
     return response
+
+
+def _store(cache, cache_key: str, response: ClusterAvailabilityResponse) -> None:
+    cache.set(
+        "api_responses",
+        cache_key,
+        response.model_dump(mode="json"),
+        ttl=NODES_AVAILABILITY_CACHE_TTL,
+    )
+
+
+def peek_availability(
+    key_for: Callable[[str], str] = get_scope_cache_key,
+) -> Optional[ClusterAvailabilityResponse]:
+    """What the shared caches already hold about reachability, or None. No probe and no write.
+
+    The two cheap tiers of `resolve_availability`: the availability cache, then a projection of a
+    warm `/nodes` body. `key_for` picks the scope; the API key surface reads the unscoped key
+    because a key is bounded by its grant, not by an org scope.
+    """
+    cache = get_cache_manager()
+    cached = cache.get("api_responses", key_for(NODES_AVAILABILITY_CACHE_KEY))
+    if cached is not None:
+        # note: overwrite `source`, and only `source`. The stored body records how it was
+        # first produced, so returning it verbatim reports "probe" on every cache hit and
+        # makes the field useless for the one question it exists to answer. `generated_at`
+        # is deliberately left as stored: restamping it would claim data was built now.
+        return ClusterAvailabilityResponse(**{**cached, "source": "availability_cache"})
+
+    # The node-status page and the metrics prewarm both fill this key. Riding it costs one
+    # Redis read and keeps every picker from generating its own fan-out.
+    nodes_body = cache.get("api_responses", key_for(NODES_STATUS_CACHE_KEY))
+    if nodes_body is not None:
+        return _build_response(None, "", project_from_nodes_body(nodes_body), "nodes_cache")
+    return None
 
 
 class RegistryUnavailable(Exception):
@@ -393,21 +445,12 @@ async def resolve_availability(
     availability_key = get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY)
 
     if not fresh:
-        cached = cache.get("api_responses", availability_key)
-        if cached is not None:
-            # note: overwrite `source`, and only `source`. The stored body records how it was
-            # first produced, so returning it verbatim reports "probe" on every cache hit and
-            # makes the field useless for the one question it exists to answer. `generated_at`
-            # is deliberately left as stored: restamping it would claim data was built now.
-            return ClusterAvailabilityResponse(**{**cached, "source": "availability_cache"})
-
-        # The node-status page and the metrics prewarm both fill this key. Riding it costs one
-        # Redis read and keeps every picker from generating its own fan-out.
-        nodes_body = cache.get("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
-        if nodes_body is not None:
-            return _build_response(
-                cache, availability_key, project_from_nodes_body(nodes_body), "nodes_cache"
-            )
+        peeked = peek_availability()
+        if peeked is not None:
+            if peeked.source == "nodes_cache":
+                # A projection is cached like a probe so the next picker open is one read.
+                _store(cache, availability_key, peeked)
+            return peeked
 
     # note: the registry read is a Vault LIST with its own budget (core/vault_client), so it
     # runs off the loop; inline it parked every request for the length of a lost LIST. A lost

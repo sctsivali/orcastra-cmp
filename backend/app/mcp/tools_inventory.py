@@ -46,9 +46,10 @@ def register(mcp: MCPServer) -> None:
         name="orcastra_list_clusters",
         annotations=_READ_ONLY,
         description=(
-            "Clusters this key may reach: name, endpoint, server type and location. Clusters that "
-            "did not answer are listed under `unreachable`. orcastra_whoami reports the level this "
-            "key holds on each."
+            "Clusters this key may reach: name, endpoint, server type, location, `access` (the "
+            "level and projects this key holds) and the last known `status` (online, offline, "
+            "not_authorized; null when nothing checked it recently, this never probes). A cluster "
+            "whose registration could not be read is listed under `unreachable`."
         ),
     )
     async def orcastra_list_clusters(cluster_id: ClusterId = None) -> CallToolResult:
