@@ -3,7 +3,8 @@
 Every call goes out as `exec_instance`, which means it inherits, rather than re-implements: the
 argv-only contract, the bounded output streams, the privilege drop to a session user, the audit
 record that stores the exact command, and the capability gate on top. A click is literally
-`["xdotool","mousemove","--sync","678","568","click","1"]` in the audit index a year later.
+`["xdotool","mousemove","677","568","mousemove","--sync","678","568","click","1"]` in the audit
+index a year later.
 
 important: the bounded stream is constructed HERE with its own cap rather than borrowing exec's.
 `_BoundedStream` already takes a `limit`; `EXEC_OUTPUT_LIMIT` is only its default. A screenshot is

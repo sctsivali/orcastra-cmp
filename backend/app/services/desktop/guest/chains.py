@@ -130,11 +130,27 @@ def capture_chain(
 
 # ── pointer ────────────────────────────────────────────────────────────────────────────────────
 
+def _sync_move(x: int, y: int) -> List[str]:
+    """xdotool arguments that put the pointer on (x, y) and return only once it is there.
+
+    --sync is not optional. Without it xdotool returns before the pointer has actually moved, so a
+    click issued immediately after lands at the previous position.
+
+    important: but `mousemove --sync` to the spot the pointer is ALREADY on never returns: it
+    waits for a motion event that cannot come. Measured on xdotool 3.20211022.1 under Xvfb: rc 143
+    after `timeout 8`, while the same move to a new spot returned at once. A click at the current
+    position, the commonest thing an agent does after a mouse_move, therefore burned the whole
+    exec budget, came back as a timeout, and held a desktop worker for it. So the pointer is first
+    stepped one pixel aside, which makes the synced move a real one; both requests travel on one
+    connection, so the server applies them in order.
+    """
+    neighbour = x - 1 if x > 0 else x + 1
+    return ["mousemove", str(neighbour), str(y), "mousemove", "--sync", str(x), str(y)]
+
+
 def mouse_move_chain(session_type: str, tool: str, x: int, y: int) -> List[str]:
     if tool == "xdotool":
-        # --sync is not optional. Without it xdotool returns before the pointer has actually moved,
-        # so a click issued immediately after lands at the previous position.
-        return ["xdotool", "mousemove", "--sync", str(x), str(y)]
+        return ["xdotool", *_sync_move(x, y)]
     if tool == "wlrctl":
         return ["wlrctl", "pointer", "move", str(x), str(y)]
     raise ValueError(f"no pointer chain for {tool!r}")
@@ -155,7 +171,7 @@ def click_chain(
     for modifier in modifiers or []:
         argv += ["keydown", modifier]
     if coordinate is not None:
-        argv += ["mousemove", "--sync", str(coordinate[0]), str(coordinate[1])]
+        argv += _sync_move(coordinate[0], coordinate[1])
     argv += ["click"]
     if repeat > 1:
         # A delay between presses, or the guest's toolkit sees one long press rather than a
@@ -175,9 +191,9 @@ def drag_chain(session_type: str, tool: str, start: tuple, end: tuple) -> List[s
     # to the user like a broken desktop rather than a failed agent.
     return [
         "xdotool",
-        "mousemove", "--sync", str(start[0]), str(start[1]),
+        *_sync_move(start[0], start[1]),
         "mousedown", "1",
-        "mousemove", "--sync", str(end[0]), str(end[1]),
+        *_sync_move(end[0], end[1]),
         "mouseup", "1",
     ]
 
@@ -194,7 +210,7 @@ def scroll_chain(
         raise ValueError(f"no scroll chain for {tool!r}")
     argv: List[str] = ["xdotool"]
     if coordinate is not None:
-        argv += ["mousemove", "--sync", str(coordinate[0]), str(coordinate[1])]
+        argv += _sync_move(coordinate[0], coordinate[1])
     argv += ["click", "--repeat", str(amount), "--delay", "50", _X11_SCROLL[direction]]
     return argv
 
