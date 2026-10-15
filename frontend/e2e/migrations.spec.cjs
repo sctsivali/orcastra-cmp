@@ -153,12 +153,12 @@ test("load older uses offset pagination and exposes the 101st job and draft", as
   await expectCleanMigrationHarness(api);
 });
 
-test("paused admission keeps existing migration recovery visible", async ({ page }, testInfo) => {
+test("turned-off admission keeps existing migration recovery visible", async ({ page }, testInfo) => {
   const unresolved = makeJob({
     resourceName: "needs-recheck",
     phase: "manual_recovery",
     status: "manual_recovery",
-    available_actions: ["recheck"],
+    available_actions: ["recheck", "release"],
   });
   await authenticate(page.context(), "partner");
   const api = await installMigrationFixtures(page, "partner", {
@@ -168,12 +168,15 @@ test("paused admission keeps existing migration recovery visible", async ({ page
 
   await page.goto("/inventory/migrations");
 
-  await expect(page.getByRole("heading", { name: "New migration admission is paused" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New migrations are turned off on this deployment" })).toBeVisible();
   await expect(page.getByRole("button", { name: "New Migration" })).toBeDisabled();
   await expect(page.getByText("needs-recheck", { exact: true })).toBeVisible();
   expect(api.requests.some((request) => request.path === "/migrations")).toBe(true);
 
   await page.getByRole("button", { name: "needs-recheck", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Manual recovery required" })).toBeVisible();
+  // Release is Admin only. The server offers it, the console hides it from a Partner.
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Release" })).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "Recheck" }).click();
   await expect(page.getByRole("heading", { name: "Recheck Migration" })).toBeVisible();
   await page.getByLabel("Reason").fill("Reconcile the uncertain daemon operation");
@@ -200,6 +203,9 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
   await page.goto("/inventory/migrations");
   await page.getByRole("button", { name: "New Migration" }).click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  if (testInfo.project.name.startsWith("mobile")) {
+    await expect(page.getByText("Step 1 of 7: Choose the source", { exact: true })).toBeVisible();
+  }
 
   await choose(page, "Source cluster", "Cluster A");
   await choose(page, "Source project", "default");
@@ -208,8 +214,8 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
 
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   await choose(page, "Destination cluster", "Cluster B");
+  await choose(page, "Destination project", "target-project");
   await expect(page.getByLabel("Destination member (optional)")).toBeVisible();
-  await page.getByLabel("Destination project", { exact: true }).fill("target-project");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
 
   await expect(page).toHaveURL(/\bplan=plan-resume\b/);
@@ -218,7 +224,7 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
   expect(api.createdBodies[0]).toMatchObject({
     scope: "instance",
     intent: "move",
-    source: { cluster_id: "cluster-a", project: "default", resource_name: "source-vm" },
+    source: { cluster_id: "cluster-a", project: "default", resource_name: "source-vm", member: "member-a" },
     target: { cluster_id: "cluster-b", project: "target-project", resource_name: "source-vm" },
   });
   const createRequest = api.mutations.find(
@@ -248,7 +254,7 @@ test("editing a resumed source detaches to a new plan without reusing the stale 
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Review preflight" })).toBeVisible();
 
   for (const expectedHeading of [
-    "Resolve mappings",
+    "Review mappings",
     "Review the strategy",
     "Choose the destination",
     "Choose the source",
@@ -295,34 +301,64 @@ test("Tenant is refused before Migration Center data is requested", async ({ pag
   await expectCleanMigrationHarness(api);
 });
 
-test("preflight shows blockers, expiry, revision conflict, and rollout execution gate", async ({ page }, testInfo) => {
-  const blocked = makePlan({
-    plan_id: "plan-blocked",
-    status: "blocked",
-    blockers: [{
-      code: "TARGET_NOT_EMPTY",
-      severity: "blocker",
-      message: "Target project is not empty.",
-      remediation: "Choose a new or empty target project.",
-      resource_key: null,
-    }],
+test("a network blocker is resolved by mapping, and a stale revision reloads instead of failing", async ({ page }, testInfo) => {
+  const blocked = makePlan({}, "move_network_mapping");
+  const stale = makePlan({ plan_id: "plan-stale" });
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", {
+    plans: [blocked, stale],
+    patchVariants: { [blocked.plan_id]: "move_ready" },
+    patchConflictPlanIds: [stale.plan_id],
   });
+
+  await page.goto(`/inventory/migrations?plan=${blocked.plan_id}`);
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Review preflight" })).toBeVisible();
+  await expect(
+    page.getByText(
+      "NIC 'eth0' uses 'lxdbr0', which the target project cannot use. Available networks: lxdbr1.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Resolution: Map the network to one of the available target networks.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Continue" })).toBeDisabled();
+
+  await page.getByRole("dialog").getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Review mappings" })).toBeVisible();
+  await choose(page, "Target network for eth0 on source-vm", "lxdbr1");
+  await expect(page.getByText("Your mapping, applied on Continue", { exact: true })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
+
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Review preflight" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Preflight Passed" })).toBeVisible();
+  await expect(page.getByText("Plan revision 2", { exact: true })).toBeVisible();
+  expect(api.patchBodies.at(-1)).toMatchObject({
+    planId: blocked.plan_id,
+    body: { mappings: { networks: { lxdbr0: "lxdbr1" } } },
+  });
+
+  await page.goto(`/inventory/migrations?plan=${stale.plan_id}`);
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Review preflight" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Recheck" }).click();
+  await expect(page.getByRole("heading", { name: "The plan was updated" })).toBeVisible();
+  await expect(page.getByText(/Preflight changed since you reviewed it and is now revision 1/)).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "The plan changed" })).toHaveCount(0);
+
+  await expectProjectTheme(page, testInfo);
+  await expectNoHorizontalOverflow(page);
+  await expectCleanMigrationHarness(api);
+});
+
+test("expired preflight and a turned-off move keep the plan reviewable but not executable", async ({ page }, testInfo) => {
   const expired = makePlan({ plan_id: "plan-expired", status: "expired", expires_at: EXPIRED });
   const ready = makePlan({ plan_id: "plan-gated" });
 
   await authenticate(page.context(), "partner");
   const api = await installMigrationFixtures(page, "partner", {
     executionEnabled: false,
-    plans: [blocked, expired, ready],
-    patchConflictPlanIds: [blocked.plan_id],
+    plans: [expired, ready],
   });
-
-  await page.goto(`/inventory/migrations?plan=${blocked.plan_id}`);
-  await expect(page.getByText("Target project is not empty.", { exact: true })).toBeVisible();
-  await expect(page.getByText("Resolution: Choose a new or empty target project.", { exact: true })).toBeVisible();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Continue" })).toBeDisabled();
-  await page.getByRole("dialog").getByRole("button", { name: "Recheck" }).click();
-  await expect(page.getByText("Plan revision changed; reload and review again.", { exact: true })).toBeVisible();
 
   await page.goto(`/inventory/migrations?plan=${expired.plan_id}`);
   await expect(page.getByRole("heading", { name: "Preflight expired" })).toBeVisible();
@@ -330,14 +366,16 @@ test("preflight shows blockers, expiry, revision conflict, and rollout execution
 
   await page.goto(`/inventory/migrations?plan=${ready.plan_id}`);
   await expect(page.getByRole("heading", { name: "Preflight Passed" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "This execution path is not enabled" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "This migration cannot be started here" })).toBeVisible();
+  await expect(
+    page.getByText("Move Instance is turned off on this deployment. The plan can still be reviewed.", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Set recovery policy" })).toBeVisible();
-  await expect(page.getByLabel("Require external traffic confirmation")).toBeDisabled();
-  await expect(page.getByText(/Signed cutover webhooks are not enabled/)).toBeVisible();
+  await expect(page.getByLabel("Keep the stopped source for (hours)")).toHaveValue("24");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Approve execution" })).toBeVisible();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Start migration" })).toBeDisabled();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Start move" })).toBeDisabled();
   expect(api.executions).toEqual([]);
 
   await expectProjectTheme(page, testInfo);
@@ -345,13 +383,8 @@ test("preflight shows blockers, expiry, revision conflict, and rollout execution
   await expectCleanMigrationHarness(api);
 });
 
-test("copy recovery stays independent and a failed draft read can retry in place", async ({ page }, testInfo) => {
-  const copy = makePlan({
-    plan_id: "plan-copy",
-    intent: "copy",
-    checkpoint_requested: false,
-    rollback_contract: { summary: "Copy has no rollback window." },
-  });
+test("copy of a running source explains the stop and a failed draft read can retry in place", async ({ page }, testInfo) => {
+  const copy = makePlan({}, "copy_running");
   const retry = makePlan({ plan_id: "plan-retry" });
 
   await authenticate(page.context(), "partner");
@@ -367,24 +400,34 @@ test("copy recovery stays independent and a failed draft read can retry in place
   await expect(page.getByRole("heading", { name: "Review preflight" })).toBeVisible();
 
   await page.goto(`/inventory/migrations?plan=${copy.plan_id}`);
-  await expect(page.getByText("Create a pre-cutover checkpoint", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "The source is running and will be stopped" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Confirm the copy outcome" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "The source remains active" })).toBeVisible();
-  await expect(page.getByLabel("Source retention in hours")).toHaveCount(0);
-  await expect(page.getByLabel("Require external traffic confirmation")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "The source is not changed" })).toBeVisible();
+  await expect(page.getByLabel("Keep the stopped source for (hours)")).toHaveCount(0);
+  await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Approve execution" })).toBeVisible();
+  // A running copy needs the downtime acknowledgement on top of the copy and billing ones.
+  for (const label of [
+    "I reviewed the transfer impact. The copy is a new, independent instance.",
+    "I reviewed snapshot schedule and billing impact for every source workload.",
+    "I reviewed the downtime. A running source is stopped for the transfer.",
+  ]) {
+    await expect(page.getByLabel(label)).toBeVisible();
+  }
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Start copy" })).toBeDisabled();
 
   await expectProjectTheme(page, testInfo);
   await expectNoHorizontalOverflow(page);
   await expectCleanMigrationHarness(api);
 });
 
-test("durable copy does not offer destination member placement", async ({ page }) => {
+test("copy can target a specific destination member under a suggested new name", async ({ page }) => {
   await authenticate(page.context(), "partner");
-  const api = await installMigrationFixtures(page, "partner");
+  const api = await installMigrationFixtures(page, "partner", { createdPlanId: "plan-copy-member" });
 
   await page.goto("/inventory/migrations?new=1");
-  await choose(page, "Intent", "Durable copy");
+  await choose(page, "Intent", "Copy");
   await choose(page, "Source cluster", "Cluster A");
   await choose(page, "Source project", "default");
   await choose(page, "Instance name", "source-vm");
@@ -392,18 +435,25 @@ test("durable copy does not offer destination member placement", async ({ page }
 
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   await choose(page, "Destination cluster", "Cluster B");
-  await expect(page.getByLabel("Destination member (optional)")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Copy placement is automatic" })).toBeVisible();
-  await expect(
-    page.getByText(
-      "Durable copy cannot target a specific destination member in this release. The destination cluster selects placement.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await choose(page, "Destination project", "target-project");
+  await expect(page.getByLabel("Destination instance name")).toHaveValue("source-vm-copy");
+  await choose(page, "Destination member (optional)", "member-b2");
+  await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
+
+  await expect(page).toHaveURL(/\bplan=plan-copy-member\b/);
+  expect(api.createdBodies[0]).toMatchObject({
+    intent: "copy",
+    target: {
+      cluster_id: "cluster-b",
+      project: "target-project",
+      resource_name: "source-vm-copy",
+      member: "member-b2",
+    },
+  });
   await expectCleanMigrationHarness(api);
 });
 
-test("project migration actions stay hidden until capability admission is known", async ({ page }) => {
+test("project relocation actions explain why they are unavailable", async ({ page }) => {
   let releaseSettings;
   const settingsGate = new Promise((resolve) => {
     releaseSettings = resolve;
@@ -416,19 +466,41 @@ test("project migration actions stay hidden until capability admission is known"
   const projectCard = page.locator('[data-slot="project-card"]').filter({ hasText: "default" });
   await expect(projectCard).toBeVisible();
   await projectCard.getByRole("button", { name: "Project actions for default" }).click();
-  await expect(page.getByRole("menuitem", { name: "Relocate Workloads" })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: "Relocate Project" })).toHaveCount(0);
+  const workloads = page.getByRole("menuitem", { name: /Relocate Workloads/ });
+  const project = page.getByRole("menuitem", { name: /Relocate Project/ });
+  await expect(workloads).toHaveAttribute("aria-disabled", "true");
+  await expect(workloads).toContainText("Checking migration availability");
 
   releaseSettings();
-  await expect(page.getByRole("menuitem", { name: "Relocate Workloads" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Relocate Project" })).toBeVisible();
+  await expect(workloads).toContainText("Relocate Workloads is turned off on this deployment");
+  await expect(project).toContainText("Relocate Project is turned off on this deployment");
+  await expect(project).toHaveAttribute("aria-disabled", "true");
 
-  await page.getByRole("menuitem", { name: "Relocate Workloads" }).click();
+  // The item stays focusable so its reason is reachable, but selecting it does nothing.
+  await workloads.focus();
+  await page.keyboard.press("Enter");
+  await expect(workloads).toBeVisible();
+  await expect(page).toHaveURL(/\/inventory$/);
+  expect(api.requests.filter((request) => request.path.startsWith("/migrations"))).toEqual([]);
+  await expectCleanMigrationHarness(api);
+});
+
+test("an enabled project relocation opens the wizard at the project source", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { projectRelocationEnabled: true });
+
+  await page.goto("/inventory");
+  const projectCard = page.locator('[data-slot="project-card"]').filter({ hasText: "default" });
+  await projectCard.getByRole("button", { name: "Project actions for default" }).click();
+  const workloads = page.getByRole("menuitem", { name: "Relocate Workloads", exact: true });
+  await expect(workloads).not.toHaveAttribute("aria-disabled", "true");
+  await workloads.click();
+
   await expect(page).toHaveURL(/\bmode=member\b/);
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the source" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
-  await choose(page, "Destination member (optional)", "member-b");
+  await choose(page, "Destination member (optional)", "member-a2");
   await expectCleanMigrationHarness(api);
 });
 
@@ -446,14 +518,17 @@ test("execution retry reuses the idempotency key for the same reviewed payload",
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Approve execution" })).toBeVisible();
 
+  const acknowledgements = [
+    "I reviewed the downtime. A running source is stopped for the transfer.",
+    "I understand the source is kept stopped for the retention window and then deleted.",
+    "I reviewed snapshot schedule and billing impact for every source workload.",
+  ];
   await page.getByLabel("Reason for this migration").fill("Approved change CHG-1024");
-  await page.getByLabel("I reviewed the downtime class and cutover sequence.").check();
-  await page.getByLabel("I understand the retained source stays stopped and fenced.").check();
-  await page.getByLabel("I reviewed snapshot schedule and billing impact for every source workload.").check();
+  for (const label of acknowledgements) await page.getByLabel(label).check();
 
-  await page.getByRole("dialog").getByRole("button", { name: "Start migration" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Start move" }).click();
   await expect(page.getByText("Fixture lost the execute response after acceptance.", { exact: true })).toBeVisible();
-  await page.getByRole("dialog").getByRole("button", { name: "Start migration" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Start move" }).click();
 
   await expect(page).toHaveURL(/\bjob=job-executed\b/);
   expect(api.executions).toHaveLength(2);
@@ -461,16 +536,22 @@ test("execution retry reuses the idempotency key for the same reviewed payload",
   expect(api.executions[1].headers["idempotency-key"]).toBe(
     api.executions[0].headers["idempotency-key"],
   );
+  expect([...api.executions[0].body.acknowledgements].sort()).toEqual([
+    "billing-impact-reviewed",
+    "downtime-reviewed",
+    "source-retention-understood",
+  ]);
   await expectCleanMigrationHarness(api);
 });
 
-test("job detail preserves stale state and filters release-disabled destructive actions", async ({ page }, testInfo) => {
+test("job detail shows retention, offers Finalize and Roll Back, and keeps stale state", async ({ page }, testInfo) => {
   const jobs = [
     makeJob({ resourceName: "unknown-vm", phase: "reconciling", status: "unknown", available_actions: ["recheck"] }),
-    makeJob({ resourceName: "manual-vm", phase: "manual_recovery", status: "manual_recovery", available_actions: ["recheck"] }),
-    makeJob({ resourceName: "cleanup-vm", phase: "cleanup_due", status: "waiting", available_actions: ["cleanup"] }),
-    makeJob({ resourceName: "rollback-vm", phase: "rollback_available", status: "waiting", available_actions: ["rollback", "restore_checkpoint"] }),
-    makeJob({ resourceName: "abort-vm", phase: "cutover_pending", status: "waiting", available_actions: ["cancel", "cutover"] }),
+    makeJob({ resourceName: "manual-vm", phase: "manual_recovery", status: "manual_recovery", available_actions: ["recheck", "release"] }),
+    makeJob({ resourceName: "retained-vm", phase: "source_retained", status: "waiting", available_actions: ["rollback", "cleanup"] }),
+    makeJob({ resourceName: "due-vm", phase: "cleanup_due", status: "waiting", available_actions: ["rollback", "cleanup"] }),
+    makeJob({ resourceName: "blocked-vm", phase: "cleanup_blocked", status: "waiting", available_actions: ["rollback", "cleanup", "release"] }),
+    makeJob({ resourceName: "abort-vm", scope: "project", phase: "cutover_pending", status: "waiting", available_actions: ["cancel", "cutover"] }),
   ];
 
   await authenticate(page.context(), "admin");
@@ -487,29 +568,45 @@ test("job detail preserves stale state and filters release-disabled destructive 
 
   await page.getByRole("button", { name: "manual-vm", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Manual recovery required" })).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Release" })).toBeVisible();
   await closeDialog(page);
 
-  await page.getByRole("button", { name: "cleanup-vm", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Source cleanup is due" })).toBeVisible();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Delete Source" })).toHaveCount(0);
+  await page.getByRole("button", { name: "due-vm", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Retention ended" })).toBeVisible();
   await closeDialog(page);
 
-  await page.getByRole("button", { name: "rollback-vm", exact: true }).click();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Rollback" })).toHaveCount(0);
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Restore Checkpoint" })).toHaveCount(0);
+  await page.getByRole("button", { name: "blocked-vm", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Source cleanup is blocked" })).toBeVisible();
   await closeDialog(page);
 
-  expect(
-    api.mutations.filter((request) =>
-      ["/rollback", "/restore-checkpoint", "/cleanup"].some((suffix) => request.path.endsWith(suffix)),
-    ),
-  ).toEqual([]);
+  await page.getByRole("button", { name: "retained-vm", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Source Retention" })).toBeVisible();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Roll Back" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Finalize" }).click();
+  await expect(page.getByRole("heading", { name: "Finalize This Move" })).toBeVisible();
+  const submit = page.getByRole("button", { name: "Finalize and delete source" });
+  await page.getByLabel("Reason").fill("Target verified by the application owner");
+  await expect(submit).toBeDisabled();
+  await page.getByLabel(/to confirm/).fill("cleanup");
+  await expect(submit).toBeDisabled();
+  await page.getByLabel(/to confirm/).fill("CLEANUP");
+  await submit.click();
+  await expect(page.getByRole("heading", { name: "Finalize This Move" })).toHaveCount(0);
+  const finalize = api.mutations.find(
+    (request) => request.method === "POST" && request.path === "/migrations/job-retained-vm/cleanup",
+  );
+  expect(finalize?.body).toEqual({
+    expected_revision: 1,
+    reason: "Target verified by the application owner",
+    confirmation: "CLEANUP",
+  });
+  expect(api.mutations.filter((request) => request.path.endsWith("/rollback"))).toEqual([]);
+  await closeDialog(page);
 
   await page.getByRole("button", { name: "abort-vm", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Abort before cutover" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Abort before cutover" }).click();
   await expect(page.getByRole("heading", { name: "Abort Before Cutover" })).toBeVisible();
-  await expect(page.getByText(/cutover approval is requested before target staging/)).toBeVisible();
 
   await expectProjectTheme(page, testInfo);
   await expectNoHorizontalOverflow(page);

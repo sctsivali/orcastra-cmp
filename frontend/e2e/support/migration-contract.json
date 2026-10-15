@@ -1,0 +1,674 @@
+{
+  "_generated_by": "backend/tests/test_migration_e2e_contract.py",
+  "jobs": {
+    "cleanup_blocked": {
+      "available_actions": [
+        "rollback",
+        "cleanup",
+        "release"
+      ],
+      "created_at": "2026-09-22T12:00:00Z",
+      "downtime_class": "cold",
+      "error_code": null,
+      "error_message": null,
+      "external_cutover_confirmed_at": null,
+      "external_cutover_required": false,
+      "finished_at": null,
+      "intent": "move",
+      "job_id": "job-cleanup_blocked",
+      "phase": "cleanup_blocked",
+      "plan_id": "plan-ready",
+      "plan_revision": 1,
+      "resources": [],
+      "retention_deadline": "2099-09-22T12:00:00Z",
+      "retention_hours": 24,
+      "revision": 1,
+      "safe_result": null,
+      "scope": "instance",
+      "source": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-a",
+        "member": "member-a",
+        "project": "default",
+        "resource_name": "source-vm"
+      },
+      "started_at": "2026-09-22T12:00:00Z",
+      "status": "waiting",
+      "strategy": "cross_cluster_pull",
+      "target": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-b",
+        "member": null,
+        "project": "target-project",
+        "resource_name": "source-vm"
+      },
+      "timeline": [],
+      "updated_at": "2026-09-22T12:00:00Z"
+    },
+    "manual_recovery": {
+      "available_actions": [
+        "recheck",
+        "release"
+      ],
+      "created_at": "2026-09-22T12:00:00Z",
+      "downtime_class": "cold",
+      "error_code": null,
+      "error_message": null,
+      "external_cutover_confirmed_at": null,
+      "external_cutover_required": false,
+      "finished_at": null,
+      "intent": "move",
+      "job_id": "job-manual_recovery",
+      "phase": "manual_recovery",
+      "plan_id": "plan-ready",
+      "plan_revision": 1,
+      "resources": [],
+      "retention_deadline": "2099-09-22T12:00:00Z",
+      "retention_hours": 24,
+      "revision": 1,
+      "safe_result": null,
+      "scope": "instance",
+      "source": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-a",
+        "member": "member-a",
+        "project": "default",
+        "resource_name": "source-vm"
+      },
+      "started_at": "2026-09-22T12:00:00Z",
+      "status": "manual_recovery",
+      "strategy": "cross_cluster_pull",
+      "target": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-b",
+        "member": null,
+        "project": "target-project",
+        "resource_name": "source-vm"
+      },
+      "timeline": [],
+      "updated_at": "2026-09-22T12:00:00Z"
+    },
+    "source_retained": {
+      "available_actions": [
+        "rollback",
+        "cleanup"
+      ],
+      "created_at": "2026-09-22T12:00:00Z",
+      "downtime_class": "cold",
+      "error_code": null,
+      "error_message": null,
+      "external_cutover_confirmed_at": null,
+      "external_cutover_required": false,
+      "finished_at": null,
+      "intent": "move",
+      "job_id": "job-source_retained",
+      "phase": "source_retained",
+      "plan_id": "plan-ready",
+      "plan_revision": 1,
+      "resources": [],
+      "retention_deadline": "2099-09-22T12:00:00Z",
+      "retention_hours": 24,
+      "revision": 1,
+      "safe_result": null,
+      "scope": "instance",
+      "source": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-a",
+        "member": "member-a",
+        "project": "default",
+        "resource_name": "source-vm"
+      },
+      "started_at": "2026-09-22T12:00:00Z",
+      "status": "waiting",
+      "strategy": "cross_cluster_pull",
+      "target": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-b",
+        "member": null,
+        "project": "target-project",
+        "resource_name": "source-vm"
+      },
+      "timeline": [],
+      "updated_at": "2026-09-22T12:00:00Z"
+    }
+  },
+  "plans": {
+    "copy_running": {
+      "blockers": [],
+      "capabilities": [
+        {
+          "code": "same_engine",
+          "reason": null,
+          "supported": true
+        },
+        {
+          "code": "checkpoint",
+          "reason": null,
+          "supported": true
+        },
+        {
+          "code": "rollback",
+          "reason": "Copy creates an independent destination and has no rollback window.",
+          "supported": false
+        },
+        {
+          "code": "live",
+          "reason": "A running source is stopped for the transfer and its target is started afterwards (cold migration).",
+          "supported": false
+        },
+        {
+          "code": "incremental_refresh",
+          "reason": "The selected topology does not expose an eligible refresh capability.",
+          "supported": false
+        },
+        {
+          "code": "lxd_native_cross_project_move",
+          "reason": "Native LXD cross-project move is not applicable to the selected topology.",
+          "supported": false
+        },
+        {
+          "code": "atomic_shadow_metadata_cutover",
+          "reason": "Tags, snapshot schedules, and tenant access rules follow the instance to its new identity in the same transaction that retains the source.",
+          "supported": true
+        },
+        {
+          "code": "project_dependency_isolation",
+          "reason": "Effective project dependencies are contained by the selected project locks.",
+          "supported": true
+        },
+        {
+          "code": "daemon_operation_quiescence",
+          "reason": "Authoritative daemon operation inventory is readable and quiescent.",
+          "supported": true
+        },
+        {
+          "code": "mapping_storage_root",
+          "reason": "Only storage_pools.root or storage_pools.* is applied.",
+          "supported": true
+        },
+        {
+          "code": "mapping_networks",
+          "reason": "Each NIC follows an explicit mapping, the target profile, or a network with the same name.",
+          "supported": true
+        },
+        {
+          "code": "mapping_profiles",
+          "reason": "Profiles may be renamed to existing target profiles.",
+          "supported": true
+        },
+        {
+          "code": "mapping_volumes",
+          "reason": "Custom volume mapping is not executable in this release.",
+          "supported": false
+        },
+        {
+          "code": "mapping_members",
+          "reason": "Member mapping is selected through the destination member only.",
+          "supported": false
+        },
+        {
+          "code": "mapping_external_dependencies",
+          "reason": "External dependency mapping requires an operator-managed cutover.",
+          "supported": false
+        }
+      ],
+      "checkpoint_requested": false,
+      "created_at": "2026-09-22T12:00:00Z",
+      "downtime_class": "cold",
+      "expires_at": "2099-09-22T12:00:00Z",
+      "external_cutover_required": false,
+      "intent": "copy",
+      "mappings": {
+        "external_dependencies": {},
+        "members": {},
+        "networks": {},
+        "profiles": {},
+        "storage_pools": {},
+        "volumes": {}
+      },
+      "plan_id": "plan-copy",
+      "resources": [
+        {
+          "dependency_keys": [],
+          "resource_key": "instance:source-vm",
+          "resource_type": "instance",
+          "source": {
+            "cluster_id": "cluster-a",
+            "definition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "member": "member-a",
+            "name": "source-vm",
+            "project": "default",
+            "project_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "source_status": "running",
+          "target": {
+            "cluster_id": "cluster-b",
+            "contract": {
+              "contract_hash": "bd4d0f7a317452d2d3774886c77911753d8e8c1dd880e664ccbdc7699432f056",
+              "nic_decisions": [
+                {
+                  "device": "eth0",
+                  "source": "lxdbr0",
+                  "target": "lxdbr0",
+                  "via": "same_name"
+                }
+              ],
+              "pinned_config": [],
+              "pinned_devices": [
+                "eth0"
+              ],
+              "profile_added_config": [],
+              "profiles": [
+                "default"
+              ],
+              "root_pool": "default"
+            },
+            "definition_fingerprint": null,
+            "identity_fingerprint": null,
+            "member": null,
+            "name": "source-vm",
+            "project": "target-project",
+            "project_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "retention_hours": 24,
+      "revision": 1,
+      "rollback_contract": {
+        "automatic_cleanup": false,
+        "manual_recovery_only": false,
+        "reason": "Copy creates an independent destination and has no retained-source rollback.",
+        "retention_hours": null,
+        "source_retained": false,
+        "supported": false,
+        "target_writes_discarded_on_rollback": false
+      },
+      "scope": "instance",
+      "source": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-a",
+        "member": "member-a",
+        "project": "default",
+        "resource_name": "source-vm"
+      },
+      "status": "ready",
+      "strategy": "cross_cluster_pull",
+      "target": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-b",
+        "member": null,
+        "project": "target-project",
+        "resource_name": "source-vm"
+      },
+      "updated_at": "2026-09-22T12:00:00Z",
+      "warnings": []
+    },
+    "move_network_mapping": {
+      "blockers": [
+        {
+          "code": "network_mapping_required",
+          "message": "NIC 'eth0' uses 'lxdbr0', which the target project cannot use. Available networks: lxdbr1.",
+          "remediation": "Map the network to one of the available target networks.",
+          "resource_key": null,
+          "severity": "blocker"
+        }
+      ],
+      "capabilities": [
+        {
+          "code": "same_engine",
+          "reason": null,
+          "supported": true
+        },
+        {
+          "code": "checkpoint",
+          "reason": null,
+          "supported": true
+        },
+        {
+          "code": "rollback",
+          "reason": "The stopped source is retained, so rollback restores it and removes the target. Writes made on the target after cutover are discarded.",
+          "supported": true
+        },
+        {
+          "code": "live",
+          "reason": "A running source is stopped for the transfer and its target is started afterwards (cold migration).",
+          "supported": false
+        },
+        {
+          "code": "incremental_refresh",
+          "reason": "The selected topology does not expose an eligible refresh capability.",
+          "supported": false
+        },
+        {
+          "code": "lxd_native_cross_project_move",
+          "reason": "Native LXD cross-project move is not applicable to the selected topology.",
+          "supported": false
+        },
+        {
+          "code": "atomic_shadow_metadata_cutover",
+          "reason": "Tags, snapshot schedules, and tenant access rules follow the instance to its new identity in the same transaction that retains the source.",
+          "supported": true
+        },
+        {
+          "code": "project_dependency_isolation",
+          "reason": "Effective project dependencies are contained by the selected project locks.",
+          "supported": true
+        },
+        {
+          "code": "daemon_operation_quiescence",
+          "reason": "Authoritative daemon operation inventory is readable and quiescent.",
+          "supported": true
+        },
+        {
+          "code": "mapping_storage_root",
+          "reason": "Only storage_pools.root or storage_pools.* is applied.",
+          "supported": true
+        },
+        {
+          "code": "mapping_networks",
+          "reason": "Each NIC follows an explicit mapping, the target profile, or a network with the same name.",
+          "supported": true
+        },
+        {
+          "code": "mapping_profiles",
+          "reason": "Profiles may be renamed to existing target profiles.",
+          "supported": true
+        },
+        {
+          "code": "mapping_volumes",
+          "reason": "Custom volume mapping is not executable in this release.",
+          "supported": false
+        },
+        {
+          "code": "mapping_members",
+          "reason": "Member mapping is selected through the destination member only.",
+          "supported": false
+        },
+        {
+          "code": "mapping_external_dependencies",
+          "reason": "External dependency mapping requires an operator-managed cutover.",
+          "supported": false
+        }
+      ],
+      "checkpoint_requested": false,
+      "created_at": "2026-09-22T12:00:00Z",
+      "downtime_class": "none",
+      "expires_at": "2099-09-22T12:00:00Z",
+      "external_cutover_required": false,
+      "intent": "move",
+      "mappings": {
+        "external_dependencies": {},
+        "members": {},
+        "networks": {},
+        "profiles": {},
+        "storage_pools": {},
+        "volumes": {}
+      },
+      "plan_id": "plan-network",
+      "resources": [
+        {
+          "dependency_keys": [],
+          "resource_key": "instance:source-vm",
+          "resource_type": "instance",
+          "source": {
+            "cluster_id": "cluster-a",
+            "definition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "member": "member-a",
+            "name": "source-vm",
+            "project": "default",
+            "project_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "source_status": "stopped",
+          "target": {
+            "cluster_id": "cluster-b",
+            "contract": {
+              "contract_hash": "bd4d0f7a317452d2d3774886c77911753d8e8c1dd880e664ccbdc7699432f056",
+              "nic_decisions": [
+                {
+                  "device": "eth0",
+                  "source": "lxdbr0",
+                  "target": null,
+                  "via": "unmapped"
+                }
+              ],
+              "pinned_config": [],
+              "pinned_devices": [
+                "eth0"
+              ],
+              "profile_added_config": [],
+              "profiles": [
+                "default"
+              ],
+              "root_pool": "default"
+            },
+            "definition_fingerprint": null,
+            "identity_fingerprint": null,
+            "member": null,
+            "name": "source-vm",
+            "project": "target-project",
+            "project_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "retention_hours": 24,
+      "revision": 1,
+      "rollback_contract": {
+        "automatic_cleanup": true,
+        "manual_recovery_only": false,
+        "reason": "The source stays stopped and fenced for the retention window. Rollback restores it and removes the target. Finalize, or the end of retention, deletes it.",
+        "retention_hours": 24,
+        "source_retained": true,
+        "supported": true,
+        "target_writes_discarded_on_rollback": true
+      },
+      "scope": "instance",
+      "source": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-a",
+        "member": "member-a",
+        "project": "default",
+        "resource_name": "source-vm"
+      },
+      "status": "blocked",
+      "strategy": "cross_cluster_pull",
+      "target": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-b",
+        "member": null,
+        "project": "target-project",
+        "resource_name": "source-vm"
+      },
+      "updated_at": "2026-09-22T12:00:00Z",
+      "warnings": []
+    },
+    "move_ready": {
+      "blockers": [],
+      "capabilities": [
+        {
+          "code": "same_engine",
+          "reason": null,
+          "supported": true
+        },
+        {
+          "code": "checkpoint",
+          "reason": null,
+          "supported": true
+        },
+        {
+          "code": "rollback",
+          "reason": "The stopped source is retained, so rollback restores it and removes the target. Writes made on the target after cutover are discarded.",
+          "supported": true
+        },
+        {
+          "code": "live",
+          "reason": "A running source is stopped for the transfer and its target is started afterwards (cold migration).",
+          "supported": false
+        },
+        {
+          "code": "incremental_refresh",
+          "reason": "The selected topology does not expose an eligible refresh capability.",
+          "supported": false
+        },
+        {
+          "code": "lxd_native_cross_project_move",
+          "reason": "Native LXD cross-project move is not applicable to the selected topology.",
+          "supported": false
+        },
+        {
+          "code": "atomic_shadow_metadata_cutover",
+          "reason": "Tags, snapshot schedules, and tenant access rules follow the instance to its new identity in the same transaction that retains the source.",
+          "supported": true
+        },
+        {
+          "code": "project_dependency_isolation",
+          "reason": "Effective project dependencies are contained by the selected project locks.",
+          "supported": true
+        },
+        {
+          "code": "daemon_operation_quiescence",
+          "reason": "Authoritative daemon operation inventory is readable and quiescent.",
+          "supported": true
+        },
+        {
+          "code": "mapping_storage_root",
+          "reason": "Only storage_pools.root or storage_pools.* is applied.",
+          "supported": true
+        },
+        {
+          "code": "mapping_networks",
+          "reason": "Each NIC follows an explicit mapping, the target profile, or a network with the same name.",
+          "supported": true
+        },
+        {
+          "code": "mapping_profiles",
+          "reason": "Profiles may be renamed to existing target profiles.",
+          "supported": true
+        },
+        {
+          "code": "mapping_volumes",
+          "reason": "Custom volume mapping is not executable in this release.",
+          "supported": false
+        },
+        {
+          "code": "mapping_members",
+          "reason": "Member mapping is selected through the destination member only.",
+          "supported": false
+        },
+        {
+          "code": "mapping_external_dependencies",
+          "reason": "External dependency mapping requires an operator-managed cutover.",
+          "supported": false
+        }
+      ],
+      "checkpoint_requested": false,
+      "created_at": "2026-09-22T12:00:00Z",
+      "downtime_class": "none",
+      "expires_at": "2099-09-22T12:00:00Z",
+      "external_cutover_required": false,
+      "intent": "move",
+      "mappings": {
+        "external_dependencies": {},
+        "members": {},
+        "networks": {},
+        "profiles": {},
+        "storage_pools": {},
+        "volumes": {}
+      },
+      "plan_id": "plan-ready",
+      "resources": [
+        {
+          "dependency_keys": [],
+          "resource_key": "instance:source-vm",
+          "resource_type": "instance",
+          "source": {
+            "cluster_id": "cluster-a",
+            "definition_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "member": "member-a",
+            "name": "source-vm",
+            "project": "default",
+            "project_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "source_status": "stopped",
+          "target": {
+            "cluster_id": "cluster-b",
+            "contract": {
+              "contract_hash": "bd4d0f7a317452d2d3774886c77911753d8e8c1dd880e664ccbdc7699432f056",
+              "nic_decisions": [
+                {
+                  "device": "eth0",
+                  "source": "lxdbr0",
+                  "target": "lxdbr0",
+                  "via": "same_name"
+                }
+              ],
+              "pinned_config": [],
+              "pinned_devices": [
+                "eth0"
+              ],
+              "profile_added_config": [],
+              "profiles": [
+                "default"
+              ],
+              "root_pool": "default"
+            },
+            "definition_fingerprint": null,
+            "identity_fingerprint": null,
+            "member": null,
+            "name": "source-vm",
+            "project": "target-project",
+            "project_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "retention_hours": 24,
+      "revision": 1,
+      "rollback_contract": {
+        "automatic_cleanup": true,
+        "manual_recovery_only": false,
+        "reason": "The source stays stopped and fenced for the retention window. Rollback restores it and removes the target. Finalize, or the end of retention, deletes it.",
+        "retention_hours": 24,
+        "source_retained": true,
+        "supported": true,
+        "target_writes_discarded_on_rollback": true
+      },
+      "scope": "instance",
+      "source": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-a",
+        "member": "member-a",
+        "project": "default",
+        "resource_name": "source-vm"
+      },
+      "status": "ready",
+      "strategy": "cross_cluster_pull",
+      "target": {
+        "cluster_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cluster_id": "cluster-b",
+        "member": null,
+        "project": "target-project",
+        "resource_name": "source-vm"
+      },
+      "updated_at": "2026-09-22T12:00:00Z",
+      "warnings": []
+    }
+  },
+  "settings": {
+    "api_version": "",
+    "debug": false,
+    "migration_auto_cleanup_enabled": true,
+    "migration_center_enabled": true,
+    "migration_default_retention_hours": 24,
+    "migration_durable_copy_enabled": true,
+    "migration_instance_move_enabled": true,
+    "migration_project_cross_cluster_enabled": false,
+    "migration_project_member_relocation_enabled": false,
+    "migration_recovery_actions_enabled": true,
+    "migration_running_source_enabled": true,
+    "read_only_mode": false,
+    "snapshot_schedules_enabled": false,
+    "task_journal_enabled": true
+  }
+}

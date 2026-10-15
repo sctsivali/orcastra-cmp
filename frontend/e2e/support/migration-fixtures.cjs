@@ -1,107 +1,37 @@
 const { expect } = require("@playwright/test");
 const { expectCleanHarness, installApiFixtures } = require("./fixtures.cjs");
 
+// note: plans, jobs and settings come from a golden file the backend generates from its real
+// presenters (backend/tests/test_migration_e2e_contract.py), so these fixtures cannot drift
+// from the shape the server sends.
+const CONTRACT = require("./migration-contract.json");
+
 const NOW = "2026-09-22T12:00:00Z";
 const FUTURE = "2099-09-22T12:00:00Z";
 const EXPIRED = "2020-09-22T12:00:00Z";
 
-function endpoint(clusterId, project, resourceName) {
-  return {
-    cluster_id: clusterId,
-    project,
-    resource_name: resourceName ?? null,
-    member: null,
-    cluster_fingerprint: "a".repeat(64),
-  };
-}
+const clone = (value) => JSON.parse(JSON.stringify(value));
 
-function mappings() {
-  return {
-    storage_pools: { root: "default" },
-    networks: {},
-    profiles: {},
-    volumes: {},
-    members: {},
-    external_dependencies: {},
-  };
-}
-
-function makePlan(overrides = {}) {
-  return {
-    plan_id: "plan-ready",
-    revision: 1,
-    scope: "instance",
-    intent: "move",
-    status: "ready",
-    source: endpoint("cluster-a", "default", "source-vm"),
-    target: endpoint("cluster-b", "target-project", "source-vm"),
-    strategy: "cold",
-    downtime_class: "cold",
-    retention_hours: 24,
-    checkpoint_requested: false,
-    external_cutover_required: false,
-    capabilities: [
-      { code: "cold_cutover", supported: true, reason: "Cold cutover is available." },
-      { code: "mapping_storage_root", supported: true, reason: "Root storage mapping is supported." },
-      { code: "mapping_networks", supported: false, reason: "Network mappings are not applied." },
-      { code: "mapping_profiles", supported: false, reason: "Profile mappings are not applied." },
-      { code: "mapping_volumes", supported: false, reason: "Volume mappings are not applied." },
-      { code: "mapping_members", supported: false, reason: "Member mappings are not applied." },
-      { code: "mapping_external_dependencies", supported: false, reason: "External mappings are not applied." },
-      { code: "external_cutover_webhook", supported: false, reason: "Signed cutover webhooks are not enabled." },
-    ],
-    resources: [{
-      resource_key: "instance:source-vm",
-      resource_type: "instance",
-      source: { name: "source-vm", cluster_id: "cluster-a", project: "default" },
-      target: { name: "source-vm", cluster_id: "cluster-b", project: "target-project" },
-      dependency_keys: [],
-    }],
-    mappings: mappings(),
-    blockers: [],
-    warnings: [],
-    rollback_contract: { summary: "Eligibility is checked before rollback." },
-    expires_at: FUTURE,
-    created_at: NOW,
-    updated_at: NOW,
-    ...overrides,
-  };
+function makePlan(overrides = {}, variant = "move_ready") {
+  return { ...clone(CONTRACT.plans[variant]), ...overrides };
 }
 
 function makeJob(overrides = {}) {
   const resourceName = overrides.resourceName ?? "source-vm";
   const phase = overrides.phase ?? "queued";
   const status = overrides.status ?? "pending";
-  const availableActions = overrides.available_actions ?? [];
   const cleaned = { ...overrides };
   delete cleaned.resourceName;
+  const base = clone(CONTRACT.jobs.source_retained);
   return {
+    ...base,
     job_id: `job-${resourceName}`,
-    plan_id: "plan-ready",
-    plan_revision: 1,
-    revision: 1,
-    scope: "instance",
-    intent: "move",
-    source: endpoint("cluster-a", "default", resourceName),
-    target: endpoint("cluster-b", "target-project", resourceName),
-    strategy: "cold",
-    downtime_class: "cold",
+    source: { ...base.source, resource_name: resourceName },
+    target: { ...base.target, resource_name: resourceName },
     phase,
     status,
-    retention_hours: 24,
-    retention_deadline: FUTURE,
-    external_cutover_required: false,
-    external_cutover_confirmed_at: null,
-    resources: [],
     timeline: [{ sequence: 1, phase, message: `Fixture entered ${phase}.`, created_at: NOW }],
-    available_actions: availableActions,
-    safe_result: null,
-    error_code: null,
-    error_message: null,
-    created_at: NOW,
-    updated_at: NOW,
-    started_at: NOW,
-    finished_at: null,
+    available_actions: overrides.available_actions ?? [],
     ...cleaned,
   };
 }
@@ -187,6 +117,7 @@ async function installMigrationFixtures(page, role, options = {}) {
       path === "/instances" ||
       path === "/cluster-members" ||
       path === "/storage/pools" ||
+      path === "/networks" ||
       path === "/migrations" ||
       path.startsWith("/migrations/");
 
@@ -209,17 +140,23 @@ async function installMigrationFixtures(page, role, options = {}) {
 
     if (method === "GET" && path === "/system/settings") {
       if (options.settingsGate) await options.settingsGate;
+      const executable = (value) => options.executionEnabled !== false && value;
+      const projectRelocation = (value) => options.projectRelocationEnabled ?? value;
       await json(route, {
+        ...CONTRACT.settings,
         read_only_mode: options.readOnly === true,
         api_version: "e2e",
-        debug: false,
         snapshot_schedules_enabled: true,
         task_journal_enabled: false,
-        migration_center_enabled: options.centerEnabled !== false,
-        migration_durable_copy_enabled: options.executionEnabled !== false,
-        migration_instance_move_enabled: options.executionEnabled !== false,
-        migration_project_member_relocation_enabled: options.executionEnabled !== false,
-        migration_project_cross_cluster_enabled: options.executionEnabled !== false,
+        migration_center_enabled: options.centerEnabled !== false && CONTRACT.settings.migration_center_enabled,
+        migration_durable_copy_enabled: executable(CONTRACT.settings.migration_durable_copy_enabled),
+        migration_instance_move_enabled: executable(CONTRACT.settings.migration_instance_move_enabled),
+        migration_project_member_relocation_enabled: projectRelocation(
+          CONTRACT.settings.migration_project_member_relocation_enabled,
+        ),
+        migration_project_cross_cluster_enabled: projectRelocation(
+          CONTRACT.settings.migration_project_cross_cluster_enabled,
+        ),
       });
       return;
     }
@@ -230,7 +167,7 @@ async function installMigrationFixtures(page, role, options = {}) {
     if (method === "GET" && path === "/projects") {
       await json(route, [
         { host: "cluster-a", projects: [{ name: "default", description: "", config: {}, used_by: [], host: "cluster-a", tags: [] }], total: 1, reachable: true, error: null },
-        { host: "cluster-b", projects: [], total: 0, reachable: true, error: null },
+        { host: "cluster-b", projects: [{ name: "target-project", description: "", config: {}, used_by: [], host: "cluster-b", tags: [] }], total: 1, reachable: true, error: null },
       ]);
       return;
     }
@@ -264,24 +201,20 @@ async function installMigrationFixtures(page, role, options = {}) {
     }
     if (method === "GET" && path === "/cluster-members") {
       const node = url.searchParams.get("node") ?? "cluster-b";
-      await json(route, {
-        node,
-        is_clustered: true,
-        cluster_enabled: true,
-        members: [{
-          server_name: "member-b",
-          url: "https://member-b.invalid:8443",
-          database: true,
-          status: "Online",
-          message: "",
-          roles: ["database-leader"],
-          architecture: "x86_64",
-          failure_domain: null,
-          description: null,
-          groups: [],
-        }],
-        total: 1,
-      });
+      const prefix = node === "cluster-a" ? "member-a" : "member-b";
+      const members = [prefix, `${prefix}2`].map((serverName, index) => ({
+        server_name: serverName,
+        url: `https://${serverName}.invalid:8443`,
+        database: true,
+        status: "Online",
+        message: "",
+        roles: index === 0 ? ["database-leader"] : ["database"],
+        architecture: "x86_64",
+        failure_domain: null,
+        description: null,
+        groups: [],
+      }));
+      await json(route, { node, is_clustered: true, cluster_enabled: true, members, total: members.length });
       return;
     }
     if (method === "GET" && path === "/storage/pools") {
@@ -290,6 +223,26 @@ async function installMigrationFixtures(page, role, options = {}) {
         total: 1,
         pools: [{ name: "default", description: "", driver: "dir", config: {}, used_by: [], status: "Created", node }],
         nodes: [node],
+        unreachable_nodes: [],
+      });
+      return;
+    }
+    if (method === "GET" && path === "/networks") {
+      const host = url.searchParams.get("host") ?? "cluster-b";
+      await json(route, {
+        total: 1,
+        networks: [{
+          name: "lxdbr1",
+          description: "",
+          type: "bridge",
+          managed: true,
+          config: {},
+          used_by: [],
+          status: "Created",
+          node: host,
+          project: url.searchParams.get("project") ?? "default",
+        }],
+        nodes: [host],
         unreachable_nodes: [],
       });
       return;
@@ -358,13 +311,18 @@ async function installMigrationFixtures(page, role, options = {}) {
         return;
       }
       if (method === "PATCH") {
-        if ((options.patchConflictPlanIds ?? []).includes(planId)) {
-          await json(route, { detail: "Plan revision changed; reload and review again." }, 409);
-          return;
-        }
         const body = state.mutations.at(-1).body;
         state.patchBodies.push({ planId, body });
-        const updated = { ...plan, ...body, revision: plan.revision + 1, updated_at: NOW };
+        if ((options.patchConflictPlanIds ?? []).includes(planId)) {
+          // The server's own wording (repository.py), so the wizard's conflict recovery runs.
+          await json(route, { detail: "The plan changed. Reload it before applying changes." }, 409);
+          return;
+        }
+        // A PATCH re-runs preflight on the server. A fixture plan can name the variant that
+        // the new revision resolves to, such as a blocked plan whose network is now mapped.
+        const variant = (options.patchVariants ?? {})[planId];
+        const base = variant ? { ...makePlan({}, variant), plan_id: planId } : plan;
+        const updated = { ...base, ...body, revision: plan.revision + 1, updated_at: NOW };
         plans.set(planId, updated);
         await json(route, updated);
         return;
@@ -390,7 +348,7 @@ async function installMigrationFixtures(page, role, options = {}) {
       await json(route, job ?? { detail: "Migration job not found" }, job ? 200 : 404);
       return;
     }
-    const actionMatch = path.match(/^\/migrations\/([^/]+)\/(cancel|cutover|confirm-external-cutover|rollback|restore-checkpoint|cleanup|recheck)$/);
+    const actionMatch = path.match(/^\/migrations\/([^/]+)\/(cancel|cutover|confirm-external-cutover|rollback|restore-checkpoint|cleanup|recheck|release)$/);
     if (method === "POST" && actionMatch) {
       const job = jobs.get(decodeURIComponent(actionMatch[1]));
       const updated = job ? { ...job, revision: job.revision + 1 } : null;
