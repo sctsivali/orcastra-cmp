@@ -28,9 +28,13 @@ from app.services.lxd.lazy_client import client_for
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 
-from . import preflight, repository
+from . import preflight, project_policy, repository
 from .authority import AuthentikAuthorityVerifier
-from .billing import enforce_migration_billing_policy, validate_acknowledgements
+from .billing import (
+    enforce_migration_billing_policy,
+    report_has_running_source,
+    validate_acknowledgements,
+)
 from .contracts import (
     MigrationAuthorityError,
     MigrationConflict,
@@ -41,6 +45,12 @@ from .contracts import (
     _enum_value,
 )
 from .plan_contracts import _preflight_payload, _target_pool, approval_report_hash
+from .planning_checks import (
+    active_endpoint_blockers,
+    orcahub_blockers,
+    shared_policy_blockers,
+    stale_target_access_blockers,
+)
 from .security import canonical_json_hash, canonical_resource_key, sanitize_payload
 from .worker import _schedule, run_migration_job
 
@@ -198,6 +208,11 @@ async def _has_active_upload_session(
     return False
 
 
+def _target_project_config(client: Any, project: str) -> dict[str, Any]:
+    record = preflight._get_project(client, project)
+    return dict((record or {}).get("config") or {})
+
+
 class MigrationPlanningMixin:
     def __init__(
         self,
@@ -309,6 +324,8 @@ class MigrationPlanningMixin:
         *,
         source_fingerprint: str,
         target_fingerprint: str,
+        user: Any = None,
+        organization_id: Optional[int] = None,
     ) -> dict[str, Any]:
         source_client, target_client = await self._clients(
             request,
@@ -348,6 +365,17 @@ class MigrationPlanningMixin:
             checkpoint_reason = (
                 "Member relocation checkpoints are not retained by the current recovery contract."
             )
+        elif _enum_value(request.intent) == "move" and _enum_value(request.scope) == "instance":
+            checkpoint_blocker = {
+                "code": "move_checkpoint_unsupported",
+                "severity": "blocker",
+                "message": "Automatic checkpoints are not used for an instance move.",
+                "remediation": (
+                    "Disable the checkpoint. The stopped source is retained for the whole "
+                    "retention window and is the rollback point."
+                ),
+            }
+            checkpoint_reason = "The retained source is the rollback point for an instance move."
         elif _enum_value(request.intent) == "copy":
             checkpoint_blocker = {
                 "code": "copy_checkpoint_unsupported",
@@ -404,6 +432,46 @@ class MigrationPlanningMixin:
                         "import before running migration preflight again."
                     ),
                 }
+            )
+        payload["blockers"].extend(
+            await orcahub_blockers(
+                self.db, request, strategy=result.strategy, settings=self.settings
+            )
+        )
+        payload["blockers"].extend(await active_endpoint_blockers(self.db, request))
+        payload["blockers"].extend(
+            await stale_target_access_blockers(self.db, request, organization_id)
+        )
+        if _enum_value(request.scope) == "instance" and result.contracts:
+            creates_project = bool(result.capabilities.get("target_project_create"))
+            target_project_config = None
+            if result.capabilities.get("target_project_exists"):
+                target_project_config = await _blocking(
+                    _target_project_config,
+                    target_client,
+                    request.target.project,
+                    label="migration.target_project_policy",
+                )
+            elif creates_project:
+                # The worker creates the target as a clone of the source project.
+                source_project_config = await _blocking(
+                    _target_project_config,
+                    source_client,
+                    request.source.project,
+                    label="migration.source_project_policy",
+                )
+                target_project_config = project_policy.clone_config(
+                    {"config": source_project_config}, job_id=None
+                )
+            payload["blockers"].extend(
+                await shared_policy_blockers(
+                    self.db,
+                    user=user,
+                    request=request,
+                    contracts=result.contracts,
+                    target_project_config=target_project_config,
+                    creates_project=creates_project,
+                )
             )
         if request.external_cutover_required:
             payload["blockers"].append(
@@ -463,6 +531,8 @@ class MigrationPlanningMixin:
             request,
             source_fingerprint=source_fingerprint,
             target_fingerprint=target_fingerprint,
+            user=user,
+            organization_id=source_org,
         )
         payload = request.model_dump(mode="json")
         payload["source"]["cluster_fingerprint"] = source_fingerprint
@@ -556,6 +626,8 @@ class MigrationPlanningMixin:
             request,
             source_fingerprint=source_fingerprint,
             target_fingerprint=target_fingerprint,
+            user=user,
+            organization_id=source_org,
         )
         merged = request.model_dump(mode="json")
         merged["source"]["cluster_fingerprint"] = source_fingerprint
@@ -654,7 +726,9 @@ class MigrationPlanningMixin:
             self.db,
             (request.source.cluster_id, request.target.cluster_id),
         ):
-            await self._organizations(request, user=user, requester_role=requester_role)
+            source_org, _ = await self._organizations(
+                request, user=user, requester_role=requester_role
+            )
             source_fingerprint, target_fingerprint = await self._fingerprints(request)
             if (
                 source_fingerprint != plan.source_cluster_fingerprint
@@ -665,6 +739,8 @@ class MigrationPlanningMixin:
                 request,
                 source_fingerprint=source_fingerprint,
                 target_fingerprint=target_fingerprint,
+                user=user,
+                organization_id=source_org,
             )
             self._require_execution_stage(request, report)
             approved_report = dict(plan.preflight_payload or {})
@@ -683,6 +759,7 @@ class MigrationPlanningMixin:
                 strategy=str(report.get("strategy") or ""),
                 external_cutover_required=request.external_cutover_required,
                 acknowledgements=acknowledgements,
+                source_running=report_has_running_source(report),
             )
             source_client, _target_client = await self._clients(
                 request,

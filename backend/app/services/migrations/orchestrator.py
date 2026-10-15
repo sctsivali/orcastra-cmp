@@ -25,13 +25,10 @@ from .contracts import (
     _worker_fence,
 )
 from .plan_contracts import _preflight_payload, _target_pool
-from .preparation import (
-    _ensure_project_target,
-    _prepare_sources,
-    _restart_source_best_effort,
-)
+from .preparation import _ensure_project_target, _prepare_sources
 from .reconciliation import _reconcile
-from .recovery_actions import _cleanup, _restore, _rollback
+from .retention import run_cleanup
+from .rollback import run_abort, run_rollback
 from .service import MigrationService
 from .transfer import _perform_copy_or_cutover, _transfer_resources
 from .worker import (
@@ -58,7 +55,6 @@ __all__ = [
     "_authority_pin",
     "_authority_values",
     "_blocking",
-    "_cleanup",
     "_ensure_project_target",
     "_enum_value",
     "_fenced_job_update",
@@ -71,9 +67,6 @@ __all__ = [
     "_reconcile",
     "_resource_update",
     "_resources",
-    "_restart_source_best_effort",
-    "_restore",
-    "_rollback",
     "_run_claimed",
     "_safe_mutation_resume",
     "_schedule",
@@ -83,5 +76,8 @@ __all__ = [
     "_worker_fence",
     "drain_migration_audits",
     "recover_migration_jobs",
+    "run_abort",
+    "run_cleanup",
     "run_migration_job",
+    "run_rollback",
 ]

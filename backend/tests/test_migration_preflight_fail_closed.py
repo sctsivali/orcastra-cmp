@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from app.services.migrations import preflight
+from app.services.migrations import preflight, preflight_source
 
 
 _ISOLATED_CONFIG = {
@@ -57,8 +57,8 @@ def _patch_inspect(
     source_config: dict[str, str] | None = None,
     target_config: dict[str, str] | None = None,
 ) -> tuple[Any, Any]:
-    source_client = object()
-    target_client = object()
+    source_client = SimpleNamespace(api=SimpleNamespace(networks=object(), operations=object()))
+    target_client = SimpleNamespace(api=SimpleNamespace(networks=object(), operations=object()))
     source_instance = _instance(status=status)
     source_project = {
         "name": "source-project",
@@ -114,6 +114,16 @@ def _patch_inspect(
     monkeypatch.setattr(preflight, "_storage_pools", lambda _client: ["fast"])
     monkeypatch.setattr(preflight, "_instance_transfer_bytes", lambda *_args: 100)
     monkeypatch.setattr(
+        preflight_source, "active_instance_operations", lambda _client, _wanted: set()
+    )
+    monkeypatch.setattr(
+        preflight,
+        "_get_collection",
+        lambda _node, *, project, resource: [
+            {"name": "lxdbr0", "managed": True, "type": "bridge", "status": "Created"}
+        ],
+    )
+    monkeypatch.setattr(
         preflight.mobility,
         "pool_headroom",
         lambda *_args: {"total": 1_000, "used": 100, "free": 900},
@@ -162,7 +172,7 @@ def _codes(result: preflight.PreflightResult) -> set[str]:
     return {issue["code"] for issue in result.blockers}
 
 
-def test_identity_changing_move_is_blocked_but_copy_remains_separate(
+def test_identity_changing_move_is_admitted_like_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, target = _patch_inspect(monkeypatch)
@@ -170,8 +180,12 @@ def test_identity_changing_move_is_blocked_but_copy_remains_separate(
     moved = _inspect(source, target, intent="move")
     copied = _inspect(source, target, intent="copy")
 
-    assert "instance_shadow_metadata_cutover_unsupported" in _codes(moved)
-    assert "instance_shadow_metadata_cutover_unsupported" not in _codes(copied)
+    for result in (moved, copied):
+        assert "instance_shadow_metadata_cutover_unsupported" not in _codes(result)
+        assert result.strategy == "cross_cluster_pull"
+        assert "workload" in result.contracts
+    assert moved.capabilities["rollback"] is True
+    assert copied.capabilities["rollback"] is False
 
 
 def test_same_project_member_move_is_not_identity_cutover_blocked(
@@ -209,26 +223,63 @@ def test_project_member_relocation_is_blocked_until_partial_recovery_exists(
     assert "project_member_relocation_recovery_unavailable" in _codes(result)
 
 
-def test_copy_to_an_explicit_member_is_blocked_until_member_local_validation_exists(
+def test_copy_to_an_explicit_member_fails_closed_on_unreadable_membership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, target = _patch_inspect(monkeypatch)
 
     result = _inspect(source, target, intent="copy", target_member="member-b")
 
-    assert "targeted_copy_member_validation_unsupported" in _codes(result)
-    assert result.capabilities["targeted_copy"] is False
+    assert "targeted_copy_member_validation_unsupported" not in _codes(result)
+    assert "target_member_unverified" in _codes(result)
 
 
-@pytest.mark.parametrize("status", ["Running", "", "Frozen"])
-def test_every_transfer_requires_authoritatively_stopped_source(
+def test_a_running_source_is_admitted_for_a_cold_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target = _patch_inspect(monkeypatch, status="Running")
+
+    result = _inspect(source, target, intent="copy")
+
+    assert "source_instance_not_stopped" not in _codes(result)
+    assert result.capabilities["source_status"] == "running"
+    assert result.downtime == "cold"
+
+
+def test_a_running_source_is_refused_when_running_migration_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target = _patch_inspect(monkeypatch, status="Running")
+
+    result = preflight.inspect(
+        scope="instance",
+        intent="copy",
+        source_client=source,
+        target_client=target,
+        source_cluster="cluster-a",
+        source_project="source-project",
+        source_name="workload",
+        target_cluster="cluster-b",
+        target_project="target-project",
+        target_name="workload-copy",
+        target_member=None,
+        target_pool="fast",
+        settings=SimpleNamespace(migration_running_source_enabled=False),
+        mappings={"storage_pools": {"root": "fast"}},
+    )
+
+    assert "source_instance_not_stopped" in _codes(result)
+
+
+@pytest.mark.parametrize("status", ["", "Frozen", "Error", "Starting"])
+def test_a_transitional_or_failed_source_is_never_migrated(
     monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
     source, target = _patch_inspect(monkeypatch, status=status)
 
     result = _inspect(source, target, intent="copy")
 
-    assert "source_instance_not_stopped" in _codes(result)
+    assert "source_instance_state_unsupported" in _codes(result)
 
 
 @pytest.mark.parametrize(
@@ -238,19 +289,36 @@ def test_every_transfer_requires_authoritatively_stopped_source(
         {},
     ],
 )
-def test_non_default_project_must_isolate_every_dependency_namespace(
+def test_shared_default_dependencies_are_a_warning_for_one_instance(
     monkeypatch: pytest.MonkeyPatch, source_config: dict[str, str]
 ) -> None:
     source, target = _patch_inspect(monkeypatch, source_config=source_config)
 
     result = _inspect(source, target, intent="copy")
 
+    assert "source_shared_project_dependencies_unlocked" not in _codes(result)
+    warning = next(
+        issue
+        for issue in result.warnings
+        if issue["code"] == "source_project_shares_default_dependencies"
+    )
+    assert "features.profiles" in warning["message"]
+
+
+def test_shared_default_dependencies_still_block_a_whole_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, target = _patch_inspect(
+        monkeypatch, source_config={**_ISOLATED_CONFIG, "features.profiles": "false"}
+    )
+
+    result = _inspect(source, target, intent="move", scope="project")
+
     blocker = next(
         issue
         for issue in result.blockers
         if issue["code"] == "source_shared_project_dependencies_unlocked"
     )
-    assert "features.profiles" in blocker["message"]
     assert "canonical locks" in blocker["message"]
 
 
@@ -286,12 +354,10 @@ def test_target_inventory_failure_is_a_hard_blocker(
 ) -> None:
     source, target = _patch_inspect(monkeypatch)
 
-    def inventory(client: Any, _project: str) -> dict[str, list[Any]]:
-        if client is target:
-            raise preflight.InventoryReadError("network")
-        return _empty_resources(_instance())
+    def networks(_node: Any, *, project: str, resource: str) -> list[dict[str, Any]]:
+        raise preflight.InventoryReadError(resource)
 
-    monkeypatch.setattr(preflight, "_known_project_resources", inventory)
+    monkeypatch.setattr(preflight, "_get_collection", networks)
 
     result = _inspect(source, target, intent="copy")
 

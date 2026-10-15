@@ -214,6 +214,32 @@ def test_same_cluster_helper_reproduces_config_devices_and_profiles():
     assert body["profiles"] == ["default", "restricted"]
 
 
+def test_a_contract_copy_names_the_architecture_and_keeps_a_preserved_mac():
+    """LXD 5.21 refuses an explicit-config copy with no architecture when the source lives on the
+    member answering the request ("Architecture is not supported: \"\""). Found live on the lab."""
+    fake = FakeClient(_CopyableInstanceNode())
+    definition = {
+        "type": "container",
+        "architecture": "x86_64",
+        "profiles": ["default"],
+        "config": {"user.orcastra.migration-job": "job-1", "volatile.eth0.hwaddr": "00:16:3e:aa:bb:cc"},
+        "devices": {},
+    }
+
+    mobility.copy_within_cluster(
+        fake,
+        source_name=INSTANCE,
+        source_project=PROJECT,
+        target_name=INSTANCE,
+        target_project="scratch",
+        definition=definition,
+    )
+
+    body, _params = fake.api.instances.created[0]
+    assert body["architecture"] == "x86_64"
+    assert body["config"]["volatile.eth0.hwaddr"] == "00:16:3e:aa:bb:cc"
+
+
 def test_target_pool_overrides_only_the_effective_root_disk():
     node = _CopyableInstanceNode(config={"limits.cpu": "1"})
     node.devices = {

@@ -560,6 +560,7 @@ for _action_name, _action_path in (
     ("rollback", "rollback"),
     ("restore_checkpoint", "restore-checkpoint"),
     ("cleanup", "cleanup"),
+    ("release", "release"),
 ):
     _destructive_action_route(_action_name, _action_path)
 

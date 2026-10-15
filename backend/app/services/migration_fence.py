@@ -285,6 +285,14 @@ async def _active_locked_job_id(
     return (await db.execute(statement)).scalar_one_or_none()
 
 
+# Rows that fence a whole project or cluster: every project lock, plus the instance locks of a
+# retained move while its rollback or cleanup is mutating daemons.
+_hierarchy_fence = or_(
+    MigrationResourceLock.lock_scope == "project",
+    MigrationJob.phase.in_(("rolling_back", "cleaning_up")),
+)
+
+
 async def _active_project_lock_job_id(
     db: AsyncSession,
     *,
@@ -300,7 +308,7 @@ async def _active_project_lock_job_id(
                 MigrationJob.active_source_key.is_not(None),
                 MigrationJob.active_target_key.is_not(None),
             ),
-            MigrationResourceLock.lock_scope == "project",
+            _hierarchy_fence,
             MigrationResourceLock.cluster_id == cluster_id,
             MigrationResourceLock.project == project,
         )
@@ -314,7 +322,13 @@ async def _active_cluster_lock_job_id(
     *,
     cluster_id: str,
 ) -> Optional[str]:
-    """Return any migration holding a source or target hierarchy in this cluster."""
+    """Return any migration holding a project hierarchy in this cluster.
+
+    A staged move in retention keeps only the exact lock on its stopped source. That instance
+    fence must not freeze cluster-wide infrastructure for the whole retention window, so only
+    project-scope locks, which every actively running migration holds, fence the cluster. A
+    rollback or cleanup is running again, so its instance locks fence the cluster too.
+    """
     statement = (
         select(MigrationResourceLock.job_id)
         .join(MigrationJob, MigrationResourceLock.job_id == MigrationJob.job_id)
@@ -324,6 +338,7 @@ async def _active_cluster_lock_job_id(
                 MigrationJob.active_target_key.is_not(None),
             ),
             MigrationResourceLock.cluster_id == cluster_id,
+            _hierarchy_fence,
         )
         .limit(1)
     )

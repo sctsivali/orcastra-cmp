@@ -64,7 +64,8 @@ class _OrderedDatabase:
 
     async def execute(self, statement: Any) -> _FirstResult:
         self.statements.append(statement)
-        return _FirstResult(self.results.pop(0))
+        # Unscripted planner checks (OrcaHub ownership, active endpoints) find nothing.
+        return _FirstResult(self.results.pop(0) if self.results else None)
 
 
 @pytest.mark.asyncio

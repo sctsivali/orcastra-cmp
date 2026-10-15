@@ -14,16 +14,23 @@ from app.models.migration_models import MigrationResourceLock
 from app.models.migration_schemas import MigrationPlanCreateRequest
 from app.routers import instance_mobility
 from app.services.migrations import (
+    activation,
     executor,
     planning,
     preflight,
+    preflight_source,
+    reconcile_transfer,
     reconciliation,
     repository,
     transfer,
     worker,
 )
 from app.services.migrations.authority import ActorIdentityPin, MigrationAuthorityPin
-from app.services.migrations.contracts import MigrationConflict, MigrationUnknown
+from app.services.migrations.contracts import (
+    MigrationAuthorityError,
+    MigrationConflict,
+    MigrationUnknown,
+)
 
 
 def _compiled(statement: Any) -> str:
@@ -336,7 +343,8 @@ async def _reconcile_original_running_but_stopped(
     monkeypatch: pytest.MonkeyPatch,
     *,
     strategy: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    marker: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Exception | None]:
     same_cluster = strategy == "member_relocation"
     source_cluster = "shared-cluster" if same_cluster else "source-cluster"
     target_cluster = source_cluster if same_cluster else "target-cluster"
@@ -348,6 +356,8 @@ async def _reconcile_original_running_but_stopped(
         location="member-b" if same_cluster else "member-a",
     )
     target = source if same_cluster else _instance("target-identity", status="Stopped")
+    if marker is not None and not same_cluster:
+        target["config"]["user.orcastra.migration-job"] = marker
     operation_refs = [
         {
             "kind": "transfer",
@@ -358,9 +368,17 @@ async def _reconcile_original_running_but_stopped(
     ]
     safe_result: dict[str, Any] = {
         "transfer_submission_intent": True,
+        "contract_hash": "contract-a",
         "original_status": "running",
+        "source_identity_hash": executor.instance_identity_fingerprint(source),
+        "source_definition_hash": executor.instance_fingerprint(source),
+        "source_root_pool": None,
     }
-    if not same_cluster:
+    if same_cluster:
+        safe_result["source_root_pool"] = "fast"
+        source["expanded_devices"] = {"root": {"type": "disk", "path": "/", "pool": "fast"}}
+        safe_result["source_definition_hash"] = executor.instance_fingerprint(source)
+    else:
         operation_refs.insert(
             0,
             {
@@ -428,49 +446,75 @@ async def _reconcile_original_running_but_stopped(
             return source if args[0] is source_client else target
         pytest.fail(f"unexpected reconciliation read: {function}")
 
-    monkeypatch.setattr(reconciliation, "_resources", resources)
-    monkeypatch.setattr(reconciliation, "_resource_update", resource_update)
-    monkeypatch.setattr(reconciliation, "_fenced_job_update", job_update)
-    monkeypatch.setattr(reconciliation, "_blocking", blocking)
+    async def watched(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"settled": True, "failed": False}
 
-    await reconciliation._reconcile(job, "worker-a", source_client, target_client)
-    return resource_updates, job_updates
+    async def job_plan(_job: Any) -> Any:
+        return SimpleNamespace(
+            request_payload=_migration_request().model_dump(mode="json"),
+            preflight_payload={},
+        )
+
+    for module in (reconciliation, reconcile_transfer):
+        monkeypatch.setattr(module, "_resources", resources)
+        monkeypatch.setattr(module, "_resource_update", resource_update)
+        monkeypatch.setattr(module, "_fenced_job_update", job_update)
+        monkeypatch.setattr(module, "_blocking", blocking)
+    monkeypatch.setattr(reconcile_transfer, "await_operation", watched)
+    monkeypatch.setattr(reconcile_transfer, "_job_plan", job_plan)
+
+    error: Exception | None = None
+    try:
+        await reconciliation._reconcile(job, "worker-a", source_client, target_client)
+    except Exception as exc:  # noqa: BLE001
+        error = exc
+    return resource_updates, job_updates, error
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("strategy", ["cross_cluster_pull", "member_relocation"])
-async def test_reconciliation_never_accepts_stopped_target_for_original_running_source(
+async def test_reconciliation_resumes_activation_for_a_relocated_running_source(
     monkeypatch: pytest.MonkeyPatch,
-    strategy: str,
 ) -> None:
-    resource_updates, job_updates = await _reconcile_original_running_but_stopped(
-        monkeypatch,
-        strategy=strategy,
+    resource_updates, job_updates, error = await _reconcile_original_running_but_stopped(
+        monkeypatch, strategy="member_relocation"
     )
 
-    assert resource_updates[-1]["state"] == "unknown"
-    assert job_updates[-1]["phase"] == "manual_recovery"
-    assert job_updates[-1]["status"] == "manual_recovery"
-    assert job_updates[-1]["error_code"] == "target_activation_unverified"
+    assert error is None
+    assert resource_updates[-1]["state"] == "ready"
+    # Activation, not a premature success, decides the outcome: it starts the instance again.
+    assert job_updates[-1]["phase"] == "target_validating"
+    assert job_updates[-1]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_never_adopts_a_staged_target_without_the_job_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _updates, job_updates, error = await _reconcile_original_running_but_stopped(
+        monkeypatch, strategy="cross_cluster_pull"
+    )
+
+    assert isinstance(error, MigrationAuthorityError)
+    assert getattr(error, "code", None) == "target_not_owned"
+    assert not any(update.get("phase") == "target_validating" for update in job_updates)
 
 
 def _cutover_resource(name: str) -> Any:
     return SimpleNamespace(
         resource_id=f"resource-{name}",
         resource_type="instance",
-        state="pending",
+        state="ready",
         source_ref={"name": name},
         target_ref={"name": name},
         safe_result={},
     )
 
 
-async def _run_cutover_until_unknown(
+async def _run_activation_until_unknown(
     monkeypatch: pytest.MonkeyPatch,
     *,
     names: list[str],
     target_stays_stopped: bool = False,
-    source_restarts_immediately: bool = False,
     source_restarts_at_final_barrier: bool = False,
 ) -> list[tuple[str, dict[str, Any]]]:
     resources = [_cutover_resource(name) for name in names]
@@ -483,10 +527,11 @@ async def _run_cutover_until_unknown(
         source_project="source-project",
         target_project="target-project",
         target_member=None,
+        safe_result={},
     )
     source_client = object()
     target_client = object()
-    prepared: dict[str, dict[str, Any]] = {}
+    transferred: list[tuple[Any, dict[str, Any], Any]] = []
     source_by_name: dict[str, dict[str, Any]] = {}
     target_by_name: dict[str, dict[str, Any]] = {}
     for resource in resources:
@@ -495,13 +540,22 @@ async def _run_cutover_until_unknown(
         source["name"] = name
         target = _instance(f"target-{name}", status="Stopped")
         target["name"] = name
+        target["config"]["user.orcastra.migration-job"] = job.job_id
         source_by_name[name] = source
         target_by_name[name] = target
-        prepared[resource.resource_id] = {
-            "original_status": "running",
-            "source_identity_hash": executor.instance_identity_fingerprint(source),
-        }
+        transferred.append(
+            (
+                resource,
+                {
+                    "original_status": "running",
+                    "source_identity_hash": executor.instance_identity_fingerprint(source),
+                    "target_identity_hash": executor.instance_identity_fingerprint(target),
+                },
+                None,
+            )
+        )
     resource_updates: list[tuple[str, dict[str, Any]]] = []
+    started: set[str] = set()
 
     async def update(resource_id: str, **values: Any) -> None:
         resource_updates.append((resource_id, values))
@@ -512,48 +566,44 @@ async def _run_cutover_until_unknown(
     async def job_update(*_args: Any, **_kwargs: Any) -> bool:
         return True
 
+    async def settled(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"settled": True, "failed": False}
+
+    async def retention(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("an unverified cutover must never enter retention")
+
     async def blocking(function: Any, *args: Any, **kwargs: Any) -> Any:
         label = str(kwargs.pop("label", ""))
-        if function is executor.submit_copy_instance:
-            source_name = str(kwargs["source_name"])
-            return "copy", f"transfer-{source_name}", target_client
         if function is executor.submit_instance_state:
+            started.add(str(kwargs["name"]))
             return f"start-{kwargs['name']}"
-        if function is executor.wait_operation:
-            return {"settled": True, "failed": False, "err": None}
         if function is executor.read_instance:
             name = str(kwargs["name"])
             if args[0] is target_client:
                 target = dict(target_by_name[name])
-                if "verify_started_target" in label or "final_target_state" in label:
+                if name in started:
                     target["status"] = "Stopped" if target_stays_stopped else "Running"
                 return target
             source = dict(source_by_name[name])
-            if source_restarts_immediately and "verify_stopped_source_after_activation" in label:
-                source["status"] = "Running"
             if (
                 source_restarts_at_final_barrier
                 and name == names[0]
-                and "final_source_fence" in label
+                and "final_barrier" in label
             ):
                 source["status"] = "Running"
             return source
-        pytest.fail(f"unexpected cutover operation: {function}")
+        pytest.fail(f"unexpected activation operation: {function}")
 
-    monkeypatch.setattr(transfer, "_resource_update", update)
-    monkeypatch.setattr(transfer, "_assert_mutation_lease", lease)
-    monkeypatch.setattr(transfer, "_fenced_job_update", job_update)
-    monkeypatch.setattr(transfer, "_blocking", blocking)
+    monkeypatch.setattr(activation, "_resource_update", update)
+    monkeypatch.setattr(activation, "_assert_mutation_lease", lease)
+    monkeypatch.setattr(activation, "_fenced_job_update", job_update)
+    monkeypatch.setattr(activation, "_blocking", blocking)
+    monkeypatch.setattr(activation, "await_operation", settled)
+    monkeypatch.setattr(activation, "enter_source_retention", retention)
 
     with pytest.raises(MigrationUnknown):
-        await transfer._transfer_resources(
-            job,
-            "worker-a",
-            source_client,
-            target_client,
-            resources,
-            prepared,
-            "fast",
+        await activation.finish_transfer(
+            job, "worker-a", source_client, target_client, transferred
         )
     return resource_updates
 
@@ -562,7 +612,7 @@ async def _run_cutover_until_unknown(
 async def test_settled_start_is_unknown_when_target_readback_is_still_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    updates = await _run_cutover_until_unknown(
+    updates = await _run_activation_until_unknown(
         monkeypatch,
         names=["workload"],
         target_stays_stopped=True,
@@ -575,10 +625,10 @@ async def test_settled_start_is_unknown_when_target_readback_is_still_stopped(
 async def test_source_restart_after_target_activation_is_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    updates = await _run_cutover_until_unknown(
+    updates = await _run_activation_until_unknown(
         monkeypatch,
         names=["workload"],
-        source_restarts_immediately=True,
+        source_restarts_at_final_barrier=True,
     )
 
     assert not any(values.get("state") == "retained" for _, values in updates)
@@ -588,7 +638,7 @@ async def test_source_restart_after_target_activation_is_unknown(
 async def test_final_multi_resource_barrier_prevents_terminal_promotion_on_source_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    updates = await _run_cutover_until_unknown(
+    updates = await _run_activation_until_unknown(
         monkeypatch,
         names=["workload-a", "workload-b"],
         source_restarts_at_final_barrier=True,
@@ -711,12 +761,68 @@ def test_boot_autostart_is_a_hard_blocker_for_instance_and_project_graphs(
         mappings={},
     )
 
-    for report in (instance_report, project_report):
-        blockers = {blocker["code"]: blocker for blocker in report.blockers}
-        assert "source_autostart_not_fenced" in blockers
-        assert "Disable boot.autostart" in blockers["source_autostart_not_fenced"][
-            "remediation"
-        ]
+    # A copy leaves the source alone, so autostart is not a concern for it.
+    assert "source_autostart_not_fenced" not in {
+        blocker["code"] for blocker in instance_report.blockers
+    }
+    # Whole-project relocation still refuses an autostarting source.
+    project_blockers = {blocker["code"]: blocker for blocker in project_report.blockers}
+    assert "source_autostart_not_fenced" in project_blockers
+    assert "Disable boot.autostart" in project_blockers["source_autostart_not_fenced"][
+        "remediation"
+    ]
+
+
+def test_an_instance_move_fences_autostart_instead_of_refusing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SimpleNamespace(api=SimpleNamespace(networks=object(), operations=object()))
+    source = _instance("source-identity", autostart=True)
+    project = {"name": "source-project", "config": {}}
+    monkeypatch.setattr(preflight, "daemon_identity", lambda _client: _preflight_identity())
+    monkeypatch.setattr(preflight, "approved_build", lambda *_args: True)
+    monkeypatch.setattr(preflight, "_get_project", lambda *_args: project)
+    monkeypatch.setattr(
+        preflight,
+        "_instance",
+        lambda _client, project_name, name: (
+            source if name == "workload" and project_name == "source-project" else None
+        ),
+    )
+    monkeypatch.setattr(preflight, "_profile", lambda *_args: {"config": {}, "devices": {}})
+    monkeypatch.setattr(preflight, "_get_collection", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(preflight, "_storage_pools", lambda _client: ["fast"])
+    monkeypatch.setattr(preflight, "_instance_transfer_bytes", lambda *_args: 100)
+    monkeypatch.setattr(
+        preflight_source, "active_instance_operations", lambda _client, _wanted: set()
+    )
+    monkeypatch.setattr(
+        preflight.mobility,
+        "pool_headroom",
+        lambda *_args: {"total": 1_000, "used": 100, "free": 900},
+    )
+
+    report = preflight.inspect(
+        scope="instance",
+        intent="move",
+        source_client=client,
+        target_client=client,
+        source_cluster="cluster-a",
+        source_project="source-project",
+        source_name="workload",
+        target_cluster="cluster-a",
+        target_project="other-project",
+        target_name="workload",
+        target_member=None,
+        target_pool="fast",
+        settings=SimpleNamespace(),
+        mappings={},
+    )
+
+    assert "source_autostart_not_fenced" not in {issue["code"] for issue in report.blockers}
+    assert "source_autostart_fenced" in {issue["code"] for issue in report.warnings}
+    # The target keeps the source's autostart setting. Only the retained source loses it.
+    assert report.contracts["workload"].expected_config.get("boot.autostart") == "true"
 
 
 def _migration_request() -> MigrationPlanCreateRequest:

@@ -5,10 +5,14 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any, Optional
 
-from app.core.org_scope import get_user_org_ids
-from app.models.migration_models import MigrationJob
+from sqlalchemy import select
 
-from . import executor, repository
+from app.core.org_scope import get_user_org_ids
+from app.models.db_models import InstanceOperationJob, RebuildJob
+from app.models.migration_models import MigrationJob
+from app.services.shared_cluster_audit import serialize_cluster_configuration
+
+from . import repository
 from .authority import AuthentikAuthorityVerifier
 from .context import _authoritative_clients, _job_plan
 from .contracts import (
@@ -16,10 +20,9 @@ from .contracts import (
     MigrationConflict,
     MigrationNotFound,
     _authority_values,
-    _blocking,
 )
+from .retention_store import RETAINED_PHASES, refence_target_for_rollback
 from .security import sanitize_payload
-from .recovery_actions import DESTRUCTIVE_RECOVERY_ENABLED
 from .worker import _schedule, run_migration_job
 
 
@@ -33,7 +36,33 @@ def _reset_reconciliation_cycle(value: Any) -> dict[str, Any]:
     return sanitize_payload(state)
 
 
+async def _target_has_active_work(db: Any, row: MigrationJob) -> bool:
+    """Ordinary instance or rebuild work on the target would race the rollback delete."""
+    target_name = row.target_resource_name or row.source_resource_name
+    for model, statuses in (
+        (InstanceOperationJob, ("pending", "running", "unknown")),
+        (RebuildJob, ("pending", "stopping", "rebuilding", "starting", "provisioning")),
+    ):
+        statement = (
+            select(model.job_id)
+            .where(
+                model.cluster_id == row.target_cluster_id,
+                model.project == row.target_project,
+                model.instance_name == target_name,
+                model.status.in_(statuses),
+            )
+            .limit(1)
+        )
+        if (await db.execute(statement)).first() is not None:
+            return True
+    return False
+
+
 class MigrationActionsMixin:
+    def _require_recovery_actions(self) -> None:
+        if not bool(getattr(self.settings, "migration_recovery_actions_enabled", True)):
+            raise MigrationConflict("Rollback and source cleanup are disabled on this deployment.")
+
     async def act(
         self,
         job_id: str,
@@ -61,7 +90,7 @@ class MigrationActionsMixin:
                 )
         # Request ContextVars do not authorize a durable action. Rebuild ownership,
         # organization affiliation, registration fingerprints, and daemon identity now.
-        _source_client, target_client = await _authoritative_clients(
+        await _authoritative_clients(
             row, current_authority=authority
         )
         now = repository.utcnow()
@@ -113,114 +142,80 @@ class MigrationActionsMixin:
                 "retention_deadline": now + timedelta(hours=row.retention_hours),
             }
         elif action == "rollback":
-            if not DESTRUCTIVE_RECOVERY_ENABLED:
-                raise MigrationConflict(
-                    "Rollback is disabled until authoritative target write history can be proven."
-                )
+            self._require_recovery_actions()
             if confirmation != "ROLLBACK":
-                raise MigrationConflict("Type ROLLBACK to confirm reverse cutover.")
-            if row.phase not in {"source_retained", "cleanup_due", "rollback_available"}:
-                raise MigrationConflict("Rollback is not available in this phase.")
-            if row.strategy == "member_relocation":
-                raise MigrationConflict(
-                    "Member relocation rollback requires a new reverse relocation plan."
-                )
-            resources = await repository.list_resources(self.db, row.job_id)
-            if any(
-                (resource.safe_result or {}).get("target_started")
-                or (resource.safe_result or {}).get("target_start_attempted")
-                for resource in resources
+                raise MigrationConflict("Type ROLLBACK to confirm the rollback.")
+            if (
+                row.scope != "instance"
+                or row.intent != "move"
+                or row.strategy == "member_relocation"
             ):
                 raise MigrationConflict(
-                    "Automated rollback is blocked after target writes; reverse sync is required."
+                    "Only a staged instance move has a retained source to roll back to."
                 )
-            for resource in resources:
-                if resource.resource_type != "instance":
-                    continue
-                target_name = str(
-                    (resource.target_ref or {}).get("name")
-                    or (resource.source_ref or {}).get("name")
-                    or ""
-                )
-                target_record = await _blocking(
-                    executor.read_instance,
-                    target_client,
-                    project=row.target_project,
-                    name=target_name,
-                    label=f"migration.rollback_live_check[{target_name}]",
-                )
-                if target_record is None or str(
-                    target_record.get("status") or ""
-                ).lower() == "running":
+            if row.phase not in RETAINED_PHASES or row.status != "waiting":
+                raise MigrationConflict("Rollback is only available while the source is retained.")
+            # important: the same cluster lock ordinary instance writes take before their fence
+            # check, so no write admitted before the re-fence can land after it.
+            async with serialize_cluster_configuration(self.db, row.target_cluster_id):
+                if await _target_has_active_work(self.db, row):
                     raise MigrationConflict(
-                        "Rollback requires a present, stopped target with no activation history."
+                        "The target has an operation in progress. Retry once it finishes."
                     )
-            values = {"phase": "rolling_back", "status": "pending"}
+                await refence_target_for_rollback(self.db, row)
+            values = {
+                "phase": "rolling_back",
+                "status": "pending",
+                "locked_by": None,
+                "lease_expires_at": None,
+                "safe_result": sanitize_payload(
+                    {**(row.safe_result or {}), "recovery_kind": "rollback"}
+                ),
+            }
         elif action == "restore_checkpoint":
-            if not DESTRUCTIVE_RECOVERY_ENABLED:
-                raise MigrationConflict(
-                    "Checkpoint restore is disabled until authoritative target write history "
-                    "can be proven."
-                )
-            if confirmation != "RESTORE":
-                raise MigrationConflict("Type RESTORE to confirm checkpoint restoration.")
-            if row.phase not in {"manual_recovery", "rollback_available"}:
-                raise MigrationConflict("Checkpoint restore is unavailable in this phase.")
-            if row.strategy == "member_relocation":
-                raise MigrationConflict(
-                    "Member relocation recovery requires a new reverse relocation plan."
-                )
-            resources = await repository.list_resources(self.db, row.job_id)
-            instance_resources = [
-                resource
-                for resource in resources
-                if resource.resource_type == "instance"
-            ]
-            if row.external_cutover_confirmed_at is not None or any(
-                (resource.safe_result or {}).get("target_started") is not False
-                or (resource.safe_result or {}).get("target_start_attempted") is not False
-                for resource in instance_resources
-            ):
-                raise MigrationConflict(
-                    "Checkpoint restore is blocked after target activation or ambiguous write "
-                    "history; reverse sync is required."
-                )
-            if not any(
-                (resource.safe_result or {}).get("checkpoint_name")
-                for resource in instance_resources
-            ):
-                raise MigrationConflict("No durable checkpoint is available to restore.")
-            for resource in instance_resources:
-                target_name = str(
-                    (resource.target_ref or {}).get("name")
-                    or (resource.source_ref or {}).get("name")
-                    or ""
-                )
-                target_record = await _blocking(
-                    executor.read_instance,
-                    target_client,
-                    project=row.target_project,
-                    name=target_name,
-                    label=f"migration.restore_live_check[{target_name}]",
-                )
-                if target_record is not None:
-                    raise MigrationConflict(
-                        "Checkpoint restore requires the target to be absent and verified."
-                    )
-            values = {"phase": "preparing_recovery", "status": "pending"}
+            raise MigrationConflict(
+                "Checkpoint restore is not offered. Roll back to the retained source instead."
+            )
         elif action == "cleanup":
-            if not DESTRUCTIVE_RECOVERY_ENABLED:
-                raise MigrationConflict(
-                    "Source cleanup is disabled until authoritative target write history can "
-                    "be proven."
-                )
+            self._require_recovery_actions()
             if confirmation != "CLEANUP":
-                raise MigrationConflict("Type CLEANUP to confirm source deletion.")
-            if row.phase not in {"cleanup_due", "cleanup_blocked"}:
-                raise MigrationConflict("Source cleanup is unavailable in this phase.")
-            if row.retention_deadline is None or row.retention_deadline > now:
-                raise MigrationConflict("The source retention window has not ended.")
-            values = {"phase": "cleaning_up", "status": "pending"}
+                raise MigrationConflict("Type CLEANUP to confirm deleting the retained source.")
+            if row.scope != "instance" or row.intent != "move" or row.strategy == "member_relocation":
+                raise MigrationConflict("This migration has no retained source to delete.")
+            if row.phase not in RETAINED_PHASES or row.status != "waiting":
+                raise MigrationConflict("The retained source can only be deleted during retention.")
+            values = {
+                "phase": "cleaning_up",
+                "status": "pending",
+                "locked_by": None,
+                "lease_expires_at": None,
+                "error_code": None,
+                "error_message": None,
+                "safe_result": sanitize_payload(
+                    {**(row.safe_result or {}), "cleanup_trigger": "finalize"}
+                ),
+            }
+        elif action == "release":
+            if requester_role != "admin":
+                raise MigrationAuthorityError(
+                    "Only an administrator can release a migration.", code="current_role_denied"
+                )
+            if confirmation != "RELEASE":
+                raise MigrationConflict("Type RELEASE to end the migration without changes.")
+            if row.phase not in {"cleanup_blocked", "manual_recovery"} or row.status not in {
+                "waiting",
+                "manual_recovery",
+            }:
+                raise MigrationConflict("Only a blocked or manual-recovery migration can be released.")
+            retained = row.phase == "cleanup_blocked"
+            values = {
+                "phase": "completed" if retained else "failed",
+                "status": "success" if retained else "failure",
+                "safe_result": sanitize_payload(
+                    {**(row.safe_result or {}), "released": True, "release_reason": reason}
+                ),
+            }
+            terminal = True
         elif action == "recheck":
             if row.status not in {"unknown", "manual_recovery"}:
                 raise MigrationConflict("Recheck is only available for unresolved migrations.")

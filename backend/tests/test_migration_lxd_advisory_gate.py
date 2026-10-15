@@ -15,17 +15,23 @@ def _identity(*, engine: str = "lxd", version: str = "6.10") -> dict[str, str]:
 
 
 def test_general_migration_build_baseline_has_no_disable_switch() -> None:
+    # A patched build passes the series policy, an unpatched one has no switch to pass it.
     assert approved_build(
-        _identity(),
+        _identity(version="6.9"),
         SimpleNamespace(
             migration_require_approved_build=False,
             migration_approved_builds="",
         ),
     ) is False
+    assert approved_build(_identity(version="6.10"), SimpleNamespace()) is True
     assert approved_build(
-        _identity(),
-        SimpleNamespace(migration_approved_builds="lxd:6.10"),
+        _identity(version="6.9"),
+        SimpleNamespace(migration_approved_builds="lxd:6.9"),
     ) is True
+    assert approved_build(
+        _identity(version="6.10"),
+        SimpleNamespace(migration_build_deny="lxd:6.10"),
+    ) is False
 
 
 def test_native_lxd_cross_project_move_requires_its_own_exact_build_approval() -> None:
@@ -133,7 +139,7 @@ def test_plan_explains_the_fail_closed_unapproved_baseline() -> None:
     assert "fail-closed" in capability["reason"]
 
 
-def test_preflight_gate_warns_and_keeps_staged_copy_when_unapproved() -> None:
+def test_preflight_gate_keeps_staged_copy_when_native_move_is_unapproved() -> None:
     result = _result(security_approved=False)
 
     preflight._apply_lxd_native_cross_project_move_gate(
@@ -151,9 +157,8 @@ def test_preflight_gate_warns_and_keeps_staged_copy_when_unapproved() -> None:
     assert result.strategy == "same_cluster_copy"
     assert result.capabilities["lxd_native_cross_project_move_selected"] is False
     assert result.capabilities["lxd_native_cross_project_move_security_approved"] is False
-    assert [warning["code"] for warning in result.warnings] == [
-        "lxd_native_cross_project_move_security_blocked"
-    ]
+    # The native path is never selected, so its build gate no longer warns on every plan.
+    assert result.warnings == []
 
 
 def test_preflight_gate_is_quiet_outside_native_lxd_cross_project_move() -> None:

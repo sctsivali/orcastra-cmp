@@ -238,8 +238,9 @@ class Settings(BaseSettings):
 
     # Durable instance and project migration. This gates only new plan/job admission. Recovery,
     # audit delivery, retention, and authorized actions stay available for already durable jobs.
+    # The instance-level stages are on by default and each flag remains a kill switch.
     migration_center_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MIGRATION_CENTER_ENABLED",
         description="Enable new Migration Center plan creation and job execution.",
     )
@@ -249,12 +250,12 @@ class Settings(BaseSettings):
         description="Master gate for every project-scope relocation stage.",
     )
     migration_durable_copy_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MIGRATION_DURABLE_COPY_ENABLED",
         description="Enable durable copy execution after read-only preflight is validated.",
     )
     migration_instance_move_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MIGRATION_INSTANCE_MOVE_ENABLED",
         description="Enable staged instance move execution after durable copy is validated.",
     )
@@ -306,9 +307,49 @@ class Settings(BaseSettings):
     migration_approved_builds: str = Field(
         default="",
         alias="MIGRATION_APPROVED_BUILDS",
+        description="Deprecated alias of MIGRATION_BUILD_ALLOW, kept for existing deployments.",
+    )
+    migration_build_allow: str = Field(
+        default="",
+        alias="MIGRATION_BUILD_ALLOW",
         description=(
-            "Comma-separated exact engine:server_version values approved for migration after "
-            "vendor or distribution security review."
+            "Comma-separated exact engine:server_version builds admitted in addition to the "
+            "built-in minimum patched LXD policy. Incus builds are admitted only from this list."
+        ),
+    )
+    migration_build_deny: str = Field(
+        default="",
+        alias="MIGRATION_BUILD_DENY",
+        description="Comma-separated exact engine:server_version builds refused even when allowed.",
+    )
+    migration_recovery_actions_enabled: bool = Field(
+        default=True,
+        alias="MIGRATION_RECOVERY_ACTIONS_ENABLED",
+        description="Allow rollback and source cleanup (finalize) of a retained move.",
+    )
+    migration_auto_cleanup_enabled: bool = Field(
+        default=True,
+        alias="MIGRATION_AUTO_CLEANUP_ENABLED",
+        description="Delete a retained move source automatically once its retention expires.",
+    )
+    migration_running_source_enabled: bool = Field(
+        default=True,
+        alias="MIGRATION_RUNNING_SOURCE_ENABLED",
+        description="Stop a running source for a cold transfer and start the target afterwards.",
+    )
+    migration_default_stop_timeout_seconds: int = Field(
+        default=120,
+        ge=10,
+        le=900,
+        alias="MIGRATION_DEFAULT_STOP_TIMEOUT_SECONDS",
+        description="Graceful stop budget for a running source before the transfer.",
+    )
+    migration_orcahub_identity_change_enabled: bool = Field(
+        default=False,
+        alias="MIGRATION_ORCAHUB_IDENTITY_CHANGE_ENABLED",
+        description=(
+            "Allow moving workloads of OrcaHub-provisioned projects to another project or "
+            "cluster. Off until OrcaHub accepts a relocation event."
         ),
     )
     migration_lxd_native_cross_project_move_approved_builds: str = Field(

@@ -63,13 +63,18 @@ class SystemSettings(BaseModel):
     snapshot_schedules_enabled: bool
     # The task panel is mounted only when the journal is on; the console hides the dock otherwise.
     task_journal_enabled: bool
-    # Migration rollout is deliberately staged. The center flag exposes read-only planning;
-    # each mutation class has a separate, default-off production gate.
+    # Migration rollout is staged. Each mutation class has its own gate, and the instance
+    # stages are on by default. The recovery flags tell the console which retention actions,
+    # automatic cleanup, and running-source behaviour to describe.
     migration_center_enabled: bool
     migration_durable_copy_enabled: bool
     migration_instance_move_enabled: bool
     migration_project_member_relocation_enabled: bool
     migration_project_cross_cluster_enabled: bool
+    migration_recovery_actions_enabled: bool = False
+    migration_auto_cleanup_enabled: bool = False
+    migration_running_source_enabled: bool = False
+    migration_default_retention_hours: int = 24
 
 
 class VersionInfo(BaseModel):
@@ -133,6 +138,19 @@ async def get_system_settings():
         migration_project_cross_cluster_enabled=(
             getattr(settings, "project_relocation_enabled", False)
             and getattr(settings, "migration_project_cross_cluster_enabled", False)
+        ),
+        migration_recovery_actions_enabled=getattr(
+            settings, "migration_recovery_actions_enabled", False
+        ),
+        migration_auto_cleanup_enabled=bool(
+            getattr(settings, "migration_auto_cleanup_enabled", False)
+            and getattr(settings, "migration_recovery_actions_enabled", False)
+        ),
+        migration_running_source_enabled=getattr(
+            settings, "migration_running_source_enabled", False
+        ),
+        migration_default_retention_hours=getattr(
+            settings, "migration_default_retention_hours", 24
         ),
     )
 

@@ -16,6 +16,8 @@ def _preflight_payload(
     source = request.source
     target = request.target
     intent = str(getattr(request.intent, "value", request.intent))
+    instance_scope = str(getattr(request.scope, "value", request.scope)) == "instance"
+    rollback_supported = bool(result.capabilities.get("rollback")) and intent == "move"
     resources: list[dict[str, Any]] = []
     project_resource_keys = {
         f"project:{resource.get('source_name')}"
@@ -27,8 +29,14 @@ def _preflight_payload(
         target_name = resource.get("target_name")
         resource_type = str(resource.get("resource_type") or "resource")
         resource_key = f"{resource_type}:{source_name or ordinal}"
+        planned: dict[str, Any] = {}
+        if resource.get("source_status"):
+            # Outside ``source`` on purpose: the worker's graph signature hashes ``source`` and
+            # a running source is stopped by the job itself.
+            planned["source_status"] = resource["source_status"]
         resources.append(
             {
+                **planned,
                 "resource_key": resource_key,
                 "resource_type": resource_type,
                 "source": {
@@ -56,6 +64,11 @@ def _preflight_payload(
                     "project_fingerprint": result.capabilities.get(
                         "target_project_fingerprint"
                     ),
+                    **(
+                        {"contract": resource["contract"]}
+                        if isinstance(resource.get("contract"), dict)
+                        else {}
+                    ),
                 },
                 "dependency_keys": (
                     []
@@ -79,18 +92,25 @@ def _preflight_payload(
         },
         {
             "code": "rollback",
-            "supported": False,
+            "supported": rollback_supported,
             "reason": (
                 "Copy creates an independent destination and has no rollback window."
                 if intent == "copy"
-                else "Automated rollback is unavailable in this release because direct-daemon "
-                "write history cannot yet be proven across worker restarts."
+                else "Member relocation keeps one instance identity. Relocate it back instead."
+                if result.strategy == "member_relocation"
+                else "The stopped source is retained, so rollback restores it and removes the "
+                "target. Writes made on the target after cutover are discarded."
+                if rollback_supported
+                else "Project-scope rollback is not available yet."
             ),
         },
         {
             "code": "live",
             "supported": bool(result.capabilities.get("live")),
-            "reason": "This release uses cold cutover for deterministic recovery.",
+            "reason": (
+                "A running source is stopped for the transfer and its target is started "
+                "afterwards (cold migration)."
+            ),
         },
         {
             "code": "incremental_refresh",
@@ -126,11 +146,10 @@ def _preflight_payload(
                 result.capabilities.get("atomic_shadow_metadata_cutover")
             ),
             "reason": (
-                "The selected operation preserves Orcastra resource identity."
+                "Tags, snapshot schedules, and tenant access rules follow the instance to its "
+                "new identity in the same transaction that retains the source."
                 if result.capabilities.get("atomic_shadow_metadata_cutover")
-                else "Identity-changing instance move is disabled until tags, schedules, "
-                "policy grants, tenant rules, billing, and webhook ownership can be cut over "
-                "atomically."
+                else "Project-scope metadata cutover is not available yet."
             ),
         },
         {
@@ -166,13 +185,22 @@ def _preflight_payload(
         },
         {
             "code": "mapping_networks",
-            "supported": False,
-            "reason": "Network mapping is not executable in this release.",
+            "supported": instance_scope,
+            "reason": (
+                "Each NIC follows an explicit mapping, the target profile, or a network with "
+                "the same name."
+                if instance_scope
+                else "Network mapping for project relocation is not available yet."
+            ),
         },
         {
             "code": "mapping_profiles",
-            "supported": False,
-            "reason": "Profile mapping is not executable in this release.",
+            "supported": instance_scope,
+            "reason": (
+                "Profiles may be renamed to existing target profiles."
+                if instance_scope
+                else "Profile mapping for project relocation is not available yet."
+            ),
         },
         {
             "code": "mapping_volumes",
@@ -190,6 +218,8 @@ def _preflight_payload(
             "reason": "External dependency mapping requires an operator-managed cutover.",
         },
     ]
+    retained = intent == "move" and result.strategy != "member_relocation"
+    automatic_cleanup = bool(result.capabilities.get("automatic_cleanup")) and retained
     payload = {
         "strategy": result.strategy,
         "downtime_class": result.downtime,
@@ -204,33 +234,22 @@ def _preflight_payload(
             {**issue, "severity": "warning"} for issue in result.warnings
         ],
         "rollback_contract": {
-            "supported": False,
-            "source_retained": (
-                intent == "move"
-                and result.strategy != "member_relocation"
-            ),
-            "retention_hours": (
-                request.retention_hours
-                if intent == "move"
-                and result.strategy != "member_relocation"
-                else None
-            ),
-            "automatic_cleanup": False,
-            "reverse_sync_required_after_target_writes": (
-                intent == "move"
-                and result.strategy != "member_relocation"
-            ),
-            "manual_recovery_only": (
-                intent == "move"
-                and result.strategy != "member_relocation"
-            ),
+            "supported": rollback_supported,
+            "source_retained": retained,
+            "retention_hours": request.retention_hours if retained else None,
+            "automatic_cleanup": automatic_cleanup,
+            "target_writes_discarded_on_rollback": retained,
+            "manual_recovery_only": False,
             "reason": (
                 "Copy creates an independent destination and has no retained-source rollback."
                 if intent == "copy"
                 else "Native member relocation has no retained source copy."
                 if result.strategy == "member_relocation"
-                else "The stopped source may be retained, but automated rollback, restore, and "
-                "cleanup are unavailable in this release."
+                else "The source stays stopped and fenced for the retention window. Rollback "
+                "restores it and removes the target. Finalize, or the end of retention, deletes it."
+                if automatic_cleanup
+                else "The source stays stopped and fenced for the retention window. Rollback "
+                "restores it and removes the target. Finalize deletes it."
             ),
         },
     }
@@ -289,3 +308,10 @@ def approval_report_hash(report: dict[str, Any]) -> str:
 def _target_pool(request: MigrationPlanCreateRequest) -> Optional[str]:
     pools = request.mappings.storage_pools
     return pools.get("root") or pools.get("*") or next(iter(pools.values()), None)
+
+
+def approved_root_pool(plan_payload: dict[str, Any]) -> Optional[str]:
+    """The root pool the approved preflight resolved, which the worker must reuse."""
+    capabilities = (plan_payload or {}).get("daemon_capabilities") or {}
+    pool = capabilities.get("target_root_pool")
+    return pool if isinstance(pool, str) and pool else None

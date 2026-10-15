@@ -296,6 +296,7 @@ def copy_within_cluster(
     target_project: str,
     target_member: Optional[str] = None,
     target_pool: Optional[str] = None,
+    definition: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Copy an instance inside one cluster.
 
@@ -307,8 +308,12 @@ def copy_within_cluster(
     destination project is a query parameter and the source project travels inside `source`,
     which is what the `container_copy_project` extension added.
     """
-    definition = read_instance_definition(client, source_name, source_project)
-    devices = _map_root_pool(definition["devices"], target_pool)
+    if definition is None:
+        definition = read_instance_definition(client, source_name, source_project)
+        devices = _map_root_pool(definition["devices"], target_pool)
+    else:
+        # A migration contract already decided every device, including the root pool.
+        devices = dict(definition.get("devices") or {})
 
     body: Dict[str, Any] = {
         "name": target_name,
@@ -322,6 +327,10 @@ def copy_within_cluster(
         "devices": devices,
         "profiles": definition["profiles"],
     }
+    # important: LXD 5.21 rejects an explicit-config copy without an architecture when the
+    # source lives on the member answering the request ("Architecture is not supported").
+    if definition.get("architecture"):
+        body["architecture"] = definition["architecture"]
 
     params = _project_params(target_project, target=target_member)
     response = client.api.instances.post(json=body, params=params)

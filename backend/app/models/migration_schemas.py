@@ -112,6 +112,7 @@ class MigrationActionName(str, Enum):
     RESTORE_CHECKPOINT = "restore_checkpoint"
     CLEANUP = "cleanup"
     RECHECK = "recheck"
+    RELEASE = "release"
 
 
 class MigrationEndpointRef(BaseModel):
@@ -223,6 +224,8 @@ class MigrationPlannedResource(BaseModel):
 
     resource_key: str = Field(..., min_length=1, max_length=512)
     resource_type: str = Field(..., min_length=1, max_length=64)
+    # Live status at planning time. A running source is stopped for the transfer.
+    source_status: Optional[str] = Field(None, max_length=32)
     source: Dict[str, JsonValue] = Field(default_factory=dict)
     target: Dict[str, JsonValue] = Field(default_factory=dict)
     dependency_keys: List[str] = Field(default_factory=list, max_length=1024)

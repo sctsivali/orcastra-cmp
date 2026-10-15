@@ -34,16 +34,28 @@ def billing_override_event(
     }
 
 
+def report_has_running_source(report: dict[str, Any]) -> bool:
+    return any(
+        resource.get("source_status") == "running"
+        for resource in (report or {}).get("resources") or []
+        if isinstance(resource, dict)
+    )
+
+
 def required_acknowledgements(
     *,
     intent: str,
     strategy: str,
     external_cutover_required: bool,
+    source_running: bool = False,
 ) -> set[str]:
     required = {
         "copy-impact-reviewed" if intent == "copy" else "downtime-reviewed",
         BILLING_ACKNOWLEDGEMENT,
     }
+    if intent == "copy" and source_running:
+        # A running source is stopped for the duration of the copy.
+        required.add("downtime-reviewed")
     if intent == "move" and strategy != "member_relocation":
         required.add("source-retention-understood")
     if external_cutover_required:
@@ -57,12 +69,14 @@ def validate_acknowledgements(
     strategy: str,
     external_cutover_required: bool,
     acknowledgements: list[str],
+    source_running: bool = False,
 ) -> None:
     provided = set(acknowledgements)
     missing = required_acknowledgements(
         intent=intent,
         strategy=strategy,
         external_cutover_required=external_cutover_required,
+        source_running=source_running,
     ) - provided
     if missing:
         raise MigrationConflict(

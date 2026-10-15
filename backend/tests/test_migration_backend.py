@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.core.dependencies import check_read_only_mode
 from app.models.migration_schemas import MigrationPlanCreateRequest
 from app.routers import migrations as migration_router
+from app.services.migrations import preflight_source, target_admission
 from app.services.migrations import billing, executor, orchestrator, preflight, repository
 from app.services.migrations.completion import target_completion_events
 from app.services.migrations.contracts import MigrationAuthorityError
@@ -175,7 +176,7 @@ def test_copy_contract_does_not_promise_retained_source_rollback() -> None:
         "source_retained": False,
         "retention_hours": None,
         "automatic_cleanup": False,
-        "reverse_sync_required_after_target_writes": False,
+        "target_writes_discarded_on_rollback": False,
         "manual_recovery_only": False,
         "reason": (
             "Copy creates an independent destination and has no retained-source rollback."
@@ -183,28 +184,32 @@ def test_copy_contract_does_not_promise_retained_source_rollback() -> None:
     }
 
 
-def test_staged_move_contract_discloses_manual_recovery_only() -> None:
-    payload = orchestrator._preflight_payload(_preflight_result([]), _request())
+def test_staged_move_contract_offers_rollback_and_retention_cleanup() -> None:
+    result = _preflight_result([])
+    result.capabilities["automatic_cleanup"] = True
+    payload = orchestrator._preflight_payload(result, _request())
 
     rollback = next(
         capability
         for capability in payload["capabilities"]
         if capability["code"] == "rollback"
     )
-    assert rollback["supported"] is False
-    assert "direct-daemon write history" in str(rollback["reason"])
-    assert payload["rollback_contract"] == {
-        "supported": False,
-        "source_retained": True,
-        "retention_hours": 24,
-        "automatic_cleanup": False,
-        "reverse_sync_required_after_target_writes": True,
-        "manual_recovery_only": True,
-        "reason": (
-            "The stopped source may be retained, but automated rollback, restore, and "
-            "cleanup are unavailable in this release."
-        ),
-    }
+    assert rollback["supported"] is True
+    assert "discarded" in str(rollback["reason"])
+    contract = payload["rollback_contract"]
+    assert contract["supported"] is True
+    assert contract["source_retained"] is True
+    assert contract["retention_hours"] == 24
+    assert contract["automatic_cleanup"] is True
+    assert contract["target_writes_discarded_on_rollback"] is True
+    assert contract["manual_recovery_only"] is False
+
+
+def test_staged_move_contract_without_automatic_cleanup_requires_finalize() -> None:
+    payload = orchestrator._preflight_payload(_preflight_result([]), _request())
+
+    assert payload["rollback_contract"]["automatic_cleanup"] is False
+    assert "Finalize deletes it" in payload["rollback_contract"]["reason"]
 
 
 def test_member_relocation_acknowledgements_do_not_claim_a_retained_source() -> None:
@@ -249,6 +254,23 @@ def test_dependency_graph_links_an_explicit_project_resource() -> None:
     ]
 
 
+def _usage() -> Any:
+    limits = {
+        "cpu": None,
+        "memory_bytes": None,
+        "instances": 10,
+        "containers": None,
+        "virtual_machines": None,
+        "disk_bytes": None,
+    }
+    return SimpleNamespace(
+        limits=limits,
+        used={key: 1 for key in limits},
+        complete=True,
+        complete_fields=set(limits),
+    )
+
+
 def _patch_instance_preflight(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -260,8 +282,13 @@ def _patch_instance_preflight(
     target_profile: dict[str, Any] | None = None,
     free: int = 1_000,
 ) -> tuple[Any, Any]:
-    source_client = object()
-    target_client = object()
+    source_client = SimpleNamespace(api=SimpleNamespace(networks=object(), operations=object()))
+    target_client = SimpleNamespace(api=SimpleNamespace(networks=object(), operations=object()))
+    source_instance = {
+        "status": "Stopped",
+        "created_at": "2026-01-01T00:00:00Z",
+        **source_instance,
+    }
     identity = {
         "engine": "lxd",
         "version": "6.10",
@@ -291,6 +318,17 @@ def _patch_instance_preflight(
     )
     monkeypatch.setattr(preflight, "_storage_pools", lambda _client: ["fast"])
     monkeypatch.setattr(preflight, "_instance_transfer_bytes", lambda *_args: 100)
+    monkeypatch.setattr(
+        preflight_source, "active_instance_operations", lambda _client, _wanted: set()
+    )
+    monkeypatch.setattr(
+        preflight,
+        "_get_collection",
+        lambda _node, *, project, resource: [
+            {"name": "lxdbr0", "managed": True, "type": "bridge", "status": "Created"}
+        ],
+    )
+    monkeypatch.setattr(target_admission, "read_project_usage", lambda *_args: _usage())
     monkeypatch.setattr(
         preflight.mobility,
         "pool_headroom",
@@ -350,7 +388,7 @@ def _inspect_instance(source_client: Any, target_client: Any, **overrides: Any) 
     return preflight.inspect(**values)
 
 
-def test_cross_project_instance_requires_empty_policy_equivalent_target(
+def test_cross_project_move_admits_a_populated_target_with_its_own_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_client, target_client = _patch_instance_preflight(
@@ -376,11 +414,12 @@ def test_cross_project_instance_requires_empty_policy_equivalent_target(
     result = _inspect_instance(source_client, target_client)
     codes = {issue["code"] for issue in result.blockers}
 
-    assert "target_project_policy_mismatch" in codes
-    assert "target_project_not_empty" in codes
+    assert "target_project_policy_mismatch" not in codes
+    assert "target_project_not_empty" not in codes
+    assert not codes
 
 
-def test_same_cluster_cross_project_checks_profile_equivalence(
+def test_cross_project_move_pins_profile_values_the_target_would_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_client, target_client = _patch_instance_preflight(
@@ -392,7 +431,9 @@ def test_same_cluster_cross_project_checks_profile_equivalence(
             "type": "container",
             "architecture": "x86_64",
             "profiles": ["default"],
-            "expanded_config": {},
+            "config": {},
+            "devices": {},
+            "expanded_config": {"limits.cpu": "2"},
             "expanded_devices": {},
         },
         source_profile={"config": {"limits.cpu": "2"}, "devices": {}},
@@ -406,7 +447,11 @@ def test_same_cluster_cross_project_checks_profile_equivalence(
         target_cluster="same",
     )
 
-    assert "profile_drift" in {issue["code"] for issue in result.blockers}
+    assert "profile_drift" not in {issue["code"] for issue in result.blockers}
+    contract = result.contracts["workload"]
+    assert contract.config["limits.cpu"] == "2"
+    assert "limits.cpu" in contract.pinned_config
+    assert contract.expected_config["limits.cpu"] == "2"
 
 
 def test_known_insufficient_storage_is_a_blocker(
@@ -461,12 +506,13 @@ def test_unsupported_mapping_groups_fail_closed(
         mappings={
             "storage_pools": {"root": "fast"},
             "networks": {"old": "new"},
+            "volumes": {"data": "data"},
         },
     )
+    codes = {issue["code"] for issue in result.blockers}
 
-    assert "unsupported_networks_mapping" in {
-        issue["code"] for issue in result.blockers
-    }
+    assert "unsupported_volumes_mapping" in codes
+    assert "unsupported_networks_mapping" not in codes
 
 
 def test_identical_instance_source_and_target_is_a_blocker(

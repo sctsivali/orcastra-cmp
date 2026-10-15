@@ -12,6 +12,7 @@ from app.core.lxd_path import safe_segment
 from app.services.lxd import mobility
 from app.services.lxd import snapshots as snapshot_service
 
+from . import project_policy
 from .contracts import MigrationUnknown
 from .security import (
     api_endpoint,
@@ -23,6 +24,26 @@ from .security import (
 
 class MigrationOperationUnknown(MigrationUnknown):
     """A mutation was accepted but its final state is not yet known."""
+
+
+class OperationForgotten(MigrationOperationUnknown):
+    """The daemon no longer lists the operation, usually because it finished and was purged."""
+
+
+def _is_not_found(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return response is not None and getattr(response, "status_code", None) == 404
+
+
+def is_definitive_rejection(exc: Exception) -> bool:
+    """Whether a daemon answered a mutation with a client error, so nothing was accepted.
+
+    A 4xx answer to a POST or PUT is a synchronous refusal: the daemon validated the request and
+    created no operation. Timeouts, connection errors and 5xx answers stay ambiguous.
+    """
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None) if response is not None else None
+    return isinstance(status_code, int) and 400 <= status_code < 500
 
 
 def _metadata(response: Any) -> Any:
@@ -162,13 +183,27 @@ def read_project(client: Any, *, project: str) -> Optional[dict[str, Any]]:
     return metadata if isinstance(metadata, dict) else None
 
 
-def _reviewed_project_payload(source: dict[str, Any], target_project: str) -> dict[str, Any]:
+def _reviewed_project_payload(
+    source: dict[str, Any], target_project: str, *, job_id: Optional[str] = None
+) -> dict[str, Any]:
     """Return the exact project fields approved by preflight for a new namespace."""
     return {
         "name": target_project,
         "description": str(source.get("description") or ""),
-        "config": dict(source.get("config") or {}),
+        "config": project_policy.clone_config(source, job_id=job_id),
     }
+
+
+def _sync_success(response: Any) -> bool:
+    try:
+        payload = response.json()
+    except Exception:  # noqa: BLE001
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("type") == "sync"
+        and payload.get("status_code") == 200
+    )
 
 
 def submit_create_project(
@@ -177,25 +212,47 @@ def submit_create_project(
     *,
     source_project: str,
     target_project: str,
+    job_id: Optional[str] = None,
 ) -> Optional[str]:
+    """Create the target project, returning an operation id or None for a synchronous create."""
     source = read_project(source_client, project=source_project)
     if source is None:
         raise RuntimeError("The source project no longer exists.")
     response = target_client.api.projects.post(
-        json=_reviewed_project_payload(source, target_project)
+        json=_reviewed_project_payload(source, target_project, job_id=job_id)
     )
+    # LXD answers a project create synchronously. Only an async daemon returns an operation.
+    if _sync_success(response):
+        return None
     _, operation_id = _operation(response, target_client)
     return operation_id
 
 
+def delete_project(client: Any, *, project: str) -> None:
+    """Delete an empty project. LXD answers synchronously and refuses a non-empty one."""
+    client.api.projects[safe_segment(project)].delete()
+
+
 def projects_equivalent(source: dict[str, Any], target: dict[str, Any]) -> bool:
     """Compare project policy that affects isolation, restrictions, and quotas."""
-    return dict(source.get("config") or {}) == dict(target.get("config") or {})
+    return project_policy.projects_equivalent(source, target)
 
 
 def wait_operation(
-    client: Any, *, operation_id: Optional[str], project: str, timeout: int = 20
+    client: Any,
+    *,
+    operation_id: Optional[str],
+    project: str,
+    timeout: int = 20,
+    wait_seconds: Optional[int] = None,
 ) -> dict[str, Any]:
+    """Ask the daemon to hold the response until the operation settles or the wait ends.
+
+    note: callers going through ``_blocking`` must pass ``wait_seconds``. ``_blocking`` consumes
+    ``timeout`` as its own wall-clock limit, so ``timeout`` never reaches this function there.
+    """
+    if wait_seconds is not None:
+        timeout = wait_seconds
     if not operation_id:
         raise MigrationOperationUnknown(
             "A daemon mutation cannot be reconciled without an operation identity."
@@ -207,6 +264,22 @@ def wait_operation(
     except MigrationOperationUnknown:
         raise
     except Exception as exc:  # noqa: BLE001 - submission already crossed the mutation boundary
+        if _is_not_found(exc):
+            raise OperationForgotten(
+                "The daemon no longer lists this operation. Target readback decides its outcome."
+            ) from exc
+        # important: LXD answers the wait of a FAILED operation with an error-typed body that
+        # carries the operation's own error (verified on LXD 5.21: a VM stop past its timeout).
+        # One authoritative read of the operation tells that definitive failure apart from an
+        # outcome that really could not be read.
+        try:
+            outcome = read_operation(client, operation_id=operation_id, project=project)
+        except OperationForgotten:
+            raise
+        except Exception:  # noqa: BLE001
+            outcome = None
+        if outcome is not None and outcome.get("settled"):
+            return outcome
         raise MigrationOperationUnknown(
             "The daemon operation outcome could not be read and requires reconciliation."
         ) from exc
@@ -235,9 +308,18 @@ def submit_instance_state(
     name: str,
     action: str,
     timeout: int = 60,
+    force: bool = False,
+    action_timeout: Optional[int] = None,
 ) -> Optional[str]:
+    """Submit a state change. ``action_timeout`` is the guest shutdown budget for a stop.
+
+    note: callers going through ``_blocking`` must use ``action_timeout``, for the same reason
+    as ``wait_operation``.
+    """
+    if action_timeout is not None:
+        timeout = action_timeout
     response = client.api.instances[safe_segment(name)].state.put(
-        json={"action": action, "timeout": timeout, "force": False},
+        json={"action": action, "timeout": timeout, "force": force},
         params={"project": project},
     )
     _, operation_id = _operation(response, client)
@@ -312,6 +394,7 @@ def submit_copy_instance(
     target_name: str,
     target_member: Optional[str],
     target_pool: Optional[str],
+    definition: Optional[dict[str, Any]] = None,
 ) -> tuple[str, str, Any]:
     transport = mobility.choose_transport(source_cluster, target_cluster)
     if transport == mobility.TRANSPORT_COPY:
@@ -322,7 +405,8 @@ def submit_copy_instance(
             target_name=target_name,
             target_project=target_project,
             target_member=target_member,
-            target_pool=target_pool,
+            target_pool=None if definition is not None else target_pool,
+            definition=definition,
         )
         operation_client = source_client
     else:
@@ -390,8 +474,9 @@ def submit_cross_cluster_target(
     target_member: Optional[str],
     target_pool: Optional[str],
     handoff: dict[str, Any],
+    definition: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Accept a prepared pull handoff; callers must never persist ``handoff``."""
+    """Accept a prepared pull handoff. Callers must never persist ``handoff``."""
     operation_url = mobility.accept_migration_on_target(
         target_client,
         target_name=target_name,
@@ -400,8 +485,8 @@ def submit_cross_cluster_target(
         source_certificate=str(handoff["source_certificate"]),
         secrets=dict(handoff["secrets"]),
         target_member=target_member,
-        target_pool=target_pool,
-        definition=dict(handoff["definition"]),
+        target_pool=None if definition is not None else target_pool,
+        definition=dict(definition if definition is not None else handoff["definition"]),
     )
     return _required_operation_id(operation_url, target_client)
 
@@ -428,6 +513,19 @@ def submit_member_relocation(
         json={"migration": True, "live": False},
         params={"project": project, "target": target_member},
     )
+    _, operation_id = _operation(response, client)
+    return operation_id
+
+
+def patch_instance_config(
+    client: Any, *, project: str, name: str, config: dict[str, str]
+) -> Optional[str]:
+    """Merge config keys into one instance. Returns an operation id when the daemon gives one."""
+    response = client.api.instances[safe_segment(name)].patch(
+        json={"config": dict(config)}, params={"project": project}
+    )
+    if _sync_success(response):
+        return None
     _, operation_id = _operation(response, client)
     return operation_id
 
@@ -469,9 +567,15 @@ def submit_restore_checkpoint(
 
 
 def read_operation(client: Any, *, operation_id: str, project: str) -> dict[str, Any]:
-    metadata = _metadata(
-        client.api.operations[safe_segment(operation_id)].get(params={"project": project})
-    )
+    try:
+        response = client.api.operations[safe_segment(operation_id)].get(
+            params={"project": project}
+        )
+    except Exception as exc:
+        if _is_not_found(exc):
+            raise OperationForgotten("The daemon no longer lists this operation.") from exc
+        raise
+    metadata = _metadata(response)
     if not isinstance(metadata, dict):
         raise MigrationOperationUnknown("Operation metadata is unreadable.")
     status = metadata.get("status")

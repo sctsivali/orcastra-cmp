@@ -210,11 +210,10 @@ def _build_token(identity: Mapping[str, Any]) -> str:
 
 
 def approved_build(identity: Mapping[str, Any], settings: Any) -> bool:
-    """Require the explicit operator allowlist without a security-bypass switch."""
-    allowlist = _exact_build_allowlist(
-        getattr(settings, "migration_approved_builds", "") or ""
-    )
-    return _build_token(identity) in allowlist
+    """Admit a daemon build through the deny list, allow list, and patched-series policy."""
+    from .build_policy import build_verdict
+
+    return build_verdict(identity, settings).approved
 
 
 def approved_lxd_native_cross_project_move(

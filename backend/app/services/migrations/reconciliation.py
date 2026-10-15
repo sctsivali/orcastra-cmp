@@ -12,10 +12,11 @@ from app.core.lxd_path import safe_segment
 from app.models.migration_models import MigrationJob
 from app.services.lxd.root_disk import root_pool
 
-from . import executor, preflight, repository
+from . import executor, preflight, project_policy, repository
 from .completion import target_completion_events
 from .context import _fenced_job_update, _resource_update, _resources
 from .contracts import _blocking, logger
+from .reconcile_transfer import reconcile_staged
 from .security import (
     MigrationSecurityError,
     api_endpoint,
@@ -35,6 +36,8 @@ class _OperationEvidence:
     settled: bool = False
     failed: bool = False
     operation_id: str | None = None
+    # The daemon no longer lists the recorded operation, so it is not in flight any more.
+    forgotten: bool = False
 
 
 _OPERATION_DESCRIPTIONS: dict[str, frozenset[str]] = {
@@ -385,6 +388,10 @@ async def _operation_evidence(
                 project=project,
                 label=f"migration.reconcile_{kind}[{ref['operation_id']}]",
             )
+        except executor.OperationForgotten:
+            return _OperationEvidence(
+                seen=True, operation_id=str(ref["operation_id"]), forgotten=True
+            )
         except Exception as exc:  # noqa: BLE001
             logger.info(
                 "Could not read migration operation %s during reconciliation: %s",
@@ -562,6 +569,7 @@ async def _reconcile_project_creation(
         or not approved_source_hash
         or preflight._project_fingerprint(source) != approved_source_hash
         or not executor.projects_equivalent(source, target)
+        or not project_policy.created_by_job(target, job.job_id)
         or occupied
     ):
         await _resource_update(resource.resource_id, state="unknown")
@@ -622,6 +630,52 @@ async def _reconcile_pretransfer(
             name=name,
             label=f"migration.reconcile_pretransfer_source[{name}]",
         )
+        if (
+            state.get("stop_submission_intent")
+            and state.get("original_status") == "running"
+            and _exact_instance(
+                resource,
+                source,
+                identity_key="source_identity_hash",
+                definition_key="source_definition_hash",
+                expected_status="running",
+            )
+        ):
+            # The stop never took effect (a guest that ignored its shutdown, for example) and no
+            # transfer was submitted, so nothing changed. Only a stop still in flight waits.
+            evidence = await _operation_evidence(
+                resource,
+                client=source_client,
+                cluster_id=job.source_cluster_id,
+                project=job.source_project,
+                name=name,
+                kind="stop_source",
+                intent_key="stop_submission_intent",
+            )
+            if evidence.seen and not evidence.settled and not evidence.forgotten:
+                await _resource_update(resource.resource_id, state="unknown", safe_result=state)
+                await _mark_reconciliation_unknown(job, worker_id)
+                return True
+            await _fenced_job_update(
+                job,
+                worker_id,
+                phase="rolling_back",
+                status="running",
+                locked_by=None,
+                lease_expires_at=None,
+                safe_result=sanitize_payload(
+                    {
+                        **(job.safe_result or {}),
+                        "recovery_kind": "abort",
+                        "abort_code": "source_stop_failed",
+                        "abort_reason": sanitize_error(
+                            f"Source '{name}' did not shut down, so nothing was changed."
+                        ),
+                    }
+                ),
+                event_message="The source did not stop, so nothing was changed. Ending the migration.",
+            )
+            return True
         if not _exact_instance(
             resource,
             source,
@@ -711,169 +765,6 @@ async def _reconcile_pretransfer(
         error_code=None,
         error_message=None,
         event_message="Source preparation was reconciled and can continue safely.",
-    )
-    return True
-
-
-def _recovery_action(resources: list[Any]) -> str | None:
-    keys = {
-        "cleanup": "cleanup_submission_intent",
-        "rollback": "rollback_delete_submission_intent",
-        "restore": "restore_submission_intent",
-    }
-    observed = {
-        action
-        for action, key in keys.items()
-        if any((resource.safe_result or {}).get(key) for resource in resources)
-    }
-    return next(iter(observed)) if len(observed) == 1 else None
-
-
-async def _reconcile_recovery(
-    job: MigrationJob,
-    worker_id: str,
-    source_client: Any,
-    target_client: Any,
-    resources: list[Any],
-    action: str,
-) -> bool:
-    instances = [resource for resource in resources if resource.resource_type == "instance"]
-    if not instances:
-        await _mark_reconciliation_unknown(job, worker_id)
-        return True
-    for resource in instances:
-        state = dict(resource.safe_result or {})
-        source_name = str((resource.source_ref or {}).get("name") or "")
-        target_name = str((resource.target_ref or {}).get("name") or source_name)
-        source = await _blocking(
-            executor.read_instance,
-            source_client,
-            project=job.source_project,
-            name=source_name,
-            label=f"migration.reconcile_{action}_source[{source_name}]",
-        )
-        target = await _blocking(
-            executor.read_instance,
-            target_client,
-            project=job.target_project,
-            name=target_name,
-            label=f"migration.reconcile_{action}_target[{target_name}]",
-        )
-        if action == "cleanup":
-            evidence = await _operation_evidence(
-                resource,
-                client=source_client,
-                cluster_id=job.source_cluster_id,
-                project=job.source_project,
-                name=source_name,
-                kind="cleanup_source",
-                intent_key="cleanup_submission_intent",
-            )
-            target_status = "running" if state.get("target_started") else "stopped"
-            verified = source is None and _exact_instance(
-                resource,
-                target,
-                identity_key="target_identity_hash",
-                definition_key="target_definition_hash",
-                expected_status=target_status,
-            )
-        elif action == "rollback":
-            evidence = await _operation_evidence(
-                resource,
-                client=target_client,
-                cluster_id=job.target_cluster_id,
-                project=job.target_project,
-                name=target_name,
-                kind="rollback_target_delete",
-                intent_key="rollback_delete_submission_intent",
-            )
-            verified = target is None and _exact_instance(
-                resource,
-                source,
-                identity_key="source_identity_hash",
-                definition_key="source_definition_hash",
-                expected_status="stopped",
-            )
-        else:
-            if (
-                state.get("target_started")
-                or state.get("target_start_attempted")
-                or getattr(job, "external_cutover_confirmed_at", None) is not None
-            ):
-                await _mark_reconciliation_unknown(
-                    job,
-                    worker_id,
-                    message="Checkpoint restore requires reverse sync after target activation.",
-                )
-                return True
-            evidence = await _operation_evidence(
-                resource,
-                client=source_client,
-                cluster_id=job.source_cluster_id,
-                project=job.source_project,
-                name=source_name,
-                kind="restore_checkpoint",
-                intent_key="restore_submission_intent",
-                checkpoint_name=str(state.get("checkpoint_name") or ""),
-            )
-            start_intended = bool(state.get("restore_start_submission_intent"))
-            expected_status = "running" if start_intended else "stopped"
-            verified = target is None and _exact_instance(
-                resource,
-                source,
-                identity_key="source_identity_hash",
-                definition_key="source_definition_hash",
-                expected_status=expected_status,
-            )
-            if start_intended:
-                start_evidence = await _operation_evidence(
-                    resource,
-                    client=source_client,
-                    cluster_id=job.source_cluster_id,
-                    project=job.source_project,
-                    name=source_name,
-                    kind="restore_source_start",
-                    intent_key="restore_start_submission_intent",
-                )
-                verified = verified and (
-                    start_evidence.seen
-                    and start_evidence.settled
-                    and not start_evidence.failed
-                )
-            elif state.get("original_status") == "running":
-                verified = False
-        if evidence.failed or not evidence.seen or not evidence.settled or not verified:
-            await _resource_update(resource.resource_id, state="unknown", safe_result=state)
-            await _mark_reconciliation_unknown(job, worker_id, failed=evidence.failed)
-            return True
-        if action in {"rollback", "restore"}:
-            try:
-                current_snapshots = await _blocking(
-                    executor.snapshot_inventory_fingerprint,
-                    source_client,
-                    project=job.source_project,
-                    name=source_name,
-                    label=f"migration.reconcile_{action}_snapshots[{source_name}]",
-                )
-            except Exception:  # noqa: BLE001
-                await _mark_reconciliation_unknown(job, worker_id)
-                return True
-            if current_snapshots != state.get("source_snapshot_inventory_hash"):
-                await _mark_reconciliation_unknown(job, worker_id)
-                return True
-        await _resource_update(resource.resource_id, state="completed", safe_result=state)
-    terminal_phase = "completed" if action == "cleanup" else "rolled_back"
-    await _fenced_job_update(
-        job,
-        worker_id,
-        phase=terminal_phase,
-        status="success",
-        terminal=True,
-        event_message=(
-            "Recovery reconciliation verified source cleanup."
-            if action == "cleanup"
-            else "Recovery reconciliation verified the rollback outcome."
-        ),
     )
     return True
 
@@ -1147,16 +1038,32 @@ async def _reconcile(
     target_client: Any,
 ) -> None:
     resources = await _resources(job.job_id)
-    recovery_markers = {
-        action
-        for action, key in {
-            "cleanup": "cleanup_submission_intent",
-            "rollback": "rollback_delete_submission_intent",
-            "restore": "restore_submission_intent",
-        }.items()
-        if any((resource.safe_result or {}).get(key) for resource in resources)
-    }
-    if recovery_markers:
+    states = [resource.safe_result or {} for resource in resources]
+    recovery_phase = (
+        "cleaning_up"
+        if any(state.get("cleanup_submission_intent") for state in states)
+        else "rolling_back"
+        if any(
+            state.get(key)
+            for state in states
+            for key in ("rollback_delete_submission_intent", "abort_target_delete_intent")
+        )
+        else None
+    )
+    if recovery_phase is not None and job.phase != recovery_phase:
+        # A recovery runner was interrupted. Its steps read state first, so resuming the same
+        # runner is safe. Locks stay held until that runner reaches its terminal transaction.
+        await _fenced_job_update(
+            job,
+            worker_id,
+            phase=recovery_phase,
+            status="running",
+            locked_by=None,
+            lease_expires_at=None,
+            event_message="Reconciliation resumed an interrupted recovery step.",
+        )
+        return
+    if any((resource.safe_result or {}).get("restore_submission_intent") for resource in resources):
         await _fenced_job_update(
             job,
             worker_id,
@@ -1189,6 +1096,10 @@ async def _reconcile(
     )
     if not has_transfer_intent and await _reconcile_project_creation(
         job, worker_id, source_client, target_client, resources
+    ):
+        return
+    if await reconcile_staged(
+        job, worker_id, source_client, target_client, resources=resources
     ):
         return
     if await _try_terminalize_failed_copy(
@@ -1275,11 +1186,13 @@ async def _reconcile(
             )
             original_status = str(state.get("original_status") or "").lower()
             current_status = str(source.get("status") or "").lower()
-            # Member relocation is released only for the stopped-source path admitted by
-            # preflight. Treating every non-running state as "stopped" could otherwise claim
-            # success for Error, Frozen, Starting, or incomplete daemon state.
-            exact_stopped_status = (
-                original_status == "stopped" and current_status == "stopped"
+            # A relocated instance is either still stopped, or running again because its
+            # pre-migration state was running and activation already started it. Error,
+            # Frozen, or transitional states are never adopted.
+            exact_stopped_status = current_status == "stopped" or (
+                original_status == "running"
+                and current_status == "running"
+                and bool(state.get("target_start_attempted"))
             )
             exact_member = (
                 isinstance(job.target_member, str)
@@ -1316,10 +1229,10 @@ async def _reconcile(
                 {
                     "target_definition_hash": executor.instance_fingerprint(source),
                     "target_identity_hash": source_identity,
-                    "target_started": False,
+                    "target_started": current_status == "running",
                 }
             )
-            await _resource_update(resource.resource_id, state="completed", safe_result=state)
+            await _resource_update(resource.resource_id, state="ready", safe_result=state)
             validated += 1
             continue
 
@@ -1478,6 +1391,24 @@ async def _reconcile(
                 "Cutover activation does not match the source's pinned pre-migration state."
             ),
             event_message="Migration paused because target activation needs operator recovery.",
+        )
+    elif (
+        not unresolved
+        and not failed_operation
+        and validated == instance_count
+        and job.strategy == "member_relocation"
+    ):
+        # Activation and the final barrier finish the job from the adopted state.
+        await _fenced_job_update(
+            job,
+            worker_id,
+            phase="target_validating",
+            status="running",
+            locked_by=None,
+            lease_expires_at=None,
+            error_code=None,
+            error_message=None,
+            event_message="Reconciliation verified the relocation. Resuming activation.",
         )
     elif not unresolved and not failed_operation and validated == instance_count:
         completion_events = target_completion_events(

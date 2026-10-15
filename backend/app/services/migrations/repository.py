@@ -771,6 +771,7 @@ async def set_resource(
     safe_result: Optional[dict[str, Any]] = None,
     error_code: Optional[str] = None,
     error_message: Optional[str] = None,
+    progress: Optional[dict[str, Any]] = None,
 ) -> None:
     lease = (
         await db.execute(
@@ -805,6 +806,8 @@ async def set_resource(
     row.state = state
     if safe_result is not None:
         row.safe_result = sanitize_payload(safe_result)
+    if progress is not None:
+        row.progress = sanitize_payload(progress)
     row.error_code = error_code
     row.error_message = sanitize_error(error_message) if error_message else None
     row.updated_at = utcnow()
@@ -958,21 +961,6 @@ async def mark_expired_plans(db: AsyncSession) -> int:
             MigrationPlan.expires_at <= utcnow(),
         )
         .values(status="expired", updated_at=utcnow())
-    )
-    await db.commit()
-    return int(result.rowcount or 0)
-
-
-async def cleanup_due_jobs(db: AsyncSession) -> int:
-    result = await db.execute(
-        update(MigrationJob)
-        .where(
-            MigrationJob.phase == "source_retained",
-            MigrationJob.status == "waiting",
-            MigrationJob.retention_deadline.is_not(None),
-            MigrationJob.retention_deadline <= utcnow(),
-        )
-        .values(phase="cleanup_due", updated_at=utcnow(), revision=MigrationJob.revision + 1)
     )
     await db.commit()
     return int(result.rowcount or 0)

@@ -4,17 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.config import get_settings
 from app.models.migration_models import MigrationJob, MigrationResource
 
-from . import executor, repository
+from . import executor, preflight, project_policy, repository
 from .context import (
     _assert_mutation_lease,
     _fenced_job_update,
     _resource_update,
     _resources,
 )
-from .contracts import MigrationAuthorityError, MigrationUnknown, _blocking, logger
-from .security import canonical_json_hash, sanitize_error
+from .contracts import (
+    MigrationAuthorityError,
+    MigrationUnknown,
+    TransferFailed,
+    _blocking,
+)
+from .operation_wait import await_operation
 
 async def _ensure_project_target(
     job: MigrationJob,
@@ -65,9 +71,14 @@ async def _ensure_project_target(
             target_client,
             source_project=job.source_project,
             target_project=job.target_project,
+            job_id=job.job_id,
             label="migration.create_target_project",
         )
     except Exception as exc:  # noqa: BLE001
+        if executor.is_definitive_rejection(exc):
+            raise RuntimeError(
+                f"The target cluster refused to create project '{job.target_project}'."
+            ) from exc
         raise MigrationUnknown("Target project creation outcome is unknown.") from exc
     if operation_id:
         await _resource_update(
@@ -80,27 +91,26 @@ async def _ensure_project_target(
                 "operation_id": operation_id,
             },
         )
-    outcome = await _blocking(
-        executor.wait_operation,
-        target_client,
-        operation_id=operation_id,
-        project="default",
-        timeout=60,
-        label="migration.wait_create_target_project",
-    )
-    if not outcome.get("settled"):
-        raise MigrationUnknown(
-            f"Target project creation is still running ({operation_id or 'unknown operation'})."
+        outcome = await await_operation(
+            target_client,
+            operation_id=operation_id,
+            project="default",
+            label="migration.wait_create_target_project",
+            deadline_seconds=300,
         )
-    if outcome.get("failed"):
-        raise RuntimeError(outcome.get("err") or "Target project creation failed.")
+        if outcome.get("failed"):
+            raise RuntimeError(outcome.get("err") or "Target project creation failed.")
     target = await _blocking(
         executor.read_project,
         target_client,
         project=job.target_project,
         label="migration.verify_target_project",
     )
-    if target is None or not executor.projects_equivalent(source, target):
+    if (
+        target is None
+        or not executor.projects_equivalent(source, target)
+        or not project_policy.created_by_job(target, job.job_id)
+    ):
         raise MigrationUnknown(
             "Target project creation settled without equivalent restrictions and quotas."
         )
@@ -111,7 +121,7 @@ async def _ensure_project_target(
             **(project_resource.safe_result or {}),
             "target_project_create_intent": True,
             "target_project_created": True,
-            "source_project_hash": canonical_json_hash(source.get("config") or {}),
+            "source_project_hash": project_policy.policy_fingerprint(source),
         },
     )
     return True
@@ -213,7 +223,24 @@ async def _prepare_sources(
         await _resource_update(
             resource.resource_id, state="preparing", safe_result=state
         )
+        if "transfer_bytes" not in state:
+            measured = await _blocking(
+                preflight._instance_transfer_bytes,
+                source_client,
+                job.source_project,
+                name,
+                label=f"migration.measure_source[{name}]",
+            )
+            state = {**state, "transfer_bytes": measured}
+            prepared[resource.resource_id] = state
         if was_running and not state.get("stop_reconciled"):
+            if job.strategy != "member_relocation" and not bool(
+                getattr(get_settings(), "migration_running_source_enabled", True)
+            ):
+                raise TransferFailed(
+                    f"Source '{name}' is running and running-source migration is disabled."
+                )
+            stop_timeout = int(get_settings().migration_default_stop_timeout_seconds)
             state = {
                 **state,
                 "stop_submission_intent": True,
@@ -231,9 +258,12 @@ async def _prepare_sources(
                     project=job.source_project,
                     name=name,
                     action="stop",
+                    action_timeout=stop_timeout,
                     label=f"migration.stop[{name}]",
                 )
             except Exception as exc:  # noqa: BLE001
+                if executor.is_definitive_rejection(exc):
+                    raise TransferFailed(f"The cluster refused to stop '{name}'.") from exc
                 raise MigrationUnknown(
                     f"Stop submission for '{name}' has an unknown outcome."
                 ) from exc
@@ -248,20 +278,21 @@ async def _prepare_sources(
                         "operation_id": operation_id,
                     },
                 )
-            outcome = await _blocking(
-                executor.wait_operation,
-                source_client,
-                operation_id=operation_id,
-                project=job.source_project,
-                timeout=60,
-                label=f"migration.wait_stop[{name}]",
-            )
-            if not outcome.get("settled"):
-                raise MigrationUnknown(
-                    f"Stopping '{name}' is still running ({operation_id or 'unknown operation'})."
+            try:
+                outcome = await await_operation(
+                    source_client,
+                    operation_id=operation_id,
+                    project=job.source_project,
+                    label=f"migration.wait_stop[{name}]",
+                    deadline_seconds=stop_timeout + 120,
                 )
+            except executor.OperationForgotten:
+                outcome = {"settled": True, "failed": False}
             if outcome.get("failed"):
-                raise RuntimeError(outcome.get("err") or f"Could not stop '{name}'.")
+                raise TransferFailed(
+                    f"Source '{name}' did not shut down within {stop_timeout} seconds: "
+                    f"{outcome.get('err') or 'stop failed'}."
+                )
             stopped = await _blocking(
                 executor.read_instance,
                 source_client,
@@ -342,18 +373,13 @@ async def _prepare_sources(
                         "operation_id": operation_id,
                     },
                 )
-            outcome = await _blocking(
-                executor.wait_operation,
+            outcome = await await_operation(
                 source_client,
                 operation_id=operation_id,
                 project=job.source_project,
-                timeout=60,
                 label=f"migration.wait_checkpoint[{name}]",
+                deadline_seconds=1800,
             )
-            if not outcome.get("settled"):
-                raise MigrationUnknown(
-                    f"Checkpoint for '{name}' is still running ({operation_id or 'unknown operation'})."
-                )
             if outcome.get("failed"):
                 raise RuntimeError(outcome.get("err") or f"Checkpoint for '{name}' failed.")
 
@@ -410,53 +436,3 @@ async def _prepare_sources(
             safe_result=state,
         )
     return prepared
-
-
-async def _restart_source_best_effort(
-    job: MigrationJob,
-    source_client: Any,
-    resources: list[MigrationResource],
-    prepared: dict[str, dict[str, Any]],
-) -> None:
-    for resource in resources:
-        state = prepared.get(resource.resource_id) or resource.safe_result or {}
-        if resource.resource_type != "instance" or state.get("original_status") != "running":
-            continue
-        name = str((resource.source_ref or {}).get("name") or "")
-        try:
-            await _assert_mutation_lease()
-            operation_id = await _blocking(
-                executor.submit_instance_state,
-                source_client,
-                project=job.source_project,
-                name=name,
-                action="start",
-                label=f"migration.restart_source[{name}]",
-            )
-            if operation_id:
-                await _resource_update(
-                    resource.resource_id,
-                    state="preparing",
-                    operation_ref={
-                        "kind": "restart_source_after_abort",
-                        "cluster_id": job.source_cluster_id,
-                        "project": job.source_project,
-                        "operation_id": operation_id,
-                    },
-                )
-            outcome = await _blocking(
-                executor.wait_operation,
-                source_client,
-                operation_id=operation_id,
-                project=job.source_project,
-                timeout=60,
-                label=f"migration.wait_restart_source[{name}]",
-            )
-            if not outcome.get("settled") or outcome.get("failed"):
-                raise MigrationUnknown(f"Restarting source '{name}' is unresolved.")
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Could not restart source %s after migration failure: %s",
-                name,
-                sanitize_error(exc),
-            )

@@ -21,6 +21,7 @@ from . import preflight, repository
 from .authority import AuthentikAuthorityVerifier, CurrentAuthorityError
 from .contracts import (
     MigrationAuthorityError,
+    MigrationAuthorityUnavailable,
     MigrationLeaseLost,
     _assert_job_plan_pin,
     _authority_pin,
@@ -39,6 +40,8 @@ async def _authoritative_clients(
                 _authority_pin(job)
             )
         except CurrentAuthorityError as exc:
+            if getattr(exc, "retryable", False):
+                raise MigrationAuthorityUnavailable(str(exc), code=exc.code) from exc
             raise MigrationAuthorityError(str(exc), code=exc.code) from exc
     actor_email = current_authority.pin.identity.email
     actor_role = current_authority.role.value
@@ -129,6 +132,11 @@ async def _fenced_job_update(
     terminal: bool = False,
     **values: Any,
 ) -> bool:
+    if values.get("status") == "success":
+        # A transient error recorded on the way, such as an authority retry, does not describe
+        # a job that finished cleanly.
+        values.setdefault("error_code", None)
+        values.setdefault("error_message", None)
     async with async_session_maker() as db:
         transitioned = await repository.set_job(
             db,

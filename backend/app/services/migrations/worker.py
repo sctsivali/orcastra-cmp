@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import secrets
 import socket
+from datetime import timedelta
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.models.migration_models import MigrationJob, MigrationResource
 from app.services.activity_logger import get_activity_logger
@@ -23,6 +25,7 @@ from .context import (
 )
 from .contracts import (
     MigrationAuthorityError,
+    MigrationAuthorityUnavailable,
     MigrationLeaseLost,
     MigrationUnknown,
     _HEARTBEAT_SECONDS,
@@ -30,14 +33,14 @@ from .contracts import (
     logger,
 )
 from .reconciliation import _reconcile, _reconciliation_backoff_values
-from .recovery_actions import (
-    DESTRUCTIVE_RECOVERY_ENABLED,
-    _cleanup,
-    _restore,
-    _rollback,
-)
+from .retention import run_cleanup
+from .retention_store import schedule_due_cleanups
+from .rollback import run_abort, run_rollback
 from .security import MigrationSecurityError, sanitize_error, sanitize_payload
-from .transfer import _perform_copy_or_cutover
+from .transfer import _perform_copy_or_cutover, resume_after_transfer
+
+_RECOVERY_PHASES = frozenset({"cleaning_up", "rolling_back"})
+_AUTHORITY_RETRY_DELAY = timedelta(seconds=60)
 
 activity_logger = get_activity_logger()
 _tasks: set[asyncio.Task[Any]] = set()
@@ -134,29 +137,9 @@ def _safe_mutation_resume(
             )
             for resource in instance_resources
         )
-    action_contract = {
-        "cleaning_up": ("cleanup_source", "cleanup_submission_intent"),
-        "rolling_back": (
-            "rollback_target_delete",
-            "rollback_delete_submission_intent",
-        ),
-        "preparing_recovery": (
-            "restore_checkpoint",
-            "restore_submission_intent",
-        ),
-    }
-    expected = action_contract.get(job.phase)
-    if expected is None:
-        return False
-    operation_kind, intent_key = expected
-    return all(
-        not (resource.safe_result or {}).get(intent_key)
-        and all(
-            operation_ref.get("kind") != operation_kind
-            for operation_ref in resource.operation_refs or []
-        )
-        for resource in instance_resources
-    )
+    # Recovery runners and post-transfer activation read state before every step and never
+    # repeat a mutation that already took effect, so they resume with mutation allowed.
+    return job.phase in _RECOVERY_PHASES or job.phase == "target_validating"
 
 
 async def _run_claimed(
@@ -265,8 +248,33 @@ async def _run_claimed(
         )
         return
     source_client, target_client = await _authoritative_clients(job)
+    if job.phase == "cleaning_up":
+        await run_cleanup(job, worker_id, source_client, target_client)
+        return
+    if job.phase == "rolling_back":
+        if (job.safe_result or {}).get("recovery_kind") == "abort":
+            await run_abort(job, worker_id, source_client, target_client)
+        else:
+            await run_rollback(job, worker_id, source_client, target_client)
+        return
+    if job.phase == "preparing_recovery":
+        await _fenced_job_update(
+            job,
+            worker_id,
+            phase="manual_recovery",
+            status="manual_recovery",
+            locked_by=None,
+            lease_expires_at=None,
+            error_code="checkpoint_restore_unsupported",
+            error_message="Checkpoint restore is not offered. Roll back the retained source instead.",
+            event_message="A checkpoint restore request was refused.",
+        )
+        return
     if not allow_mutation:
         await _reconcile(job, worker_id, source_client, target_client)
+        return
+    if job.phase == "target_validating":
+        await resume_after_transfer(job, worker_id, source_client, target_client)
         return
     if job.phase == "queued":
         report = await _fresh_worker_preflight(job, source_client, target_client)
@@ -285,7 +293,7 @@ async def _run_claimed(
                 event_message="Execution stopped because fresh preflight found blockers.",
             )
             return
-        if job.intent == "move":
+        if job.intent == "move" and job.scope == "project":
             await _wait_for_cutover(job, worker_id)
             return
         await _perform_copy_or_cutover(
@@ -308,29 +316,6 @@ async def _run_claimed(
         await _reconcile(job, worker_id, source_client, target_client)
     elif job.phase in {"unknown", "reconciling", "manual_recovery"} or job.status == "unknown":
         await _reconcile(job, worker_id, source_client, target_client)
-    elif job.phase in {"cleaning_up", "rolling_back", "preparing_recovery"}:
-        if not DESTRUCTIVE_RECOVERY_ENABLED:
-            await _fenced_job_update(
-                job,
-                worker_id,
-                phase="manual_recovery",
-                status="manual_recovery",
-                locked_by=None,
-                lease_expires_at=None,
-                error_code="destructive_recovery_write_history_unverified",
-                error_message=(
-                    "Destructive recovery is disabled until authoritative target write "
-                    "history can be proven."
-                ),
-                event_message="Destructive recovery was stopped at the current release gate.",
-            )
-            return
-        if job.phase == "cleaning_up":
-            await _cleanup(job, worker_id, source_client, target_client)
-        elif job.phase == "rolling_back":
-            await _rollback(job, worker_id, source_client, target_client)
-        else:
-            await _restore(job, worker_id, source_client, target_client)
 
 
 async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> None:
@@ -346,25 +331,57 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
     try:
         await _run_claimed(job, worker_id, allow_mutation=allow_mutation)
     except MigrationLeaseLost:
-        logger.warning("Migration worker %s lost its lease; no further mutation will run", job_id)
+        logger.warning("Migration worker %s lost its lease. No further mutation will run.", job_id)
+    except MigrationAuthorityUnavailable as exc:
+        # An identity-provider outage is not a decision about the actor. Release the job and
+        # let the sweep retry it after a short delay, without consuming reconciliation attempts.
+        async with async_session_maker() as db:
+            await repository.set_job(
+                db,
+                job.job_id,
+                worker_id=worker_id,
+                fence_token=job.fence_token,
+                status="pending" if job.phase == "queued" else "running",
+                locked_by=None,
+                lease_expires_at=repository.utcnow() + _AUTHORITY_RETRY_DELAY,
+                error_code=exc.code,
+                error_message=sanitize_error(exc),
+            )
     except MigrationAuthorityError as exc:
-        await _fenced_job_update(
-            job,
-            worker_id,
-            phase="manual_recovery",
-            status="manual_recovery",
-            locked_by=None,
-            lease_expires_at=None,
-            error_code=exc.code,
-            error_message=sanitize_error(exc),
-            event_message="Migration paused because authorization or cluster identity changed.",
-        )
+        if job.phase == "cleaning_up":
+            # An automatic cleanup that cannot prove current authority waits for an operator.
+            await _fenced_job_update(
+                job,
+                worker_id,
+                phase="cleanup_blocked",
+                status="waiting",
+                locked_by=None,
+                lease_expires_at=None,
+                error_code=exc.code,
+                error_message=sanitize_error(exc),
+                event_message="Source cleanup is waiting because current authority was not proven.",
+            )
+        else:
+            await _fenced_job_update(
+                job,
+                worker_id,
+                phase="manual_recovery",
+                status="manual_recovery",
+                locked_by=None,
+                lease_expires_at=None,
+                error_code=exc.code,
+                error_message=sanitize_error(exc),
+                event_message="Migration paused because authorization or cluster identity changed.",
+            )
     except (MigrationUnknown, MigrationSecurityError) as exc:
         values = _reconciliation_backoff_values(
             job,
             error_code="operation_outcome_unknown",
             error_message=sanitize_error(exc),
         )
+        if job.phase in _RECOVERY_PHASES and values.get("status") == "unknown":
+            # Keep the recovery phase so the retry resumes the same convergent runner.
+            values["phase"] = job.phase
         await _fenced_job_update(
             job,
             worker_id,
@@ -401,7 +418,14 @@ async def recover_migration_jobs() -> int:
     """Run one idempotent recovery sweep; database leases arbitrate multiple workers."""
     async with async_session_maker() as db:
         await repository.mark_expired_plans(db)
-        await repository.cleanup_due_jobs(db)
+        settings = get_settings()
+        await schedule_due_cleanups(
+            db,
+            automatic=bool(
+                settings.migration_auto_cleanup_enabled
+                and settings.migration_recovery_actions_enabled
+            ),
+        )
         job_ids = await repository.recoverable_job_ids(db)
         recovery: list[tuple[str, bool]] = []
         for job_id in job_ids:

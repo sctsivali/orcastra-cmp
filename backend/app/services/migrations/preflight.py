@@ -14,6 +14,8 @@ from app.core.lxd_path import safe_segment
 from app.services.lxd import mobility
 from app.services.lxd.project_usage import parse_lxd_size
 
+from . import project_policy
+from .build_policy import build_verdict
 from .security import (
     MigrationSecurityError,
     api_endpoint,
@@ -80,6 +82,9 @@ class PreflightResult:
     resources: list[dict[str, Any]] = field(default_factory=list)
     blockers: list[dict[str, str]] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
+    # In-memory target contracts by source instance name. Never persisted or serialized:
+    # they carry raw config values that only the planner's policy checks may read.
+    contracts: dict[str, Any] = field(default_factory=dict)
 
     @property
     def ready(self) -> bool:
@@ -433,9 +438,8 @@ def _block_inventory_error(
 
 
 def _project_fingerprint(project: Optional[dict[str, Any]]) -> Optional[str]:
-    if project is None:
-        return None
-    return canonical_json_hash(project.get("config") or {})
+    """Policy-only hash. Operator ``user.*`` metadata never changes migration approval."""
+    return project_policy.policy_fingerprint(project)
 
 
 def _instance_preflight_fingerprint(instance: dict[str, Any]) -> str:
@@ -456,7 +460,6 @@ def _instance_preflight_fingerprint(instance: dict[str, Any]) -> str:
             "devices": instance.get("expanded_devices")
             or instance.get("devices")
             or {},
-            "status": instance.get("status"),
             "location": instance.get("location"),
         }
     )
@@ -488,14 +491,6 @@ def _apply_lxd_native_cross_project_move_gate(
         security_approved
     )
     result.capabilities["lxd_native_cross_project_move_selected"] = False
-    if applicable and not security_approved:
-        result.warn(
-            "lxd_native_cross_project_move_security_blocked",
-            "Native LXD cross-project move is disabled because its exact daemon build has not "
-            "passed the GHSA-5g5r-wh97-qcq2 security baseline.",
-            "Keep the staged-copy strategy, or independently approve the exact build token in "
-            "MIGRATION_LXD_NATIVE_CROSS_PROJECT_MOVE_APPROVED_BUILDS after vendor or package review.",
-        )
 
 
 def _check_capacity(
@@ -1118,40 +1113,23 @@ def inspect(
             "same_project": same_project,
             "target_member": target_member,
             "checkpoint": True,
-            # Automated rollback, checkpoint restore, and source cleanup remain hard-disabled
-            # until Orcastra can prove every direct-daemon write across worker restarts.
+            # The instance planner turns rollback on for a move once the target contract is
+            # derived. Project scope has no retained-source rollback yet.
             "rollback": False,
             "live": False,
             "incremental_refresh": False,
             "target_project_exists": False,
             "target_project_create": False,
-            "atomic_shadow_metadata_cutover": not (
-                scope == "instance" and intent == "move" and not member_relocation
-            ),
+            "atomic_shadow_metadata_cutover": scope == "instance",
             "project_dependencies_locked": True,
             "daemon_operation_inventory_verified": True,
             "daemon_operations_quiescent": True,
             "stopped_source_required": True,
+            "automatic_cleanup": bool(
+                getattr(settings, "migration_auto_cleanup_enabled", False)
+            ),
         },
     )
-    if scope == "instance" and intent == "move" and not member_relocation:
-        result.block(
-            "instance_shadow_metadata_cutover_unsupported",
-            "Identity-changing instance move is disabled because Orcastra tags, schedules, "
-            "policy grants, tenant rules, billing ownership, and webhook ownership cannot yet "
-            "be cut over atomically.",
-            "Use Copy Instance, or use same-cluster same-project member relocation with the "
-            "original instance name.",
-        )
-    if intent == "copy" and target_member:
-        result.capabilities["targeted_copy"] = False
-        result.block(
-            "targeted_copy_member_validation_unsupported",
-            "Copy to an explicit cluster member is disabled because member-local network, "
-            "storage, architecture, and capacity validation is not yet generalized for copy.",
-            "Remove the target member and let the daemon place the stopped copy, or use a "
-            "separately validated member-relocation workflow.",
-        )
     if scope == "project" and member_relocation:
         result.block(
             "project_member_relocation_recovery_unavailable",
@@ -1159,15 +1137,16 @@ def inspect(
             "cannot yet be reversed inside the original locked job.",
             "Relocate one instance at a time after target-member preflight succeeds.",
         )
-    _check_active_operations(
-        result,
-        source_client=source_client,
-        target_client=target_client,
-        source_cluster=source_cluster,
-        source_project=source_project,
-        target_cluster=target_cluster,
-        target_project=target_project,
-    )
+    if scope == "project":
+        _check_active_operations(
+            result,
+            source_client=source_client,
+            target_client=target_client,
+            source_cluster=source_cluster,
+            source_project=source_project,
+            target_cluster=target_cluster,
+            target_project=target_project,
+        )
     mapping_groups = mappings or {}
     if scope == "project" and intent == "copy":
         result.block(
@@ -1175,7 +1154,12 @@ def inspect(
             "Project copy is not implemented by the durable relocation executor.",
             "Use project move after reviewing cutover and retention, or copy instances individually.",
         )
-    for group in ("networks", "profiles", "volumes", "members", "external_dependencies"):
+    unsupported_groups = (
+        ("volumes", "members", "external_dependencies")
+        if scope == "instance"
+        else ("networks", "profiles", "volumes", "members", "external_dependencies")
+    )
+    for group in unsupported_groups:
         if mapping_groups.get(group):
             result.block(
                 f"unsupported_{group}_mapping",
@@ -1240,11 +1224,14 @@ def inspect(
             "The cluster lacks the extension required for cross-member relocation.",
         )
     for side, identity in (("source", source_identity), ("target", target_identity)):
+        verdict = build_verdict(identity, settings)
         if not approved_build(identity, settings):
             result.block(
                 f"{side}_build_not_approved",
-                f"The {side} daemon build is not in the migration allowlist.",
-                f"Approve exact token {identity['engine']}:{identity['version']} after review.",
+                f"The {side} daemon build is not admitted for migration: {verdict.reason}",
+                "Upgrade the daemon to a patched build, or list its exact "
+                f"{identity['engine']}:{identity['version']} token in MIGRATION_BUILD_ALLOW "
+                "after a security review.",
             )
     try:
         source_project_record = _get_project(source_client, source_project)
@@ -1283,6 +1270,29 @@ def inspect(
             "Use an unrestricted compatible target project until a pinned push transport is "
             "implemented and approved.",
         )
+    if scope == "instance":
+        from .preflight_instance import inspect_instance
+
+        return inspect_instance(
+            result,
+            intent=intent,
+            source_client=source_client,
+            target_client=target_client,
+            source_cluster=source_cluster,
+            source_project=source_project,
+            source_name=source_name,
+            target_cluster=target_cluster,
+            target_project=target_project,
+            target_name=target_name,
+            target_member=target_member,
+            target_pool=target_pool,
+            settings=settings,
+            mappings=mapping_groups,
+            source_identity=source_identity,
+            target_identity=target_identity,
+            source_project_record=source_project_record,
+            target_project_record=target_project_record,
+        )
     _block_shared_dependencies(
         result,
         side="source",
@@ -1296,223 +1306,6 @@ def inspect(
             project=target_project,
             project_record=target_project_record,
         )
-    if scope == "instance":
-        if not source_name:
-            result.block("source_name_required", "An instance name is required.")
-            return result
-        try:
-            source_instance = _instance(source_client, source_project, source_name)
-        except InventoryReadError as exc:
-            _block_inventory_error(result, side="source", error=exc)
-            return result
-        if source_instance is None:
-            result.block("source_not_found", "The source instance does not exist.")
-            return result
-        _source_state_blocker(result, source_instance, source_name)
-        source_identity_fingerprint = instance_identity_fingerprint(source_instance)
-        if source_identity_fingerprint is None:
-            result.block(
-                "source_identity_unavailable",
-                f"Instance '{source_name}' has no authoritative immutable identity evidence.",
-                "Refresh the daemon inventory and ensure the instance exposes a creation time or UUID.",
-            )
-        destination_name = target_name or source_name
-        if same_project and not target_member:
-            if destination_name == source_name:
-                result.block(
-                    "source_target_identical",
-                    "Source and target resolve to the same instance identity.",
-                    "Choose a distinct copy name, another project, or another cluster member.",
-                )
-            elif intent == "move":
-                result.block(
-                    "rename_in_place_unsupported",
-                    "A same-project move cannot be used as an in-place rename.",
-                    "Use a dedicated rename workflow or choose another project/member.",
-                )
-        if member_relocation:
-            source_location = str(source_instance.get("location") or "").strip()
-            if not source_location:
-                result.block(
-                    "source_member_unverified",
-                    "The source instance member could not be read authoritatively.",
-                    "Refresh cluster inventory before selecting a relocation member.",
-                )
-            elif source_location == target_member:
-                result.block(
-                    "target_member_is_source",
-                    f"Instance '{source_name}' is already on member '{target_member}'.",
-                    "Choose a different target member.",
-                )
-        if member_relocation and target_name and target_name != source_name:
-            result.block(
-                "member_relocation_rename_unsupported",
-                "Native member relocation preserves the instance name.",
-                "Use the source name as the destination name or choose staged copy.",
-            )
-        if member_relocation and target_member:
-            _member_relocation_checks(
-                result,
-                client=source_client,
-                project=source_project,
-                target_member=target_member,
-                target_pool=target_pool,
-                instances=[source_instance],
-            )
-        if target_project_record is None:
-            can_create_target = source_project_record is not None
-            if source_project_record is None:
-                result.block(
-                    "source_project_missing", "The source project does not exist."
-                )
-            elif not _reviewed_project_config(
-                dict(source_project_record.get("config") or {})
-            ):
-                can_create_target = False
-                result.block(
-                    "unsupported_project_config",
-                    "The source project has configuration without a reviewed clone policy.",
-                    "Create and validate the target project manually before migration.",
-                )
-            used_profiles: list[Optional[dict[str, Any]]] = []
-            for name in source_instance.get("profiles") or ["default"]:
-                try:
-                    used_profiles.append(
-                        _profile(source_client, source_project, str(name))
-                    )
-                except InventoryReadError as exc:
-                    _block_inventory_error(result, side="source", error=exc)
-                    used_profiles.append(None)
-            if any(
-                profile is None
-                or bool(profile.get("config") or {})
-                or bool(profile.get("devices") or {})
-                for profile in used_profiles
-            ):
-                can_create_target = False
-                result.block(
-                    "target_project_requires_profile_clone",
-                    "A new target project would require cloning a non-empty profile.",
-                    "Create the target project and equivalent profiles before migration.",
-                )
-            if can_create_target:
-                result.capabilities["target_project_create"] = True
-                result.capabilities["target_project_fingerprint"] = _project_fingerprint(
-                    source_project_record
-                )
-        if not same_project:
-            result.resources.append(
-                {
-                    "resource_type": "project",
-                    "source_name": source_project,
-                    "target_name": target_project,
-                    "required": True,
-                    "state": "planned",
-                }
-            )
-        result.capabilities["incremental_refresh"] = bool(
-            member_relocation
-            and source_identity["engine"] == "incus"
-            and source_instance.get("type") == "container"
-            and "instance_refresh_migration" in source_identity["extensions"]
-        )
-        if member_relocation:
-            target_instance = source_instance
-        elif target_project_record is None:
-            target_instance = None
-        else:
-            try:
-                target_instance = _instance(
-                    target_client, target_project, destination_name
-                )
-            except InventoryReadError as exc:
-                _block_inventory_error(result, side="target", error=exc)
-                target_instance = None
-        if not member_relocation and target_project_record is not None:
-            if target_instance is not None:
-                result.block(
-                    "target_instance_exists",
-                    f"Target instance '{destination_name}' already exists.",
-                    "Choose another target name or remove the conflicting instance.",
-                )
-        source_arch = source_instance.get("architecture")
-        if source_arch and target_identity["architectures"] and source_arch not in target_identity[
-            "architectures"
-        ]:
-            result.block(
-                "architecture_mismatch",
-                f"Target cannot run architecture '{source_arch}'.",
-            )
-        _device_blockers(result, source_instance, source_name)
-        if not same_project:
-            _network_dependency_blockers(result, source_instance, source_name)
-        if not same_project and target_project_record is not None:
-            if source_project_record is None or dict(
-                source_project_record.get("config") or {}
-            ) != dict(target_project_record.get("config") or {}):
-                result.block(
-                    "target_project_policy_mismatch",
-                    "Target project restrictions, features, limits, or quotas differ from source.",
-                    "Align the empty target project policy exactly before migration.",
-                )
-            try:
-                target_resources = _known_project_resources(
-                    target_client, target_project
-                )
-            except InventoryReadError as exc:
-                _block_inventory_error(result, side="target", error=exc)
-                target_resources = None
-            occupied = (
-                _occupied_resources(target_resources)
-                if target_resources is not None
-                else {}
-            )
-            if occupied:
-                result.block(
-                    "target_project_not_empty",
-                    "The target project contains resources.",
-                    "Choose a new or empty target project. Project merge is not supported.",
-                )
-            _profile_compatibility(
-                result,
-                source_client,
-                target_client,
-                source_project,
-                target_project,
-                source_instance,
-            )
-        if not member_relocation:
-            _check_capacity(
-                result,
-                source_client=source_client,
-                target_client=target_client,
-                source_project=source_project,
-                instance_names=[source_name],
-                target_pool=target_pool,
-            )
-        result.resources.append(
-            {
-                "resource_type": "instance",
-                "source_name": source_name,
-                "target_name": destination_name,
-                "source_fingerprint": _instance_preflight_fingerprint(source_instance),
-                "source_identity_fingerprint": source_identity_fingerprint,
-                "target_fingerprint": (
-                    _instance_preflight_fingerprint(target_instance)
-                    if target_instance is not None
-                    else None
-                ),
-                "target_identity_fingerprint": (
-                    instance_identity_fingerprint(target_instance)
-                    if target_instance is not None
-                    else None
-                ),
-                "required": True,
-                "state": "planned",
-            }
-        )
-        return result
-
     if source_project_record is None:
         result.block("source_project_missing", "The source project does not exist.")
         return result

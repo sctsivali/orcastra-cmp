@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.config import get_settings
 from app.models.migration_models import MigrationAuditOutbox, MigrationJob, MigrationPlan
 from app.models.migration_schemas import (
     MigrationActionName,
@@ -90,10 +91,20 @@ def _available_actions(job: MigrationJob, resources: list[Any]) -> list[Migratio
         actions.append(MigrationActionName.CUTOVER)
     if job.phase == "external_cutover_pending" and job.status == "waiting":
         actions.append(MigrationActionName.CONFIRM_EXTERNAL_CUTOVER)
-    # Destructive recovery is intentionally absent until daemon-side target write history can
-    # be proven authoritatively. The action endpoint independently enforces the same gate.
+    retained = (
+        job.scope == "instance"
+        and job.intent == "move"
+        and job.strategy != "member_relocation"
+        and job.phase in {"source_retained", "cleanup_due", "cleanup_blocked"}
+        and job.status == "waiting"
+    )
+    if retained and bool(getattr(get_settings(), "migration_recovery_actions_enabled", True)):
+        actions.extend([MigrationActionName.ROLLBACK, MigrationActionName.CLEANUP])
     if job.status in {"unknown", "manual_recovery"}:
         actions.append(MigrationActionName.RECHECK)
+    if job.phase in {"cleanup_blocked", "manual_recovery"}:
+        # Admin only. The action endpoint enforces the role.
+        actions.append(MigrationActionName.RELEASE)
     return actions
 
 

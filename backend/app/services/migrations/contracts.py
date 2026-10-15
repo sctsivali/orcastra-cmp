@@ -40,6 +40,18 @@ class MigrationLeaseLost(RuntimeError):
     pass
 
 
+class MigrationAuthorityUnavailable(MigrationUnknown):
+    """The identity provider could not confirm authority right now. Retry later."""
+
+    def __init__(self, message: str, *, code: str = "authority_unavailable") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class TransferFailed(RuntimeError):
+    """The daemon definitively refused or failed a step before any target was activated."""
+
+
 _worker_fence: contextvars.ContextVar[Optional[tuple[str, str, int]]] = (
     contextvars.ContextVar("migration_worker_fence", default=None)
 )

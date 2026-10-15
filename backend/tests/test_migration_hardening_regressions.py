@@ -10,14 +10,19 @@ import pytest
 
 from app.models.migration_schemas import MigrationPlanCreateRequest
 from app.services.migrations import (
+    activation,
     context,
     executor,
     planning,
     preflight,
+    preflight_source,
     preparation,
+    reconcile_transfer,
     reconciliation,
-    recovery_actions,
     repository,
+    retention,
+    rollback,
+    transfer,
 )
 from app.services.migrations.authority import ActorIdentityPin, MigrationAuthorityPin
 from app.services.migrations.contracts import MigrationAuthorityError, MigrationConflict
@@ -190,10 +195,13 @@ async def _run_cleanup_until_blocked(
     job = SimpleNamespace(
         job_id="job-a",
         scope="instance",
+        intent="move",
+        strategy="same_cluster_copy",
         source_project="source-project",
         target_project="target-project",
         source_cluster_id="cluster-a",
         retention_deadline=repository.utcnow(),
+        safe_result={},
     )
     fenced_updates: list[dict[str, Any]] = []
 
@@ -215,20 +223,18 @@ async def _run_cleanup_until_blocked(
     def unexpected_delete(*_args: Any, **_kwargs: Any) -> None:
         pytest.fail("cleanup reached destructive deletion after drift")
 
-    monkeypatch.setattr(recovery_actions, "_resources", resources)
-    monkeypatch.setattr(recovery_actions, "_blocking", direct_call)
-    monkeypatch.setattr(recovery_actions, "_fenced_job_update", fenced_update)
-    monkeypatch.setattr(recovery_actions.executor, "read_instance", read_instance)
+    monkeypatch.setattr(retention, "_resources", resources)
+    monkeypatch.setattr(retention, "_blocking", direct_call)
+    monkeypatch.setattr(retention, "_fenced_job_update", fenced_update)
+    monkeypatch.setattr(retention.executor, "read_instance", read_instance)
     monkeypatch.setattr(
-        recovery_actions.executor,
+        retention.executor,
         "snapshot_inventory_fingerprint",
         lambda *_args, **_kwargs: current_snapshot_hash,
     )
-    monkeypatch.setattr(
-        recovery_actions.executor, "submit_delete_instance", unexpected_delete
-    )
+    monkeypatch.setattr(retention.executor, "submit_delete_instance", unexpected_delete)
 
-    await recovery_actions._cleanup(job, "worker-a", source_client, target_client)
+    await retention.run_cleanup(job, "worker-a", source_client, target_client)
 
     assert len(fenced_updates) == 1
     return fenced_updates[0]
@@ -293,6 +299,9 @@ def _recovery_resource(
 def _recovery_job(**updates: Any) -> SimpleNamespace:
     values = {
         "job_id": "job-recovery",
+        "scope": "instance",
+        "intent": "move",
+        "safe_result": {},
         "strategy": "same_cluster_copy",
         "source_cluster_id": "cluster-a",
         "target_cluster_id": "cluster-a",
@@ -303,16 +312,18 @@ def _recovery_job(**updates: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-@pytest.mark.asyncio
-async def test_rollback_never_deletes_a_same_name_target_replacement(
+async def _run_rollback_until_manual(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    *,
+    source: dict[str, Any],
+    target: dict[str, Any],
+    expected_source: dict[str, Any],
+    expected_target: dict[str, Any],
+) -> list[dict[str, Any]]:
     source_client = object()
     target_client = object()
-    source = _instance("source-uuid")
-    expected_target = _instance("target-uuid")
-    replacement_target = _instance("replacement-target-uuid")
-    resource = _recovery_resource(source, expected_target)
+    resource = _recovery_resource(expected_source, expected_target)
+    updates: list[dict[str, Any]] = []
 
     async def resources(_job_id: str) -> list[Any]:
         return [resource]
@@ -322,75 +333,64 @@ async def test_rollback_never_deletes_a_same_name_target_replacement(
         return function(*args, **kwargs)
 
     def read_instance(client: Any, **_kwargs: Any) -> dict[str, Any]:
-        return source if client is source_client else replacement_target
+        return source if client is source_client else target
 
-    def unexpected_delete(*_args: Any, **_kwargs: Any) -> None:
-        pytest.fail("rollback deleted a replacement target")
+    async def fenced_update(_job: Any, _worker_id: str, **values: Any) -> bool:
+        updates.append(values)
+        return True
 
-    monkeypatch.setattr(recovery_actions, "_resources", resources)
-    monkeypatch.setattr(recovery_actions, "_blocking", direct_call)
-    monkeypatch.setattr(recovery_actions.executor, "read_instance", read_instance)
-    monkeypatch.setattr(
-        recovery_actions.executor,
-        "snapshot_inventory_fingerprint",
-        lambda *_args, **_kwargs: "snapshot-inventory",
-    )
-    monkeypatch.setattr(
-        recovery_actions.executor, "submit_delete_instance", unexpected_delete
-    )
+    def unexpected(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("rollback mutated an instance it could not prove")
 
-    with pytest.raises(RuntimeError, match="immutable identity"):
-        await recovery_actions._rollback(
-            _recovery_job(), "worker-a", source_client, target_client
-        )
+    monkeypatch.setattr(rollback, "_resources", resources)
+    monkeypatch.setattr(rollback, "_blocking", direct_call)
+    monkeypatch.setattr(rollback, "_fenced_job_update", fenced_update)
+    monkeypatch.setattr(rollback.executor, "read_instance", read_instance)
+    monkeypatch.setattr(rollback.executor, "submit_delete_instance", unexpected)
+    monkeypatch.setattr(rollback.executor, "submit_instance_state", unexpected)
+
+    await rollback.run_rollback(_recovery_job(), "worker-a", source_client, target_client)
+    return updates
 
 
 @pytest.mark.asyncio
-async def test_restore_never_overwrites_a_same_name_source_replacement(
+async def test_rollback_never_deletes_a_same_name_target_replacement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_client = object()
-    target_client = object()
-    expected_source = _instance("source-uuid")
-    replacement_source = _instance("replacement-source-uuid")
+    source = _instance("source-uuid")
+    updates = await _run_rollback_until_manual(
+        monkeypatch,
+        source=source,
+        target=_instance("replacement-target-uuid"),
+        expected_source=source,
+        expected_target=_instance("target-uuid"),
+    )
+
+    assert updates[-1]["phase"] == "manual_recovery"
+    assert updates[-1]["error_code"] == "rollback_target_unproven"
+
+
+@pytest.mark.asyncio
+async def test_rollback_never_restarts_a_same_name_source_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     target = _instance("target-uuid")
-    resource = _recovery_resource(expected_source, target)
-
-    async def resources(_job_id: str) -> list[Any]:
-        return [resource]
-
-    async def direct_call(function: Any, *args: Any, **kwargs: Any) -> Any:
-        kwargs.pop("label", None)
-        return function(*args, **kwargs)
-
-    def read_instance(client: Any, **_kwargs: Any) -> Any:
-        return replacement_source if client is source_client else None
-
-    def unexpected_restore(*_args: Any, **_kwargs: Any) -> None:
-        pytest.fail("restore overwrote a replacement source")
-
-    monkeypatch.setattr(recovery_actions, "_resources", resources)
-    monkeypatch.setattr(recovery_actions, "_blocking", direct_call)
-    monkeypatch.setattr(recovery_actions.executor, "read_instance", read_instance)
-    monkeypatch.setattr(
-        recovery_actions.executor,
-        "snapshot_inventory_fingerprint",
-        lambda *_args, **_kwargs: "snapshot-inventory",
-    )
-    monkeypatch.setattr(
-        recovery_actions.executor, "submit_restore_checkpoint", unexpected_restore
+    updates = await _run_rollback_until_manual(
+        monkeypatch,
+        source=_instance("replacement-source-uuid"),
+        target=target,
+        expected_source=_instance("source-uuid"),
+        expected_target=target,
     )
 
-    with pytest.raises(RuntimeError, match="immutable identity"):
-        await recovery_actions._restore(
-            _recovery_job(), "worker-a", source_client, target_client
-        )
+    assert updates[-1]["phase"] == "manual_recovery"
+    assert updates[-1]["error_code"] == "rollback_source_unproven"
 
 
 @pytest.mark.asyncio
 async def test_member_relocation_never_uses_delete_as_rollback() -> None:
-    with pytest.raises(RuntimeError, match="reverse relocation plan"):
-        await recovery_actions._rollback(
+    with pytest.raises(RuntimeError, match="Relocate it back"):
+        await rollback.run_rollback(
             _recovery_job(strategy="member_relocation"),
             "worker-a",
             object(),
@@ -526,7 +526,7 @@ async def test_compatibility_copy_replay_reauthorizes_before_disclosure(
 def _configure_project_creation_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[MigrationPlanCreateRequest, Any, dict[str, Any], dict[str, Any]]:
-    client = object()
+    client = SimpleNamespace(api=SimpleNamespace(networks=object(), operations=object()))
     request = _request(intent="copy")
     state: dict[str, Any] = {
         "target_project": None,
@@ -590,6 +590,16 @@ def _configure_project_creation_preflight(
     )
     monkeypatch.setattr(preflight, "_storage_pools", lambda _client: ["fast"])
     monkeypatch.setattr(preflight, "_instance_transfer_bytes", lambda *_args: 100)
+    monkeypatch.setattr(
+        preflight_source, "active_instance_operations", lambda _client, _wanted: set()
+    )
+    monkeypatch.setattr(
+        preflight,
+        "_get_collection",
+        lambda _node, *, project, resource: [
+            {"name": "lxdbr0", "managed": True, "type": "bridge", "status": "Created"}
+        ],
+    )
     monkeypatch.setattr(
         preflight.mobility,
         "pool_headroom",
@@ -998,11 +1008,12 @@ async def test_source_replacement_is_refused_before_cutover_mutation(
 
 
 @pytest.mark.asyncio
-async def test_successful_reconciliation_emits_stable_completion_outbox(
+async def test_reconciliation_adopts_a_marked_staged_target_and_resumes_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = _instance("source-uuid")
     target = _instance("target-uuid")
+    target["config"]["user.orcastra.migration-job"] = "job-a"
     resource = SimpleNamespace(
         resource_id="resource-a",
         resource_type="instance",
@@ -1014,12 +1025,6 @@ async def test_successful_reconciliation_emits_stable_completion_outbox(
         target_ref={"name": "workload-copy"},
         operation_refs=[
             {
-                "kind": "source_transfer",
-                "cluster_id": "source-cluster",
-                "project": "source-project",
-                "operation_id": "source-operation-a",
-            },
-            {
                 "kind": "transfer",
                 "cluster_id": "target-cluster",
                 "project": "target-project",
@@ -1028,10 +1033,12 @@ async def test_successful_reconciliation_emits_stable_completion_outbox(
         ],
         safe_result={
             "original_status": "stopped",
+            "source_identity_hash": executor.instance_identity_fingerprint(source),
             "source_definition_hash": executor.instance_fingerprint(source),
             "source_snapshot_inventory_hash": "snapshot-inventory",
             "source_submission_intent": True,
             "target_submission_intent": True,
+            "contract_hash": "contract-a",
         },
     )
     job = SimpleNamespace(
@@ -1050,9 +1057,93 @@ async def test_successful_reconciliation_emits_stable_completion_outbox(
     source_client = object()
     target_client = object()
     job_updates: list[dict[str, Any]] = []
+    resource_updates: list[dict[str, Any]] = []
 
     async def resources(_job_id: str) -> list[Any]:
         return [resource]
+
+    async def resource_update(_resource_id: str, **values: Any) -> None:
+        resource_updates.append(values)
+
+    async def fenced_update(_job: Any, _worker_id: str, **values: Any) -> bool:
+        job_updates.append(values)
+        return True
+
+    async def blocking(function: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.pop("label", None)
+        if function is transfer.build_live_contract:
+            return SimpleNamespace(contract_hash="contract-a"), source
+        if function is executor.read_instance:
+            return source if args[0] is source_client else target
+        if function is executor.snapshot_inventory_fingerprint:
+            return "snapshot-inventory"
+        pytest.fail(f"unexpected reconciliation read: {function}")
+
+    async def watched(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"settled": True, "failed": False}
+
+    async def job_plan(_job: Any) -> Any:
+        return SimpleNamespace(
+            request_payload=_request(intent="copy").model_dump(mode="json"),
+            preflight_payload={},
+        )
+
+    for module in (reconciliation, reconcile_transfer):
+        monkeypatch.setattr(module, "_resources", resources)
+        monkeypatch.setattr(module, "_resource_update", resource_update)
+        monkeypatch.setattr(module, "_fenced_job_update", fenced_update)
+        monkeypatch.setattr(module, "_blocking", blocking)
+    monkeypatch.setattr(reconcile_transfer, "await_operation", watched)
+    monkeypatch.setattr(reconcile_transfer, "_job_plan", job_plan)
+    monkeypatch.setattr(reconcile_transfer, "mismatches", lambda *_args: [])
+
+    await reconciliation._reconcile(job, "worker-a", source_client, target_client)
+
+    assert resource_updates[-1]["state"] == "ready"
+    adopted = resource_updates[-1]["safe_result"]
+    assert adopted["contract_hash"] == "contract-a"
+    assert adopted["target_identity_hash"] == executor.instance_identity_fingerprint(target)
+    assert job_updates[-1]["phase"] == "target_validating"
+    assert "outbox_events" not in job_updates[-1]
+
+
+@pytest.mark.asyncio
+async def test_verified_copy_completion_emits_stable_outbox_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _instance("source-uuid")
+    target = _instance("target-uuid")
+    target["config"]["user.orcastra.migration-job"] = "job-a"
+    resource = SimpleNamespace(
+        resource_id="resource-a",
+        resource_type="instance",
+        state="ready",
+        source_ref={"name": "workload"},
+        target_ref={"name": "workload-copy"},
+        safe_result={},
+    )
+    state = {
+        "original_status": "stopped",
+        "source_identity_hash": executor.instance_identity_fingerprint(source),
+        "target_identity_hash": executor.instance_identity_fingerprint(target),
+    }
+    job = SimpleNamespace(
+        job_id="job-a",
+        scope="instance",
+        intent="copy",
+        strategy="cross_cluster_pull",
+        source_cluster_id="source-cluster",
+        source_project="source-project",
+        source_resource_name="workload",
+        target_cluster_id="target-cluster",
+        target_project="target-project",
+        target_resource_name="workload-copy",
+        target_member=None,
+        safe_result={},
+    )
+    source_client = object()
+    target_client = object()
+    job_updates: list[dict[str, Any]] = []
 
     async def resource_update(_resource_id: str, **_values: Any) -> None:
         return None
@@ -1063,20 +1154,17 @@ async def test_successful_reconciliation_emits_stable_completion_outbox(
 
     async def blocking(function: Any, *args: Any, **kwargs: Any) -> Any:
         kwargs.pop("label", None)
-        if function is reconciliation.executor.read_operation:
-            return {"settled": True, "failed": False, "err": None}
-        if function is reconciliation.executor.read_instance:
+        if function is executor.read_instance:
             return source if args[0] is source_client else target
-        if function is reconciliation.executor.snapshot_inventory_fingerprint:
-            return "snapshot-inventory"
-        pytest.fail(f"unexpected reconciliation read: {function}")
+        pytest.fail(f"unexpected completion call: {function}")
 
-    monkeypatch.setattr(reconciliation, "_resources", resources)
-    monkeypatch.setattr(reconciliation, "_resource_update", resource_update)
-    monkeypatch.setattr(reconciliation, "_fenced_job_update", fenced_update)
-    monkeypatch.setattr(reconciliation, "_blocking", blocking)
+    monkeypatch.setattr(activation, "_resource_update", resource_update)
+    monkeypatch.setattr(activation, "_fenced_job_update", fenced_update)
+    monkeypatch.setattr(activation, "_blocking", blocking)
 
-    await reconciliation._reconcile(job, "worker-a", source_client, target_client)
+    await activation.finish_transfer(
+        job, "worker-a", source_client, target_client, [(resource, state, None)]
+    )
 
     assert len(job_updates) == 1
     update = job_updates[0]

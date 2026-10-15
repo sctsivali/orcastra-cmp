@@ -17,12 +17,14 @@ from app.services.migrations import (
     transfer,
     worker,
 )
-from app.services.migrations.contracts import MigrationUnknown
+from app.services.migrations import target_contract
+from app.services.migrations.contracts import MigrationAuthorityError, MigrationUnknown
 
 
 def _job(**overrides: Any) -> SimpleNamespace:
     values: dict[str, Any] = {
         "job_id": "migration-job",
+        "scope": "instance",
         "source_cluster_id": "source-cluster",
         "target_cluster_id": "target-cluster",
         "source_project": "source-project",
@@ -386,9 +388,16 @@ async def test_single_transfer_evidence_remains_valid_for_same_cluster_strategie
         target_client,
     )
 
-    assert any(update.get("state") == "completed" for update in resource_updates)
-    assert job_updates[-1]["phase"] == "completed"
-    assert job_updates[-1]["status"] == "success"
+    if strategy == "member_relocation":
+        # Adoption proves the relocation. Activation and its final barrier complete the job.
+        assert any(update.get("state") == "ready" for update in resource_updates)
+        assert job_updates[-1]["phase"] == "target_validating"
+        assert job_updates[-1]["status"] == "running"
+    else:
+        # A copy accepted before target contracts keeps the operation-evidence rule.
+        assert any(update.get("state") == "completed" for update in resource_updates)
+        assert job_updates[-1]["phase"] == "completed"
+        assert job_updates[-1]["status"] == "success"
 
 
 @pytest.mark.asyncio
@@ -548,8 +557,8 @@ async def test_member_relocation_can_adopt_exact_identity_and_member_without_ope
         target_client,
     )
 
-    assert any(update.get("state") == "completed" for update in resource_updates)
-    assert job_updates[-1]["phase"] == "completed"
+    assert any(update.get("state") == "ready" for update in resource_updates)
+    assert job_updates[-1]["phase"] == "target_validating"
 
 
 @pytest.mark.asyncio
@@ -607,7 +616,7 @@ async def test_primary_copy_inventory_match_without_correlation_token_stays_unkn
         "restore_submission_intent",
     ],
 )
-async def test_persisted_destructive_recovery_intent_never_releases_locks(
+async def test_persisted_recovery_intent_resumes_its_runner_without_releasing_locks(
     monkeypatch: pytest.MonkeyPatch,
     intent_key: str,
 ) -> None:
@@ -627,16 +636,22 @@ async def test_persisted_destructive_recovery_intent_never_releases_locks(
     )
 
     await reconciliation._reconcile(
-        _job(), "worker-1", source_client, target_client
+        _job(phase="unknown"), "worker-1", source_client, target_client
     )
 
     assert resource_updates == []
-    assert job_updates[-1]["phase"] == "manual_recovery"
-    assert job_updates[-1]["status"] == "manual_recovery"
-    assert job_updates[-1]["error_code"] == (
-        "destructive_recovery_write_history_unverified"
-    )
     assert "terminal" not in job_updates[-1]
+    if intent_key == "restore_submission_intent":
+        # Checkpoint restore is not offered, so a persisted restore intent needs an operator.
+        assert job_updates[-1]["phase"] == "manual_recovery"
+        assert job_updates[-1]["status"] == "manual_recovery"
+    else:
+        # The convergent runner resumes. Locks are only released by its terminal transaction.
+        expected = (
+            "cleaning_up" if intent_key == "cleanup_submission_intent" else "rolling_back"
+        )
+        assert job_updates[-1]["phase"] == expected
+        assert job_updates[-1]["status"] == "running"
 
 
 class _InventoryResponse:
@@ -940,11 +955,14 @@ async def test_invalid_contract_after_submission_keeps_resource_locks(
     "phase",
     ["source_retained", "cleanup_due", "rollback_available", "cleanup_blocked"],
 )
-def test_destructive_recovery_actions_are_not_advertised(phase: str) -> None:
+def test_retention_actions_follow_the_retained_phase(phase: str) -> None:
     job = SimpleNamespace(
         phase=phase,
         status="waiting",
         lease_expires_at=None,
+        scope="instance",
+        intent="move",
+        strategy="same_cluster_copy",
     )
     resource = SimpleNamespace(
         resource_type="instance",
@@ -959,9 +977,26 @@ def test_destructive_recovery_actions_are_not_advertised(phase: str) -> None:
 
     actions = presenters._available_actions(job, [resource])
 
-    assert MigrationActionName.ROLLBACK not in actions
+    retained = phase in {"source_retained", "cleanup_due", "cleanup_blocked"}
+    assert (MigrationActionName.ROLLBACK in actions) is retained
+    assert (MigrationActionName.CLEANUP in actions) is retained
     assert MigrationActionName.RESTORE_CHECKPOINT not in actions
-    assert MigrationActionName.CLEANUP not in actions
+    assert (MigrationActionName.RELEASE in actions) is (phase == "cleanup_blocked")
+
+
+def test_member_relocation_and_copy_never_offer_retention_actions() -> None:
+    for intent, strategy in (("move", "member_relocation"), ("copy", "same_cluster_copy")):
+        job = SimpleNamespace(
+            phase="source_retained",
+            status="waiting",
+            lease_expires_at=None,
+            scope="instance",
+            intent=intent,
+            strategy=strategy,
+        )
+        actions = presenters._available_actions(job, [])
+        assert MigrationActionName.ROLLBACK not in actions
+        assert MigrationActionName.CLEANUP not in actions
 
 
 @pytest.mark.asyncio
@@ -1124,8 +1159,18 @@ async def _run_copy_transfer(
     source["status"] = source_status
     target = _instance(identity="target-identity")
     target["status"] = target_status
+    target["config"]["user.orcastra.migration-job"] = "migration-job"
     source_client = object()
     target_client = object()
+    contract = target_contract.build_contract(
+        source=source,
+        target_profiles={"default": {"config": {}, "devices": {}}},
+        profile_mapping={},
+        network_mapping={},
+        usable_networks=[],
+        root_pool="fast",
+        intent="copy",
+    )
     resource = SimpleNamespace(
         resource_id="resource-1",
         resource_type="instance",
@@ -1133,11 +1178,19 @@ async def _run_copy_transfer(
             "name": "workload",
             "identity_fingerprint": executor.instance_identity_fingerprint(source),
         },
-        target_ref={"name": "workload-copy"},
+        target_ref={"name": "workload-copy", "contract": contract.summary()},
         operation_refs=[],
         safe_result={},
         state="pending",
     )
+    prepared = {
+        "resource-1": {
+            "original_status": "stopped",
+            "source_identity_hash": executor.instance_identity_fingerprint(source),
+            "source_definition_hash": executor.instance_fingerprint(source),
+            "source_snapshot_inventory_hash": "snapshot-hash",
+        }
+    }
     job = _job(
         source_cluster_id="shared-cluster",
         target_cluster_id="shared-cluster",
@@ -1152,11 +1205,16 @@ async def _run_copy_transfer(
     async def lease() -> None:
         return None
 
+    async def settled(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"settled": True, "failed": False}
+
     async def blocking(function: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal submissions
         kwargs.pop("label", None)
         if function is executor.read_instance:
             return source if args[0] is source_client else target
+        if function is transfer.build_live_contract:
+            return contract, source
         if function is executor.snapshot_inventory_fingerprint:
             return (
                 "snapshot-hash"
@@ -1165,21 +1223,14 @@ async def _run_copy_transfer(
             )
         if function is executor.submit_copy_instance:
             submissions += 1
-            assert any(
-                update.get("safe_result", {}).get(
-                    "source_snapshot_inventory_hash"
-                )
-                == "snapshot-hash"
-                for update in updates
-            )
+            assert kwargs["definition"]["config"]["user.orcastra.migration-job"] == job.job_id
             return "copy", "transfer-operation", target_client
-        if function is executor.wait_operation:
-            return {"settled": True, "failed": False}
         pytest.fail(f"unexpected copy transfer call: {function}")
 
     monkeypatch.setattr(transfer, "_resource_update", update)
     monkeypatch.setattr(transfer, "_assert_mutation_lease", lease)
     monkeypatch.setattr(transfer, "_blocking", blocking)
+    monkeypatch.setattr(transfer, "await_operation", settled)
     error: Exception | None = None
     try:
         await transfer._transfer_resources(
@@ -1188,8 +1239,14 @@ async def _run_copy_transfer(
             source_client,
             target_client,
             [resource],
-            {},
-            "fast",
+            prepared,
+            request=SimpleNamespace(
+                mappings=SimpleNamespace(
+                    model_dump=lambda **_kwargs: {},
+                    storage_pools={"root": "fast"},
+                )
+            ),
+            root_pool_name="fast",
         )
     except Exception as exc:  # noqa: BLE001 - returned for focused assertions
         error = exc
@@ -1225,7 +1282,8 @@ async def test_copy_transfer_pins_and_verifies_status_and_snapshot_inventory(
         == "snapshot-hash"
         for update in updates
     )
-    assert any(update.get("state") == "completed" for update in updates) is succeeds
+    # Transfer ends at "ready". Activation and its barriers decide completion.
+    assert any(update.get("state") == "ready" for update in updates) is succeeds
     if not succeeds:
         assert isinstance(error, MigrationUnknown)
 
@@ -1241,7 +1299,7 @@ async def test_copy_source_state_race_is_rejected_before_submit(
 
     assert submissions == 0
     assert updates == []
-    assert error is not None
+    assert isinstance(error, MigrationAuthorityError)
 
 
 async def _run_failed_copy_reconciliation(
