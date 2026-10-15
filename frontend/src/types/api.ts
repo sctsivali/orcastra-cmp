@@ -1464,11 +1464,18 @@ export interface SystemSettings {
   task_journal_enabled?: boolean;
   /** Read-only Migration Center planning and history capability. */
   migration_center_enabled?: boolean;
-  /** Independently staged mutation capabilities. All default to disabled server-side. */
+  /** Independently staged mutation capabilities. Instance copy and move are on by default. */
   migration_durable_copy_enabled?: boolean;
   migration_instance_move_enabled?: boolean;
   migration_project_member_relocation_enabled?: boolean;
   migration_project_cross_cluster_enabled?: boolean;
+  /** Rollback and Finalize of a retained move. */
+  migration_recovery_actions_enabled?: boolean;
+  /** Whether the retained source is deleted automatically when retention ends. */
+  migration_auto_cleanup_enabled?: boolean;
+  /** Whether a running source is stopped for the transfer and its target started after. */
+  migration_running_source_enabled?: boolean;
+  migration_default_retention_hours?: number;
 }
 
 // My Keys
@@ -3374,63 +3381,5 @@ export interface SnapshotActionResponse {
   instance_name: string;
   snapshot: string;
   operation_id?: string | null;
-  message: string;
-}
-
-// ========== Instance Mobility Types ==========
-
-export interface MoveDestinationPool {
-  name: string;
-  headroom?: { total: number; used: number; free: number } | null;
-}
-
-export interface MoveDestination {
-  host: string;
-  same_cluster: boolean;
-  reachable?: boolean;
-  /** Architectures this host can run. A mismatch is a hard refusal from the hypervisor. */
-  architectures?: string[];
-  /** False when the host cannot run this instance's architecture. */
-  compatible?: boolean;
-  /** Why the destination is unusable, when it is. */
-  reason?: string;
-  projects?: string[];
-  pools?: MoveDestinationPool[];
-}
-
-export interface MovePreflight {
-  instance_name: string;
-  source_host: string;
-  source_project: string;
-  /** Root disk usage in bytes, when the driver reports it. */
-  footprint_bytes?: number | null;
-  architecture?: string | null;
-  destinations: MoveDestination[];
-  blockers: string[];
-}
-
-export interface MoveRequest {
-  host: string;
-  project: string;
-  target_host: string;
-  target_project: string;
-  target_name: string;
-  target_member?: string | null;
-  target_pool?: string | null;
-  /** Required when the source carries an upstream schedule, alongside a reason. */
-  acknowledge_billing_impact?: boolean;
-  reason?: string;
-}
-
-export interface MoveResponse {
-  success: boolean;
-  instance_name: string;
-  target_host: string;
-  target_project: string;
-  target_name: string;
-  /** Durable engine, copy within a cluster, migration between clusters, or bounded stream. */
-  transport: "durable" | "copy" | "migration" | "stream";
-  operation_id?: string | null;
-  migration_job_id?: string | null;
   message: string;
 }

@@ -23,8 +23,8 @@ export interface InstanceRowActionsInput {
   /** Partner and above. The backend refuses copy, rebuild and delete below that. */
   canManage: boolean;
   /** Fail-closed reason while Migration Center planning availability is not established. */
-  migrationPlanningUnavailableReason?: string;
-  /** Copy is mutating and is available only through the reviewed durable-copy rollout stage. */
+  migrationMoveUnavailableReason?: string;
+  /** Copy and Move open the Migration Center wizard. Each has its own deployment switch. */
   migrationCopyUnavailableReason?: string;
   /** Keys of the lifecycle actions in flight (actionKey), from useInstanceActions. */
   pendingActions: ReadonlySet<string>;
@@ -57,7 +57,7 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
     isReadOnly,
     writeDisabledReason,
     canManage,
-    migrationPlanningUnavailableReason,
+    migrationMoveUnavailableReason,
     migrationCopyUnavailableReason,
     pendingActions,
     deletePending,
@@ -113,7 +113,7 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
         label: "Move Instance",
         icon: ArrowLeftRight,
         onSelect: input.onMove,
-        unavailableReason: migrationPlanningUnavailableReason,
+        unavailableReason: manage ?? migrationMoveUnavailableReason,
       },
       { id: "rebuild", label: "Rebuild Instance", icon: RefreshCw, onSelect: input.onRebuild, unavailableReason: manage },
       {

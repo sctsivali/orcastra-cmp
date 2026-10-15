@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Trash2,
   Undo2,
+  Unlock,
   XCircle,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -30,12 +31,16 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useMigrationJob } from "@/hooks/use-migrations";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
 import { describeReadError } from "@/lib/read-error";
 import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { MigrationAction, MigrationJob } from "@/types/migrations";
+import { Role } from "@/types/rbac";
 import { MigrationActionDialog, migrationActionCopy } from "./migration-action-dialog";
 import { endpointLabel, jobProgress, migrationStatusMeta } from "./migration-format";
 import { MigrationResourceTable } from "./migration-resource-table";
+import { MigrationRetentionPanel } from "./migration-retention-panel";
 
 const ACTIONS: Record<
   MigrationAction,
@@ -44,17 +49,15 @@ const ACTIONS: Record<
   cancel: { label: "Cancel", icon: XCircle },
   cutover: { label: "Approve Cutover", icon: Scissors },
   confirm_external_cutover: { label: "Confirm Traffic Cutover", icon: CheckCircle2 },
-  rollback: { label: "Rollback", icon: Undo2, destructive: true },
+  rollback: { label: "Roll Back", icon: Undo2, destructive: true },
   restore_checkpoint: { label: "Restore Checkpoint", icon: RotateCcw, destructive: true },
-  cleanup: { label: "Delete Source", icon: Trash2, destructive: true },
+  cleanup: { label: "Finalize", icon: Trash2, destructive: true },
   recheck: { label: "Recheck", icon: RefreshCw },
+  release: { label: "Release", icon: Unlock },
 };
 
-const RELEASE_DISABLED_ACTIONS = new Set<MigrationAction>([
-  "rollback",
-  "restore_checkpoint",
-  "cleanup",
-]);
+// Only an administrator can release a blocked job. The endpoint enforces the role too.
+const ADMIN_ACTIONS = new Set<MigrationAction>(["release"]);
 
 interface MigrationJobDialogProps {
   jobId: string | null;
@@ -65,6 +68,8 @@ interface MigrationJobDialogProps {
 export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }: MigrationJobDialogProps) {
   const query = useMigrationJob(jobId, !!jobId);
   const [action, setAction] = React.useState<MigrationAction | null>(null);
+  const isAdmin = usePermissions().hasRole(Role.ADMIN);
+  const { autoCleanupEnabled } = useMigrationCapabilities();
 
   React.useEffect(() => setAction(null), [jobId]);
 
@@ -128,18 +133,18 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                   <AlertTriangle className="h-4 w-4" aria-hidden />
                   <AlertTitle>Manual recovery required</AlertTitle>
                   <AlertDescription>
-                    Automatic reconciliation stopped to avoid replaying an uncertain operation.
-                    Inspect both endpoints and use Recheck after the cause is resolved.
+                    Orcastra stopped because it could not prove the next step is safe, and every
+                    fence is still held. Inspect both endpoints, fix the cause, then use Recheck.
                   </AlertDescription>
                 </Alert>
               )}
               {job.phase === "cleanup_due" && (
                 <Alert>
                   <Trash2 className="h-4 w-4" aria-hidden />
-                  <AlertTitle>Source cleanup is due</AlertTitle>
+                  <AlertTitle>Retention ended</AlertTitle>
                   <AlertDescription>
-                    Retention ended. The source remains stopped and fenced. Automated cleanup is
-                    unavailable in this release; use a separately reviewed operator plan.
+                    The source is still stopped and fenced. Use Finalize to delete it, or Roll Back
+                    to restore it.
                   </AlertDescription>
                 </Alert>
               )}
@@ -148,8 +153,8 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                   <AlertTriangle className="h-4 w-4" aria-hidden />
                   <AlertTitle>Source cleanup is blocked</AlertTitle>
                   <AlertDescription>
-                    Source drift, target health, or a newly discovered resource failed the cleanup
-                    safety check. Nothing was deleted.
+                    The source changed during retention or the new instance failed its health
+                    check, so nothing was deleted. The reason is shown below.
                   </AlertDescription>
                 </Alert>
               )}
@@ -201,6 +206,8 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                     />
                   </div>
 
+                  <MigrationRetentionPanel job={job} autoCleanupEnabled={autoCleanupEnabled} />
+
                   {overallProgress !== null && (
                     <div className="space-y-2 rounded-md border p-3">
                       <div className="flex items-center justify-between gap-2 text-sm">
@@ -241,7 +248,7 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
             Close
           </Button>
           {job?.available_actions?.map((availableAction) => {
-            if (RELEASE_DISABLED_ACTIONS.has(availableAction)) return null;
+            if (ADMIN_ACTIONS.has(availableAction) && !isAdmin) return null;
             if (availableAction === "cancel" && job.phase !== "queued" && job.phase !== "cutover_pending") {
               return null;
             }
@@ -255,7 +262,13 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
               <Button
                 key={availableAction}
                 className="min-h-11 w-full sm:min-h-10 sm:w-auto"
-                variant={config.destructive ? "destructive" : availableAction === "cutover" ? "default" : "outline"}
+                variant={
+                  config.destructive
+                    ? "destructive"
+                    : availableAction === "cutover"
+                      ? "default"
+                      : "outline"
+                }
                 onClick={() => setAction(availableAction)}
                 disabled={!!writeDisabledReason || query.isError}
                 title={writeDisabledReason}

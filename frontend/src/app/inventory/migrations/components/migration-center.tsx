@@ -78,11 +78,14 @@ function MigrationCenterContent() {
 
   const seed = React.useMemo<MigrationWizardSeed>(() => {
     const scope = searchParams.get("scope");
+    const intent = searchParams.get("intent");
     return {
       scope: scope === "project" ? "project" : scope === "instance" ? "instance" : undefined,
+      intent: intent === "copy" ? "copy" : intent === "move" ? "move" : undefined,
       sourceCluster: searchParams.get("source_cluster") || undefined,
       sourceProject: searchParams.get("source_project") || undefined,
       resourceName: searchParams.get("resource_name") || undefined,
+      sourceMember: searchParams.get("source_member") || undefined,
       mode: searchParams.get("mode") === "member" ? "member" : searchParams.get("mode") === "cluster" ? "cluster" : undefined,
     };
   }, [searchParams]);
@@ -97,7 +100,7 @@ function MigrationCenterContent() {
           : undefined;
   const planWriteDisabledReason = centerEnabled
     ? writeDisabledReason
-    : "New migration admission is paused";
+    : "New migrations are turned off on this deployment";
   const patchQuery = React.useCallback(
     (patch: Record<string, string | null>) => {
       const params = currentQuery();
@@ -119,6 +122,8 @@ function MigrationCenterContent() {
       source_project: null,
       resource_name: null,
       mode: null,
+      intent: null,
+      source_member: null,
     });
   }, [patchQuery]);
 
@@ -246,10 +251,10 @@ function MigrationCenterContent() {
       {!centerEnabled && (
         <Alert>
           <LockKeyhole className="h-4 w-4" aria-hidden />
-          <AlertTitle>New migration admission is paused</AlertTitle>
+          <AlertTitle>New migrations are turned off on this deployment</AlertTitle>
           <AlertDescription>
-            Existing jobs, safe actions, drafts, and history remain available. New plans and
-            execution requests stay blocked until the rollout gate is enabled.
+            Existing jobs, their rollback and cleanup actions, saved drafts, and history stay
+            available. An administrator enables new plans with MIGRATION_CENTER_ENABLED.
           </AlertDescription>
         </Alert>
       )}
@@ -416,6 +421,7 @@ function MigrationCenterContent() {
           instanceMoveEnabled: migrationCapabilities.instanceMoveEnabled,
           projectMemberRelocationEnabled: migrationCapabilities.projectMemberRelocationEnabled,
           projectCrossClusterEnabled: migrationCapabilities.projectCrossClusterEnabled,
+          defaultRetentionHours: migrationCapabilities.defaultRetentionHours,
         }}
       />
 

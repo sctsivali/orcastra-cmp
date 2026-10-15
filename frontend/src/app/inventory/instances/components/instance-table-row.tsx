@@ -25,7 +25,7 @@ export interface InstanceTableRowProps {
   pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
   writeDisabledReason?: string;
-  migrationPlanningUnavailableReason?: string;
+  migrationMoveUnavailableReason?: string;
   migrationCopyUnavailableReason?: string;
   /** Undefined when the caller may act; otherwise why not, including "still checking". */
   permissionReason: (
@@ -104,7 +104,7 @@ export function InstanceTableRow({
   pendingActions,
   isReadOnly,
   writeDisabledReason,
-  migrationPlanningUnavailableReason,
+  migrationMoveUnavailableReason,
   migrationCopyUnavailableReason,
   permissionReason,
   canDeleteInstance,
@@ -128,7 +128,7 @@ export function InstanceTableRow({
     isReadOnly,
     writeDisabledReason,
     canManage: canDeleteInstance,
-    migrationPlanningUnavailableReason,
+    migrationMoveUnavailableReason,
     migrationCopyUnavailableReason,
     pendingActions,
     deletePending,

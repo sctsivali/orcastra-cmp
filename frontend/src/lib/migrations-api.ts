@@ -27,6 +27,7 @@ const ACTION_PATH: Record<MigrationAction, string> = {
   restore_checkpoint: "restore-checkpoint",
   cleanup: "cleanup",
   recheck: "recheck",
+  release: "release",
 };
 
 export const migrationsAPI = {

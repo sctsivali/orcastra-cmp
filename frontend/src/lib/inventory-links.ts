@@ -27,7 +27,7 @@ export const LINK_TARGETS = {
   images: { path: "/inventory/images", search: true, facets: ["node", "project"] },
   profiles: { path: "/inventory/profiles", search: true, facets: ["node", "project"] },
   operations: { path: "/inventory/operations", search: true, facets: ["node"], reserved: ["task", "since"] },
-  migrations: { path: "/inventory/migrations", search: false, facets: [], reserved: ["job", "new", "scope", "source_cluster", "source_project", "resource_name", "mode"] },
+  migrations: { path: "/inventory/migrations", search: false, facets: [], reserved: ["job", "new", "scope", "source_cluster", "source_project", "resource_name", "mode", "intent", "source_member"] },
   networkAcls: { path: "/inventory/network-acls", search: true, facets: ["node"] },
   storagePools: { path: "/inventory/storage-pools", search: true, facets: ["node"] },
   storageVolumes: { path: "/inventory/storage-volumes", search: true, facets: ["node"] },
@@ -107,6 +107,8 @@ export type MigrationLink =
       sourceProject?: never;
       resourceName?: never;
       mode?: never;
+      intent?: never;
+      sourceMember?: never;
     }
   | {
       job?: null;
@@ -115,6 +117,8 @@ export type MigrationLink =
       sourceProject: string;
       resourceName?: string | null;
       mode?: "member" | "cluster" | null;
+      intent?: "copy" | "move" | null;
+      sourceMember?: string | null;
     };
 
 export const inventoryLinks = {
@@ -171,6 +175,8 @@ export const inventoryLinks = {
         source_project: link.sourceProject,
         resource_name: link.resourceName,
         mode: link.mode,
+        intent: link.intent,
+        source_member: link.sourceMember,
       },
     }),
 

@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronUp,
   Trash2,
-  MoreVertical,
   Cpu,
   HardDrive,
   MemoryStick,
@@ -23,11 +22,7 @@ import {
   CardHeader,
   CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { RowActions, type RowAction } from "@/components/ui/row-actions";
 import { useUpdateProjectTags } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/hooks/use-toast";
@@ -75,11 +70,50 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
   const { isPartner } = usePermissions();
   const { navigate } = useNavigationProgress();
   const migrationCapabilities = useMigrationCapabilities();
-  const canPlanMigration =
-    isPartner &&
-    !migrationCapabilities.isLoading &&
-    !migrationCapabilities.isError &&
-    migrationCapabilities.centerEnabled === true;
+  const relocationReason = (enabled: boolean | undefined, label: string) =>
+    migrationCapabilities.planningUnavailableReason ??
+    (enabled === true ? undefined : `${label} is turned off on this deployment`);
+  const openRelocation = (mode: "member" | "cluster") =>
+    navigate(
+      inventoryLinks.migrations({
+        scope: "project",
+        sourceCluster: project.host,
+        sourceProject: project.name,
+        mode,
+      }),
+    );
+  // Planning stays offered in read-only rollout because the backend allows it. A relocation
+  // this deployment cannot run is listed with its reason rather than left out.
+  const projectActions: RowAction[] = [
+    ...(isReadOnly
+      ? []
+      : [{ id: "edit", label: "Edit Project", icon: Settings, onSelect: () => setEditDialogOpen(true) }]),
+    {
+      id: "relocate-workloads",
+      label: "Relocate Workloads",
+      icon: Boxes,
+      onSelect: () => openRelocation("member"),
+      unavailableReason: relocationReason(migrationCapabilities.projectMemberRelocationEnabled, "Relocate Workloads"),
+      separatorBefore: !isReadOnly,
+    },
+    {
+      id: "relocate-project",
+      label: "Relocate Project",
+      icon: ArrowLeftRight,
+      onSelect: () => openRelocation("cluster"),
+      unavailableReason: relocationReason(migrationCapabilities.projectCrossClusterEnabled, "Relocate Project"),
+    },
+    ...(isReadOnly
+      ? []
+      : [{
+          id: "delete",
+          label: "Delete Project",
+          icon: Trash2,
+          destructive: true,
+          separatorBefore: true,
+          onSelect: () => setDeleteDialogOpen(true),
+        }]),
+  ];
   // useId rather than an id built from projectKey: the key carries a colon and the project name
   // is operator-supplied, so neither is safe to put in the DOM id the disclosure points at.
   const instancesRegionId = React.useId();
@@ -157,87 +191,23 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             {/* An identifier, not a status: the node it runs on links into Clusters through the
                 same component every table cell uses, and reads as text for a Tenant. */}
             <NodeLink clusterId={project.host} className="text-xs shrink-0" />
-            {/* Partner planning stays available in read-only rollout; mutations do not. */}
-            {isPartner && (!isReadOnly || canPlanMigration) && (
+            {isPartner && (
               <>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      aria-label={`Project actions for ${project.name}`}
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                  {!isReadOnly && (
-                    <DropdownMenuItem
-                      className="cursor-pointer"
-                      onSelect={() => setEditDialogOpen(true)}
-                    >
-                      <Settings className="mr-2 h-4 w-4" />
-                      Edit Project
-                    </DropdownMenuItem>
-                  )}
-                  {canPlanMigration && (
-                    <>
-                      <DropdownMenuItem
-                        className="cursor-pointer"
-                        onSelect={() =>
-                          navigate(
-                            inventoryLinks.migrations({
-                              scope: "project",
-                              sourceCluster: project.host,
-                              sourceProject: project.name,
-                              mode: "member",
-                            }),
-                          )
-                        }
-                      >
-                        <Boxes className="mr-2 h-4 w-4" />
-                        Relocate Workloads
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="cursor-pointer"
-                        onSelect={() =>
-                          navigate(
-                            inventoryLinks.migrations({
-                              scope: "project",
-                              sourceCluster: project.host,
-                              sourceProject: project.name,
-                              mode: "cluster",
-                            }),
-                          )
-                        }
-                      >
-                        <ArrowLeftRight className="mr-2 h-4 w-4" />
-                        Relocate Project
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  {!isReadOnly && (
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive cursor-pointer"
-                      onSelect={() => setDeleteDialogOpen(true)}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete Project
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              {!isReadOnly && (
-                <ProjectDeleteDialog
-                  project={project}
-                  instanceCount={instanceCount}
-                  open={deleteDialogOpen}
-                  onOpenChange={setDeleteDialogOpen}
-                  isReadOnly={isReadOnly}
+                <RowActions
+                  actions={projectActions}
+                  triggerLabel={`Project actions for ${project.name}`}
+                  className="h-7 w-7"
                 />
-              )}
-            </>
+                {!isReadOnly && (
+                  <ProjectDeleteDialog
+                    project={project}
+                    instanceCount={instanceCount}
+                    open={deleteDialogOpen}
+                    onOpenChange={setDeleteDialogOpen}
+                    isReadOnly={isReadOnly}
+                  />
+                )}
+              </>
             )}
           </div>
         </div>

@@ -37,9 +37,10 @@ const ACTION_COPY: Record<MigrationAction, { title: string; description: string;
     submit: "Confirm traffic cutover",
   },
   rollback: {
-    title: "Start Rollback",
-    description: "Start rollback only after the server proves eligibility. Automated rollback is unavailable after target activation or new writes; recovery then requires manual reverse sync.",
-    submit: "Start rollback",
+    title: "Roll Back This Move",
+    description:
+      "Stops and deletes the new instance, then restores the retained source with its earlier running state, tags, schedules, and access rules. Anything written to the new instance since cutover is lost.",
+    submit: "Roll back",
   },
   restore_checkpoint: {
     title: "Restore Checkpoint",
@@ -47,14 +48,21 @@ const ACTION_COPY: Record<MigrationAction, { title: string; description: string;
     submit: "Restore checkpoint",
   },
   cleanup: {
-    title: "Delete Retained Source",
-    description: "Permanently remove the retained source after fresh drift and target-health checks.",
-    submit: "Delete source",
+    title: "Finalize This Move",
+    description:
+      "Permanently deletes the retained source now instead of at the end of retention. Orcastra first checks that the source is unchanged and the new instance is healthy. Rollback is no longer possible afterwards.",
+    submit: "Finalize and delete source",
   },
   recheck: {
     title: "Recheck Migration",
     description: "Reconcile authoritative source, target, and daemon operation state without replaying a mutation.",
     submit: "Run recheck",
+  },
+  release: {
+    title: "Release This Migration",
+    description:
+      "Ends the job without deleting or restoring anything and lifts its fences. Both instances stay exactly as they are now. Use this only after the situation was resolved by hand.",
+    submit: "Release migration",
   },
 };
 
@@ -77,6 +85,7 @@ const CONFIRMATION: Partial<Record<MigrationAction, string>> = {
   rollback: "ROLLBACK",
   restore_checkpoint: "RESTORE",
   cleanup: "CLEANUP",
+  release: "RELEASE",
 };
 
 interface MigrationActionDialogProps {
@@ -111,6 +120,7 @@ export function MigrationActionDialog({
   const copy = migrationActionCopy(job, action);
   const phrase = CONFIRMATION[action];
   const destructive = action === "cleanup" || action === "restore_checkpoint" || action === "rollback";
+  const fenceChange = action === "release";
   const valid = reason.trim().length >= 8 && (!phrase || confirmation === phrase);
 
   const submit = async () => {
@@ -146,6 +156,16 @@ export function MigrationActionDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {fenceChange && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              <AlertTitle>Fences are removed</AlertTitle>
+              <AlertDescription>
+                After release, ordinary instance actions work on both endpoints again. Orcastra no
+                longer tracks this migration.
+              </AlertDescription>
+            </Alert>
+          )}
           {destructive && (
             <Alert variant="destructive">
               <AlertTriangle className="h-4 w-4" aria-hidden />
@@ -172,7 +192,7 @@ export function MigrationActionDialog({
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               rows={3}
-              maxLength={500}
+              maxLength={1000}
               placeholder="Record why this action is required"
             />
             {reason.trim().length > 0 && reason.trim().length < 8 && (

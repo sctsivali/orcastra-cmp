@@ -82,9 +82,6 @@ import {
   SnapshotCreateResponse,
   SnapshotRestoreRequest,
   SnapshotActionResponse,
-  MovePreflight,
-  MoveRequest,
-  MoveResponse,
 } from "@/types";
 
 const API_PREFIX = "/api/v1";
@@ -2677,43 +2674,6 @@ const snapshotAPI = {
   },
 };
 
-const mobilityAPI = {
-  /** Where this instance may be copied, with pool headroom, so the UI never offers an impossible move. */
-  preflight: async (
-    instanceName: string,
-    host: string,
-    project = "default",
-    opts: ReadOptions = {},
-  ): Promise<MovePreflight> => {
-    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
-    return fetchRead<MovePreflight>(
-      `/instances/${encodeURIComponent(instanceName)}/move-preflight?${qs}`,
-      opts,
-      90000,
-    );
-  },
-  copy: async (
-    instanceName: string,
-    body: MoveRequest,
-    idempotencyKey: string,
-  ): Promise<MoveResponse> => {
-    // A cross-cluster copy holds the request while the upstream operation is set up, which is
-    // slower than an ordinary write but still bounded: the transfer itself runs as an operation
-    // the caller polls, not inside this request.
-    return fetchAPI<MoveResponse>(
-      `/instances/${encodeURIComponent(instanceName)}/copy`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-        headers: { "Idempotency-Key": idempotencyKey },
-      },
-      120000,
-      false,
-      { retryAfterAuthRefresh: false },
-    );
-  },
-};
-
 // Consolidated API export
 export const api = {
   vms: vmAPI,
@@ -2747,7 +2707,6 @@ export const api = {
   breakGlass: breakGlassAPI,
   snapshots: snapshotAPI,
   snapshotSchedules: snapshotScheduleAPI,
-  mobility: mobilityAPI,
   clusterMembers: {
     list: async (node: string, opts: ReadOptions = {}) => {
       return fetchRead<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`, opts);

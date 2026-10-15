@@ -187,7 +187,6 @@ const checks = [
       ) &&
       /setDeleteTarget\(null\)/.test(bodies.instanceActions) &&
       /setRebuildTarget\(null\)/.test(bodies.instanceActions) &&
-      /setCopyTarget\(null\)/.test(bodies.instanceActions) &&
       /setSelectedInstance\(null\)/.test(bodies.instancesPage) &&
       /setConfirmAction\(\{[\s\S]{0,160}open: false/.test(bodies.instanceActions) &&
       /activeActorScopeRef\.current !== scopeKey/.test(bodies.instanceActions),

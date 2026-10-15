@@ -92,7 +92,7 @@ interface InstancesTableProps {
   pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
   writeDisabledReason?: string;
-  migrationPlanningUnavailableReason?: string;
+  migrationMoveUnavailableReason?: string;
   migrationCopyUnavailableReason?: string;
   permissionReason: Parameters<typeof InstanceTableRow>[0]["permissionReason"];
   canDeleteInstance: boolean;
@@ -184,7 +184,7 @@ export function InstancesTable(props: InstancesTableProps) {
             pendingActions={props.pendingActions}
             isReadOnly={props.isReadOnly}
             writeDisabledReason={props.writeDisabledReason}
-            migrationPlanningUnavailableReason={props.migrationPlanningUnavailableReason}
+            migrationMoveUnavailableReason={props.migrationMoveUnavailableReason}
             migrationCopyUnavailableReason={props.migrationCopyUnavailableReason}
             permissionReason={props.permissionReason}
             canDeleteInstance={props.canDeleteInstance}

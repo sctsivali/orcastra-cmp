@@ -6,162 +6,117 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatLabel } from "@/lib/utils";
+import type { NetworkInfo } from "@/types/api";
 import type {
   MigrationCapability,
+  MigrationContractSummary,
   MigrationMappingCategory,
   MigrationMappings,
 } from "@/types/migrations";
+import { MigrationNetworkMapping } from "./migration-network-mapping";
 
-const CATEGORIES: Exclude<MigrationMappingCategory, "storage_pools">[] = [
-  "networks",
-  "profiles",
+const UNSUPPORTED: Array<Exclude<MigrationMappingCategory, "storage_pools" | "networks" | "profiles">> = [
   "volumes",
   "members",
   "external_dependencies",
 ];
 
-const CAPABILITY_CODE: Record<(typeof CATEGORIES)[number], string> = {
-  networks: "mapping_networks",
-  profiles: "mapping_profiles",
-  volumes: "mapping_volumes",
-  members: "mapping_members",
-  external_dependencies: "mapping_external_dependencies",
-};
-
 export function MigrationMappingsEditor({
   mappings,
   capabilities,
+  contracts,
+  networks,
+  networksLoading,
   onChange,
 }: {
   mappings: MigrationMappings;
   capabilities: MigrationCapability[];
+  contracts: Array<{ name: string; contract: MigrationContractSummary }>;
+  networks: NetworkInfo[];
+  networksLoading: boolean;
   onChange: (mappings: MigrationMappings) => void;
 }) {
-  const storageCapability = capabilities.find((item) => item.code === "mapping_storage_root");
-  const storageSupported = storageCapability?.supported === true;
-  const storageTarget = mappings.storage_pools.root ?? mappings.storage_pools["*"];
-  const unsupportedStorageKeys = Object.keys(mappings.storage_pools).filter(
-    (key) => key !== "root" && key !== "*",
+  const supported = (code: string) => capabilities.find((item) => item.code === code)?.supported === true;
+  const rootPools = [...new Set(contracts.map(({ contract }) => contract.root_pool).filter(Boolean))];
+  const pinned = contracts.flatMap(({ name, contract }) =>
+    [...(contract.pinned_config ?? []), ...(contract.pinned_devices ?? [])].map((key) => `${name}: ${key}`),
   );
 
   return (
     <div className="space-y-5">
-      <section className="space-y-3 rounded-md border p-3">
+      <section className="space-y-2 rounded-md border p-3">
+        <h3 className="text-sm font-semibold">Storage Pool</h3>
+        <p className="text-xs text-muted-foreground">
+          The root disk lands on this pool. Change it in the Destination step.
+        </p>
+        <p className="break-words font-mono text-sm font-medium">
+          {rootPools.length ? rootPools.join(", ") : mappings.storage_pools.root || "Resolved by preflight"}
+        </p>
+      </section>
+
+      <section className="space-y-3">
         <div>
-          <h3 className="text-sm font-semibold">Storage Pools</h3>
+          <h3 className="text-sm font-semibold">Networks</h3>
           <p className="text-xs text-muted-foreground">
-            {storageSupported
-              ? "Only the instance root pool is executable. Change it in the Destination step."
-              : storageCapability?.reason || "Root storage mapping was not advertised as executable."}
+            Each NIC keeps its network when the target has it, follows the target profile, or uses
+            the network you pick here.
           </p>
         </div>
-        {storageSupported ? (
-          <div className="rounded-md border bg-muted/30 p-3">
-            <p className="text-xs text-muted-foreground">Root storage target</p>
-            <p className="mt-1 break-words font-mono text-sm font-medium">
-              {storageTarget || "Project default pool"}
-            </p>
-          </div>
+        {supported("mapping_networks") ? (
+          <MigrationNetworkMapping
+            contracts={contracts}
+            mappings={mappings.networks}
+            networks={networks}
+            networksLoading={networksLoading}
+            onChange={(networksMapping) => onChange({ ...mappings, networks: networksMapping })}
+          />
         ) : (
-          <p className="text-sm text-muted-foreground">
-            Unavailable for this plan. Select no storage override and resolve the dependency before execution.
-          </p>
-        )}
-        {(unsupportedStorageKeys.length > 0 || (!storageSupported && Object.keys(mappings.storage_pools).length > 0)) && (
-          <div className="space-y-2">
-            <p className="text-sm text-destructive">
-              {storageSupported
-                ? `Unsupported storage keys: ${unsupportedStorageKeys.join(", ")}`
-                : "The current storage mapping is unsupported."}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onChange({
-                ...mappings,
-                storage_pools: storageSupported && storageTarget ? { root: storageTarget } : {},
-              })}
-            >
-              Remove Unsupported Storage Mappings
-            </Button>
-          </div>
+          <p className="text-sm text-muted-foreground">Network mapping is not available for this plan.</p>
         )}
       </section>
 
-      {CATEGORIES.map((category) => {
-        const capability = capabilities.find((item) => item.code === CAPABILITY_CODE[category]);
-        const values = mappings[category];
-        return capability?.supported ? (
-          <MappingCategory
-            key={category}
-            category={category}
-            values={values}
-            onChange={(next) => onChange({ ...mappings, [category]: next })}
-          />
-        ) : (
-          <UnavailableMappingCategory
-            key={category}
-            category={category}
-            values={values}
-            reason={capability?.reason}
-            onClear={() => onChange({ ...mappings, [category]: {} })}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-function UnavailableMappingCategory({
-  category,
-  values,
-  reason,
-  onClear,
-}: {
-  category: Exclude<MigrationMappingCategory, "storage_pools">;
-  values: Record<string, string>;
-  reason?: string | null;
-  onClear: () => void;
-}) {
-  const entries = Object.entries(values);
-  return (
-    <section className="space-y-3 rounded-md border p-3">
-      <div>
-        <h3 className="text-sm font-semibold">{formatLabel(category)}</h3>
-        <p className="text-xs text-muted-foreground">
-          {reason || "This mapping is not applied by the current migration executor."}
-        </p>
-      </div>
-      {entries.length ? (
-        <>
-          <div className="divide-y rounded-md border bg-muted/30">
-            {entries.map(([from, to]) => (
-              <div key={from} className="grid gap-1 p-2 text-sm sm:grid-cols-2">
-                <span className="break-words font-mono">{from}</span>
-                <span className="break-words font-mono text-muted-foreground">{to}</span>
-              </div>
-            ))}
-          </div>
-          <Button type="button" variant="outline" size="sm" onClick={onClear}>
-            Remove Unsupported Mappings
-          </Button>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Unavailable for this plan. Resolve the dependency outside migration, then recheck.
-        </p>
+      {supported("mapping_profiles") && (
+        <MappingCategory
+          category="profiles"
+          description="Use an existing target profile in place of a source profile with another name."
+          values={mappings.profiles}
+          onChange={(profiles) => onChange({ ...mappings, profiles })}
+        />
       )}
-    </section>
+
+      {pinned.length > 0 && (
+        <section className="space-y-2 rounded-md border p-3">
+          <h3 className="text-sm font-semibold">Kept as on the Source</h3>
+          <p className="text-xs text-muted-foreground">
+            The target profiles would change these settings, so they are set on the instance itself.
+          </p>
+          <p className="break-words font-mono text-xs">{pinned.join(", ")}</p>
+        </section>
+      )}
+
+      {UNSUPPORTED.filter((category) => Object.keys(mappings[category]).length > 0).map((category) => (
+        <section key={category} className="space-y-2 rounded-md border p-3">
+          <h3 className="text-sm font-semibold">{formatLabel(category)}</h3>
+          <p className="text-sm text-destructive">
+            {formatLabel(category)} mappings are not applied, so this plan stays blocked while they exist.
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={() => onChange({ ...mappings, [category]: {} })}>
+            Remove {formatLabel(category)} Mappings
+          </Button>
+        </section>
+      ))}
+    </div>
   );
 }
 
 function MappingCategory({
   category,
+  description,
   values,
   onChange,
 }: {
   category: MigrationMappingCategory;
+  description: string;
   values: Record<string, string>;
   onChange: (values: Record<string, string>) => void;
 }) {
@@ -184,7 +139,7 @@ function MappingCategory({
     <section className="space-y-3 rounded-md border p-3">
       <div>
         <h3 className="text-sm font-semibold">{formatLabel(category)}</h3>
-        <p className="text-xs text-muted-foreground">Map an exact source name to an exact destination name.</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
       </div>
 
       {entries.length ? (

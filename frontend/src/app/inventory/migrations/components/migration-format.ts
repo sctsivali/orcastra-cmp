@@ -7,6 +7,7 @@ import type {
   MigrationJobPhase,
   MigrationJobResource,
   MigrationJobStatus,
+  MigrationContractSummary,
   MigrationJsonValue,
   MigrationPlannedResource,
 } from "@/types/migrations";
@@ -150,3 +151,23 @@ export function jobProgress(job: Pick<MigrationJob, "resources">): number | null
   if (!values.length) return null;
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
+
+/** Value-free target contract summaries, one per planned instance, keyed by source name. */
+export function planContracts(
+  resources: MigrationPlannedResource[],
+): Array<{ name: string; contract: MigrationContractSummary }> {
+  return resources.flatMap((resource) => {
+    const contract = resource.target?.contract;
+    if (resource.resource_type !== "instance" || !contract || typeof contract !== "object" || Array.isArray(contract)) {
+      return [];
+    }
+    return [{ name: resourceName(resource), contract: contract as unknown as MigrationContractSummary }];
+  });
+}
+
+export function planHasRunningSource(resources: MigrationPlannedResource[]): boolean {
+  return resources.some((resource) => resource.source_status === "running");
+}
+
+/** Phases in which a staged move keeps its stopped source for rollback. */
+export const RETAINED_PHASES = new Set<MigrationJobPhase>(["source_retained", "cleanup_due", "cleanup_blocked"]);

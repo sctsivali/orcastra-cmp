@@ -64,8 +64,6 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
   // Instance pending rebuild (controls the shared RebuildDialog).
   const [rebuildTarget, setRebuildTarget] = useState<VMInfo | null>(null);
-  // Instance pending a copy to another project, member or cluster.
-  const [copyTarget, setCopyTarget] = useState<VMInfo | null>(null);
   // Radix keeps AlertDialogContent mounted through its ~200ms exit fade, so
   // reading a just-nulled deleteTarget flashes blank name/host. Keep the last
   // target around and render the dialog body from it so it stays populated
@@ -94,7 +92,6 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
     actionsInFlightRef.current.clear();
     setDeleteTarget(null);
     setRebuildTarget(null);
-    setCopyTarget(null);
     deleteDisplayRef.current = null;
     deleteRequestActorScopeRef.current = null;
     setConfirmAction({
@@ -290,12 +287,6 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
       if (activeActorScopeRef.current !== scopeKey) return;
       setActionUiActorScope(scopeKey);
       setRebuildTarget(target);
-    },
-    copyTarget: actionUiIsCurrent ? copyTarget : null,
-    setCopyTarget: (target: VMInfo | null) => {
-      if (activeActorScopeRef.current !== scopeKey) return;
-      setActionUiActorScope(scopeKey);
-      setCopyTarget(target);
     },
     confirmAction: actionUiIsCurrent
       ? confirmAction

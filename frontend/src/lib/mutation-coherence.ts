@@ -103,11 +103,6 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "nodes", "nodeResources", "regions", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "profiles"],
     apiCalls: ["api.instances.rebuild"],
   },
-  "instance.copy": {
-    completion: "terminal-operation",
-    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "nodes", "nodeResources", "regions", "profiles", "networks", "storagePools", "storageVolumes"],
-    apiCalls: ["api.mobility.copy"],
-  },
   "instance.state": {
     completion: "response",
     queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "nodes", "nodeResources", "regions"],

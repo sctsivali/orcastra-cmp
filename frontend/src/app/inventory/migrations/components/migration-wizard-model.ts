@@ -7,9 +7,11 @@ import { emptyMigrationMappings, type MigrationMappings } from "@/types/migratio
 
 export interface MigrationWizardSeed {
   scope?: MigrationScope;
+  intent?: MigrationIntent;
   sourceCluster?: string;
   sourceProject?: string;
   resourceName?: string;
+  sourceMember?: string;
   mode?: "member" | "cluster";
 }
 
@@ -27,6 +29,8 @@ export interface MigrationDraftState {
   targetStoragePool: string;
   mappings: MigrationMappings;
   retentionHours: number;
+  /** What the operator typed. Only a valid value updates retentionHours. */
+  retentionInput: string;
   checkpointRequested: boolean;
   externalCutoverRequired: boolean;
   reason: string;
@@ -46,23 +50,59 @@ export const MIGRATION_STEPS = [
   "Rollback and Cleanup",
 ] as const;
 
+/** The steps the wizard itself walks. The rest describe what happens after Start. */
+export const PLANNING_STEP_COUNT = 7;
+export const MIN_RETENTION_HOURS = 1;
+export const MAX_RETENTION_HOURS = 168;
+
 export const LXD_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$/;
 
-export function initialMigrationDraft(seed: MigrationWizardSeed = {}): MigrationDraftState {
+/** Suggested name for a copy. A name that would exceed the LXD limit is left for the operator. */
+export function defaultCopyName(name: string): string {
+  const candidate = `${name}-copy`;
+  return LXD_NAME_PATTERN.test(candidate) ? candidate : name;
+}
+
+export function parseRetention(value: string): number | null {
+  if (!/^\d+$/.test(value.trim())) return null;
+  const hours = Number(value.trim());
+  return hours >= MIN_RETENTION_HOURS && hours <= MAX_RETENTION_HOURS ? hours : null;
+}
+
+/** Whether the draft points at the instance or project it starts from. */
+export function isSameLocation(draft: MigrationDraftState): boolean {
+  const targetMember = draft.targetMember.trim();
+  return (
+    draft.targetCluster === draft.sourceCluster &&
+    draft.targetProject.trim() === draft.sourceProject.trim() &&
+    (draft.scope === "project" || draft.targetResourceName.trim() === draft.resourceName.trim()) &&
+    (!targetMember || targetMember === draft.sourceMember.trim())
+  );
+}
+
+export function initialMigrationDraft(
+  seed: MigrationWizardSeed = {},
+  defaultRetentionHours = 24,
+): MigrationDraftState {
   return {
     scope: seed.scope ?? "instance",
-    intent: "move",
+    intent: seed.intent ?? "move",
     sourceCluster: seed.sourceCluster ?? "",
     sourceProject: seed.sourceProject ?? "default",
     resourceName: seed.resourceName ?? "",
-    sourceMember: "",
+    sourceMember: seed.sourceMember ?? "",
     targetCluster: seed.mode === "member" ? seed.sourceCluster ?? "" : "",
     targetProject: seed.scope === "project" ? seed.sourceProject ?? "" : "",
-    targetResourceName: seed.resourceName ?? "",
+    targetResourceName: seed.resourceName
+      ? seed.intent === "copy"
+        ? defaultCopyName(seed.resourceName)
+        : seed.resourceName
+      : "",
     targetMember: "",
     targetStoragePool: "",
     mappings: emptyMigrationMappings(),
-    retentionHours: 24,
+    retentionHours: defaultRetentionHours,
+    retentionInput: String(defaultRetentionHours),
     checkpointRequested: false,
     externalCutoverRequired: false,
     reason: "",
@@ -94,6 +134,7 @@ export function draftFromPlan(plan: {
     targetStoragePool: plan.mappings?.storage_pools?.root ?? plan.mappings?.storage_pools?.["*"] ?? "",
     mappings: plan.mappings ?? emptyMigrationMappings(),
     retentionHours: plan.retention_hours,
+    retentionInput: String(plan.retention_hours),
     checkpointRequested: plan.checkpoint_requested,
     externalCutoverRequired: plan.external_cutover_required,
     reason: "",
@@ -119,7 +160,7 @@ export function createPlanBody(draft: MigrationDraftState): MigrationPlanCreateR
         draft.scope === "instance"
           ? draft.targetResourceName.trim() || resourceName
           : undefined,
-      member: draft.intent === "move" ? draft.targetMember.trim() || undefined : undefined,
+      member: draft.targetMember.trim() || undefined,
     },
     mappings: {
       ...draft.mappings,

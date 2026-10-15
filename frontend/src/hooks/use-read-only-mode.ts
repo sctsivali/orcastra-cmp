@@ -61,12 +61,35 @@ export function useTaskJournalEnabled(): boolean | undefined {
   return useSystemSettings().data?.task_journal_enabled;
 }
 
+/** Fail-closed: planning is offered only once the server said the Migration Center is on. */
+function migrationPlanningUnavailableReason(
+  isLoading: boolean,
+  isError: boolean,
+  centerEnabled: boolean | undefined,
+): string | undefined {
+  if (isLoading) return "Checking migration availability";
+  if (isError) return "Migration availability could not be read";
+  if (centerEnabled !== true) return "Migrations are turned off on this deployment";
+  return undefined;
+}
+
 export function useMigrationCapabilities() {
   const query = useSystemSettings();
+  // An error only matters while nothing was read. Last known capabilities stay valid.
+  const isError = query.isError && !query.data;
   return {
     isLoading: query.isLoading,
-    isError: query.isError,
+    isError,
+    planningUnavailableReason: migrationPlanningUnavailableReason(
+      query.isLoading,
+      isError,
+      query.data?.migration_center_enabled,
+    ),
     centerEnabled: query.data?.migration_center_enabled,
+    recoveryActionsEnabled: query.data?.migration_recovery_actions_enabled,
+    autoCleanupEnabled: query.data?.migration_auto_cleanup_enabled,
+    runningSourceEnabled: query.data?.migration_running_source_enabled,
+    defaultRetentionHours: query.data?.migration_default_retention_hours,
     durableCopyEnabled: query.data?.migration_durable_copy_enabled,
     instanceMoveEnabled: query.data?.migration_instance_move_enabled,
     projectMemberRelocationEnabled:

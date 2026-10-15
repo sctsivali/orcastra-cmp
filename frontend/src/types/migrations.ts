@@ -67,7 +67,8 @@ export type MigrationAction =
   | "rollback"
   | "restore_checkpoint"
   | "cleanup"
-  | "recheck";
+  | "recheck"
+  | "release";
 
 export type MigrationDowntimeClass = "none" | "brief" | "cold" | "unknown";
 export type MigrationJsonValue = string | number | boolean | null | MigrationJsonValue[] | { [key: string]: MigrationJsonValue };
@@ -108,9 +109,30 @@ export interface MigrationCapability {
 export interface MigrationPlannedResource {
   resource_key: string;
   resource_type: string;
+  /** Live source status when the plan was checked. A running source is stopped for the transfer. */
+  source_status?: string | null;
   source: Record<string, MigrationJsonValue>;
   target: Record<string, MigrationJsonValue>;
   dependency_keys: string[];
+}
+
+/** How one NIC of the source is placed on the target, as decided by preflight. */
+export interface MigrationNicDecision {
+  device: string;
+  source: string;
+  target: string | null;
+  via: "mapping" | "target_profile" | "same_name" | "unmapped" | "unattached";
+}
+
+/** Value-free summary of the definition the target is created with. */
+export interface MigrationContractSummary {
+  contract_hash: string;
+  profiles: string[];
+  root_pool: string | null;
+  nic_decisions: MigrationNicDecision[];
+  pinned_config: string[];
+  pinned_devices: string[];
+  profile_added_config: string[];
 }
 
 export interface MigrationJobResource extends MigrationPlannedResource {

@@ -57,7 +57,6 @@ import { Plus } from "lucide-react";
 
 import { RebuildDialog } from "@/components/rebuild-dialog";
 
-import { MoveInstanceDialog } from "@/components/instance-detail/move-instance-dialog";
 
 import { PageReadError } from "@/components/ui/read-error-state";
 
@@ -166,8 +165,6 @@ function InstancesContent() {
     setDeleteTarget,
     rebuildTarget,
     setRebuildTarget,
-    copyTarget,
-    setCopyTarget,
   } = actions;
 
   // Deep link from OrcaHub: /inventory/instances?instance=<name>&project=<lxd-project>&host=<cluster>
@@ -217,17 +214,26 @@ function InstancesContent() {
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
   const canDeleteInstance = hasRole(Role.PARTNER);
   const migrationCapabilities = useMigrationCapabilities();
-  const migrationPlanningUnavailableReason = migrationCapabilities.isLoading
-    ? "Checking Migration Center availability"
-    : migrationCapabilities.isError
-      ? "Migration Center availability is unavailable"
-      : migrationCapabilities.centerEnabled !== true
-        ? "New migration admission is paused"
-        : undefined;
+  const migrationPlanningUnavailableReason = migrationCapabilities.planningUnavailableReason;
   const migrationCopyUnavailableReason = migrationPlanningUnavailableReason
-    ?? (migrationCapabilities.durableCopyEnabled === true
-      ? undefined
-      : "Durable Copy Instance is not enabled");
+    ?? (migrationCapabilities.durableCopyEnabled === false
+      ? "Copy Instance is turned off on this deployment"
+      : undefined);
+  const migrationMoveUnavailableReason = migrationPlanningUnavailableReason
+    ?? (migrationCapabilities.instanceMoveEnabled === false
+      ? "Move Instance is turned off on this deployment"
+      : undefined);
+  const openMigration = (instance: VMInfo, intent: "copy" | "move") =>
+    navigate(
+      inventoryLinks.migrations({
+        scope: "instance",
+        intent,
+        sourceCluster: instance.host,
+        sourceProject: instance.project || "default",
+        resourceName: instance.name,
+        sourceMember: instance.location || null,
+      }),
+    );
 
   const resetPage = () => setCurrentPage(1);
   const filters = useTableFilters(INSTANCES, instances as any[], { onFilterChange: resetPage });
@@ -381,7 +387,7 @@ function InstancesContent() {
             pendingActions={actions.pendingActions}
             isReadOnly={isReadOnly}
             writeDisabledReason={writeDisabledReason}
-            migrationPlanningUnavailableReason={migrationPlanningUnavailableReason}
+            migrationMoveUnavailableReason={migrationMoveUnavailableReason}
             migrationCopyUnavailableReason={migrationCopyUnavailableReason}
             permissionReason={permissionReason}
             canDeleteInstance={canDeleteInstance}
@@ -391,17 +397,8 @@ function InstancesContent() {
               setSelectedInstance(null);
               setSpecificationTarget(instance);
             }}
-            onCopy={setCopyTarget}
-            onMove={(instance) =>
-              navigate(
-                inventoryLinks.migrations({
-                  scope: "instance",
-                  sourceCluster: instance.host,
-                  sourceProject: instance.project || "default",
-                  resourceName: instance.name,
-                }),
-              )
-            }
+            onCopy={(instance) => openMigration(instance, "copy")}
+            onMove={(instance) => openMigration(instance, "move")}
             onRebuild={setRebuildTarget}
             onDelete={setDeleteTarget}
           />
@@ -452,17 +449,6 @@ function InstancesContent() {
           }}
           onDone={() => void refetch()}
           writeDisabledReason={writeDisabledReason}
-        />
-      )}
-
-      {/* Copy elsewhere (shared across rows, controlled by copyTarget) */}
-      {copyTarget && (
-        <MoveInstanceDialog
-          open={!!copyTarget}
-          onOpenChange={(open) => {
-            if (!open) setCopyTarget(null);
-          }}
-          instance={copyTarget}
         />
       )}
 

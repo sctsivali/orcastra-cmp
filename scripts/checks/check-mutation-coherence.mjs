@@ -290,7 +290,6 @@ for (const [impactId, families] of Object.entries({
   "snapshot.schedule": ["snapshotSchedules", "snapshots"],
   "snapshot.schedule-run": ["snapshotSchedules", "snapshots", "instances", "storagePoolDetails"],
   "profile.write": ["profiles", "profileDetails", "instances", "monitoring", "ipam", "networks", "storagePools", "storageVolumes"],
-  "instance.copy": ["instances", "instanceDetails", "monitoring", "ipam", "projectUsage", "profiles", "networks", "storagePools", "storageVolumes"],
 })) {
   for (const family of families) {
     if (!MUTATION_IMPACTS[impactId]?.queryFamilies.includes(family)) {
@@ -529,7 +528,6 @@ function scopeReconcilesImpact(scope, impactId) {
     compact.includes(`reconcileExternalMutation("${impactId}"`) ||
     (impactId === "task.cancel" && compact.includes("followTaskCancellation(")) ||
     (impactId === "instance.state" && compact.includes("refreshInstanceQueries(queryClient)")) ||
-    (impactId === "instance.copy" && compact.includes("reconcileCopyState(queryClient")) ||
     (impactId === "snapshot.write" && compact.includes("reconcileSnapshotState(queryClient"))
   );
 }
@@ -951,7 +949,6 @@ for (const match of hooks.matchAll(
     observedHookImpacts.add(`${hookName}:${impactId}`);
     const aliases = {
       "instance.state": ["refreshInstanceQueries(queryClient)"],
-      "instance.copy": ["reconcileCopyState(queryClient, scopeKey)"],
       "snapshot.write": ["reconcileSnapshotState(queryClient, scopeKey)"],
     };
     if (
@@ -978,7 +975,6 @@ for (const [hookName, impactId] of Object.entries({
   useCreateSnapshot: "snapshot.write",
   useDeleteSnapshot: "snapshot.write",
   useRestoreSnapshot: "snapshot.write",
-  useCopyInstance: "instance.copy",
 })) {
   if (!observedHookImpacts.has(`${hookName}:${impactId}`)) {
     failures.push(`frontend/src/hooks/use-lxd.ts: ${hookName} must reconcile ${impactId}`);
@@ -989,7 +985,6 @@ for (const required of [
   "instance.create",
   "instance.specification",
   "instance.rebuild",
-  "instance.copy",
   "image.upload",
   "iso.upload",
   "snapshot.write",
@@ -1061,22 +1056,8 @@ for (const snippet of [
 ]) {
   if (!hooks.includes(snippet)) failures.push(`use-lxd.ts is missing ${snippet}`);
 }
-if ((hooks.match(/api\.mobility\.copy\s*\(/g) ?? []).length !== 1) {
-  failures.push("use-lxd.ts must submit instance.copy exactly once; polling may never replay it");
-}
-
-const copyReconcile = namedFunctionSource("reconcileCopyState") ?? "";
-for (const marker of [
-  'reconcile(queryClient, "instance.copy")',
-  "reconcileInstanceFleet(queryClient, actorScope, { fresh: true })",
-]) {
-  if (!copyReconcile.includes(marker)) {
-    failures.push(`reconcileCopyState is missing ${marker}`);
-  }
-}
 for (const [name, source, impact] of [
   ["reconcileSnapshotState", namedFunctionSource("reconcileSnapshotState") ?? "", "snapshot.write"],
-  ["reconcileCopyState", copyReconcile, "instance.copy"],
 ]) {
   const invalidateAt = source.indexOf(`reconcile(queryClient, "${impact}")`);
   const actorFenceAt = source.indexOf(
@@ -1090,19 +1071,6 @@ for (const [name, source, impact] of [
     failures.push(`${name} must finish invalidation, recheck the actor, then run the final fleet read`);
   }
 }
-const copyPoll = namedFunctionSource("reconcileCopyOperation") ?? "";
-for (const marker of [
-  "/operations/${encodeURIComponent(operationId)}?host=${encodeURIComponent(targetHost)}",
-  'verdict === "success" || verdict === "failure" || verdict === "partial"',
-  "await reconcileCopyState(queryClient, actorScope)",
-  "COPY_OPERATION_MAX_POLL_MS",
-]) {
-  if (!copyPoll.includes(marker)) failures.push(`reconcileCopyOperation is missing ${marker}`);
-}
-if (copyPoll.includes("api.mobility.copy")) {
-  failures.push("reconcileCopyOperation must never replay api.mobility.copy");
-}
-
 const apiSource = readFileSync(join(root, "frontend/src/lib/api.ts"), "utf8");
 const runNowSource = apiSource.match(
   /runNow: async \(id: number\)[\s\S]*?\n\s*remove: async/,

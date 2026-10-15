@@ -3,7 +3,7 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { MigrationIntent } from "@/types/migrations";
-import { MIGRATION_STEPS } from "./migration-wizard-model";
+import { MIGRATION_STEPS, PLANNING_STEP_COUNT } from "./migration-wizard-model";
 
 interface MigrationStepRailProps {
   step: number;
@@ -82,13 +82,13 @@ export function MigrationStepStatus({
   return (
     <>
       <p className="text-sm text-muted-foreground md:hidden">
-        Step {step + 1} of {MIGRATION_STEPS.length}: {title}
+        Step {step + 1} of {PLANNING_STEP_COUNT}: {title}
       </p>
       {step === 6 && (
         <p className="text-xs text-muted-foreground">
           {intent === "copy"
             ? "Execution, validation, and completion continue in the job detail after this plan is started."
-            : "Execution, cutover, and recovery continue in the job detail after this plan is started."}
+            : "The transfer, cutover, retention, and rollback continue in the job detail after this plan is started."}
         </p>
       )}
     </>
