@@ -405,6 +405,9 @@ function ActiveSessionsTab() {
   const currentPage = Math.min(page, totalPages);
   const pagedSessions = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
+  // The rows have not been read for this actor and scope yet (loading, or a failed read with
+  // nothing held), so neither the toolbar nor the summary cards may state a number.
+  const countUnknown = currentSessions.length === 0 && (currentLoading || Boolean(currentError));
   const totalDlRate = currentSessions.reduce((sum, s) => sum + s.bandwidth.download_rate_bps, 0);
   const totalUlRate = currentSessions.reduce((sum, s) => sum + s.bandwidth.upload_rate_bps, 0);
 
@@ -416,7 +419,7 @@ function ActiveSessionsTab() {
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Active</p>
-              <p className="text-2xl font-bold mt-1">{currentSessions.length}</p>
+              <p className="text-2xl font-bold mt-1">{countUnknown ? EMPTY_VALUE : currentSessions.length}</p>
             </div>
             <Wifi className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
@@ -426,7 +429,9 @@ function ActiveSessionsTab() {
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Download</p>
-              <p className="text-lg font-bold mt-1 font-mono">↓{formatNetworkRate(totalDlRate, 1)}</p>
+              <p className="text-lg font-bold mt-1 font-mono">
+                {countUnknown ? EMPTY_VALUE : `↓${formatNetworkRate(totalDlRate, 1)}`}
+              </p>
             </div>
             <ArrowDownToLine className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
@@ -436,7 +441,9 @@ function ActiveSessionsTab() {
           <CardContent className="p-4 flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Upload</p>
-              <p className="text-lg font-bold mt-1 font-mono">↑{formatNetworkRate(totalUlRate, 1)}</p>
+              <p className="text-lg font-bold mt-1 font-mono">
+                {countUnknown ? EMPTY_VALUE : `↑${formatNetworkRate(totalUlRate, 1)}`}
+              </p>
             </div>
             <ArrowUpFromLine className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
@@ -466,7 +473,11 @@ function ActiveSessionsTab() {
               />
             </div>
           </div>
-          <TableToolbar filters={filters} noun="sessions" />
+          <TableToolbar
+            filters={filters}
+            noun="sessions"
+            countUnknown={countUnknown}
+          />
         </CardHeader>
         <CardContent>
           {/* A short list and a correct list look identical, which is how the
@@ -862,7 +873,11 @@ function SessionHistoryTab() {
               />
             </div>
           </div>
-          <TableToolbar filters={filters} noun="log entries" />
+          <TableToolbar
+            filters={filters}
+            noun="log entries"
+            countUnknown={currentLogs.length === 0 && (currentLoading || Boolean(currentError))}
+          />
         </CardHeader>
         <CardContent>
           {currentTrailTotal > currentLogs.length && (

@@ -19,6 +19,11 @@ export interface TableToolbarProps<F extends string> {
   noun: string;
   actions?: React.ReactNode;
   className?: string;
+  /**
+   * The rows have not been read (still loading, or the read failed with nothing held), so there
+   * is no count to state. "0 sessions" above a loader claimed an empty list that nobody had read.
+   */
+  countUnknown?: boolean;
 }
 
 /**
@@ -34,6 +39,7 @@ export function TableToolbar<F extends string>({
   noun,
   actions,
   className,
+  countUnknown = false,
 }: TableToolbarProps<F>) {
   const {
     searchInput,
@@ -150,11 +156,16 @@ export function TableToolbar<F extends string>({
         role="status"
         aria-live="polite"
         aria-atomic="true"
-        className="text-sm text-muted-foreground"
+        aria-busy={countUnknown}
+        // note: min-h keeps the line's height while it is empty, so the table does not jump when
+        // the count arrives.
+        className="min-h-5 text-sm text-muted-foreground"
       >
-        {activeFilterCount === 0
-          ? `${totalCount} ${noun}`
-          : `${filteredCount} of ${totalCount} ${noun}`}
+        {countUnknown
+          ? null
+          : activeFilterCount === 0
+            ? `${totalCount} ${noun}`
+            : `${filteredCount} of ${totalCount} ${noun}`}
       </p>
     </div>
   );
