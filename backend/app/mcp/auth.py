@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SERVED_METHODS",
     "ApiKeyMiddleware",
+    "a_granted_project",
     "credentials_from_headers",
     "current_api_key",
     "current_tool_name",
@@ -98,6 +99,25 @@ def current_api_key() -> Dict[str, Any]:
             message="no authenticated API key on this request",
         )
     return key
+
+
+def a_granted_project(cluster_id: str) -> str:
+    """A project this key may name on `cluster_id`, for a call whose answer does not depend on it.
+
+    `proxy_operation` and the inventory routes authorise the request's project before anything
+    else, so defaulting to `default` refused every key limited to other projects. Used where the
+    project only has to pass that check: listing projects (narrowed to the grant whichever is
+    named) and polling an operation (answered by the operation's own owner, not by `project`).
+    """
+    for grant in current_api_key().get("cluster_permissions") or []:
+        if not isinstance(grant, dict) or grant.get("cluster_id") != cluster_id:
+            continue
+        projects = grant.get("projects", ["default"]) or ["default"]
+        if project_grant_is_unrestricted(projects) or "default" in projects:
+            return "default"
+        return sorted(str(p) for p in projects)[0]
+    # No grant on that cluster: the route refuses it by name, which is the useful answer.
+    return "default"
 
 
 def current_tool_name() -> Optional[str]:

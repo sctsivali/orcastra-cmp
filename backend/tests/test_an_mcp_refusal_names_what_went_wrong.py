@@ -223,6 +223,51 @@ def test_lxd_get_operation_polls_through_the_proxy(monkeypatch) -> None:
     assert (seen[0].operation, seen[0].params) == ("get_operation", {"operation_id": "op-7"})
 
 
+@pytest.mark.parametrize("projects, expected", [
+    (["tenant-b", "tenant-a"], "tenant-a"), (["*"], "default"), (["default", "tenant-a"], "default"),
+])
+def test_lxd_get_operation_without_a_project_names_one_the_key_holds(monkeypatch, projects, expected) -> None:
+    """`default` was sent whatever the grant, so a key limited to other projects could not poll
+    the operations it started without passing `project`. Seen live on nuc2, 2026-10-14."""
+    seen = _capture_proxy(monkeypatch)
+    result = asyncio.run(mcp_call(
+        tools_read, "lxd_get_operation", FakeClient(ProjectSession()), key(projects, ["lxd.proxy"]),
+        monkeypatch, cluster_id=CLUSTER_ID, operation_id="op-7",
+    ))
+    assert not result.is_error
+    assert seen[0].project == expected
+
+
+def test_lxd_get_operation_keeps_a_project_the_caller_named(monkeypatch) -> None:
+    seen = _capture_proxy(monkeypatch)
+    asyncio.run(mcp_call(
+        tools_read, "lxd_get_operation", FakeClient(ProjectSession()),
+        key(["tenant-b", "tenant-a"], ["lxd.proxy"]), monkeypatch,
+        cluster_id=CLUSTER_ID, operation_id="op-7", project="tenant-b",
+    ))
+    assert seen[0].project == "tenant-b"
+
+
+@pytest.mark.parametrize("named, expected", [(None, "tenant-a"), ("tenant-b", "tenant-b")])
+def test_orcastra_get_operation_names_a_project_the_key_holds(monkeypatch, named, expected) -> None:
+    seen: List[Dict[str, Any]] = []
+
+    async def _operation(**kwargs: Any) -> Dict[str, Any]:
+        seen.append(kwargs)
+        return {"id": kwargs["operation_id"], "status": "Running"}
+
+    monkeypatch.setattr(integrations, "get_integration_operation", _operation)
+    arguments: Dict[str, Any] = {"cluster_id": CLUSTER_ID, "operation_id": "op-7"}
+    if named:
+        arguments["project"] = named
+    result = asyncio.run(mcp_call(
+        tools_inventory, "orcastra_get_operation", FakeClient(ProjectSession()),
+        key(["tenant-b", "tenant-a"], ["inventory.read"]), monkeypatch, **arguments,
+    ))
+    assert not result.is_error
+    assert seen[0]["project"] == expected
+
+
 # ── the audit row ──────────────────────────────────────────────────────────────────────────────
 
 class _Recorder:

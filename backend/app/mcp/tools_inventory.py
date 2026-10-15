@@ -13,6 +13,7 @@ from pydantic import Field
 
 from app.services.lxd_service import get_lxd_service
 
+from .auth import a_granted_project
 from .dispatch import run_inventory
 
 __all__ = ["register"]
@@ -117,18 +118,23 @@ def register(mcp: MCPServer) -> None:
             "Status of an LXD operation started earlier. This is how a tool called with "
             "wait=false is followed up: it returns an operation id, and this reports on it. An "
             "operation in a project this key was not granted answers not_found, like one LXD "
-            "has already reaped."
+            "has already reaped. `project` may be omitted: the operation's own project decides."
         ),
     )
     async def orcastra_get_operation(
         operation_id: Annotated[str, Field(description="The operation id to poll.")],
         cluster_id: Annotated[str, Field(description="The cluster it was started on.")],
-        project: Annotated[str, Field(default="default")] = "default",
+        project: Annotated[
+            Optional[str],
+            Field(default=None, description="Optional. A project this key holds on the cluster."),
+        ] = None,
     ) -> CallToolResult:
+        # note: the project only has to pass the route's grant check; visibility is decided by the
+        # operation's owner, so a key limited to other projects is not refused for omitting it.
         return await run_inventory(
             "get_integration_operation",
             operation_id=operation_id,
             cluster_id=cluster_id,
-            project=project,
+            project=project or a_granted_project(cluster_id),
             lxd_service=get_lxd_service(),
         )

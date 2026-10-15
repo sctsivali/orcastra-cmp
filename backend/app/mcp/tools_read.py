@@ -11,9 +11,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
-from app.core.api_key_capabilities import project_grant_is_unrestricted
-
-from .auth import current_api_key
+from .auth import a_granted_project
 from .dispatch import call_proxy
 
 __all__ = ["register"]
@@ -33,24 +31,6 @@ _RESOURCE_OPERATIONS = {
     "storage_pools": "list_storage_pools",
     "profiles": "list_profiles",
 }
-
-
-def _a_granted_project(cluster_id: str) -> str:
-    """A project this key may name on `cluster_id`, for a read whose answer does not depend on it.
-
-    `proxy_operation` authorises the request's project before anything else, and `list_projects`
-    then narrows its answer to the grant whichever project was named. Sending `default` therefore
-    refused every key limited to other projects, the keys this tool's narrowing exists for.
-    """
-    for grant in current_api_key().get("cluster_permissions") or []:
-        if not isinstance(grant, dict) or grant.get("cluster_id") != cluster_id:
-            continue
-        projects = grant.get("projects", ["default"]) or ["default"]
-        if project_grant_is_unrestricted(projects) or "default" in projects:
-            return "default"
-        return sorted(str(p) for p in projects)[0]
-    # No grant on that cluster: the proxy refuses it by name, which is the useful answer.
-    return "default"
 
 
 def register(mcp: MCPServer) -> None:
@@ -88,7 +68,7 @@ def register(mcp: MCPServer) -> None:
         ] = None,
     ) -> CallToolResult:
         return await call_proxy(
-            "list_projects", cluster_id, project=project or _a_granted_project(cluster_id)
+            "list_projects", cluster_id, project=project or a_granted_project(cluster_id)
         )
 
     @mcp.tool(
@@ -117,16 +97,20 @@ def register(mcp: MCPServer) -> None:
             "returned. Costs `read` on that cluster, so any key that started the operation can "
             "follow it. Completed operations are reaped by LXD, so a late poll is not_found: "
             "check the resource itself then. An operation in a project this key was not granted "
-            "is not_found too."
+            "is not_found too. `project` may be omitted: the operation's own project decides."
         ),
     )
     async def lxd_get_operation(
         cluster_id: Cluster,
         operation_id: Annotated[str, Field(description="The operation id to poll.")],
-        project: Project = "default",
+        project: Annotated[
+            Optional[str],
+            Field(default=None, description="Optional. A project this key holds on the cluster."),
+        ] = None,
     ) -> CallToolResult:
         return await call_proxy(
-            "get_operation", cluster_id, project=project, params={"operation_id": operation_id}
+            "get_operation", cluster_id, project=project or a_granted_project(cluster_id),
+            params={"operation_id": operation_id},
         )
 
     @mcp.tool(
