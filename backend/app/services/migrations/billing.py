@@ -58,6 +58,9 @@ def required_acknowledgements(
         required.add("downtime-reviewed")
     if intent == "move" and strategy != "member_relocation":
         required.add("source-retention-understood")
+    if strategy == "project_relocation":
+        # Finalize deletes the whole source project, not only its instances.
+        required.add("source-project-deletion-understood")
     if external_cutover_required:
         required.add("external-cutover-owned")
     return required

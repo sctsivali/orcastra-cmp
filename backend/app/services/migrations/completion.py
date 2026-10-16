@@ -114,6 +114,73 @@ def removal_events(
     ]
 
 
+def project_instance_events(
+    job: MigrationJob, *, role: str, created: bool, names: list[str], occurred_at: str
+) -> list[dict[str, Any]]:
+    """Per-instance lifecycle events of a project relocation, plus one cache invalidation.
+
+    ``role`` is the side the instances live on (target for created or rolled back, source for
+    cleaned up). The instance name is part of every event id, so events stay unique per job.
+    """
+    if role == "source":
+        cluster_id, project = job.source_cluster_id, job.source_project
+    else:
+        cluster_id, project = job.target_cluster_id, job.target_project
+    lifecycle = "created" if created else "deleted"
+    phase = "verifying" if created else "cleaning_up" if role == "source" else "rolling_back"
+    events: list[dict[str, Any]] = [
+        {
+            "event_id": _event_id(job.job_id, "cache", f"migration.cache.invalidate:{role}:{lifecycle}"),
+            "channel": "cache",
+            "event_type": "migration.cache.invalidate",
+            "phase": phase,
+            "message": "Inventory caches will be invalidated for the relocated project.",
+            "extra": {
+                "cluster_id": cluster_id,
+                "project": project,
+                "resource_name": project,
+                "resource_type": "project",
+                "occurred_at": occurred_at,
+            },
+        }
+    ]
+    events.append(
+        {
+            "event_id": _event_id(
+                job.job_id, "webhook", f"orcastra.project.{lifecycle}.v1:{role}"
+            ),
+            "channel": "webhook",
+            "event_type": f"orcastra.project.{lifecycle}.v1",
+            "phase": phase,
+            "message": f"A project {lifecycle} event will be delivered.",
+            "extra": {**events[0]["extra"]},
+        }
+    )
+    for name in names:
+        payload = {
+            "cluster_id": cluster_id,
+            "project": project,
+            "resource_name": name,
+            "resource_type": "instance",
+            "occurred_at": occurred_at,
+        }
+        for channel, event_type in (
+            ("webhook", f"orcastra.instance.{lifecycle}.v1"),
+            ("billing", f"instance.{lifecycle}"),
+        ):
+            events.append(
+                {
+                    "event_id": _event_id(job.job_id, channel, f"{event_type}:{role}:{name}"),
+                    "channel": channel,
+                    "event_type": event_type,
+                    "phase": phase,
+                    "message": f"A {lifecycle} event for '{name}' will be delivered.",
+                    "extra": payload,
+                }
+            )
+    return events
+
+
 def _required_text(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value:
@@ -139,11 +206,13 @@ async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
     if row.channel == "webhook" and row.event_type in {
         "orcastra.instance.created.v1",
         "orcastra.instance.deleted.v1",
+        "orcastra.project.created.v1",
+        "orcastra.project.deleted.v1",
     }:
         await emit_resource_event(
             event_type=row.event_type,
             cluster_id=cluster_id,
-            resource_type="instance",
+            resource_type="project" if ".project." in row.event_type else "instance",
             resource_name=resource_name,
             project=project,
             event_id=row.event_id,

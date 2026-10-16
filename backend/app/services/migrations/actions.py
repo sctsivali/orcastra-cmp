@@ -21,6 +21,7 @@ from .contracts import (
     MigrationNotFound,
     _authority_values,
 )
+from .project_retention_store import fence_project_for_recovery
 from .retention_store import RETAINED_PHASES, refence_target_for_rollback
 from .security import sanitize_payload
 from .worker import _schedule, run_migration_job
@@ -36,6 +37,13 @@ def _reset_reconciliation_cycle(value: Any) -> dict[str, Any]:
     return sanitize_payload(state)
 
 
+def _has_retained_source(row: MigrationJob) -> bool:
+    """A staged instance move or a project relocation: both keep the source for rollback."""
+    if row.intent != "move" or row.strategy == "member_relocation":
+        return False
+    return row.scope == "instance" or row.strategy == "project_relocation"
+
+
 async def _target_has_active_work(db: Any, row: MigrationJob) -> bool:
     """Ordinary instance or rebuild work on the target would race the rollback delete."""
     target_name = row.target_resource_name or row.source_resource_name
@@ -43,12 +51,16 @@ async def _target_has_active_work(db: Any, row: MigrationJob) -> bool:
         (InstanceOperationJob, ("pending", "running", "unknown")),
         (RebuildJob, ("pending", "stopping", "rebuilding", "starting", "provisioning")),
     ):
+        # A project rollback deletes every instance of the target project.
+        scope = (
+            [model.instance_name == target_name] if row.scope == "instance" else []
+        )
         statement = (
             select(model.job_id)
             .where(
                 model.cluster_id == row.target_cluster_id,
                 model.project == row.target_project,
-                model.instance_name == target_name,
+                *scope,
                 model.status.in_(statuses),
             )
             .limit(1)
@@ -56,6 +68,14 @@ async def _target_has_active_work(db: Any, row: MigrationJob) -> bool:
         if (await db.execute(statement)).first() is not None:
             return True
     return False
+
+
+async def _fence_project(db: Any, row: MigrationJob, *, side: str) -> None:
+    """Fence the project a project rollback or Finalize tears down, in the action's transaction."""
+    try:
+        await fence_project_for_recovery(db, row, side=side)
+    except repository.RepositoryConflict as exc:
+        raise MigrationConflict(str(exc)) from exc
 
 
 class MigrationActionsMixin:
@@ -145,13 +165,10 @@ class MigrationActionsMixin:
             self._require_recovery_actions()
             if confirmation != "ROLLBACK":
                 raise MigrationConflict("Type ROLLBACK to confirm the rollback.")
-            if (
-                row.scope != "instance"
-                or row.intent != "move"
-                or row.strategy == "member_relocation"
-            ):
+            if not _has_retained_source(row):
                 raise MigrationConflict(
-                    "Only a staged instance move has a retained source to roll back to."
+                    "Only a staged move or a project relocation has a retained source to roll "
+                    "back to."
                 )
             if row.phase not in RETAINED_PHASES or row.status != "waiting":
                 raise MigrationConflict("Rollback is only available while the source is retained.")
@@ -162,7 +179,13 @@ class MigrationActionsMixin:
                     raise MigrationConflict(
                         "The target has an operation in progress. Retry once it finishes."
                     )
-                await refence_target_for_rollback(self.db, row)
+                if row.scope == "instance":
+                    try:
+                        await refence_target_for_rollback(self.db, row)
+                    except repository.RepositoryConflict as exc:
+                        raise MigrationConflict(str(exc)) from exc
+                else:
+                    await _fence_project(self.db, row, side="target")
             values = {
                 "phase": "rolling_back",
                 "status": "pending",
@@ -180,10 +203,13 @@ class MigrationActionsMixin:
             self._require_recovery_actions()
             if confirmation != "CLEANUP":
                 raise MigrationConflict("Type CLEANUP to confirm deleting the retained source.")
-            if row.scope != "instance" or row.intent != "move" or row.strategy == "member_relocation":
+            if not _has_retained_source(row):
                 raise MigrationConflict("This migration has no retained source to delete.")
             if row.phase not in RETAINED_PHASES or row.status != "waiting":
                 raise MigrationConflict("The retained source can only be deleted during retention.")
+            if row.scope == "project":
+                async with serialize_cluster_configuration(self.db, row.source_cluster_id):
+                    await _fence_project(self.db, row, side="source")
             values = {
                 "phase": "cleaning_up",
                 "status": "pending",
@@ -192,7 +218,11 @@ class MigrationActionsMixin:
                 "error_code": None,
                 "error_message": None,
                 "safe_result": sanitize_payload(
-                    {**(row.safe_result or {}), "cleanup_trigger": "finalize"}
+                    {
+                        **(row.safe_result or {}),
+                        "cleanup_trigger": "finalize",
+                        "recovery_kind": "cleanup",
+                    }
                 ),
             }
         elif action == "release":

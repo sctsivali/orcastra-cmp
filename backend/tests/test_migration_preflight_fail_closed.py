@@ -205,7 +205,7 @@ def test_same_project_member_move_is_not_identity_cutover_blocked(
     assert "instance_shadow_metadata_cutover_unsupported" not in _codes(result)
 
 
-def test_project_member_relocation_is_blocked_until_partial_recovery_exists(
+def test_project_member_relocation_is_admitted_as_a_rolling_move(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, _target = _patch_inspect(monkeypatch)
@@ -220,7 +220,8 @@ def test_project_member_relocation_is_blocked_until_partial_recovery_exists(
         scope="project",
     )
 
-    assert "project_member_relocation_recovery_unavailable" in _codes(result)
+    assert "project_member_relocation_recovery_unavailable" not in _codes(result)
+    assert result.strategy == "member_relocation"
 
 
 def test_copy_to_an_explicit_member_fails_closed_on_unreadable_membership(
@@ -305,7 +306,7 @@ def test_shared_default_dependencies_are_a_warning_for_one_instance(
     assert "features.profiles" in warning["message"]
 
 
-def test_shared_default_dependencies_still_block_a_whole_project(
+def test_shared_default_dependencies_are_named_on_a_project_relocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, target = _patch_inspect(
@@ -314,12 +315,14 @@ def test_shared_default_dependencies_still_block_a_whole_project(
 
     result = _inspect(source, target, intent="move", scope="project")
 
-    blocker = next(
+    # The new project shares the target's default profiles the same way, so it is a warning.
+    assert "source_shared_project_dependencies_unlocked" not in _codes(result)
+    warning = next(
         issue
-        for issue in result.blockers
-        if issue["code"] == "source_shared_project_dependencies_unlocked"
+        for issue in result.warnings
+        if issue["code"] == "source_project_shares_default_dependencies"
     )
-    assert "canonical locks" in blocker["message"]
+    assert "profiles" in warning["message"]
 
 
 class _Response:

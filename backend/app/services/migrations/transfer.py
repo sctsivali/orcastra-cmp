@@ -32,6 +32,7 @@ from .preparation import _ensure_project_target, _prepare_sources
 from .project_policy import MIGRATION_JOB_MARKER
 from .rollback import TransferFailed, abort_before_activation
 from .security import sanitize_error, sanitize_payload
+from .source_fence import before_fences
 from .target_admission import contract_for, read_target_view
 from .target_contract import TargetContract, mismatches, preserved_identity_config
 
@@ -47,6 +48,7 @@ def build_live_contract(
     root_pool_name: Optional[str],
     source_name: str,
     config_overrides: Optional[dict[str, Any]] = None,
+    source_state: Optional[dict[str, Any]] = None,
 ) -> tuple[TargetContract, dict[str, Any]]:
     """Re-derive the approved target contract from current daemon state (blocking)."""
     source = executor.read_instance(source_client, project=job.source_project, name=source_name)
@@ -54,6 +56,7 @@ def build_live_contract(
         raise MigrationAuthorityError(
             f"Source instance '{source_name}' disappeared.", code="source_missing"
         )
+    source = before_fences(source, source_state)
     mappings = request.mappings.model_dump(mode="json")
     profile_mapping = dict(mappings.get("profiles") or {})
     view = read_target_view(
@@ -660,6 +663,7 @@ async def resume_after_transfer(
                 request=request,
                 root_pool_name=root_pool_name,
                 source_name=source_name,
+                source_state=state,
                 label=f"migration.resume_contract[{source_name}]",
             )
             if contract.contract_hash != state.get("contract_hash"):

@@ -27,6 +27,15 @@ from app.services import migration_fence
 from app.services.migrations.retention_store import schedule_due_cleanups
 from tests._sqlite_session import AsyncSessionFacade, sqlite_session
 
+from types import SimpleNamespace
+
+from app.models.migration_schemas import MigrationPlanCreateRequest
+from app.services.migrations.planning_checks import project_lock_blockers
+from app.services.migrations.project_retention_store import fence_project_for_recovery
+from app.services.migrations.repository import RepositoryConflict
+from app.services.migrations.retention_store import refence_target_for_rollback
+from app.services.migrations.security import canonical_resource_key
+
 PAST = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
@@ -174,3 +183,59 @@ async def test_expired_retention_deletes_automatically_only_when_the_plan_approv
 
     row = db.sync.execute(select(MigrationJob.phase, MigrationJob.status)).one()
     assert row.phase == phase
+
+
+async def test_a_project_plan_waits_for_a_retained_move_into_that_project(db: AsyncSessionFacade) -> None:
+    """Security review pass 2: a retained instance move locks only its source, yet its live
+    target in the other project is still its rollback object."""
+    _seed(db, "job-1", phase="source_retained")
+    request = MigrationPlanCreateRequest.model_validate(
+        {
+            "scope": "project",
+            "source": {"cluster_id": "cluster-b", "project": "tenant-b"},
+            "target": {"cluster_id": "cluster-c", "project": "tenant-b"},
+        }
+    )
+
+    [blocker] = await project_lock_blockers(db, request)
+
+    assert blocker["code"] == "project_in_active_migration"
+    assert await project_lock_blockers(
+        db,
+        MigrationPlanCreateRequest.model_validate(
+            {
+                "scope": "project",
+                "source": {"cluster_id": "cluster-c", "project": "elsewhere"},
+                "target": {"cluster_id": "cluster-d", "project": "elsewhere"},
+            }
+        ),
+    ) == []
+
+
+async def test_a_teardown_fence_refuses_a_project_another_job_moved_into(db: AsyncSessionFacade) -> None:
+    _seed(db, "job-1", phase="source_retained")
+    relocation = SimpleNamespace(
+        job_id="job-2", target_cluster_id="cluster-b", target_project="tenant-b",
+        source_cluster_id="cluster-z", source_project="old",
+    )
+
+    with pytest.raises(RepositoryConflict, match="job-1"[:8]):
+        await fence_project_for_recovery(db, relocation, side="target")
+
+
+async def test_an_instance_rollback_refuses_a_target_another_job_now_holds(db: AsyncSessionFacade) -> None:
+    _seed(db, "job-1", phase="source_retained")
+    key = canonical_resource_key("instance", "cluster-b", "tenant-b", "web")
+    db.sync.execute(
+        insert(MigrationResourceLock),
+        [{"id": 2, "job_id": "job-other", "lock_key": key, "lock_scope": "instance",
+          "cluster_id": "cluster-b", "project": "tenant-b", "resource_name": "web"}],
+    )
+    db.sync.commit()
+    job = SimpleNamespace(
+        job_id="job-1", target_cluster_id="cluster-b", target_project="tenant-b",
+        target_resource_name=None, source_resource_name="web", target_cluster_fingerprint="fp-b",
+    )
+
+    with pytest.raises(RepositoryConflict):
+        await refence_target_for_rollback(db, job)

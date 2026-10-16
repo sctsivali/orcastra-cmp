@@ -117,7 +117,8 @@ def inspect_instance(
                 "A same-project move cannot be used as an in-place rename.",
                 "Use a dedicated rename workflow or choose another project, cluster, or member.",
             )
-    device_findings(result, source, source_name, intent)
+    # A member relocation keeps the identity, so there is no retained source to fence.
+    device_findings(result, source, source_name, "relocate" if member_relocation else intent)
     check_instance_operations(
         result,
         source_client=source_client,
@@ -234,6 +235,98 @@ def _inspect_member_relocation(
     )
 
 
+def admit_staged(
+    result: Any,
+    *,
+    intent: str,
+    source: dict[str, Any],
+    source_name: str,
+    view: Any,
+    mappings: dict[str, Any],
+    target_pool: Optional[str],
+    target_member: Optional[str],
+    target_client: Any,
+    target_project: str,
+    subject: str = "",
+) -> tuple[Any, Optional[str], str]:
+    """Contract and target admission for one staged instance: copy or identity-changing move.
+
+    Returns the contract, the resolved root pool, and how it was resolved. ``subject`` prefixes
+    findings when one plan admits several instances.
+    """
+    profile_mapping = dict(mappings.get("profiles") or {})
+    profile_names = [
+        str(profile_mapping.get(name, name)) for name in (source.get("profiles") or [])
+    ]
+    root_pool, basis = resolve_root_pool(
+        source=source, mapped_pool=target_pool, view=view, profile_names=profile_names
+    )
+    if root_pool is None:
+        result.block(
+            "target_pool_mapping_required",
+            f"{subject}No target storage pool could be chosen for the root disk.",
+            "Pick a destination storage pool.",
+        )
+    elif root_pool not in view.pools:
+        result.block(
+            "target_pool_missing", f"{subject}Target storage pool '{root_pool}' does not exist."
+        )
+
+    contract = contract_for(
+        source=source, view=view, mappings=mappings, root_pool=root_pool, intent=intent
+    )
+    result.contracts[source_name] = contract
+    for name in contract.missing_profiles:
+        result.block(
+            "target_profile_missing",
+            f"{subject}Profile '{name}' does not exist in the target project.",
+            "Map the profile to an existing target profile, or create it first.",
+        )
+    if contract.unmapped_networks:
+        candidates = ", ".join(
+            name for name in view.usable_networks if not name.startswith("parent:")
+        ) or "none"
+        for item in contract.unmapped_networks:
+            if item.get("mapped"):
+                result.block(
+                    "network_mapping_invalid",
+                    f"{subject}NIC '{item['device']}' is mapped to '{item['mapped']}', which the "
+                    f"target project cannot use. Available networks: {candidates}.",
+                    "Map the network to one of the available target networks.",
+                )
+                continue
+            result.block(
+                "network_mapping_required",
+                f"{subject}NIC '{item['device']}' uses '{item['source']}', which the target "
+                f"project cannot use. Available networks: {candidates}.",
+                "Map the network to one of the available target networks.",
+            )
+    if contract.profile_added_config:
+        result.warn(
+            "target_profile_adds_config",
+            f"{subject}The target profiles add settings the source does not have: "
+            f"{', '.join(sorted(contract.profile_added_config))}.",
+        )
+    instance_type = str(source.get("type") or "container")
+    findings = restriction_findings(
+        project_config=view.project_config,
+        contract=contract,
+        instance_type=instance_type,
+        target_member=target_member,
+    ) + static_address_findings(contract=contract, view=view)
+    if target_member:
+        findings += member_findings(
+            target_client=target_client,
+            target_project=target_project,
+            target_member=target_member,
+            root_pool=root_pool,
+            contract=contract,
+            architecture=source.get("architecture"),
+        )
+    _apply(result, [(code, f"{subject}{message}", fix) for code, message, fix in findings])
+    return contract, root_pool, basis
+
+
 def _inspect_staged(
     result: Any,
     *,
@@ -285,66 +378,20 @@ def _inspect_staged(
             result, side="target", project=target_project, record=target_project_record
         )
 
-    root_pool, basis = resolve_root_pool(
-        source=source, mapped_pool=target_pool, view=view, profile_names=profile_names
+    contract, root_pool, basis = admit_staged(
+        result,
+        intent=intent,
+        source=source,
+        source_name=source_name,
+        view=view,
+        mappings=mappings,
+        target_pool=target_pool,
+        target_member=target_member,
+        target_client=target_client,
+        target_project=target_project,
     )
     result.capabilities["target_root_pool"] = root_pool
     result.capabilities["target_root_pool_basis"] = basis
-    if root_pool is None:
-        result.block(
-            "target_pool_mapping_required",
-            "No target storage pool could be chosen for the root disk.",
-            "Pick a destination storage pool.",
-        )
-    elif root_pool not in view.pools:
-        result.block("target_pool_missing", f"Target storage pool '{root_pool}' does not exist.")
-
-    contract = contract_for(
-        source=source, view=view, mappings=mappings, root_pool=root_pool, intent=intent
-    )
-    result.contracts[source_name] = contract
-    for name in contract.missing_profiles:
-        result.block(
-            "target_profile_missing",
-            f"Profile '{name}' does not exist in the target project.",
-            "Map the profile to an existing target profile, or create it first.",
-        )
-    if contract.unmapped_networks:
-        candidates = ", ".join(
-            name for name in view.usable_networks if not name.startswith("parent:")
-        ) or "none"
-        for item in contract.unmapped_networks:
-            if item.get("mapped"):
-                result.block(
-                    "network_mapping_invalid",
-                    f"NIC '{item['device']}' is mapped to '{item['mapped']}', which the target "
-                    f"project cannot use. Available networks: {candidates}.",
-                    "Map the network to one of the available target networks.",
-                )
-                continue
-            result.block(
-                "network_mapping_required",
-                f"NIC '{item['device']}' uses '{item['source']}', which the target project "
-                f"cannot use. Available networks: {candidates}.",
-                "Map the network to one of the available target networks.",
-            )
-    if contract.profile_added_config:
-        result.warn(
-            "target_profile_adds_config",
-            "The target profiles add settings the source does not have: "
-            f"{', '.join(sorted(contract.profile_added_config))}.",
-        )
-    instance_type = str(source.get("type") or "container")
-    _apply(
-        result,
-        restriction_findings(
-            project_config=view.project_config,
-            contract=contract,
-            instance_type=instance_type,
-            target_member=target_member,
-        ),
-    )
-    _apply(result, static_address_findings(contract=contract, view=view))
 
     target_instance = None
     if view.project_exists:
@@ -366,7 +413,7 @@ def _inspect_staged(
                 target_project=target_project,
                 view=view,
                 contract=contract,
-                instance_type=instance_type,
+                instance_type=str(source.get("type") or "container"),
             ),
         )
     except Exception:  # noqa: BLE001 - unknown quota usage must fail closed
@@ -374,18 +421,6 @@ def _inspect_staged(
             "target_quota_unverified",
             "The target project's quota usage could not be read.",
             "Restore project usage reporting and run preflight again.",
-        )
-    if target_member:
-        _apply(
-            result,
-            member_findings(
-                target_client=target_client,
-                target_project=target_project,
-                target_member=target_member,
-                root_pool=root_pool,
-                contract=contract,
-                architecture=source.get("architecture"),
-            ),
         )
     if root_pool:
         pf._check_capacity(
@@ -425,4 +460,4 @@ def _inspect_staged(
     )
 
 
-__all__ = ["active_instance_operations", "inspect_instance", "source_status"]
+__all__ = ["active_instance_operations", "admit_staged", "inspect_instance", "source_status"]

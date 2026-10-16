@@ -92,9 +92,9 @@ def _available_actions(job: MigrationJob, resources: list[Any]) -> list[Migratio
     if job.phase == "external_cutover_pending" and job.status == "waiting":
         actions.append(MigrationActionName.CONFIRM_EXTERNAL_CUTOVER)
     retained = (
-        job.scope == "instance"
-        and job.intent == "move"
+        job.intent == "move"
         and job.strategy != "member_relocation"
+        and (job.scope == "instance" or job.strategy == "project_relocation")
         and job.phase in {"source_retained", "cleanup_due", "cleanup_blocked"}
         and job.status == "waiting"
     )

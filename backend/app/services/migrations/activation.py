@@ -8,6 +8,7 @@ completes (copy, member relocation) or enters retention (staged move).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -23,6 +24,7 @@ from .operation_wait import await_operation
 from .project_policy import MIGRATION_JOB_MARKER
 from .retention_store import enter_source_retention
 from .security import sanitize_payload
+from .source_fence import fence_source_nics, nic_fence_applies
 from .target_contract import TargetContract, mismatches
 
 Transferred = list[tuple[MigrationResource, dict[str, Any], Optional[TargetContract]]]
@@ -267,7 +269,11 @@ async def finish_transfer(
     source_client: Any,
     target_client: Any,
     transferred: Transferred,
+    *,
+    retain: Optional[Callable[[Transferred], Awaitable[None]]] = None,
 ) -> None:
+    """Validate, activate, and complete or retain. ``retain`` replaces the instance retention
+    transaction, for a project relocation that retains every source at once."""
     for resource, state, contract in transferred:
         started = bool(state.get("target_start_attempted") or state.get("target_started"))
         restarted = bool(
@@ -287,6 +293,10 @@ async def finish_transfer(
             status="running",
             event_message="All targets passed validation. Activating the target workloads.",
         )
+    if nic_fence_applies(job):
+        for index, (resource, state, contract) in enumerate(transferred):
+            state = await fence_source_nics(job, resource, state, source_client)
+            transferred[index] = (resource, state, contract)
     await _activate(job, transferred, source_client, target_client)
     for resource, state, contract in transferred:
         running = state.get("original_status") == "running"
@@ -320,6 +330,9 @@ async def finish_transfer(
     await _fence_source_autostart(job, transferred, source_client)
     for resource, state, _contract in transferred:
         await _resource_update(resource.resource_id, state="retained", safe_result=state)
+    if retain is not None:
+        await retain(transferred)
+        return
     resource, _state, _contract = transferred[0]
     _source_name, target_name = _names(resource)
     target = await _read(

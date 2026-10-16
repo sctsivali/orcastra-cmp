@@ -23,7 +23,6 @@ from .security import (
     approved_lxd_native_cross_project_move,
     canonical_json_hash,
     daemon_identity,
-    instance_identity_fingerprint,
 )
 
 
@@ -382,14 +381,6 @@ def _storage_pools(client: Any) -> list[str]:
     return pools
 
 
-def _reviewed_project_config(config: dict[str, Any]) -> bool:
-    return all(
-        str(key).startswith(("features.", "limits.", "restricted."))
-        or str(key) == "restricted"
-        for key in config
-    )
-
-
 def _shared_dependency_features(
     project: str, project_record: Optional[dict[str, Any]]
 ) -> list[str]:
@@ -403,27 +394,6 @@ def _shared_dependency_features(
         for feature in _PROJECT_DEPENDENCY_FEATURES
         if str(config.get(feature, "false")).strip().lower() != "true"
     ]
-
-
-def _block_shared_dependencies(
-    result: PreflightResult,
-    *,
-    side: str,
-    project: str,
-    project_record: Optional[dict[str, Any]],
-) -> None:
-    shared = _shared_dependency_features(project, project_record)
-    if not shared:
-        return
-    result.capabilities["project_dependencies_locked"] = False
-    result.block(
-        f"{side}_shared_project_dependencies_unlocked",
-        f"The {side} project inherits dependency namespaces that are outside this "
-        f"migration's canonical locks: {', '.join(shared)}.",
-        "Use a project with explicitly isolated profiles, networks, network zones, images, "
-        "custom volumes, and storage buckets, materialize equivalent dependencies there, "
-        "then run preflight again.",
-    )
 
 
 def _block_inventory_error(
@@ -887,8 +857,10 @@ def _known_project_resources(client: Any, project: str) -> dict[str, list[Any]]:
             resources[label] = []
             continue
         try:
-            node = getattr(client.api, label)
-        except (AttributeError, TypeError) as exc:
+            # note: LXD paths use dashes. pylxd only converts a few attribute names, so
+            # ``client.api.network_acls`` would ask for /1.0/network_acls and get a 404.
+            node = client.api[safe_segment(label.replace("_", "-"))]
+        except (AttributeError, KeyError, TypeError) as exc:
             raise InventoryReadError(label.replace("_", " ")) from exc
         resources[label] = _get_collection(
             node, project=project, resource=label.replace("_", " ")
@@ -898,6 +870,9 @@ def _known_project_resources(client: Any, project: str) -> dict[str, list[Any]]:
     for network in networks:
         if not isinstance(network, dict) or not network.get("name"):
             continue
+        if not network.get("managed"):
+            # A host interface has no forwards or load balancers; LXD answers 404 for it.
+            continue
         try:
             node = networks_node[safe_segment(str(network["name"]))]
         except (AttributeError, KeyError, TypeError) as exc:
@@ -906,14 +881,17 @@ def _known_project_resources(client: Any, project: str) -> dict[str, list[Any]]:
             ) from exc
         for label, attribute in (
             ("network_forwards", "forwards"),
-            ("network_load_balancers", "load_balancers"),
+            ("network_load_balancers", "load-balancers"),
         ):
             required_extension = _OPTIONAL_COLLECTION_EXTENSIONS[label]
             if required_extension not in extensions:
                 continue
+            if label == "network_load_balancers" and network.get("type") != "ovn":
+                # LXD refuses the listing outright on other drivers, which cannot hold any.
+                continue
             try:
-                collection = getattr(node, attribute)
-            except (AttributeError, TypeError) as exc:
+                collection = node[safe_segment(attribute)]
+            except (AttributeError, KeyError, TypeError) as exc:
                 raise InventoryReadError(label.replace("_", " ")) from exc
             resources[label].extend(
                 _get_collection(
@@ -957,122 +935,6 @@ def _occupied_resources(resources: dict[str, list[Any]]) -> dict[str, int]:
     return occupied
 
 
-def _device_blockers(result: PreflightResult, instance: dict[str, Any], name: str) -> None:
-    # Expanded values include inherited profile configuration. Checking only local config lets a
-    # privileged/raw profile cross the boundary without ever appearing in `config` or `devices`.
-    config = instance.get("expanded_config") or instance.get("config") or {}
-    if str(config.get("security.privileged", "")).lower() == "true":
-        result.block(
-            "privileged_instance",
-            f"Instance '{name}' is privileged.",
-            "Use a separately reviewed privileged-workload procedure.",
-        )
-    if any(str(key).startswith("raw.") for key in config):
-        result.block(
-            "raw_instance_config",
-            f"Instance '{name}' has raw daemon configuration.",
-            "Remove or separately review raw configuration before migration.",
-        )
-    if str(config.get("boot.autostart", "")).lower() == "true":
-        result.block(
-            "source_autostart_not_fenced",
-            f"Instance '{name}' can start automatically when its daemon restarts.",
-            "Disable boot.autostart and run preflight again before staged migration.",
-        )
-    devices = instance.get("expanded_devices") or instance.get("devices") or {}
-    allowed_types = {"disk", "nic", "none", "tpm"}
-    for device_name, device in devices.items():
-        if not isinstance(device, dict):
-            result.block(
-                "invalid_device", f"Instance '{name}' has invalid device '{device_name}'."
-            )
-            continue
-        device_type = str(device.get("type") or "")
-        if device_type not in allowed_types:
-            result.block(
-                "unknown_or_unsupported_device",
-                f"Instance '{name}' uses unapproved device type '{device_type or 'unknown'}'.",
-                "Remove it or add a reviewed migration handler for that device type.",
-            )
-        if device_type in {"gpu", "pci", "usb", "proxy", "unix-block", "unix-char"}:
-            result.block(
-                "unsupported_device",
-                f"Instance '{name}' uses unsupported {device_type} device '{device_name}'.",
-                "Remove the device or use a hardware-aware migration procedure.",
-            )
-        if device_type == "disk" and device.get("path") != "/" and device.get("source"):
-            result.block(
-                "attached_volume_or_host_path",
-                f"Instance '{name}' has non-root disk '{device_name}'.",
-                "Migrate and map the custom volume or host path first.",
-            )
-
-
-def _source_state_blocker(
-    result: PreflightResult, instance: dict[str, Any], name: str
-) -> None:
-    if str(instance.get("status") or "").strip().lower() == "stopped":
-        return
-    result.block(
-        "source_instance_not_stopped",
-        f"Instance '{name}' must be authoritatively Stopped before migration.",
-        "Stop the workload, drain console and terminal sessions, then run preflight again. "
-        "This release does not orchestrate live guest writes or interactive session drain.",
-    )
-
-
-def _network_dependency_blockers(
-    result: PreflightResult, instance: dict[str, Any], name: str
-) -> None:
-    devices = instance.get("expanded_devices") or instance.get("devices") or {}
-    for device_name, device in devices.items():
-        if not isinstance(device, dict) or device.get("type") != "nic":
-            continue
-        result.block(
-            "network_dependency_unmapped",
-            f"Instance '{name}' has NIC dependency '{device_name}' that cannot be proven equivalent.",
-            "Network/parent mapping is not executable in this release; use the same project or detach the NIC.",
-        )
-
-
-def _profile_compatibility(
-    result: PreflightResult,
-    source_client: Any,
-    target_client: Any,
-    source_project: str,
-    target_project: str,
-    instance: dict[str, Any],
-) -> None:
-    for profile_name in instance.get("profiles") or ["default"]:
-        name = str(profile_name)
-        try:
-            source = _profile(source_client, source_project, name)
-        except InventoryReadError as exc:
-            _block_inventory_error(result, side="source", error=exc)
-            continue
-        try:
-            target = _profile(target_client, target_project, name)
-        except InventoryReadError as exc:
-            _block_inventory_error(result, side="target", error=exc)
-            continue
-        if source is None:
-            result.block("source_profile_missing", f"Source profile '{name}' is unreadable.")
-        elif target is None:
-            result.block(
-                "target_profile_missing",
-                f"Target profile '{name}' does not exist.",
-                "Create and validate an equivalent target profile.",
-            )
-        elif (source.get("config") or {}) != (target.get("config") or {}) or (
-            source.get("devices") or {}
-        ) != (target.get("devices") or {}):
-            result.block(
-                "profile_drift",
-                f"Target profile '{name}' is not equivalent to the source profile.",
-                "Align the profile or provide an explicit mapping.",
-            )
-
-
 def inspect(
     *,
     scope: str,
@@ -1113,14 +975,13 @@ def inspect(
             "same_project": same_project,
             "target_member": target_member,
             "checkpoint": True,
-            # The instance planner turns rollback on for a move once the target contract is
-            # derived. Project scope has no retained-source rollback yet.
+            # The planners turn rollback on for a staged move once every contract is derived.
             "rollback": False,
             "live": False,
             "incremental_refresh": False,
             "target_project_exists": False,
             "target_project_create": False,
-            "atomic_shadow_metadata_cutover": scope == "instance",
+            "atomic_shadow_metadata_cutover": True,
             "project_dependencies_locked": True,
             "daemon_operation_inventory_verified": True,
             "daemon_operations_quiescent": True,
@@ -1130,13 +991,6 @@ def inspect(
             ),
         },
     )
-    if scope == "project" and member_relocation:
-        result.block(
-            "project_member_relocation_recovery_unavailable",
-            "Project member relocation is disabled because a partial multi-instance move "
-            "cannot yet be reversed inside the original locked job.",
-            "Relocate one instance at a time after target-member preflight succeeds.",
-        )
     if scope == "project":
         _check_active_operations(
             result,
@@ -1157,7 +1011,7 @@ def inspect(
     unsupported_groups = (
         ("volumes", "members", "external_dependencies")
         if scope == "instance"
-        else ("networks", "profiles", "volumes", "members", "external_dependencies")
+        else ("profiles", "volumes", "members", "external_dependencies")
     )
     for group in unsupported_groups:
         if mapping_groups.get(group):
@@ -1293,205 +1147,22 @@ def inspect(
             source_project_record=source_project_record,
             target_project_record=target_project_record,
         )
-    _block_shared_dependencies(
+    from .preflight_project import inspect_project
+
+    return inspect_project(
         result,
-        side="source",
-        project=source_project,
-        project_record=source_project_record,
+        intent=intent,
+        source_client=source_client,
+        target_client=target_client,
+        source_cluster=source_cluster,
+        source_project=source_project,
+        target_cluster=target_cluster,
+        target_project=target_project,
+        target_member=target_member,
+        target_pool=target_pool,
+        settings=settings,
+        mappings=mapping_groups,
+        target_identity=target_identity,
+        source_project_record=source_project_record,
+        target_project_record=target_project_record,
     )
-    if not same_project:
-        _block_shared_dependencies(
-            result,
-            side="target",
-            project=target_project,
-            project_record=target_project_record,
-        )
-    if source_project_record is None:
-        result.block("source_project_missing", "The source project does not exist.")
-        return result
-    if not same_project:
-        result.block(
-            "project_shadow_metadata_cutover_unsupported",
-            "Cross-project relocation cannot yet cut over Orcastra policy, billing, tags, schedules, and webhook ownership atomically.",
-            "Use same-project member relocation or wait for the shadow-metadata cutover stage.",
-        )
-    elif not target_member:
-        result.block(
-            "source_target_identical",
-            "Source and target resolve to the same project namespace with no target member.",
-            "Choose a distinct cluster member or another compatible target project.",
-        )
-    try:
-        resources = _known_project_resources(source_client, source_project)
-    except InventoryReadError as exc:
-        _block_inventory_error(result, side="source", error=exc)
-        return result
-    if member_relocation:
-        instances = [
-            instance
-            for instance in resources["instances"]
-            if isinstance(instance, dict) and instance.get("name")
-        ]
-        if not instances:
-            result.block(
-                "empty_project_relocation_noop",
-                "The project has no workloads to relocate to another member.",
-                "Choose a project with workloads or cancel this no-op operation.",
-            )
-        for instance in instances:
-            name = str(instance["name"])
-            source_location = str(instance.get("location") or "").strip()
-            if not source_location:
-                result.block(
-                    "source_member_unverified",
-                    f"The current member for instance '{name}' could not be read.",
-                    "Refresh cluster inventory before selecting a relocation member.",
-                )
-            elif source_location == target_member:
-                result.block(
-                    "target_member_contains_source_workload",
-                    f"Instance '{name}' is already on target member '{target_member}'.",
-                    "Relocate remaining workloads individually or choose another member.",
-                )
-    if target_project_record is None:
-        source_project_config = dict(source_project_record.get("config") or {})
-        if not _reviewed_project_config(source_project_config):
-            result.block(
-                "unsupported_project_config",
-                "The source project has configuration without a reviewed clone policy.",
-                "Create and validate the target project manually before migration.",
-            )
-        nontrivial_profiles = [
-            profile
-            for profile in resources["profiles"]
-            if isinstance(profile, dict)
-            and ((profile.get("config") or {}) or (profile.get("devices") or {}))
-        ]
-        if nontrivial_profiles:
-            result.block(
-                "target_project_requires_profile_clone",
-                "A new target project would require cloning non-empty profiles.",
-                "Create the target project and equivalent profiles, then run preflight again.",
-            )
-        if _reviewed_project_config(source_project_config) and not nontrivial_profiles:
-            result.capabilities["target_project_create"] = True
-            result.capabilities["target_project_fingerprint"] = _project_fingerprint(
-                source_project_record
-            )
-    if target_project_record is not None and not same_project:
-        if dict(source_project_record.get("config") or {}) != dict(
-            target_project_record.get("config") or {}
-        ):
-            result.block(
-                "target_project_policy_mismatch",
-                "Target project restrictions, features, limits, or quotas differ from source.",
-                "Align the empty target project policy exactly, then run preflight again.",
-            )
-        try:
-            target_resources = _known_project_resources(target_client, target_project)
-        except InventoryReadError as exc:
-            _block_inventory_error(result, side="target", error=exc)
-            target_resources = None
-        occupied = (
-            _occupied_resources(target_resources)
-            if target_resources is not None
-            else {}
-        )
-        if occupied:
-            result.block(
-                "target_project_not_empty",
-                "The target project contains resources.",
-                "Choose a new or empty target project. Project merge is not supported.",
-            )
-    unsupported_labels = {
-        "networks": "managed networks",
-        "network_acls": "network ACLs",
-        "network_zones": "network zones",
-        "network_address_sets": "network address sets",
-        "images": "project images",
-        "custom_volumes": "custom storage volumes",
-        "storage_buckets": "storage buckets",
-        "network_forwards": "network forwards",
-        "network_load_balancers": "network load balancers",
-        "placement_groups": "placement groups",
-    }
-    for kind, label in unsupported_labels.items():
-        if not same_project and resources.get(kind):
-            result.block(
-                f"unsupported_{kind}",
-                f"The source project contains {label} that cannot yet be migrated safely.",
-                "Migrate or remove that dependency before relocating the project.",
-            )
-    for instance in resources["instances"]:
-        if not isinstance(instance, dict) or not instance.get("name"):
-            result.block(
-                "invalid_instance_inventory",
-                "The daemon returned an invalid instance inventory entry.",
-            )
-            continue
-        name = str(instance["name"])
-        _source_state_blocker(result, instance, name)
-        source_identity_fingerprint = instance_identity_fingerprint(instance)
-        if source_identity_fingerprint is None:
-            result.block(
-                "source_identity_unavailable",
-                f"Instance '{name}' has no authoritative immutable identity evidence.",
-                "Refresh the daemon inventory and ensure the instance exposes a creation time or UUID.",
-            )
-        _device_blockers(result, instance, name)
-        if not same_project:
-            _network_dependency_blockers(result, instance, name)
-        if not same_project and target_project_record is not None:
-            _profile_compatibility(
-                result,
-                source_client,
-                target_client,
-                source_project,
-                target_project,
-                instance,
-            )
-        result.resources.append(
-            {
-                "resource_type": "instance",
-                "source_name": name,
-                "target_name": name,
-                "source_fingerprint": _instance_preflight_fingerprint(instance),
-                "source_identity_fingerprint": source_identity_fingerprint,
-                "target_fingerprint": (
-                    _instance_preflight_fingerprint(instance)
-                    if member_relocation
-                    else None
-                ),
-                "target_identity_fingerprint": (
-                    source_identity_fingerprint if member_relocation else None
-                ),
-                "required": True,
-                "state": "planned",
-            }
-        )
-    if not member_relocation:
-        _check_capacity(
-            result,
-            source_client=source_client,
-            target_client=target_client,
-            source_project=source_project,
-            instance_names=[
-                str(instance.get("name"))
-                for instance in resources["instances"]
-                if isinstance(instance, dict) and instance.get("name")
-            ],
-            target_pool=target_pool,
-        )
-    result.resources.insert(
-        0,
-        {
-            "resource_type": "project",
-            "source_name": source_project,
-            "target_name": target_project,
-            "required": True,
-            "state": "planned",
-        },
-    )
-    if not resources["instances"]:
-        result.warn("empty_source_project", "The source project has no instances to relocate.")
-    return result

@@ -136,9 +136,9 @@ async def test_orcahub_checks_are_skipped_when_the_identity_does_not_change_or_i
 
 
 class _OneRow:
-    """Answers the endpoint query with one scripted (job_id, phase) row, or none."""
+    """Answers the endpoint query with one scripted (job_id, phase, scope) row, or none."""
 
-    def __init__(self, row: Optional[tuple[str, str]]) -> None:
+    def __init__(self, row: Optional[tuple[str, str, str]]) -> None:
         self.row = row
         self.statements: list[Any] = []
 
@@ -153,7 +153,7 @@ async def test_a_free_endpoint_has_no_blocker() -> None:
 
 @pytest.mark.parametrize("phase", ["source_retained", "cleanup_due", "cleanup_blocked"])
 async def test_a_retained_endpoint_asks_for_finalize_or_rollback(phase: str) -> None:
-    [blocker] = await active_endpoint_blockers(_OneRow(("job-1", phase)), _request())
+    [blocker] = await active_endpoint_blockers(_OneRow(("job-1", phase, "instance")), _request())
 
     assert blocker["code"] == "endpoint_in_active_migration"
     assert "retained source or target" in blocker["message"]
@@ -162,7 +162,7 @@ async def test_a_retained_endpoint_asks_for_finalize_or_rollback(phase: str) -> 
 
 @pytest.mark.parametrize("phase", ["queued", "transferring", "activating"])
 async def test_a_running_endpoint_asks_to_wait(phase: str) -> None:
-    [blocker] = await active_endpoint_blockers(_OneRow(("job-1", phase)), _request())
+    [blocker] = await active_endpoint_blockers(_OneRow(("job-1", phase, "instance")), _request())
 
     assert "still running" in blocker["message"]
     assert blocker["remediation"] == "Wait for the other migration to finish."
@@ -177,12 +177,24 @@ async def test_the_endpoint_query_matches_both_keys_on_either_side(
 
     await active_endpoint_blockers(db, request)
 
-    keys = [
+    keys = {
         canonical_resource_key("instance", "plain", "tenant-a", "web"),
         canonical_resource_key("instance", "hub", "tenant-b", expected_name),
-    ]
+        # A project relocation keeps its project keys active through retention.
+        canonical_resource_key("project", "plain", "tenant-a", None),
+        canonical_resource_key("project", "hub", "tenant-b", None),
+    }
     params = db.statements[0].compile().params
-    assert [value for value in params.values() if isinstance(value, list)] == [keys, keys]
+    assert [set(value) for value in params.values() if isinstance(value, list)] == [keys, keys]
+
+
+@pytest.mark.parametrize(("phase", "words"), [("source_retained", "still in retention"), ("final_sync", "still running")])
+async def test_a_project_relocation_blocks_every_plan_that_touches_its_projects(phase: str, words: str) -> None:
+    """Security review: the new project holds no lock during retention, so an instance moved out
+    of it would become another job's retained source that the relocation's rollback deletes."""
+    [blocker] = await active_endpoint_blockers(_OneRow(("job-1", phase, "project")), _request())
+
+    assert "project relocation" in blocker["message"] and words in blocker["message"]
 
 
 def _exact_rule(db: AsyncSessionFacade, policy: int, cluster: str, project: str, name: str) -> None:

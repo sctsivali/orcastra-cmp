@@ -96,12 +96,13 @@ def _preflight_payload(
             "reason": (
                 "Copy creates an independent destination and has no rollback window."
                 if intent == "copy"
-                else "Member relocation keeps one instance identity. Relocate it back instead."
+                else "Member relocation keeps every instance identity. A failed move puts the "
+                "workloads back automatically; afterwards, relocate them back with a new plan."
                 if result.strategy == "member_relocation"
                 else "The stopped source is retained, so rollback restores it and removes the "
                 "target. Writes made on the target after cutover are discarded."
                 if rollback_supported
-                else "Project-scope rollback is not available yet."
+                else "Rollback is not available for this plan."
             ),
         },
         {
@@ -148,8 +149,10 @@ def _preflight_payload(
             "reason": (
                 "Tags, snapshot schedules, and tenant access rules follow the instance to its "
                 "new identity in the same transaction that retains the source."
-                if result.capabilities.get("atomic_shadow_metadata_cutover")
-                else "Project-scope metadata cutover is not available yet."
+                if instance_scope
+                else "Project tags, project-wide tenant access rules, and every instance's "
+                "tags, schedules, and rules follow the project in the same transaction that "
+                "retains the source project."
             ),
         },
         {
@@ -185,12 +188,15 @@ def _preflight_payload(
         },
         {
             "code": "mapping_networks",
-            "supported": instance_scope,
+            "supported": instance_scope or result.strategy == "project_relocation",
             "reason": (
                 "Each NIC follows an explicit mapping, the target profile, or a network with "
                 "the same name."
                 if instance_scope
-                else "Network mapping for project relocation is not available yet."
+                else "Each NIC of an instance or a cloned profile follows an explicit mapping, "
+                "or a network with the same name."
+                if result.strategy == "project_relocation"
+                else "Member relocation keeps every network as it is."
             ),
         },
         {
@@ -199,7 +205,7 @@ def _preflight_payload(
             "reason": (
                 "Profiles may be renamed to existing target profiles."
                 if instance_scope
-                else "Profile mapping for project relocation is not available yet."
+                else "A relocation clones every profile under its own name."
             ),
         },
         {
@@ -245,6 +251,16 @@ def _preflight_payload(
                 if intent == "copy"
                 else "Native member relocation has no retained source copy."
                 if result.strategy == "member_relocation"
+                else (
+                    "The source project stays, its instances stopped and fenced, for the retention "
+                    "window. Rollback restores it and removes the target project. "
+                    + (
+                        "Finalize, or the end of retention, deletes the source project."
+                        if automatic_cleanup
+                        else "Finalize deletes the source project."
+                    )
+                )
+                if result.strategy == "project_relocation"
                 else "The source stays stopped and fenced for the retention window. Rollback "
                 "restores it and removes the target. Finalize, or the end of retention, deletes it."
                 if automatic_cleanup

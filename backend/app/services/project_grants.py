@@ -129,7 +129,9 @@ async def grant_project_to_creator(
         rule_created=rule_created,
     )
 
-async def revoke_project_grants(db: AsyncSession, *, cluster_id: str, project_name: str) -> RevokeOutcome:
+async def revoke_project_grants(
+    db: AsyncSession, *, cluster_id: str, project_name: str, commit: bool = True
+) -> RevokeOutcome:
     """Remove every rule naming (cluster, project), whichever organization wrote it.
 
     important: every organization, not the deleter's. Organization A's leftover rule for a
@@ -172,7 +174,8 @@ async def revoke_project_grants(db: AsyncSession, *, cluster_id: str, project_na
         if not left and not assigned:
             await db.delete(policy)
             dropped += 1
-    await db.commit()
+    if commit:
+        await db.commit()
     return RevokeOutcome(rules_removed=len(rules), policies_dropped=dropped)
 
 

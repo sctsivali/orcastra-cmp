@@ -601,6 +601,12 @@ async def _run_activation_until_unknown(
     monkeypatch.setattr(activation, "await_operation", settled)
     monkeypatch.setattr(activation, "enter_source_retention", retention)
 
+    async def unfenced(_job: Any, _resource: Any, state: dict[str, Any], _client: Any) -> dict[str, Any]:
+        # The NIC fence is covered in test_migration_project_runners.py; these tests pin barriers.
+        return state
+
+    monkeypatch.setattr(activation, "fence_source_nics", unfenced)
+
     with pytest.raises(MigrationUnknown):
         await activation.finish_transfer(
             job, "worker-a", source_client, target_client, transferred
@@ -701,7 +707,7 @@ def _empty_project_resources(instance: dict[str, Any] | None = None) -> dict[str
     }
 
 
-def test_boot_autostart_is_a_hard_blocker_for_instance_and_project_graphs(
+def test_boot_autostart_never_blocks_a_copy_or_a_member_relocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = object()
@@ -765,12 +771,12 @@ def test_boot_autostart_is_a_hard_blocker_for_instance_and_project_graphs(
     assert "source_autostart_not_fenced" not in {
         blocker["code"] for blocker in instance_report.blockers
     }
-    # Whole-project relocation still refuses an autostarting source.
+    # A project member relocation keeps every identity, so autostart stays as it is.
     project_blockers = {blocker["code"]: blocker for blocker in project_report.blockers}
-    assert "source_autostart_not_fenced" in project_blockers
-    assert "Disable boot.autostart" in project_blockers["source_autostart_not_fenced"][
-        "remediation"
-    ]
+    assert "source_autostart_not_fenced" not in project_blockers
+    assert "source_autostart_fenced" not in {
+        warning["code"] for warning in project_report.warnings
+    }
 
 
 def test_an_instance_move_fences_autostart_instead_of_refusing(

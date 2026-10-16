@@ -48,7 +48,9 @@ from .plan_contracts import _preflight_payload, _target_pool, approval_report_ha
 from .planning_checks import (
     active_endpoint_blockers,
     orcahub_blockers,
+    project_lock_blockers,
     shared_policy_blockers,
+    single_owner_clusters,
     stale_target_access_blockers,
 )
 from .security import canonical_json_hash, canonical_resource_key, sanitize_payload
@@ -291,6 +293,19 @@ class MigrationPlanningMixin:
             )
         if source.organization_id != target.organization_id:
             raise MigrationConflict("Source and target must belong to the same organization.")
+        relocation = _enum_value(request.scope) == "project" and (
+            request.source.cluster_id,
+            request.source.project,
+        ) != (request.target.cluster_id, request.target.project)
+        if relocation and not await single_owner_clusters(
+            self.db, request.source.cluster_id, request.target.cluster_id
+        ):
+            # note: ownership of a project that does not exist yet can only be proven through
+            # the cluster binding. Shared clusters wait for a staged ownership grant.
+            raise MigrationConflict(
+                "A whole project can only be relocated between clusters that each belong to one "
+                "organization. Move its instances individually on a shared cluster."
+            )
         if requester_role == "partner":
             memberships = set(await get_user_org_ids(user, self.db))
             if source.organization_id not in memberships:
@@ -439,10 +454,13 @@ class MigrationPlanningMixin:
             )
         )
         payload["blockers"].extend(await active_endpoint_blockers(self.db, request))
+        payload["blockers"].extend(await project_lock_blockers(self.db, request))
         payload["blockers"].extend(
             await stale_target_access_blockers(self.db, request, organization_id)
         )
-        if _enum_value(request.scope) == "instance" and result.contracts:
+        if result.contracts and (
+            _enum_value(request.scope) == "instance" or result.strategy == "project_relocation"
+        ):
             creates_project = bool(result.capabilities.get("target_project_create"))
             target_project_config = None
             if result.capabilities.get("target_project_exists"):

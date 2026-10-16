@@ -23,6 +23,7 @@ from .operation_wait import await_operation
 from .project_policy import MIGRATION_JOB_MARKER, created_by_job
 from .retention_store import finish_rollback
 from .security import sanitize_error, sanitize_payload
+from .source_fence import unfence_source_nics
 
 __all__ = [
     "TransferFailed",
@@ -202,6 +203,7 @@ async def _start_source_if_needed(
         await _await(source_client, operation_id, job.source_project, "migration.restore_autostart")
         state = {**state, "source_autostart_fenced": False}
         await _resource_update(resource.resource_id, state="cleaning", safe_result=state)
+    state = await unfence_source_nics(job, resource, state, source_client)
     if state.get("original_status") == "running" and _status(source) != "running":
         state = {**state, "recovery_source_start_intent": True}
         await _resource_update(resource.resource_id, state="cleaning", safe_result=state)
@@ -281,6 +283,12 @@ async def abort_before_activation(
     # The runner reads the reason from this object when it records the outcome; without this
     # it saw the pre-abort copy and reported the generic "Transfer failed." (found live).
     job.safe_result = safe_result
+    job.phase = "rolling_back"
+    if getattr(job, "scope", None) == "project":
+        from .project_rollback import run_project_abort
+
+        await run_project_abort(job, worker_id, source_client, target_client)
+        return
     await run_abort(job, worker_id, source_client, target_client)
 
 

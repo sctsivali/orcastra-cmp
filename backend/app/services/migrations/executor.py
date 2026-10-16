@@ -6,6 +6,8 @@ stack between source setup and target acceptance.
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.core.lxd_path import safe_segment
@@ -108,6 +110,26 @@ def instance_identity_fingerprint(instance: dict[str, Any]) -> Optional[str]:
     return _instance_identity_fingerprint(instance)
 
 
+_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+
+
+def _whole_second(value: Any) -> Any:
+    """A snapshot timestamp at whole-second UTC precision.
+
+    note: a cross-cluster migration carries snapshot times in whole seconds, so the target
+    reads ``08:05:55Z`` where the source reads ``08:05:55.928374805Z`` (found live). Comparing
+    at second precision still pins every snapshot's identity.
+    """
+    if not isinstance(value, str):
+        return value
+    match = _TIMESTAMP.match(value.strip())
+    if match is None:
+        return value
+    base, zone = match.groups()
+    moment = datetime.fromisoformat(base + ("+00:00" if zone in (None, "Z") else zone))
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def snapshot_inventory_fingerprint(client: Any, *, project: str, name: str) -> str:
     """Hash snapshot identities without persisting snapshot configuration or guest data."""
     metadata = _metadata(
@@ -128,8 +150,8 @@ def snapshot_inventory_fingerprint(client: Any, *, project: str, name: str) -> s
         inventory.append(
             {
                 "name": str(row["name"]),
-                "created_at": row.get("created_at"),
-                "expires_at": row.get("expires_at"),
+                "created_at": _whole_second(row.get("created_at")),
+                "expires_at": _whole_second(row.get("expires_at")),
                 "stateful": bool(row.get("stateful", False)),
             }
         )
@@ -527,6 +549,46 @@ def patch_instance_config(
     if _sync_success(response):
         return None
     _, operation_id = _operation(response, client)
+    return operation_id
+
+
+def replace_instance_devices(
+    client: Any,
+    *,
+    project: str,
+    name: str,
+    devices: dict[str, Any],
+    expected_devices: dict[str, Any],
+    config_updates: Optional[dict[str, str]] = None,
+) -> Optional[str]:
+    """Replace one instance's local devices, keeping everything else as it is.
+
+    A PATCH cannot remove a device, so this is a read then a PUT of the full writable record.
+    ``devices`` was computed from ``expected_devices``: the read here must still show exactly
+    those, and its ETag guards the PUT, so an edit made in between is refused, never reverted.
+    """
+    node = client.api.instances[safe_segment(name)]
+    response = node.get(params={"project": project})
+    current = _metadata(response)
+    if not isinstance(current, dict):
+        raise MigrationOperationUnknown(f"Instance '{name}' could not be read for a device update.")
+    if (current.get("devices") or {}) != expected_devices:
+        raise MigrationOperationUnknown(f"The devices of '{name}' changed before they could be updated.")
+    etag = (getattr(response, "headers", None) or {}).get("ETag")
+    if not etag:
+        raise MigrationOperationUnknown(f"Instance '{name}' answered without an ETag; nothing was written.")
+    body = {
+        key: current.get(key)
+        for key in ("architecture", "config", "description", "ephemeral", "profiles", "stateful")
+        if key in current
+    }
+    body["devices"] = devices
+    if config_updates:
+        body["config"] = {**(current.get("config") or {}), **config_updates}
+    result = node.put(json=body, params={"project": project}, headers={"If-Match": etag})
+    if _sync_success(result):
+        return None
+    _, operation_id = _operation(result, client)
     return operation_id
 
 

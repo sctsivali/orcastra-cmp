@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
-from app.models.migration_models import MigrationJob
+from app.models.db_models import OrganizationCluster, TenantAccessPolicy, TenantPolicyRule
+from app.models.migration_models import MigrationJob, MigrationResourceLock
 from app.models.migration_schemas import MigrationPlanCreateRequest
 from app.services.instance_security_policy import (
     InstanceSecurityPolicyViolation,
@@ -144,12 +144,10 @@ async def stale_target_access_blockers(
     source. A rule left over from an earlier instance with the target name would land on the
     restored source and grant tenants access they never had there.
     """
-    if (
-        organization_id is None
-        or _enum_value(request.scope) != "instance"
-        or _enum_value(request.intent) != "move"
-    ):
+    if organization_id is None or _enum_value(request.intent) != "move":
         return []
+    if _enum_value(request.scope) == "project":
+        return await _stale_project_rules(db, request)
     target_name = request.target.resource_name or request.source.resource_name
     source = (request.source.cluster_id, request.source.project, request.source.resource_name)
     if source == (request.target.cluster_id, request.target.project, target_name):
@@ -180,6 +178,125 @@ async def stale_target_access_blockers(
     ]
 
 
+async def _stale_project_rules(
+    db: AsyncSession, request: MigrationPlanCreateRequest
+) -> list[dict[str, str]]:
+    """A project relocation creates the target project, so no rule may name it yet."""
+    if (request.source.cluster_id, request.source.project) == (
+        request.target.cluster_id,
+        request.target.project,
+    ):
+        return []
+    count = await db.scalar(
+        select(func.count())
+        .select_from(TenantPolicyRule)
+        .where(
+            TenantPolicyRule.cluster_id == request.target.cluster_id,
+            TenantPolicyRule.project_name == request.target.project,
+        )
+    )
+    if not count:
+        return []
+    return [
+        _blocker(
+            "target_access_rules_exist",
+            f"Tenant access rules already name project '{request.target.project}' on the "
+            "target cluster. They would grant access to the relocated project.",
+            "Remove those rules in Tenant Access first, or choose another project name.",
+        )
+    ]
+
+
+async def project_job_inside(
+    db: AsyncSession, endpoints: list[tuple[str, str]], *, except_job: Optional[str] = None
+) -> Optional[tuple[str, str]]:
+    """(job_id, phase) of an active job that holds a lock in, or reads or writes, a project.
+
+    important: by its columns as well as its locks. A retained instance move keeps a lock on its
+    source only, yet its live target in the other project is still its rollback object (security
+    review, pass 2).
+    """
+    active = or_(MigrationJob.active_source_key.is_not(None), MigrationJob.active_target_key.is_not(None))
+    by_lock = or_(
+        *(
+            and_(MigrationResourceLock.cluster_id == cluster_id, MigrationResourceLock.project == project)
+            for cluster_id, project in endpoints
+        )
+    )
+    by_endpoint = or_(
+        *(
+            or_(
+                and_(MigrationJob.source_cluster_id == cluster_id, MigrationJob.source_project == project),
+                and_(MigrationJob.target_cluster_id == cluster_id, MigrationJob.target_project == project),
+            )
+            for cluster_id, project in endpoints
+        )
+    )
+    others = [MigrationJob.job_id != except_job] if except_job else []
+    for statement in (
+        select(MigrationJob.job_id, MigrationJob.phase).where(active, by_endpoint, *others).limit(1),
+        select(MigrationJob.job_id, MigrationJob.phase)
+        .join(MigrationResourceLock, MigrationResourceLock.job_id == MigrationJob.job_id)
+        .where(active, by_lock, *others)
+        .limit(1),
+    ):
+        row = (await db.execute(statement)).first()
+        if row is not None:
+            return str(row[0]), str(row[1])
+    return None
+
+
+async def project_lock_blockers(
+    db: AsyncSession, request: MigrationPlanCreateRequest
+) -> list[dict[str, str]]:
+    """Name another migration that still holds anything inside the source or target project.
+
+    important: a retained source of an earlier move is a stopped instance that only its own job
+    may touch. A project relocation would otherwise stop, copy, or delete it.
+    """
+    if _enum_value(request.scope) != "project":
+        return []
+    endpoints = sorted(
+        {
+            (request.source.cluster_id, request.source.project),
+            (request.target.cluster_id, request.target.project),
+        }
+    )
+    row = await project_job_inside(db, endpoints)
+    if row is None:
+        return []
+    retained = str(row[1]) in {"source_retained", "cleanup_due", "cleanup_blocked"}
+    return [
+        _blocker(
+            "project_in_active_migration",
+            (
+                "An instance in this project is still the retained source or target of an "
+                "earlier move."
+                if retained
+                else "Another migration is still running inside this project."
+            ),
+            (
+                "Finalize or roll back the earlier migration first."
+                if retained
+                else "Wait for the other migration to finish."
+            ),
+        )
+    ]
+
+
+async def single_owner_clusters(db: AsyncSession, *cluster_ids: str) -> bool:
+    """Whether every cluster is bound to exactly one organization."""
+    for cluster_id in set(cluster_ids):
+        count = await db.scalar(
+            select(func.count())
+            .select_from(OrganizationCluster)
+            .where(OrganizationCluster.cluster_id == cluster_id)
+        )
+        if count != 1:
+            return False
+    return True
+
+
 async def active_endpoint_blockers(
     db: AsyncSession, request: MigrationPlanCreateRequest
 ) -> list[dict[str, str]]:
@@ -193,12 +310,21 @@ async def active_endpoint_blockers(
     target_key = canonical_resource_key(
         scope, request.target.cluster_id, request.target.project, target_name
     )
+    # important: a project relocation keeps project keys active through its retention, while
+    # its new project holds no lock. Any plan touching either project would otherwise make an
+    # object the relocation's rollback later deletes another job's (security review).
+    keys = {
+        source_key,
+        target_key,
+        canonical_resource_key("project", request.source.cluster_id, request.source.project, None),
+        canonical_resource_key("project", request.target.cluster_id, request.target.project, None),
+    }
     statement = (
-        select(MigrationJob.job_id, MigrationJob.phase)
+        select(MigrationJob.job_id, MigrationJob.phase, MigrationJob.scope)
         .where(
             or_(
-                MigrationJob.active_source_key.in_((source_key, target_key)),
-                MigrationJob.active_target_key.in_((source_key, target_key)),
+                MigrationJob.active_source_key.in_(keys),
+                MigrationJob.active_target_key.in_(keys),
             )
         )
         .limit(1)
@@ -208,11 +334,16 @@ async def active_endpoint_blockers(
         return []
     phase = str(row[1])
     retained = phase in {"source_retained", "cleanup_due", "cleanup_blocked"}
+    project = str(row[2]) == "project"
     return [
         _blocker(
             "endpoint_in_active_migration",
             (
-                "This instance is still the retained source or target of an earlier move."
+                "This project is part of a project relocation that is still in retention."
+                if project and retained
+                else "This project is part of a project relocation that is still running."
+                if project
+                else "This instance is still the retained source or target of an earlier move."
                 if retained
                 else "Another migration is still running for this source or target."
             ),
@@ -229,5 +360,8 @@ __all__ = [
     "active_endpoint_blockers",
     "orcahub_blockers",
     "orcahub_managed_project",
+    "project_lock_blockers",
     "shared_policy_blockers",
+    "single_owner_clusters",
+    "stale_target_access_blockers",
 ]

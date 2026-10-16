@@ -83,8 +83,68 @@ def features_enabled(project: Optional[Mapping[str, Any]], feature: str) -> bool
     return str(_config(project).get(f"features.{feature}", "false")).strip().lower() == "true"
 
 
+# Project resource kinds and the feature that makes them the project's own. With the feature
+# off, LXD lists the default project's objects of that kind under the project.
+OWNED_KIND_FEATURE = {
+    "custom_volumes": ("storage.volumes", "custom storage volumes"),
+    "storage_buckets": ("storage.buckets", "storage buckets"),
+    "networks": ("networks", "managed networks"),
+    "network_acls": ("networks", "network ACLs"),
+    "network_address_sets": ("networks", "network address sets"),
+    "network_forwards": ("networks", "network forwards"),
+    "network_load_balancers": ("networks", "network load balancers"),
+    "network_zones": ("networks.zones", "network zones"),
+}
+
+
+def owned_rows(
+    record: Optional[Mapping[str, Any]], resources: Mapping[str, list[Any]]
+) -> dict[str, list[dict[str, Any]]]:
+    """The project's own objects per kind: what its features isolate, managed networks only."""
+    owned: dict[str, list[dict[str, Any]]] = {}
+    for kind, (feature, _label) in OWNED_KIND_FEATURE.items():
+        if not features_enabled(record, feature):
+            continue
+        rows = [row for row in resources.get(kind) or [] if isinstance(row, dict)]
+        if kind == "networks":
+            rows = [row for row in rows if row.get("managed")]
+        if rows:
+            owned[kind] = rows
+    placement = [row for row in resources.get("placement_groups") or [] if isinstance(row, dict)]
+    if placement:
+        owned["placement_groups"] = placement
+    return owned
+
+
+def disposable_images(
+    images: list[Mapping[str, Any]], instances: list[Mapping[str, Any]]
+) -> set[str]:
+    """Fingerprints of project images a relocation may leave behind and Finalize may delete.
+
+    A cached image qualifies, and so does an alias-less image an instance of the project was
+    created from (``volatile.base_image``): LXD stores those in a project with its own images,
+    sometimes without the cached flag (found live). Any other image was put there on purpose.
+    """
+    bases = {
+        str((instance.get("config") or {}).get("volatile.base_image") or "")
+        for instance in instances
+        if isinstance(instance, Mapping)
+    }
+    disposable: set[str] = set()
+    for image in images:
+        fingerprint = str(image.get("fingerprint") or "")
+        if not fingerprint:
+            continue
+        if image.get("cached") or (not image.get("aliases") and fingerprint in bases):
+            disposable.add(fingerprint)
+    return disposable
+
+
 __all__ = [
     "MIGRATION_JOB_MARKER",
+    "OWNED_KIND_FEATURE",
+    "disposable_images",
+    "owned_rows",
     "clone_config",
     "created_by_job",
     "features_enabled",

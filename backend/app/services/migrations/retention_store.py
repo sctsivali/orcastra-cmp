@@ -159,13 +159,17 @@ async def refence_target_for_rollback(db: AsyncSession, job: MigrationJob) -> No
     """Fence the target again before rollback stops and deletes it (caller commits)."""
     target = target_identity(job)
     key = canonical_resource_key("instance", target.cluster_id, target.project, target.name)
-    present = (
+    owner = (
         await db.execute(
-            select(MigrationResourceLock.id).where(MigrationResourceLock.lock_key == key)
+            select(MigrationResourceLock.job_id).where(MigrationResourceLock.lock_key == key)
         )
-    ).first()
-    if present is not None:
+    ).scalar_one_or_none()
+    if owner == job.job_id:
         return
+    if owner is not None:
+        # important: another job retains or works on this instance now; deleting it would
+        # destroy that job's rollback point (security review, pass 2).
+        raise RepositoryConflict("Another migration holds the target instance. Finish it first.")
     await db.execute(
         insert(MigrationResourceLock).values(
             job_id=job.job_id,
@@ -268,7 +272,11 @@ async def schedule_due_cleanups(db: AsyncSession, *, automatic: bool) -> int:
                 locked_by=None,
                 lease_expires_at=None,
                 safe_result=sanitize_payload(
-                    {**(job.safe_result or {}), "cleanup_trigger": "retention_expired"}
+                    {
+                        **(job.safe_result or {}),
+                        "cleanup_trigger": "retention_expired",
+                        "recovery_kind": "cleanup",
+                    }
                 ),
             )
             message = "The retention window ended. The retained source will be deleted."

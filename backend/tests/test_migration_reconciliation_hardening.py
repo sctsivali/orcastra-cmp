@@ -900,7 +900,7 @@ async def test_claimed_copy_rejects_a_stale_checkpoint_plan_before_daemon_access
     [
         ("copy", "same_cluster_copy", "instance", True),
         ("move", "member_relocation", "instance", True),
-        ("move", "member_relocation", "project", False),
+        ("move", "project_relocation", "project", True),
     ],
 )
 async def test_invalid_contract_after_submission_keeps_resource_locks(

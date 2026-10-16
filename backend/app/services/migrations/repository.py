@@ -524,6 +524,10 @@ async def enqueue_event(
             status="pending",
         )
     )
+    # important: sessions run with autoflush off, so the next event on this channel in the same
+    # transaction would read the same max sequence and collide (found live: a project emits one
+    # webhook per instance in its retention transaction).
+    await db.flush()
 
 
 async def create_job(

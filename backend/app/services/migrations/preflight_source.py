@@ -9,8 +9,8 @@ from __future__ import annotations
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-_HARDWARE_DEVICES = {"gpu", "pci", "usb", "unix-block", "unix-char", "unix-hotplug", "infiniband"}
-_ALLOWED_DEVICES = {"disk", "nic", "none", "tpm"}
+HARDWARE_DEVICES = {"gpu", "pci", "usb", "unix-block", "unix-char", "unix-hotplug", "infiniband"}
+ALLOWED_DEVICES = {"disk", "nic", "none", "tpm"}
 _INSTANCE_ROOTS = {"instances", "containers", "virtual-machines"}
 
 
@@ -74,7 +74,7 @@ def device_findings(result: Any, instance: dict[str, Any], name: str, intent: st
             result.block("invalid_device", f"Instance '{name}' has invalid device '{device_name}'.")
             continue
         device_type = str(device.get("type") or "")
-        if device_type in _HARDWARE_DEVICES:
+        if device_type in HARDWARE_DEVICES:
             result.block(
                 "unsupported_device",
                 f"Instance '{name}' uses host hardware device '{device_name}' ({device_type}).",
@@ -86,7 +86,7 @@ def device_findings(result: Any, instance: dict[str, Any], name: str, intent: st
                 f"Instance '{name}' has proxy device '{device_name}', which binds host ports.",
                 "Remove the proxy device and recreate it on the target after migration.",
             )
-        elif device_type not in _ALLOWED_DEVICES:
+        elif device_type not in ALLOWED_DEVICES:
             result.block(
                 "unknown_or_unsupported_device",
                 f"Instance '{name}' uses unapproved device type '{device_type or 'unknown'}'.",

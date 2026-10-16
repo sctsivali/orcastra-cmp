@@ -245,7 +245,7 @@ class Settings(BaseSettings):
         description="Enable new Migration Center plan creation and job execution.",
     )
     project_relocation_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="PROJECT_RELOCATION_ENABLED",
         description="Master gate for every project-scope relocation stage.",
     )
@@ -260,14 +260,17 @@ class Settings(BaseSettings):
         description="Enable staged instance move execution after durable copy is validated.",
     )
     migration_project_member_relocation_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MIGRATION_PROJECT_MEMBER_RELOCATION_ENABLED",
         description="Enable whole-project workload relocation between members of one cluster.",
     )
     migration_project_cross_cluster_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MIGRATION_PROJECT_CROSS_CLUSTER_ENABLED",
-        description="Enable whole-project staged relocation between clusters.",
+        description=(
+            "Enable whole-project staged relocation: to another cluster, or under a new name on "
+            "the same cluster."
+        ),
     )
     migration_plan_ttl_seconds: int = Field(
         default=900,
@@ -343,6 +346,13 @@ class Settings(BaseSettings):
         le=900,
         alias="MIGRATION_DEFAULT_STOP_TIMEOUT_SECONDS",
         description="Graceful stop budget for a running source before the transfer.",
+    )
+    migration_project_max_instances: int = Field(
+        default=25,
+        ge=1,
+        le=200,
+        alias="MIGRATION_PROJECT_MAX_INSTANCES",
+        description="Most instances one project relocation moves. Larger projects move in parts.",
     )
     migration_orcahub_identity_change_enabled: bool = Field(
         default=False,

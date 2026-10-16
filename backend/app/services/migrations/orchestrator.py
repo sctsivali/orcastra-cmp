@@ -8,7 +8,6 @@ from .context import (
     _job_plan,
     _resource_update,
     _resources,
-    _wait_for_cutover,
 )
 from .contracts import (
     MigrationAuthorityError,
@@ -72,7 +71,6 @@ __all__ = [
     "_schedule",
     "_target_pool",
     "_transfer_resources",
-    "_wait_for_cutover",
     "_worker_fence",
     "drain_migration_audits",
     "recover_migration_jobs",

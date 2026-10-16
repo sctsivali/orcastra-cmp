@@ -184,7 +184,7 @@ def nic_key(device: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _apply_nic_target(device: Mapping[str, Any], target_key: str) -> dict[str, Any]:
+def apply_nic_target(device: Mapping[str, Any], target_key: str) -> dict[str, Any]:
     mapped = dict(device)
     if target_key.startswith(PARENT_PREFIX):
         mapped.pop("network", None)
@@ -255,7 +255,7 @@ def build_contract(
         inherited = name not in source_local_devices
         target_profile_nic = profile_devices.get(name)
         if mapped and mapped in usable:
-            desired_devices[name] = _apply_nic_target(device, mapped)
+            desired_devices[name] = apply_nic_target(device, mapped)
             nic_decisions.append(NicDecision(name, key, mapped, "mapping"))
         elif mapped:
             # important: a mapping may only name a network the target project can use. Anything
@@ -370,6 +370,8 @@ def effective_root_pool(instance: Mapping[str, Any]) -> Optional[str]:
 
 __all__ = [
     "NicDecision",
+    "PARENT_PREFIX",
+    "apply_nic_target",
     "preserved_identity_config",
     "TargetContract",
     "build_contract",

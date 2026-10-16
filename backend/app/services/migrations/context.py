@@ -259,15 +259,3 @@ async def _fresh_worker_preflight(
             }
         )
     return report
-
-
-async def _wait_for_cutover(job: MigrationJob, worker_id: str) -> None:
-    await _fenced_job_update(
-        job,
-        worker_id,
-        phase="cutover_pending",
-        status="waiting",
-        locked_by=None,
-        lease_expires_at=None,
-        event_message="Preflight passed. Migration is waiting for cutover approval.",
-    )

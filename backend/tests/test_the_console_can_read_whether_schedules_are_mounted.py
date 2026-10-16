@@ -65,10 +65,11 @@ def test_migration_rollout_capabilities_are_explicit_with_instance_stages_on() -
     assert settings.migration_recovery_actions_enabled is True
     assert settings.migration_auto_cleanup_enabled is True
     assert settings.migration_running_source_enabled is True
-    # Project-scope relocation is not released yet.
-    assert settings.project_relocation_enabled is False
-    assert settings.migration_project_member_relocation_enabled is False
-    assert settings.migration_project_cross_cluster_enabled is False
+    # Project relocation is released too, behind its own master gate and two stage flags.
+    assert settings.project_relocation_enabled is True
+    assert settings.migration_project_member_relocation_enabled is True
+    assert settings.migration_project_cross_cluster_enabled is True
+    assert settings.migration_project_max_instances == 25
     # OrcaHub-provisioned projects keep their identity until OrcaHub accepts a move event.
     assert settings.migration_orcahub_identity_change_enabled is False
 

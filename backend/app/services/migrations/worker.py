@@ -21,7 +21,6 @@ from .context import (
     _fresh_worker_preflight,
     _job_plan,
     _resources,
-    _wait_for_cutover,
 )
 from .contracts import (
     MigrationAuthorityError,
@@ -221,33 +220,26 @@ async def _run_claimed(
             event_message="Execution stopped at the copy checkpoint contract gate.",
         )
         return
-    if getattr(job, "strategy", None) == "member_relocation" and (
-        checkpoint_requested or getattr(job, "scope", None) == "project"
+    if checkpoint_requested and (
+        getattr(job, "strategy", None) == "member_relocation"
+        or getattr(job, "scope", None) == "project"
     ):
-        code = (
-            "member_relocation_checkpoint_unrecoverable"
-            if checkpoint_requested
-            else "project_member_relocation_recovery_unavailable"
-        )
-        message = (
-            "Member relocation cannot create a checkpoint because this release has no "
-            "reachable restore or cleanup path for that snapshot."
-            if checkpoint_requested
-            else "Project member relocation is blocked until partial relocation can be "
-            "reversed inside the original locked job."
-        )
         await stop_at_contract_gate(
-            code=code,
-            message=message,
-            remediation=(
-                "Disable checkpoints for single-instance member relocation."
-                if checkpoint_requested
-                else "Move one instance at a time after verifying target capacity."
+            code="member_relocation_checkpoint_unrecoverable",
+            message=(
+                "This migration cannot create a checkpoint because this release has no "
+                "reachable restore or cleanup path for that snapshot."
             ),
-            event_message="Execution stopped at the member relocation recovery gate.",
+            remediation="Disable the checkpoint and create a new plan.",
+            event_message="Execution stopped at the checkpoint contract gate.",
         )
         return
     source_client, target_client = await _authoritative_clients(job)
+    if getattr(job, "scope", None) == "project":
+        # Project runners read daemon state before every write, so each one resumes any of
+        # its phases directly. The instance reconciliation path never sees a project job.
+        await _run_project(job, worker_id, source_client, target_client)
+        return
     if job.phase == "cleaning_up":
         await run_cleanup(job, worker_id, source_client, target_client)
         return
@@ -293,9 +285,6 @@ async def _run_claimed(
                 event_message="Execution stopped because fresh preflight found blockers.",
             )
             return
-        if job.intent == "move" and job.scope == "project":
-            await _wait_for_cutover(job, worker_id)
-            return
         await _perform_copy_or_cutover(
             job, worker_id, source_client, target_client
         )
@@ -316,6 +305,49 @@ async def _run_claimed(
         await _reconcile(job, worker_id, source_client, target_client)
     elif job.phase in {"unknown", "reconciling", "manual_recovery"} or job.status == "unknown":
         await _reconcile(job, worker_id, source_client, target_client)
+
+
+async def _run_project(
+    job: MigrationJob, worker_id: str, source_client: Any, target_client: Any
+) -> None:
+    from .project_cleanup import run_project_cleanup
+    from .project_member_relocation import relocate_members
+    from .project_relocation import advance
+    from .project_rollback import run_project_abort, run_project_rollback
+
+    kind = (job.safe_result or {}).get("recovery_kind")
+    if job.phase in {"reconciling", "unknown", "manual_recovery"} and kind in {
+        "abort",
+        "rollback",
+        "revert",
+        "cleanup",
+    }:
+        # A recheck after a recovery runner stopped resumes that runner, never the forward path.
+        job.phase = "cleaning_up" if kind == "cleanup" else "rolling_back"
+    if job.strategy == "member_relocation" and job.phase != "preparing_recovery":
+        # Same identities throughout: the runner moves workloads forward or back by itself.
+        await relocate_members(job, worker_id, source_client)
+    elif job.phase == "cleaning_up":
+        await run_project_cleanup(job, worker_id, source_client, target_client)
+    elif job.phase == "rolling_back":
+        if (job.safe_result or {}).get("recovery_kind") == "abort":
+            await run_project_abort(job, worker_id, source_client, target_client)
+        else:
+            await run_project_rollback(job, worker_id, source_client, target_client)
+    elif job.phase == "preparing_recovery":
+        await _fenced_job_update(
+            job,
+            worker_id,
+            phase="manual_recovery",
+            status="manual_recovery",
+            locked_by=None,
+            lease_expires_at=None,
+            error_code="checkpoint_restore_unsupported",
+            error_message="Checkpoint restore is not offered. Roll back the retained source instead.",
+            event_message="A checkpoint restore request was refused.",
+        )
+    else:
+        await advance(job, worker_id, source_client, target_client)
 
 
 async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> None:
@@ -379,8 +411,10 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
             error_code="operation_outcome_unknown",
             error_message=sanitize_error(exc),
         )
-        if job.phase in _RECOVERY_PHASES and values.get("status") == "unknown":
-            # Keep the recovery phase so the retry resumes the same convergent runner.
+        if values.get("status") == "unknown" and (
+            job.phase in _RECOVERY_PHASES or job.scope == "project"
+        ):
+            # Keep the phase so the retry resumes the same convergent runner.
             values["phase"] = job.phase
         await _fenced_job_update(
             job,
