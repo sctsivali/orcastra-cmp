@@ -460,7 +460,7 @@ test("project relocation actions explain why they are unavailable", async ({ pag
   });
 
   await authenticate(page.context(), "partner");
-  const api = await installMigrationFixtures(page, "partner", { settingsGate });
+  const api = await installMigrationFixtures(page, "partner", { settingsGate, projectRelocationEnabled: false });
 
   await page.goto("/inventory");
   const projectCard = page.locator('[data-slot="project-card"]').filter({ hasText: "default" });
@@ -497,10 +497,77 @@ test("an enabled project relocation opens the wizard at the project source", asy
   await workloads.click();
 
   await expect(page).toHaveURL(/\bmode=member\b/);
-  await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the source" })).toBeVisible();
-  await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
-  await choose(page, "Destination member (optional)", "member-a2");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  await expect(dialog.getByLabel("Relocation", { exact: true })).toContainText("Move Workloads to Another Member");
+  // A project is relocated, never copied.
+  await dialog.getByLabel("Intent", { exact: true }).click();
+  await expect(page.getByRole("option", { name: "Copy" })).toHaveAttribute("aria-disabled", "true");
+  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the destination" })).toBeVisible();
+  // The member is the whole destination here, so Continue waits for it.
+  await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled();
+  await choose(page, "Destination member", "member-a2");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect.poll(() => api.createdBodies.length).toBe(1);
+  expect(api.createdBodies[0]).toMatchObject({
+    scope: "project",
+    intent: "move",
+    source: { cluster_id: "cluster-a", project: "default" },
+    target: { cluster_id: "cluster-a", project: "default", member: "member-a2" },
+  });
+  await expectCleanMigrationHarness(api);
+});
+
+test("relocating a project to another cluster names a new project and refuses an existing one", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner");
+
+  await page.goto("/inventory/migrations?new=1&scope=project&source_cluster=cluster-a&source_project=default&mode=cluster");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Relocation", { exact: true })).toContainText("Move Project to Another Cluster");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the destination" })).toBeVisible();
+  // The source cluster is offered but cannot be chosen: renaming covers that case.
+  await dialog.getByLabel("Destination cluster", { exact: true }).click();
+  await expect(page.getByRole("option", { name: /cluster-a/i })).toHaveAttribute("aria-disabled", "true");
+  await page.getByRole("option", { name: /cluster-b/i }).click();
+  const name = dialog.getByLabel("Project name on the destination", { exact: true });
+  await expect(name).toHaveValue("default");
+  await name.fill("target-project");
+  await expect(dialog.getByText("already exists there", { exact: false })).toBeVisible();
+  await expect(name).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled();
+  await name.fill("web-relocated");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("project-relocation-destination.png"), fullPage: true });
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect.poll(() => api.createdBodies.length).toBe(1);
+  expect(api.createdBodies[0]).toMatchObject({
+    scope: "project",
+    source: { cluster_id: "cluster-a", project: "default" },
+    target: { cluster_id: "cluster-b", project: "web-relocated" },
+  });
+  await expectCleanMigrationHarness(api);
+});
+
+test("renaming a project stays on its cluster and needs a different name", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner");
+
+  await page.goto("/inventory/migrations?new=1&scope=project&source_cluster=cluster-a&source_project=default&mode=rename");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Relocation", { exact: true })).toContainText("Rename Project on This Cluster");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  const name = dialog.getByLabel("New project name", { exact: true });
+  await name.fill("default");
+  await expect(dialog.getByText("Choose a name other than the current one.")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled();
+  await name.fill("default-v2");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect.poll(() => api.createdBodies.length).toBe(1);
+  expect(api.createdBodies[0].target).toMatchObject({ cluster_id: "cluster-a", project: "default-v2" });
   await expectCleanMigrationHarness(api);
 });
 
@@ -576,7 +643,7 @@ test("job detail shows retention, offers Finalize and Roll Back, and keeps stale
   await closeDialog(page);
 
   await page.getByRole("button", { name: "blocked-vm", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Source cleanup is blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cleanup or rollback is blocked" })).toBeVisible();
   await closeDialog(page);
 
   await page.getByRole("button", { name: "retained-vm", exact: true }).click();
