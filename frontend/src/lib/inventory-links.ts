@@ -116,7 +116,7 @@ export type MigrationLink =
       sourceCluster: string;
       sourceProject: string;
       resourceName?: string | null;
-      mode?: "member" | "cluster" | null;
+      mode?: "member" | "cluster" | "rename" | null;
       intent?: "copy" | "move" | null;
       sourceMember?: string | null;
     };

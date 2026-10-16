@@ -27,6 +27,7 @@ import {
   initialMigrationDraft,
   isSameLocation,
   parseRetention,
+  projectDestinationProblem,
   type MigrationDraftState,
   type MigrationWizardSeed,
 } from "./migration-wizard-model";
@@ -53,9 +54,11 @@ const DRAFT_PLAN_KEYS: ReadonlyArray<keyof MigrationDraftState> = [
 
 function rolloutReason(draft: MigrationDraftState, rollout: MigrationRollout): string | undefined {
   if (draft.scope === "project") {
-    const memberMove = draft.targetCluster === draft.sourceCluster && draft.targetProject === draft.sourceProject;
+    const memberMove = draft.projectMode === "member";
     const enabled = memberMove ? rollout.projectMemberRelocationEnabled : rollout.projectCrossClusterEnabled;
-    return enabled === true ? undefined : "Whole-project relocation is not available on this deployment yet";
+    return enabled === true
+      ? undefined
+      : `${memberMove ? "Relocate Workloads" : "Relocate Project"} is turned off on this deployment`;
   }
   if (draft.intent === "copy" && rollout.durableCopyEnabled === false) {
     return "Copy Instance is turned off on this deployment";
@@ -196,11 +199,16 @@ export function useMigrationWizard({
     !!draft.sourceProject.trim() &&
     (draft.scope === "project" || (!!draft.resourceName.trim() && !!sourceInstance));
   const sameLocation = isSameLocation(draft);
+  const targetProjects = (projectQuery.data ?? [])
+    .filter((entry) => entry.host === draft.targetCluster)
+    .flatMap((entry) => entry.projects.map((project) => project.name));
   const destinationValid =
-    !!draft.targetCluster &&
-    LXD_NAME_PATTERN.test(draft.targetProject.trim()) &&
-    (draft.scope === "project" || LXD_NAME_PATTERN.test(draft.targetResourceName.trim())) &&
-    !sameLocation;
+    draft.scope === "project"
+      ? !projectDestinationProblem(draft, draft.projectMode === "member" ? [] : targetProjects)
+      : !!draft.targetCluster &&
+        LXD_NAME_PATTERN.test(draft.targetProject.trim()) &&
+        LXD_NAME_PATTERN.test(draft.targetResourceName.trim()) &&
+        !sameLocation;
   const rolloutDisabledReason = rolloutReason(draft, rollout);
   const expired = plan ? Date.parse(plan.expires_at) <= Date.now() : false;
   const retentionValid = parseRetention(draft.retentionInput) !== null;

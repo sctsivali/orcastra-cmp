@@ -98,6 +98,14 @@ export function findingRemediation(finding: MigrationIssue): string | null {
   return finding.remediation ?? null;
 }
 
+/** What an operator would call the job: a project relocation is not a "move project". */
+export function operationLabel(job: Pick<MigrationJob, "intent" | "scope" | "strategy">): string {
+  if (job.scope === "project") {
+    return job.strategy === "member_relocation" ? "Relocate Workloads" : "Relocate Project";
+  }
+  return `${job.intent === "copy" ? "Copy" : "Move"} Instance`;
+}
+
 export function endpointLabel(endpoint: MigrationEndpointRef): string {
   const resource = endpoint.resource_name ? `/${endpoint.resource_name}` : "";
   return `${endpoint.cluster_id}/${endpoint.project}${resource}`;
@@ -152,16 +160,21 @@ export function jobProgress(job: Pick<MigrationJob, "resources">): number | null
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
-/** Value-free target contract summaries, one per planned instance, keyed by source name. */
+/**
+ * Value-free contract summaries keyed by display name: one per planned instance, and one per
+ * profile a project relocation clones, since a profile NIC is mapped the same way.
+ */
 export function planContracts(
   resources: MigrationPlannedResource[],
 ): Array<{ name: string; contract: MigrationContractSummary }> {
   return resources.flatMap((resource) => {
     const contract = resource.target?.contract;
-    if (resource.resource_type !== "instance" || !contract || typeof contract !== "object" || Array.isArray(contract)) {
+    const kind = resource.resource_type;
+    if ((kind !== "instance" && kind !== "profile") || !contract || typeof contract !== "object" || Array.isArray(contract)) {
       return [];
     }
-    return [{ name: resourceName(resource), contract: contract as unknown as MigrationContractSummary }];
+    const name = kind === "profile" ? `profile ${resourceName(resource)}` : resourceName(resource);
+    return [{ name, contract: contract as unknown as MigrationContractSummary }];
   });
 }
 

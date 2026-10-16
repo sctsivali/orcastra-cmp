@@ -77,7 +77,7 @@ export function MigrationNetworkMapping({
       {rows.map(({ instance, decision }) => {
         const mapped = mappings[decision.source];
         const needsMapping = decision.via === "unmapped" && !mapped;
-        const selectId = `network-map-${instance}-${decision.device}`;
+        const selectId = `network-map-${instance}-${decision.device}`.replace(/[^A-Za-z0-9_-]/g, "-");
         return (
           <li
             key={`${instance}:${decision.device}`}

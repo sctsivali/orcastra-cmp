@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 import type { ClusterMember, ProjectListResponse, StoragePoolInfo } from "@/types/api";
 import { emptyMigrationMappings } from "@/types/migrations";
+import { MigrationProjectDestination } from "./migration-project-destination";
 import { LXD_NAME_PATTERN, isSameLocation, type MigrationDraftState } from "./migration-wizard-model";
 
 const NEW_PROJECT = "__new__";
@@ -55,7 +56,7 @@ export function MigrationDestinationForm({
   ];
   const sameLocation = isSameLocation(draft);
   const projectNameValid = LXD_NAME_PATTERN.test(draft.targetProject);
-  const resourceNameValid = draft.scope === "project" || LXD_NAME_PATTERN.test(draft.targetResourceName);
+  const resourceNameValid = LXD_NAME_PATTERN.test(draft.targetResourceName);
   const showMembers = targetMembers.length > 1;
   const memberOptions = [
     { value: AUTO_MEMBER, label: "Automatic Placement" },
@@ -72,6 +73,45 @@ export function MigrationDestinationForm({
     { value: DEFAULT_POOL, label: "Same Pool or Project Default" },
     ...targetPools.map((pool) => ({ value: pool.name, label: pool.name, sublabel: `${pool.driver} · ${pool.status}` })),
   ];
+
+  const notices = (
+    <>
+      {inventoryError && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" aria-hidden />
+          <AlertTitle>Destination inventory is incomplete</AlertTitle>
+          <AlertDescription>{inventoryError}</AlertDescription>
+        </Alert>
+      )}
+
+      <Alert>
+        <Info className="h-4 w-4" aria-hidden />
+        <AlertTitle>Preflight checks the destination</AlertTitle>
+        <AlertDescription>
+          Ownership, daemon version, capacity, quotas, project restrictions, networks, and name
+          conflicts are verified by the server before anything changes.
+        </AlertDescription>
+      </Alert>
+    </>
+  );
+
+  if (draft.scope === "project") {
+    return (
+      <div className="space-y-4">
+        <MigrationProjectDestination
+          draft={draft}
+          onChange={onChange}
+          clusterOptions={clusterOptions}
+          existingProjects={existingProjects}
+          targetMembers={targetMembers}
+          targetPools={targetPools}
+          inventoryLoading={inventoryLoading}
+          resourceLoading={resourceLoading}
+        />
+        {notices}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -135,21 +175,19 @@ export function MigrationDestinationForm({
         </div>
       </div>
 
-      {draft.scope === "instance" && (
-        <div className="space-y-2">
-          <Label htmlFor="migration-target-resource">Destination instance name</Label>
-          <Input
-            id="migration-target-resource"
-            value={draft.targetResourceName}
-            onChange={(event) => onChange({ targetResourceName: event.target.value })}
-            autoComplete="off"
-            aria-invalid={draft.targetResourceName.length > 0 && !resourceNameValid}
-          />
-          {draft.targetResourceName.length > 0 && !resourceNameValid && (
-            <p className="text-xs text-destructive">{NAME_RULE}</p>
-          )}
-        </div>
-      )}
+      <div className="space-y-2">
+        <Label htmlFor="migration-target-resource">Destination instance name</Label>
+        <Input
+          id="migration-target-resource"
+          value={draft.targetResourceName}
+          onChange={(event) => onChange({ targetResourceName: event.target.value })}
+          autoComplete="off"
+          aria-invalid={draft.targetResourceName.length > 0 && !resourceNameValid}
+        />
+        {draft.targetResourceName.length > 0 && !resourceNameValid && (
+          <p className="text-xs text-destructive">{NAME_RULE}</p>
+        )}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         {showMembers && (
@@ -195,22 +233,7 @@ export function MigrationDestinationForm({
         </Alert>
       )}
 
-      {inventoryError && (
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" aria-hidden />
-          <AlertTitle>Destination inventory is incomplete</AlertTitle>
-          <AlertDescription>{inventoryError}</AlertDescription>
-        </Alert>
-      )}
-
-      <Alert>
-        <Info className="h-4 w-4" aria-hidden />
-        <AlertTitle>Preflight checks the destination</AlertTitle>
-        <AlertDescription>
-          Ownership, daemon version, capacity, quotas, project restrictions, networks, and name
-          conflicts are verified by the server before anything changes.
-        </AlertDescription>
-      </Alert>
+      {notices}
     </div>
   );
 }

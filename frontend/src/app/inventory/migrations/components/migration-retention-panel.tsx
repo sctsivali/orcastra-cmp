@@ -20,6 +20,8 @@ export function MigrationRetentionPanel({
   }
   const expired = left !== null && left <= 0;
   const automatic = autoCleanupEnabled === true;
+  const source = job.strategy === "project_relocation" ? "source project" : "source";
+  const target = job.strategy === "project_relocation" ? "new project" : "new instance";
   return (
     <section className="space-y-2 rounded-md border p-3" aria-labelledby="migration-retention-title">
       <div className="flex items-center gap-2">
@@ -44,10 +46,10 @@ export function MigrationRetentionPanel({
       </div>
       <p className="text-xs text-muted-foreground">
         {job.phase === "cleanup_blocked"
-          ? "Automatic cleanup stopped because a safety check failed. Nothing was deleted. Roll back, retry Finalize after the cause is fixed, or ask an administrator to release the job."
+          ? "A safety check stopped the last cleanup or rollback, and nothing was deleted. Roll back, retry Finalize after the cause is fixed, or ask an administrator to release the job."
           : automatic
-            ? "When retention ends, Orcastra checks that the source is unchanged and the new instance is healthy, then deletes the source. Finalize deletes it now. Rollback restores it."
-            : "When retention ends, Finalize deletes the source. Rollback restores it until then."}
+            ? `When retention ends, Orcastra checks that the ${source} is unchanged and the ${target} is healthy, then deletes the ${source}. Finalize deletes it now. Rollback restores it.`
+            : `When retention ends, Finalize deletes the ${source}. Rollback restores it until then.`}
       </p>
     </section>
   );

@@ -84,7 +84,9 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
           <div className="flex flex-wrap items-start justify-between gap-3 pr-6">
             <div className="min-w-0">
               <DialogTitle>
-                {job ? `${formatLabel(job.intent)} ${job.source.resource_name || job.source.project}` : "Migration Details"}
+                {job
+                  ? `${job.scope === "project" ? "Relocate" : formatLabel(job.intent)} ${job.source.resource_name || job.source.project}`
+                  : "Migration Details"}
               </DialogTitle>
               <DialogDescription>
                 Durable migration state, authoritative resource evidence, and available operator actions.
@@ -151,10 +153,11 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
               {job.phase === "cleanup_blocked" && (
                 <Alert variant="destructive">
                   <AlertTriangle className="h-4 w-4" aria-hidden />
-                  <AlertTitle>Source cleanup is blocked</AlertTitle>
+                  <AlertTitle>Cleanup or rollback is blocked</AlertTitle>
                   <AlertDescription>
-                    The source changed during retention or the new instance failed its health
-                    check, so nothing was deleted. The reason is shown below.
+                    {job.scope === "project"
+                      ? "A project changed during retention or a new instance failed its health check, so nothing was deleted. The reason is shown below."
+                      : "The source changed during retention or the new instance failed its health check, so nothing was deleted. The reason is shown below."}
                   </AlertDescription>
                 </Alert>
               )}
@@ -207,6 +210,8 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                   </div>
 
                   <MigrationRetentionPanel job={job} autoCleanupEnabled={autoCleanupEnabled} />
+
+                  {job.scope === "project" && <ProjectProgress job={job} />}
 
                   {overallProgress !== null && (
                     <div className="space-y-2 rounded-md border p-3">
@@ -290,6 +295,21 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
         />
       )}
     </Dialog>
+  );
+}
+
+/** How far a project job got, counted by instance: transferred, then running where it ran. */
+function ProjectProgress({ job }: { job: MigrationJob }) {
+  const instances = (job.resources ?? []).filter((resource) => resource.resource_type === "instance");
+  if (!instances.length) return null;
+  const done = instances.filter((resource) =>
+    ["ready", "cutting_over", "retained", "completed"].includes(resource.state),
+  ).length;
+  const verb = job.strategy === "member_relocation" ? "moved" : "transferred";
+  return (
+    <p className="text-sm text-muted-foreground" aria-live="polite">
+      {done} of {instances.length} instance{instances.length === 1 ? "" : "s"} {verb}
+    </p>
   );
 }
 

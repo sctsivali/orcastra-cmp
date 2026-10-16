@@ -24,7 +24,9 @@ import { endpointLabel, migrationInView, type MigrationView } from "./migration-
 import { MigrationJobDialog } from "./migration-job-dialog";
 import { MigrationJobTable } from "./migration-job-table";
 import { MigrationWizard } from "./migration-wizard";
-import type { MigrationWizardSeed } from "./migration-wizard-model";
+import type { MigrationWizardSeed, ProjectRelocationMode } from "./migration-wizard-model";
+
+const PROJECT_MODES: readonly ProjectRelocationMode[] = ["member", "cluster", "rename"];
 
 type CenterView = MigrationView | "drafts";
 
@@ -86,7 +88,7 @@ function MigrationCenterContent() {
       sourceProject: searchParams.get("source_project") || undefined,
       resourceName: searchParams.get("resource_name") || undefined,
       sourceMember: searchParams.get("source_member") || undefined,
-      mode: searchParams.get("mode") === "member" ? "member" : searchParams.get("mode") === "cluster" ? "cluster" : undefined,
+      mode: PROJECT_MODES.find((mode) => mode === searchParams.get("mode")),
     };
   }, [searchParams]);
 

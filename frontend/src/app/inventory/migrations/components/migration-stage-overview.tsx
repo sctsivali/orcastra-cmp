@@ -15,20 +15,37 @@ const STRATEGY_LABEL: Record<string, string> = {
   same_cluster_copy: "Copy inside the cluster",
   cross_cluster_pull: "Transfer between clusters",
   member_relocation: "Relocate to another member",
+  project_relocation: "Recreate the project and transfer its instances",
 };
 
 function recoverySummary(plan: MigrationPlan): string {
   if (plan.intent === "copy") return "Source stays as it is";
-  if (plan.strategy === "member_relocation") return "Same instance, relocated";
+  if (plan.strategy === "member_relocation") {
+    return plan.scope === "project" ? "Same instances, moved back on failure" : "Same instance, relocated";
+  }
   const hours = plan.rollback_contract?.retention_hours;
   const automatic = plan.rollback_contract?.automatic_cleanup === true;
-  return `Source kept ${typeof hours === "number" ? hours : plan.retention_hours} hours${
+  return `Source${plan.scope === "project" ? " project" : ""} kept ${typeof hours === "number" ? hours : plan.retention_hours} hours${
     automatic ? ", then deleted" : ", then Finalize"
   }`;
 }
 
 export function RunningSourceNotice({ plan }: { plan: MigrationPlan }) {
   if (!planHasRunningSource(plan.resources ?? [])) return null;
+  if (plan.scope === "project") {
+    const rolling = plan.strategy === "member_relocation";
+    return (
+      <Alert>
+        <Power className="h-4 w-4" aria-hidden />
+        <AlertTitle>Running instances will be stopped</AlertTitle>
+        <AlertDescription>
+          {rolling
+            ? "Each running instance is shut down gracefully, moved, and started again before the next one, so one workload at a time is offline. Live migration is not used."
+            : "Every running instance is shut down gracefully, and the new ones start once all of them are transferred and verified, in boot priority order. The project is offline for the whole transfer. Live migration is not used."}
+        </AlertDescription>
+      </Alert>
+    );
+  }
   const target = plan.intent === "move" ? "The target is started once it is verified." : "The source is started again when the copy is verified.";
   return (
     <Alert>
@@ -113,10 +130,21 @@ export function MigrationStagePreflight({ plan }: { plan: MigrationPlan }) {
       {plan.strategy === "member_relocation" && (
         <Alert>
           <Info className="h-4 w-4" aria-hidden />
-          <AlertTitle>The instance keeps its identity</AlertTitle>
+          <AlertTitle>{plan.scope === "project" ? "The instances keep their identity" : "The instance keeps its identity"}</AlertTitle>
           <AlertDescription>
-            Member relocation moves the same instance to another server of the cluster. Its
-            name, project, tags, and access rules do not change.
+            Member relocation moves the same {plan.scope === "project" ? "instances" : "instance"} to
+            another server of the cluster. Names, project, tags, and access rules do not change.
+          </AlertDescription>
+        </Alert>
+      )}
+      {plan.strategy === "project_relocation" && (
+        <Alert>
+          <Info className="h-4 w-4" aria-hidden />
+          <AlertTitle>The project gets a new identity</AlertTitle>
+          <AlertDescription>
+            The new project is created with the source project&apos;s settings and every profile.
+            Its tags and the access rules naming it, and each instance&apos;s tags, schedules, and
+            rules, follow it at cutover.
           </AlertDescription>
         </Alert>
       )}

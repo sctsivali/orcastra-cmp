@@ -5,6 +5,9 @@ import type {
 } from "@/types/migrations";
 import { emptyMigrationMappings, type MigrationMappings } from "@/types/migrations";
 
+/** How a whole project moves: its workloads to a member, to another cluster, or renamed. */
+export type ProjectRelocationMode = "member" | "cluster" | "rename";
+
 export interface MigrationWizardSeed {
   scope?: MigrationScope;
   intent?: MigrationIntent;
@@ -12,12 +15,13 @@ export interface MigrationWizardSeed {
   sourceProject?: string;
   resourceName?: string;
   sourceMember?: string;
-  mode?: "member" | "cluster";
+  mode?: ProjectRelocationMode;
 }
 
 export interface MigrationDraftState {
   scope: MigrationScope;
   intent: MigrationIntent;
+  projectMode: ProjectRelocationMode;
   sourceCluster: string;
   sourceProject: string;
   resourceName: string;
@@ -80,19 +84,81 @@ export function isSameLocation(draft: MigrationDraftState): boolean {
   );
 }
 
+/** The destination a project relocation mode implies before the operator edits it. */
+export function projectModeTarget(
+  mode: ProjectRelocationMode,
+  sourceCluster: string,
+  sourceProject: string,
+): Pick<MigrationDraftState, "targetCluster" | "targetProject" | "targetMember"> {
+  if (mode === "member") return { targetCluster: sourceCluster, targetProject: sourceProject, targetMember: "" };
+  if (mode === "rename") return { targetCluster: sourceCluster, targetProject: "", targetMember: "" };
+  return { targetCluster: "", targetProject: sourceProject, targetMember: "" };
+}
+
+export function projectModeOf(target: { cluster_id: string; project: string }, source: { cluster_id: string; project: string }): ProjectRelocationMode {
+  if (target.cluster_id !== source.cluster_id) return "cluster";
+  return target.project === source.project ? "member" : "rename";
+}
+
+export const PROJECT_MODE_LABEL: Record<ProjectRelocationMode, string> = {
+  member: "Move Workloads to Another Member",
+  cluster: "Move Project to Another Cluster",
+  rename: "Rename Project on This Cluster",
+};
+
+export const PROJECT_MODE_HELP: Record<ProjectRelocationMode, string> = {
+  member:
+    "Every workload keeps its name and identity and moves to the chosen member, one at a time. If one cannot move, the others go back.",
+  cluster:
+    "The project, its profiles, and every instance are recreated on the other cluster. The stopped source project is kept for rollback until you finalize.",
+  rename:
+    "The project is recreated under a new name on this cluster with its profiles and instances. The stopped source project is kept for rollback until you finalize.",
+};
+
+/** Why a project relocation destination cannot be planned, or undefined when it can. */
+export function projectDestinationProblem(
+  draft: MigrationDraftState,
+  existingTargetProjects: readonly string[],
+): string | undefined {
+  const name = draft.targetProject.trim();
+  if (draft.projectMode === "member") {
+    return draft.targetMember.trim() ? undefined : "Choose the member to move the workloads to.";
+  }
+  if (!draft.targetCluster) return "Choose a destination cluster.";
+  if (draft.projectMode === "cluster" && draft.targetCluster === draft.sourceCluster) {
+    return "Choose another cluster, or rename the project on this one instead.";
+  }
+  if (!name) return "Enter a name for the new project.";
+  if (!LXD_NAME_PATTERN.test(name)) {
+    return "Use letters, digits, and dashes, starting with a letter or digit, up to 63 characters.";
+  }
+  if (draft.projectMode === "rename" && name === draft.sourceProject.trim()) {
+    return "Choose a name other than the current one.";
+  }
+  if (existingTargetProjects.includes(name)) {
+    return `Project '${name}' already exists there. A relocation creates the project and never merges into an existing one.`;
+  }
+  return undefined;
+}
+
 export function initialMigrationDraft(
   seed: MigrationWizardSeed = {},
   defaultRetentionHours = 24,
 ): MigrationDraftState {
+  const scope = seed.scope ?? "instance";
+  const projectMode = seed.mode ?? "cluster";
+  const projectTarget =
+    scope === "project" ? projectModeTarget(projectMode, seed.sourceCluster ?? "", seed.sourceProject ?? "") : null;
   return {
-    scope: seed.scope ?? "instance",
-    intent: seed.intent ?? "move",
+    scope,
+    intent: scope === "project" ? "move" : seed.intent ?? "move",
+    projectMode,
     sourceCluster: seed.sourceCluster ?? "",
     sourceProject: seed.sourceProject ?? "default",
     resourceName: seed.resourceName ?? "",
     sourceMember: seed.sourceMember ?? "",
-    targetCluster: seed.mode === "member" ? seed.sourceCluster ?? "" : "",
-    targetProject: seed.scope === "project" ? seed.sourceProject ?? "" : "",
+    targetCluster: projectTarget?.targetCluster ?? "",
+    targetProject: projectTarget?.targetProject ?? "",
     targetResourceName: seed.resourceName
       ? seed.intent === "copy"
         ? defaultCopyName(seed.resourceName)
@@ -123,6 +189,7 @@ export function draftFromPlan(plan: {
   return {
     scope: plan.scope,
     intent: plan.intent,
+    projectMode: projectModeOf(plan.target, plan.source),
     sourceCluster: plan.source.cluster_id,
     sourceProject: plan.source.project,
     resourceName: plan.source.resource_name ?? "",

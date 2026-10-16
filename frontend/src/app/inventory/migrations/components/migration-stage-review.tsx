@@ -26,6 +26,9 @@ export function requiredAcknowledgements(
   if (draft.intent === "move" && plan?.strategy !== "member_relocation") {
     values.push("source-retention-understood");
   }
+  if (plan?.strategy === "project_relocation") {
+    values.push("source-project-deletion-understood");
+  }
   return values;
 }
 
@@ -39,6 +42,8 @@ const ACK_LABEL: Record<string, string> = {
   "copy-impact-reviewed": "I reviewed the transfer impact. The copy is a new, independent instance.",
   "source-retention-understood":
     "I understand the source is kept stopped for the retention window and then deleted.",
+  "source-project-deletion-understood":
+    "I understand that Finalize, or the end of retention, deletes the whole source project: its instances, profiles, and cached images.",
   "billing-impact-reviewed": "I reviewed snapshot schedule and billing impact for every source workload.",
 };
 
@@ -66,7 +71,9 @@ export function MigrationStageReview({
             draft.intent === "copy"
               ? "Unchanged and independent"
               : memberRelocation
-                ? "Same instance, no retained copy"
+                ? plan.scope === "project"
+                  ? "Same instances, moved back automatically on failure"
+                  : "Same instance, no retained copy"
                 : `${draft.retentionHours} hours`
           }
         />

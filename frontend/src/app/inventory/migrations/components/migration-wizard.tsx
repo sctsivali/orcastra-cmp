@@ -208,7 +208,15 @@ export function MigrationWizard(props: MigrationWizardProps) {
             onClick={() => void wizard.advance()}
             disabled={!wizard.canAdvance}
           >
-            {pending ? "Working" : step === 6 ? (draft.intent === "copy" ? "Start copy" : "Start move") : "Continue"}
+            {pending
+              ? "Working"
+              : step === 6
+                ? draft.intent === "copy"
+                  ? "Start copy"
+                  : draft.scope === "project"
+                    ? "Start relocation"
+                    : "Start move"
+                : "Continue"}
           </Button>
         </DialogFooter>
       </DialogContent>

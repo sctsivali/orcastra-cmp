@@ -70,6 +70,22 @@ export function migrationActionCopy(
   job: MigrationJob,
   action: MigrationAction,
 ): { title: string; description: string; submit: string } {
+  if (job.strategy === "project_relocation" && action === "rollback") {
+    return {
+      title: "Roll Back This Relocation",
+      description:
+        "Stops and deletes the new project with its instances and profiles, then restores the retained source project with its earlier running states, tags, schedules, and access rules. Anything written in the new project since cutover is lost. Orcastra refuses if the new project gained anything this relocation did not create.",
+      submit: "Roll back",
+    };
+  }
+  if (job.strategy === "project_relocation" && action === "cleanup") {
+    return {
+      title: "Finalize This Relocation",
+      description:
+        "Permanently deletes the retained source project now: its instances, profiles, and cached images. Orcastra first checks that the source project is unchanged and every new instance is healthy. Rollback is no longer possible afterwards.",
+      submit: "Finalize and delete source project",
+    };
+  }
   if (action === "cancel" && job.phase === "cutover_pending") {
     return {
       title: "Abort Before Cutover",

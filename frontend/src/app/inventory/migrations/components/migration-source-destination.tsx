@@ -25,7 +25,14 @@ import {
   type MigrationScope,
 } from "@/types/migrations";
 import { MigrationDestinationForm } from "./migration-destination-form";
-import { defaultCopyName, type MigrationDraftState } from "./migration-wizard-model";
+import {
+  PROJECT_MODE_HELP,
+  PROJECT_MODE_LABEL,
+  defaultCopyName,
+  projectModeTarget,
+  type MigrationDraftState,
+  type ProjectRelocationMode,
+} from "./migration-wizard-model";
 
 interface MigrationSourceDestinationProps {
   stage: "source" | "destination";
@@ -85,16 +92,22 @@ export function MigrationSourceDestination({
             <Label htmlFor="migration-scope">Migration scope</Label>
             <Select
               value={draft.scope}
-              onValueChange={(value) =>
+              onValueChange={(value) => {
+                const scope = value as MigrationScope;
                 onChange({
-                  scope: value as MigrationScope,
+                  scope,
+                  // A project is relocated, never copied.
+                  intent: scope === "project" ? "move" : draft.intent,
                   resourceName: "",
                   sourceMember: "",
                   targetResourceName: "",
+                  ...(scope === "project"
+                    ? projectModeTarget(draft.projectMode, draft.sourceCluster, draft.sourceProject)
+                    : {}),
                   mappings: emptyMigrationMappings(),
                   acknowledgements: [],
-                })
-              }
+                });
+              }}
             >
               <SelectTrigger id="migration-scope">
                 <SelectValue />
@@ -128,12 +141,15 @@ export function MigrationSourceDestination({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="move">Move</SelectItem>
-                <SelectItem value="copy">Copy</SelectItem>
+                <SelectItem value="copy" disabled={draft.scope === "project"}>
+                  Copy
+                </SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Move keeps the stopped source for a retention window so you can roll back. Copy
-              creates a new, independent instance.
+              {draft.scope === "project"
+                ? "A project is relocated, not copied. To copy, copy its instances one at a time."
+                : "Move keeps the stopped source for a retention window so you can roll back. Copy creates a new, independent instance."}
             </p>
           </div>
         </div>
@@ -151,6 +167,7 @@ export function MigrationSourceDestination({
                   resourceName: "",
                   sourceMember: "",
                   targetResourceName: "",
+                  ...(draft.scope === "project" ? projectModeTarget(draft.projectMode, sourceCluster, "") : {}),
                   mappings: emptyMigrationMappings(),
                   acknowledgements: [],
                 })
@@ -173,6 +190,9 @@ export function MigrationSourceDestination({
                   resourceName: "",
                   sourceMember: "",
                   targetResourceName: "",
+                  ...(draft.scope === "project"
+                    ? projectModeTarget(draft.projectMode, draft.sourceCluster, sourceProject)
+                    : {}),
                   mappings: emptyMigrationMappings(),
                   acknowledgements: [],
                 })
@@ -213,14 +233,44 @@ export function MigrationSourceDestination({
             />
           </div>
         ) : (
-          <Alert>
-            <Info className="h-4 w-4" aria-hidden />
-            <AlertTitle>The complete project environment is in scope</AlertTitle>
-            <AlertDescription>
-              Preflight discovers every workload and dependency of the project. Whole-project
-              relocation is not available on this deployment yet, so this plan is review only.
-            </AlertDescription>
-          </Alert>
+          <div className="space-y-2">
+            <Label htmlFor="migration-project-mode">Relocation</Label>
+            <Select
+              value={draft.projectMode}
+              onValueChange={(value) => {
+                const projectMode = value as ProjectRelocationMode;
+                onChange({
+                  projectMode,
+                  ...projectModeTarget(projectMode, draft.sourceCluster, draft.sourceProject),
+                  targetStoragePool: "",
+                  mappings: emptyMigrationMappings(),
+                  acknowledgements: [],
+                });
+              }}
+            >
+              <SelectTrigger id="migration-project-mode" aria-describedby="migration-project-mode-help">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(PROJECT_MODE_LABEL) as ProjectRelocationMode[]).map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {PROJECT_MODE_LABEL[mode]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p id="migration-project-mode-help" className="text-xs text-muted-foreground">
+              {PROJECT_MODE_HELP[draft.projectMode]}
+            </p>
+            <Alert>
+              <Info className="h-4 w-4" aria-hidden />
+              <AlertTitle>The complete project is in scope</AlertTitle>
+              <AlertDescription>
+                Preflight discovers every instance, profile, and dependency of the project and
+                names anything a relocation cannot carry, such as custom volumes or uploaded images.
+              </AlertDescription>
+            </Alert>
+          </div>
         )}
 
         {inventoryError && (
