@@ -109,15 +109,15 @@ async function pointOnOutline(page, code) {
     const frame = document.querySelector(".leaflet-container").getBoundingClientRect();
     if (!path) return null;
     const box = path.getBoundingClientRect();
-    const toUser = path.getScreenCTM().inverse();
+    // note: elementFromPoint hit-tests an interactive SVG path on its painted fill, so a point it
+    // resolves to the path is inside the outline and not under a chip; no geometry API needed
     for (let fy = 0.5; fy < 1; fy += 0.04) {
       for (const sy of [1, -1]) {
         for (let fx = 0.05; fx < 1; fx += 0.05) {
           const x = box.left + box.width * fx;
           const y = box.top + box.height * (0.5 + sy * (fy - 0.5));
           if (x < frame.left + 4 || x > frame.right - 4 || y < frame.top + 4 || y > frame.bottom - 4) continue;
-          const user = new DOMPoint(x, y).matrixTransform(toUser);
-          if (path.isPointInFill(user) && document.elementFromPoint(x, y) === path) return { x, y };
+          if (document.elementFromPoint(x, y) === path) return { x, y };
         }
       }
     }
