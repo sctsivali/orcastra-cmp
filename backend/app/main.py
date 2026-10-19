@@ -1139,10 +1139,20 @@ Ensure your client certificates are properly configured.
             return await http_exception_handler(request, exc)
 
         reference, full = reference_for(exc)
-        logger.error(
-            "Server fault %s on %s %s: %s",
-            reference, request.method, request.url.path, full,
-        )
+        # note: a 502/503/504 here is an answer this application chose (a cluster known to be
+        # down, a saturated proxy), not a fault. Logging it at ERROR buried real faults: one
+        # caller polling a dead cluster wrote 577 ERROR lines an hour. The access log still
+        # records the status of each one.
+        if exc.status_code in (502, 503, 504):
+            logger.warning(
+                "Unavailable %s on %s %s: %s",
+                reference, request.method, request.url.path, full,
+            )
+        else:
+            logger.error(
+                "Server fault %s on %s %s: %s",
+                reference, request.method, request.url.path, full,
+            )
 
         # important: 500 and the availability statuses are not the same thing, and treating them
         # alike was wrong in both directions. A 500 is an unexpected fault whose text is a driver
