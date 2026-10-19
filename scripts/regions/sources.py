@@ -335,18 +335,27 @@ def load_geoboundaries(path: Path) -> List[tuple]:
     return [(f["properties"]["shapeName"], geojson_to_multipolygon(f["geometry"])) for f in data["features"]]
 
 
-def load_natural_earth(path: Path) -> Dict[str, MultiPolygon]:
-    """ISO 3166-1 alpha-2 -> shape, from map units so overseas territories stand on their own.
+@dataclass(frozen=True)
+class MapUnit:
+    admin: str
+    label: Tuple[float, float]  # Natural Earth's own label point, (lat, lng)
+    shape: MultiPolygon
 
-    note: a code can span several units (Australia plus Ashmore and Cartier, Coral Sea), so
-    shapes merge per code rather than the last unit silently replacing the mainland.
+
+def load_natural_earth_units(path: Path) -> Dict[str, List[MapUnit]]:
+    """ISO 3166-1 alpha-2 -> map units, so overseas territories stand on their own.
+
+    note: a code can span several units (Australia plus Ashmore and Cartier, Coral Sea; the
+    four nations of the United Kingdom), so every unit is kept and the caller decides.
     """
-    merged: Dict[str, MultiPolygon] = {}
+    units: Dict[str, List[MapUnit]] = {}
     for f in json.loads(path.read_text())["features"]:
-        iso = f["properties"].get("ISO_A2_EH") or ""
+        props = f["properties"]
+        iso = props.get("ISO_A2_EH") or ""
         if len(iso) == 2 and f.get("geometry"):
-            merged.setdefault(iso, []).extend(geojson_to_multipolygon(f["geometry"]))
-    return merged
+            label = (float(props["LABEL_Y"]), float(props["LABEL_X"]))
+            units.setdefault(iso, []).append(MapUnit(props.get("ADMIN") or "", label, geojson_to_multipolygon(f["geometry"])))
+    return units
 
 
 def load_natural_earth_capitals(path: Path) -> Dict[str, List[Tuple[str, float, float]]]:

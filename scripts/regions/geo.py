@@ -93,6 +93,78 @@ def contains(point: LatLng, shape: MultiPolygon, tolerance_km: float = 0.0) -> b
     return tolerance_km > 0 and distance_to_boundary_km(point, shape) <= tolerance_km
 
 
+def ring_area(ring: Sequence[LatLng]) -> float:
+    """Shoelace area in square degrees of longitude scaled by cos(latitude).
+
+    Only ever used to rank rings against each other, so a flat projection around the ring's
+    own mean latitude is enough. Unscaled degrees would rank Alaska above most of Europe.
+    """
+    if len(ring) < 3:
+        return 0.0
+    k = math.cos(math.radians(sum(p[0] for p in ring) / len(ring)))
+    total = 0.0
+    for i in range(len(ring)):
+        lat_a, lng_a = ring[i]
+        lat_b, lng_b = ring[(i + 1) % len(ring)]
+        total += lng_a * k * lat_b - lng_b * k * lat_a
+    return abs(total) / 2
+
+
+def simplify_ring(ring: Sequence[LatLng], tolerance: float) -> Ring:
+    # iterative Douglas-Peucker (recursion would overflow on the longer coastlines); the same
+    # algorithm frontend/scripts/build-basemap.mjs applies to the basemap
+    points = list(ring)
+    if len(points) < 3:
+        return points
+    keep = [False] * len(points)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(points) - 1)]
+    while stack:
+        start, end = stack.pop()
+        if end <= start + 1:
+            continue
+        ay, ax = points[start]
+        by, bx = points[end]
+        dx, dy = bx - ax, by - ay
+        span = math.hypot(dx, dy)
+        worst, worst_index = -1.0, -1
+        for i in range(start + 1, end):
+            py, px = points[i]
+            distance = math.hypot(px - ax, py - ay) if span == 0 else abs(dx * (ay - py) - (ax - px) * dy) / span
+            if distance > worst:
+                worst, worst_index = distance, i
+        if worst > tolerance:
+            keep[worst_index] = True
+            stack += [(start, worst_index), (worst_index, end)]
+    return [p for p, k in zip(points, keep) if k]
+
+
+def interior_point(polygon: Polygon, grid: int = 16, rounds: int = 4) -> LatLng:
+    """The point inside the polygon farthest from its edge, by a deterministic refining grid.
+
+    For the few countries whose published label point lies in the sea between islands. A
+    centroid would not do: a crescent or an archipelago puts its centroid in the water too.
+    """
+    shape: MultiPolygon = [polygon]
+    s, w, n, e = bbox(shape)
+    best: Tuple[float, LatLng] = (-1.0, (0.0, 0.0))
+    for _ in range(rounds):
+        step_lat, step_lng = (n - s) / grid, (e - w) / grid
+        for i in range(grid + 1):
+            for j in range(grid + 1):
+                candidate = (s + i * step_lat, w + j * step_lng)
+                if point_in_multipolygon(candidate, shape):
+                    depth = distance_to_boundary_km(candidate, shape)
+                    if depth > best[0]:
+                        best = (depth, candidate)
+        if best[0] < 0:
+            raise ValueError("no grid point fell inside the polygon")
+        lat, lng = best[1]
+        s, n = lat - step_lat, lat + step_lat
+        w, e = lng - step_lng, lng + step_lng
+    return best[1]
+
+
 def bbox(shape: MultiPolygon) -> Tuple[float, float, float, float]:
     lats = [p[0] for polygon in shape for ring in polygon for p in ring]
     lngs = [p[1] for polygon in shape for ring in polygon for p in ring]

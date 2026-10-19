@@ -1186,13 +1186,13 @@ class GeoLocation(BaseModel):
     Also the shape stored locations are read back into, so it carries no constraint a location
     saved before the constraint existed could fail. Input is checked by GeoLocationInput.
     """
-    region_id: str = Field(..., description="Region identifier (for example, 'id-3174' for Kota Administrasi Jakarta Selatan or 'c-sg' for Singapore)")
+    region_id: str = Field(..., description="Region identifier (for example, 'id-3174' for Kota Administrasi Jakarta Selatan or 'c-sg' for Singapore). An id made of 'c-' and a lowercase ISO code stands for that whole country.")
     region_name: str = Field(..., description="Region display name (for example, 'Jakarta')")
     country_code: str = Field(..., min_length=2, max_length=2, description="ISO 3166-1 alpha-2 country code")
     country_name: str = Field(..., description="Country name")
-    city: str = Field(..., description="City name")
-    latitude: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
-    longitude: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+    city: str = Field(..., description="Place name: the seat of an Indonesian kabupaten or kota, or the country name for a whole-country region")
+    latitude: float = Field(..., ge=-90, le=90, description="Latitude of the map point. For a whole-country region this is a representative point inside the country, not the site.")
+    longitude: float = Field(..., ge=-180, le=180, description="Longitude of the map point. For a whole-country region this is a representative point inside the country, not the site.")
     timezone: str = Field(..., description="Timezone (for example, 'Asia/Jakarta')")
     continent: str = Field(..., description="Continent code (for example, 'AS', 'EU', or 'NA')")
     facility_name: Optional[str] = Field(None, description="Data center or facility name (for example, 'Main Data Center')")
@@ -1219,7 +1219,8 @@ class GeoLocationInput(GeoLocation):
     region_name: str = Field(..., min_length=1, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="Region display name")
     country_code: str = Field(..., pattern=r"^[A-Z]{2}$", description="ISO 3166-1 alpha-2 country code")
     country_name: str = Field(..., min_length=1, max_length=100, pattern=NO_CONTROL_CHARACTERS, description="Country name")
-    city: str = Field(..., min_length=1, max_length=200, pattern=NO_CONTROL_CHARACTERS, description="City name")
+    city: str = Field(..., min_length=1, max_length=200, pattern=NO_CONTROL_CHARACTERS,
+                      description="Place name; replaced by the catalogue's own for a catalogue region id")
     timezone: str = Field(..., min_length=1, max_length=64, pattern=NO_CONTROL_CHARACTERS,
                           description="IANA time zone (for example, 'Asia/Jakarta')")
     continent: str = Field(..., pattern=r"^[A-Z]{2}$", description="Continent code (for example, 'AS', 'EU', or 'NA')")
@@ -2004,9 +2005,9 @@ class RegionSummary(BaseModel):
     region_name: str = Field(..., description="Region display name")
     country_code: str = Field(..., description="ISO country code")
     country_name: str = Field(..., description="Country name")
-    city: str = Field(..., description="City name")
-    latitude: float = Field(..., description="Latitude coordinate")
-    longitude: float = Field(..., description="Longitude coordinate")
+    city: str = Field(..., description="Place name: the seat of an Indonesian kabupaten or kota, or the country name for a whole-country region")
+    latitude: float = Field(..., description="Latitude of the map point; for a whole-country region, a representative point inside the country")
+    longitude: float = Field(..., description="Longitude of the map point; for a whole-country region, a representative point inside the country")
     continent: str = Field(..., description="Continent code")
     province: Optional[str] = Field(None, description="Indonesian province, for a kabupaten or kota region")
     facility_name: Optional[str] = Field(None, description="Data center or facility name")

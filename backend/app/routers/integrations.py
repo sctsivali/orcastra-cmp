@@ -4380,7 +4380,11 @@ async def get_integration_operation(
 @external_router.get(
     "/regions",
     summary="Get integration region coordinates",
-    description="Return non-sensitive geographic region coordinates for clusters allowed by the API key.",
+    description=(
+        "Return non-sensitive geographic region coordinates for clusters allowed by the API key. "
+        "A region whose id is 'c-' and a lowercase ISO code stands for the whole country: its city is "
+        "the country name and its coordinates are a representative point inside the country, not the site."
+    ),
 )
 async def get_integration_regions(
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),

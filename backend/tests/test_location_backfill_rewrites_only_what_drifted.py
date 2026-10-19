@@ -30,6 +30,13 @@ CUSTOM = {
     "longitude": -77.4874, "timezone": "America/New_York", "continent": "NA",
 }
 
+# how every country location was stored while country entries were placed at the capital
+CAPITAL_ERA_JAPAN = {
+    "region_id": "c-jp", "region_name": "Japan", "country_code": "JP", "country_name": "Japan",
+    "city": "Tokyo", "latitude": 35.6895, "longitude": 139.6917, "timezone": "Asia/Tokyo",
+    "continent": "AS", "facility_name": "Tokyo DC 3",
+}
+
 
 class _Vault:
     def __init__(self, store, broken):
@@ -140,6 +147,30 @@ def test_a_second_run_finds_nothing_to_do():
     again = backfill.plan(manager)
     assert again.changes == [], [c.cluster_id for c in again.changes]
     assert sorted(again.up_to_date) == ["current", "custom-zone", "drifted"]
+
+
+def test_a_country_stored_at_its_capital_becomes_the_whole_country():
+    store = {
+        "jp-zone-city": {"display_name": "jp-zone-city", "zone": "Tokyo", "location": dict(CAPITAL_ERA_JAPAN)},
+        "jp-zone-region": {"display_name": "jp-zone-region", "zone": "Japan", "location": dict(CAPITAL_ERA_JAPAN)},
+        "jp-zone-own": {"display_name": "jp-zone-own", "zone": "Tokyo DC 3", "location": dict(CAPITAL_ERA_JAPAN)},
+    }
+    manager = _CertManager(store)
+    plan = backfill.plan(manager)
+    assert sorted(c.cluster_id for c in plan.changes) == sorted(store)
+    assert all(c.fields == ["city", "latitude", "longitude"] for c in plan.changes), [c.fields for c in plan.changes]
+
+    backfill.apply(manager, plan)
+    entry = get_region_catalog().resolve("c-jp")
+    for cluster_id, metadata in store.items():
+        location = metadata["location"]
+        assert location["city"] == "Japan", cluster_id
+        assert (location["latitude"], location["longitude"]) == (entry["latitude"], entry["longitude"]), cluster_id
+        assert location["facility_name"] == "Tokyo DC 3", "the operator's facility was lost"
+    assert store["jp-zone-city"]["zone"] == "Japan", "a zone that tracked the capital should follow the country"
+    assert store["jp-zone-region"]["zone"] == "Japan"
+    assert store["jp-zone-own"]["zone"] == "Tokyo DC 3", "an operator's own zone was overwritten"
+    assert backfill.plan(manager).changes == []
 
 
 def test_apply_judges_what_is_stored_now_not_what_was_planned():

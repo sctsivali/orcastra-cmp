@@ -3,12 +3,13 @@
 The picker used to offer 98 kota under a 34-province map, so 416 kabupaten could not be chosen
 at all, Sorong sat in a province it left in 2022, and the IKN point was 35 km from Nusantara.
 These hold the regenerated catalogue to what it claims: every kabupaten and kota of the 2025
-Kepmendagri list, one entry per country, every id the old catalogue shipped still resolving,
-and the backend reading exactly the file the frontend bundles.
+Kepmendagri list, one entry per country standing for the whole country, every id the old
+catalogue shipped still resolving, and the backend reading exactly the file the frontend bundles.
 """
 
 import collections
 import json
+import math
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,7 @@ from app.services.region_catalog import CATALOG_PATH, get_region_catalog
 
 REPO = Path(__file__).resolve().parents[2]
 FRONTEND_COPY = REPO / "frontend" / "src" / "lib" / "regions" / "catalog.json"
+COUNTRY_AREAS = REPO / "frontend" / "public" / "geo" / "country-areas.v1.json"
 LEGACY_SNAPSHOT = REPO / "scripts" / "regions" / "legacy_regions.json"
 CONTINENTS = {"AF", "AN", "AS", "EU", "NA", "OC", "SA"}
 
@@ -52,6 +54,33 @@ def test_outside_indonesia_there_is_one_entry_per_country(raw):
     assert all("province" not in r for r in countries)
 
 
+def test_a_country_entry_names_no_city(raw):
+    # the site of a cluster abroad is rarely known, so a country entry stands for all of it
+    for r in raw["regions"]:
+        if r["country_code"] != "ID":
+            assert r["city"] == r["country_name"] == r["name"], r
+
+
+def _km(a, b):
+    lat1, lng1, lat2, lng2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 2 * 6371.0 * math.asin(math.sqrt(h))
+
+
+@pytest.mark.parametrize(
+    "region_id, capital",
+    [
+        ("c-jp", (35.6895, 139.6917)),  # Tokyo
+        ("c-us", (38.8951, -77.0364)),  # Washington
+        ("c-gb", (51.5074, -0.1278)),  # London
+        ("c-au", (-35.2809, 149.13)),  # Canberra
+    ],
+)
+def test_a_country_is_not_pinned_at_its_capital(region_id, capital):
+    entry = get_region_catalog().resolve(region_id)
+    assert _km((entry["latitude"], entry["longitude"]), capital) > 100, entry
+
+
 def test_names_drop_the_kind_except_where_a_kabupaten_and_kota_share_one(raw):
     regencies = _indonesia(raw)
     names = [r["name"] for r in regencies]
@@ -84,13 +113,64 @@ def test_every_entry_is_well_formed(raw):
         ("id-9671", "Sorong (City)", "Papua Barat Daya", -1.0, 131.1, -0.7, 131.5),
         ("id-9503", "Yahukimo", "Papua Pegunungan", -5.2, 139.2, -4.5, 139.8),
         ("id-1602", "Ogan Komering Ilir", "Sumatera Selatan", -3.8, 104.5, -3.0, 105.2),
+        ("c-nz", "New Zealand", None, -47.5, 166.0, -34.0, 179.0),
+        ("c-gq", "Equatorial Guinea", None, 0.9, 9.3, 2.4, 11.4),
+        ("c-jp", "Japan", None, 30.0, 129.0, 46.0, 146.0),
+        ("c-us", "United States", None, 24.0, -125.0, 50.0, -66.0),
+        ("c-sg", "Singapore", None, 1.15, 103.6, 1.48, 104.1),
     ],
 )
 def test_known_places_are_where_they_should_be(region_id, name, province, south, west, north, east):
     entry = get_region_catalog().resolve(region_id)
     assert entry is not None, region_id
-    assert entry["name"] == name and entry["province"] == province, entry
+    assert entry["name"] == name and entry.get("province") == province, entry
     assert south <= entry["latitude"] <= north and west <= entry["longitude"] <= east, entry
+
+
+def _areas():
+    if not COUNTRY_AREAS.exists():
+        pytest.skip("frontend tree is not in this checkout")
+    return {f["id"]: f for f in json.loads(COUNTRY_AREAS.read_text())["features"]}
+
+
+def _in_ring(lng, lat, ring):
+    inside, j = False, len(ring) - 1
+    for i in range(len(ring)):
+        (xi, yi), (xj, yj) = ring[i], ring[j]
+        if (yi > lat) != (yj > lat) and lng < xi + (lat - yi) * (xj - xi) / (yj - yi):
+            inside = not inside
+        j = i
+    return inside
+
+
+# Natural Earth letters New Zealand in the Tasman Sea and Equatorial Guinea in the Gulf of Guinea;
+# the point must be on the country the map shades, not in the water beside it
+@pytest.mark.parametrize("code", ["NZ", "GQ", "JP", "US", "GB", "SG", "FJ", "RU"])
+def test_a_country_point_sits_on_its_own_outline(code):
+    entry = get_region_catalog().resolve("c-" + code.lower())
+    polygons = _areas()[code]["geometry"]["coordinates"]
+    assert any(
+        _in_ring(entry["longitude"], entry["latitude"], polygon[0])
+        and not any(_in_ring(entry["longitude"], entry["latitude"], hole) for hole in polygon[1:])
+        for polygon in polygons
+    ), entry
+
+
+def test_every_country_has_an_outline_the_map_can_shade(raw):
+    # note: the build checks each point against the full-resolution outline; CI has no source
+    # cache, so this is what ties the shipped outlines to the shipped catalogue there
+    features = _areas()
+    countries = {r["country_code"]: r for r in raw["regions"] if r["id"].startswith("c-")}
+    assert set(features) == set(countries)
+    for code, feature in features.items():
+        polygons = feature["geometry"]["coordinates"]
+        assert feature["geometry"]["type"] == "MultiPolygon" and polygons, code
+        for ring in (ring for polygon in polygons for ring in polygon):
+            assert len(ring) >= 4 and ring[0] == ring[-1], code
+        south, west, north, east = feature["properties"]["focus"]
+        entry = countries[code]
+        assert south <= entry["latitude"] <= north and west <= entry["longitude"] <= east, (code, entry)
+        assert east - west <= 180, code
 
 
 def test_every_id_the_old_catalogue_shipped_still_resolves():

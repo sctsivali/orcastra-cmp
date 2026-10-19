@@ -6,7 +6,8 @@
     python3 scripts/regions/build_regions.py --refresh  # re-download every source first
 
 Writes the same catalogue to the frontend (bundled into the picker) and the backend (read by the
-location backfill), plus verify-report.md. Standard library only. Nothing is written when any
+location backfill), the country outlines the regions map shades (frontend/public/geo), plus
+verify-report.md. Standard library only. Nothing is written when any
 verification fails; the failures are printed and the exit code is 1.
 """
 
@@ -22,6 +23,7 @@ from typing import Dict, List, Tuple
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import areas as country_areas  # noqa: E402
 import countries  # noqa: E402
 import indonesia  # noqa: E402
 import legacy  # noqa: E402
@@ -32,8 +34,8 @@ from sources import (  # noqa: E402
     load_country_info,
     load_geoboundaries,
     load_geonames_zip,
-    load_natural_earth,
     load_natural_earth_capitals,
+    load_natural_earth_units,
     nominatim_places,
     parse_kemendagri,
     sparql,
@@ -44,6 +46,7 @@ OUTPUTS = {
     "frontend": REPO / "frontend" / "src" / "lib" / "regions" / "catalog.json",
     "backend": REPO / "backend" / "app" / "data" / "regions_catalog.json",
 }
+AREAS = REPO / "frontend" / "public" / "geo" / country_areas.AREAS_FILE
 REPORT = HERE / "verify-report.md"
 SCHEMA = 1
 
@@ -98,13 +101,16 @@ def main() -> int:
         offices,
         lambda query: nominatim_places(query, cache, args.refresh),
     )
-    country_entries, country_findings, excluded = countries.build(
+    shapes = {iso: country_areas.country_shape(iso, units) for iso, units in load_natural_earth_units(by_key["natural_earth"].path).items()}
+    country_entries, country_findings, excluded, country_points = countries.build(
         load_country_info(by_key["geonames_countries"].path),
         load_geonames_zip(by_key["geonames_cities"].path, "cities500.txt", lambda p: p.fclass == "P"),
         sparql(countries.WIKIDATA_CAPITALS, cache, args.refresh),
-        load_natural_earth(by_key["natural_earth"].path),
+        shapes,
         load_natural_earth_capitals(by_key["natural_earth_places"].path),
     )
+    areas_text, area_findings, areas_summary = country_areas.render(
+        shapes, {str(e["country_code"]): (float(e["latitude"]), float(e["longitude"])) for e in country_entries})
     aliases, legacy_entries, comparisons, legacy_findings = legacy.build(
         json.loads((HERE / "legacy_regions.json").read_text()),
         id_result.entries,
@@ -113,7 +119,7 @@ def main() -> int:
         sparql(legacy.wikidata_query(), cache, args.refresh),
     )
 
-    findings = id_result.findings + country_findings + legacy_findings
+    findings = id_result.findings + country_findings + area_findings + legacy_findings
     failures = [f for f in findings if f.level == "fail"]
     ids = [str(e["id"]) for e in id_result.entries + country_entries + legacy_entries]
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
@@ -127,9 +133,10 @@ def main() -> int:
 
     regions = id_result.entries + sorted(country_entries, key=lambda e: str(e["name"]))
     catalogue, version = _catalogue_json(regions, legacy_entries, aliases)
-    report_text = report.render(fetched, id_result, country_entries, excluded, legacy_entries, comparisons, findings, version)
+    report_text = report.render(fetched, id_result, country_entries, country_points, areas_summary, excluded,
+                                legacy_entries, comparisons, findings, version)
 
-    outputs = {**{path: catalogue for path in OUTPUTS.values()}, REPORT: report_text}
+    outputs = {**{path: catalogue for path in OUTPUTS.values()}, AREAS: areas_text, REPORT: report_text}
     if args.check:
         stale = [str(p.relative_to(REPO)) for p, text in outputs.items() if not p.exists() or p.read_text() != text]
         if stale:

@@ -8,7 +8,9 @@ from __future__ import annotations
 import collections
 from typing import Dict, List, Tuple
 
+import areas
 import curation
+from countries import CountryPoint
 from indonesia import CORROBORATION_KM, OFFICE_SANITY_KM, POLYGON_TOLERANCE_KM, Finding, IndonesiaResult
 from legacy import Comparison
 from sources import SOURCES, FetchedSource
@@ -25,6 +27,8 @@ def render(
     fetched: List[FetchedSource],
     indonesia: IndonesiaResult,
     countries: List[Dict[str, object]],
+    country_points: List[CountryPoint],
+    areas_summary: areas.AreasSummary,
     excluded: List[Tuple[str, str]],
     legacy_entries: List[Dict[str, object]],
     comparisons: List[Comparison],
@@ -45,7 +49,7 @@ def render(
         ["Provinces", indonesia.counts.get("provinces", 0)],
         ["Kabupaten", indonesia.counts.get("kabupaten", 0)],
         ["Kota", indonesia.counts.get("kota", 0)],
-        ["Countries (one entry each, at the capital)", len(countries)],
+        ["Countries (one entry each, shaded as a whole on the map)", len(countries)],
         ["Hidden legacy entries", len(legacy_entries)],
         ["Legacy ids aliased to a kota", len([c for c in comparisons if c.old_id != c.new_id])],
     ])
@@ -64,9 +68,14 @@ def render(
         "coordinate identical to the Kepmendagri one counts as the same group, because one copied the other. "
         f"Every point must lie inside its own geoBoundaries ADM2 polygon (tolerance {POLYGON_TOLERANCE_KM:g} km).",
         "",
-        "Countries are placed at the GeoNames capital. It must agree within 25 km with Wikidata's current "
-        "capital or Natural Earth's capital point, and lie inside the country's Natural Earth map unit "
-        "(tolerance 5 km).",
+        "A country entry stands for the whole country, because the site of a cluster abroad is rarely "
+        "known when it is registered. Its city is the country name. Its point is Natural Earth's label "
+        "point for the country's largest map unit and must lie inside the country's own outline with no "
+        "tolerance; where Natural Earth letters the country in the sea between islands, the point is the "
+        "spot of the largest polygon farthest from its coast instead (see Notes). The capital is still "
+        "resolved from GeoNames and must agree within 25 km with Wikidata's current capital or Natural "
+        "Earth's capital point, and lie inside the country's outline (tolerance 5 km), but only to supply "
+        "the country's primary time zone.",
         "",
         "## Sources",
         "",
@@ -100,6 +109,18 @@ def render(
         decisions.append([iso, "capital", capital, why])
     lines += _table(["Code", "Kind", "Value", "Evidence"], decisions)
 
+    lines += ["", "## Country areas", "",
+              f"`frontend/public/geo/{areas.AREAS_FILE}`: {areas_summary.features} outlines, {areas_summary.size} bytes. "
+              f"Simplified at {areas.TOLERANCE_DEG:g} degrees to {areas.PRECISION} decimals, like the basemap; a country "
+              f"that collapses at that tolerance keeps its largest ring unsimplified at {areas.TINY_PRECISION} decimals "
+              f"({', '.join(areas_summary.tiny) or 'none'}). The map frames a country on its polygons of at least "
+              f"{areas.FOCUS_SHARE:g} of the largest one's area.", ""]
+    dropped = collections.Counter(areas_summary.dropped)
+    readmitted = collections.Counter(areas_summary.readmitted)
+    lines += _table(["ISO", "Natural Earth unit", "Units", "Outline"],
+                    [[iso, admin, n, "left out: another administration"] for (iso, admin), n in dropped.items()]
+                    + [[iso, admin, n, "kept: fills a hole in the country"] for (iso, admin), n in readmitted.items()])
+
     lines += ["", "## Countries left out", ""]
     lines += _table(["ISO", "Reason"], [[iso, why] for iso, why in excluded])
 
@@ -113,6 +134,13 @@ def render(
     notes = [f for f in findings if f.level == "note"]
     lines += ["", f"## Notes ({len(notes)})", ""]
     lines += _table(["Code", "Name", "Check", "Detail"], [[f.code, f.name, f.check, f.detail] for f in notes])
+
+    lines += ["", "## Every country", ""]
+    lines += _table(["ISO", "Name", "Point", "Chosen from", "Capital (time zone only)", "km from capital"], [
+        [c.iso, c.name, f"{c.point[0]}, {c.point[1]}", "interior of the largest polygon" if c.moved else "Natural Earth label point",
+         c.capital, f"{c.km_from_capital:.0f}"]
+        for c in sorted(country_points, key=lambda c: c.name)
+    ])
 
     lines += ["", "## Every kabupaten and kota", ""]
     lines += _table(["Code", "Name", "Seat", "Point", "Chosen from", "Agreeing groups", "km from Kepmendagri point"], [

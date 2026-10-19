@@ -54,6 +54,18 @@ def test_a_country_entry_carries_no_province():
     assert "province" not in out and "admin_code" not in out and "official_name" not in out, out
 
 
+def test_a_country_saved_with_its_capital_is_stored_as_the_whole_country():
+    # what a browser bundle built before the change still sends for Japan
+    capital_era = {**STALE_JAKARTA_SELATAN, "region_id": "c-jp", "region_name": "Japan", "country_code": "JP",
+                   "country_name": "Japan", "city": "Tokyo", "latitude": 35.6895, "longitude": 139.6917,
+                   "timezone": "Asia/Tokyo"}
+    out = get_region_catalog().canonical_location(capital_era)
+    entry = get_region_catalog().resolve("c-jp")
+    assert out["city"] == "Japan", out
+    assert (out["latitude"], out["longitude"]) == (entry["latitude"], entry["longitude"]) != (35.6895, 139.6917)
+    assert out["facility_name"] == "Main DC", "the operator's facility must survive the rewrite"
+
+
 def test_a_client_defined_region_passes_through_untouched():
     custom = {**STALE_JAKARTA_SELATAN, "region_id": "us-east-dc1", "region_name": "US East", "country_code": "US"}
     assert get_region_catalog().canonical_location(custom) == custom

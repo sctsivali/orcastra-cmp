@@ -1,19 +1,26 @@
-"""One catalogue entry per country outside Indonesia, placed at its capital.
+"""One catalogue entry per country outside Indonesia, standing for the whole country.
 
 The country list, names, capitals and continents come from GeoNames countryInfo (ISO 3166-1).
-The capital point is the GeoNames populated place, checked against Wikidata's current capital
-(P36 with no end date) and against the country's own Natural Earth polygon.
+A cluster abroad is rarely registered with its real site, so the entry names no city: its city is
+the country name, and its point is the country's representative point inside its own Natural
+Earth outline (areas.py), which the regions map shades as a whole.
+
+The capital is still resolved and checked (GeoNames populated place, against Wikidata's current
+capital, P36 with no end date, and Natural Earth's capital point), because it supplies the
+country's primary time zone.
 """
 
 from __future__ import annotations
 
 import collections
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import curation
-from geo import MultiPolygon, contains, haversine_km
+from areas import CountryShape, representative_point
+from geo import LatLng, contains, haversine_km, point_in_multipolygon
 from indonesia import Finding
 from sources import Place, parse_wkt_point
 
@@ -46,14 +53,25 @@ def _capital_place(capital: str, in_country: List[Place]) -> Optional[Place]:
     return None
 
 
+@dataclass(frozen=True)
+class CountryPoint:
+    iso: str
+    name: str
+    point: LatLng
+    capital: str
+    km_from_capital: float
+    moved: Optional[str]  # why the point is not Natural Earth's label point, if it is not
+
+
 def build(
     country_info: List[Dict[str, str]],
     places: List[Place],
     wikidata_rows: List[Dict[str, str]],
-    polygons: Dict[str, MultiPolygon],
+    shapes: Dict[str, CountryShape],
     ne_capitals: Dict[str, List[Tuple[str, float, float]]],
-) -> Tuple[List[Dict[str, object]], List[Finding], List[Tuple[str, str]]]:
+) -> Tuple[List[Dict[str, object]], List[Finding], List[Tuple[str, str]], List[CountryPoint]]:
     entries: List[Dict[str, object]] = []
+    country_points: List[CountryPoint] = []
     findings: List[Finding] = []
     excluded: List[Tuple[str, str]] = []
     by_country: Dict[str, List[Place]] = collections.defaultdict(list)
@@ -102,10 +120,11 @@ def build(
         if len(agreeing) == 1:
             findings.append(Finding("note", iso, name, "capital", f"{place.name} confirmed by {agreeing[0]} only"))
 
-        shape = polygons.get(iso)
-        if shape is None:
-            findings.append(Finding("note", iso, name, "polygon", "no Natural Earth map unit; capital checked against point witnesses only"))
-        elif not contains(point, shape, POLYGON_TOLERANCE_KM):
+        country = shapes.get(iso)
+        if country is None:
+            fail("no Natural Earth map unit, so the country has no outline to shade")
+            continue
+        if not contains(point, country.shape, POLYGON_TOLERANCE_KM):
             fail(f"capital {place.name} lies outside the country's Natural Earth polygon")
             continue
 
@@ -115,15 +134,26 @@ def build(
             fail(f"GeoNames time zone {place.timezone!r} is not a valid IANA zone")
             continue
 
+        raw, moved = representative_point(country)
+        where = (round(raw[0], 4), round(raw[1], 4))
+        # strict: the point stands for the country itself, so unlike a coastal capital it gets no
+        # tolerance, and rounding must not have nudged it over a border or into the sea
+        if not point_in_multipolygon(where, country.shape):
+            fail(f"representative point {where} lies outside the country's outline")
+            continue
+        if moved:
+            findings.append(Finding("note", iso, name, "point", moved))
+
         entries.append({
             "id": f"c-{iso.lower()}",
             "name": name,
-            "city": place.name,
+            "city": name,
             "country_code": iso,
             "country_name": name,
-            "latitude": round(place.lat, 4),
-            "longitude": round(place.lng, 4),
+            "latitude": where[0],
+            "longitude": where[1],
             "timezone": place.timezone,
             "continent": row["continent"],
         })
-    return entries, findings, excluded
+        country_points.append(CountryPoint(iso, name, where, place.name, haversine_km(where, point), moved))
+    return entries, findings, excluded, country_points
