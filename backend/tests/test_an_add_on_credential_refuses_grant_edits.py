@@ -41,6 +41,22 @@ class Vault(_FakeVault):
         self.deletes.append(path)
         self.store.pop(path, None)
 
+    def vault_delete_metadata(self, path: str) -> None:
+        # a permanent delete names the KV v2 metadata path; the record is stored by its data path
+        self.deletes.append(path)
+        self.store.pop(path.replace("secret/metadata/", "secret/data/", 1), None)
+
+    def vault_list(self, path: str, use_cache: bool = True) -> List[str]:
+        return []
+
+
+def permanent_deletes(key_id: str) -> List[str]:
+    """What deleting a key asks of Vault: every record destroyed, the descriptor last."""
+    return [
+        _FakeVault._path(key_id, leaf).replace("secret/data/", "secret/metadata/", 1)
+        for leaf in ("secret", "metadata")
+    ]
+
 
 class Cache:
     def __init__(self) -> None:
@@ -187,7 +203,7 @@ async def test_a_superseded_add_on_credential_is_deletable(
     db = installations((new_key, None))
     assert await delete(ADDON, db) == {"success": True, "message": f"API key {ADDON} deleted"}
     assert not any(ADDON in path for path in vault.store)
-    assert vault.deletes == [_FakeVault._path(ADDON, "metadata"), _FakeVault._path(ADDON, "secret")]
+    assert vault.deletes == permanent_deletes(ADDON)
     assert surface["evicted"] == [ADDON]
     assert [c["action"] for c in surface["log"].calls] == ["integration.api_key.delete"]
 
@@ -295,7 +311,7 @@ async def test_an_ordinary_key_still_takes_all_three(surface: Dict[str, Any]) ->
     assert not any("extension_installations" in str(statement) for statement in db.statements), (
         "an ordinary key never reads the installations"
     )
-    assert vault.deletes == [_FakeVault._path(PLAIN, "metadata"), _FakeVault._path(PLAIN, "secret")]
+    assert vault.deletes == permanent_deletes(PLAIN)
 
 
 async def test_revoke_stays_available_as_the_kill_switch(surface: Dict[str, Any]) -> None:

@@ -28,6 +28,7 @@ from app.services.lxd_service import get_lxd_service
 from tests._sqlite_session import org_tables, sqlite_session
 from tests.test_a_capability_grant_leaves_a_record import PARTNER, SECRETS, _FakeVault, _RecordingLogger
 from tests.test_an_add_on_credential_refuses_grant_edits import (
+    permanent_deletes,
     ADDON,
     PLAIN,
     addon_metadata,
@@ -214,7 +215,7 @@ async def test_deleting_an_add_on_credential_turns_on_the_claim(
         unchanged(keys)
         return
     assert response.json() == {"success": True, "message": f"API key {ADDON} deleted"}
-    assert keys["vault"].deletes == [_FakeVault._path(ADDON, "metadata"), _FakeVault._path(ADDON, "secret")]
+    assert keys["vault"].deletes == permanent_deletes(ADDON)
     assert keys["evicted"] == [ADDON]
     assert [c["action"] for c in keys["log"].calls] == ["integration.api_key.delete"]
 
@@ -225,7 +226,7 @@ async def test_an_ordinary_key_delete_never_reads_the_installations(keys: Dict[s
     response = await send(PARTNER, db, "DELETE", f"{KEYS}/{PLAIN}")
     assert response.status_code == 200
     assert not any("extension_installations" in str(statement) for statement in db.statements)
-    assert keys["vault"].deletes == [_FakeVault._path(PLAIN, "metadata"), _FakeVault._path(PLAIN, "secret")]
+    assert keys["vault"].deletes == permanent_deletes(PLAIN)
 
 
 SPELLINGS = [(f"{KEYS}/{ADDON}", 409), (f"{KEYS}/%6Fak_addon", 409), (f"{KEYS}/{ADDON}?force=true", 409),
