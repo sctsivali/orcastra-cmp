@@ -18,7 +18,7 @@
   "source_inputs": [
     {
       "path": "backend/constraints.txt",
-      "sha256": "d6bf6ee68194a2f46312adc270f950edeec947ad3ea1e3a2a37fb1aeb7442281",
+      "sha256": "681772f8b70c3d9700058c5768648a572c408cadb164955c131a1c3c5cd10fc6",
       "size": 1580
     },
     {
@@ -28,7 +28,7 @@
     },
     {
       "path": "backend/requirements.txt",
-      "sha256": "366ddee27e1cd6d41f7f7d47a6f2a24b82b4cf91fa5ab2e70ae7372917e1e075",
+      "sha256": "ad36bacbb77ec2ec83d99cf575e7eb5ee998baa395a4bb6ff0657ac0964f52b9",
       "size": 2521
     }
   ],
