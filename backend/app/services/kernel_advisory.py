@@ -18,7 +18,7 @@ from typing import Literal, Mapping, Optional, Tuple
 
 State = Literal["patched", "exposed", "unverified"]
 Severity = Literal["critical", "warning", "info"]
-Family = Literal["ubuntu", "debian", "proxmox", "rhel", "suse", "upstream"]
+Family = Literal["ubuntu", "debian", "proxmox", "rhel", "suse", "vendor", "upstream"]
 
 _FINAL = 10**6  # sorts a final release after every -rc of the same version
 _MAX_RAW = 128
@@ -29,6 +29,8 @@ _UBUNTU_LOCAL = re.compile(
 )
 _DEBIAN_LOCAL = re.compile(r"^(\+deb\d+.*|-\d+-(?:cloud-|rt-)?(?:amd64|arm64|armmp|686|686-pae))$")
 _RHEL_LOCAL = re.compile(r"\.el\d+")
+# Ubuntu's mainline kernel PPA, ex; 6.4.12-060412-generic: an upstream build, judged as one
+_UBUNTU_MAINLINE_LOCAL = re.compile(r"^-\d{6}(?:rc\d+)?-")
 _GENERIC_TRACKS = {"generic", "lowlatency", "virtual"}
 
 
@@ -120,6 +122,10 @@ def kernel_family(release: KernelRelease, os_name: Optional[str]) -> Family:
         return "proxmox"
     name = os_name.lower() if isinstance(os_name, str) else ""
     if "ubuntu" in name:
+        # note: a sublevel on an Ubuntu host is either the mainline PPA or a vendor build on
+        # Ubuntu (5.15.148-tegra on a Jetson), whose maker may have backported the fix
+        if release.sublevel and not _UBUNTU_MAINLINE_LOCAL.match(release.local):
+            return "vendor"
         return "ubuntu"
     if "debian" in name:
         return "debian"
@@ -146,6 +152,7 @@ def check_command(advisory: KernelAdvisory, family: Family) -> str:
         "ubuntu": f"{ubuntu_log}; canonical-livepatch status",
         "debian": f"uname -v; {debian_log}",
         "proxmox": "uname -v; pveversion -v | grep -i kernel",
+        "vendor": "uname -rv",
         "rhel": f"rpm -q --changelog kernel-core-$(uname -r) | grep -m1 {cve}",
         "suse": f"rpm -q --changelog kernel-default | grep -m1 {cve}",
         "upstream": "uname -r",
@@ -202,10 +209,12 @@ def _verdict(
             f"Livepatch can fix a running kernel without changing its version. {reboot}"
         ), None
 
-    if family in ("debian", "proxmox", "rhel", "suse"):
+    if family in ("debian", "proxmox", "rhel", "suse", "vendor"):
         if at_or_above_fix:
             return "patched", f"Kernel at or above the upstream fix ({fixed_text}).", None
         hint = ""
+        if family == "vendor":
+            hint = " Ask the kernel's vendor whether this build carries the fix."
         if family == "debian" and advisory.debian_fixed_package:
             fixed = ", ".join(f"{pkg} (Debian {ver})" for ver, pkg in sorted(advisory.debian_fixed_package.items()))
             hint = f" Fixed packages: {fixed}."

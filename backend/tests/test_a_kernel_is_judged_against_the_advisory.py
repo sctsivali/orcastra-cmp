@@ -32,6 +32,8 @@ def _facts(kernel, os_name=None, os_version=None, types=VM):
         ("5.15.0-1080-kvm", "Ubuntu", "22.04", "exposed"),
         ("5.15.0-185-generic", None, None, "exposed"),
         ("6.4.12-060412-generic", "Ubuntu", "22.04", "exposed"),
+        ("5.15.148-tegra", "Ubuntu", "22.04", "unverified"),
+        ("5.15.223-tegra", "Ubuntu", "22.04", "patched"),
         ("6.12.113", None, None, "patched"),
         ("6.12.114-1-lts", "Arch Linux", None, "patched"),
         ("6.12.112", None, None, "exposed"),
@@ -134,6 +136,8 @@ def test_the_family_is_read_from_the_os_then_the_string():
     assert family("5.14.0-570.el9_6.x86_64") == "rhel"
     assert family("6.1.0-37-amd64", "Rocky Linux") == "rhel"
     assert family("6.12.113") == "upstream"
+    assert family("5.15.148-tegra", "Ubuntu") == "vendor"
+    assert family("6.4.12-060412-generic", "Ubuntu") == "ubuntu"
 
 
 def test_an_unreadable_kernel_is_never_shown_in_full():
