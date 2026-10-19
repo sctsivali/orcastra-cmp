@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.services.task_journal import follower_writer as writer_module  # noqa: E402

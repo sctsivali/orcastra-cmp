@@ -7,12 +7,18 @@ collection and takes down the entire ``tests/`` directory (19 passing -> 0
 collected). conftest.py is imported before any test module, so setting a default
 here keeps collection working. Tests that need a real database override it via
 their own environment; this default is only a placeholder to satisfy the import.
+
+important: the placeholder must be unreachable. It used to be localhost:5432, which on a
+developer machine is the live dev database: every app lifespan a test starts launches the
+background workers (webhooks, task journal, upload recovery, metrics history), and each one
+logged in as "test", about 470 failed logins per run. Port 1 on loopback refuses at once, so
+those workers fail fast and nothing outside the process is touched.
 """
 import os
 
 os.environ.setdefault(
     "DATABASE_URL",
-    "postgresql+asyncpg://test:test@localhost:5432/test",
+    "postgresql+asyncpg://test:test@127.0.0.1:1/test",
 )
 
 

@@ -22,7 +22,7 @@ from pathlib import Path
 # imports it to read Base.metadata. conftest.py sets the same placeholder, but only
 # pytest loads conftest, and these tests must also run under `python -m unittest`.
 # Nothing here opens a connection, so the value only has to parse.
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory

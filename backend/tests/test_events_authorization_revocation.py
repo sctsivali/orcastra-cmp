@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.core import database as database_module  # noqa: E402

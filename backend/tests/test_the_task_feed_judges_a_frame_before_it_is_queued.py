@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from _journal_fakes import FakeResult, FakeSessionMaker  # noqa: E402

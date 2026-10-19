@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pytest
 from sqlalchemy import create_engine, literal_column, select, text
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.core import org_scope  # noqa: E402

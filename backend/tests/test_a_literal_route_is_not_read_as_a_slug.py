@@ -20,7 +20,7 @@ import os
 import pytest
 from starlette.routing import compile_path
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("APP_VERSION", "0.0.0-test")
 os.environ.setdefault("DEBUG", "true")

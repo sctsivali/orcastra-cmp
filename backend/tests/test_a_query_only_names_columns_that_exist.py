@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Set
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:1/test")
 
 import pytest  # noqa: E402
 
