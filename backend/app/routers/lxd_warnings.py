@@ -292,15 +292,17 @@ async def get_all_system_warnings(
             for node_name in nodes_to_query
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        lxd_warnings = []
-        for result in results:
-            if isinstance(result, list):
-                lxd_warnings.extend(result)
 
+        # important: the helper returns a NodeRead, not a list. Testing for a list dropped every
+        # LXD warning from this feed, so its totals undercounted. Same handling as list_warnings,
+        # including the project bound before the tenant check.
+        fan = collect(
+            nodes_to_query, results, noun="warnings", reasons_visible=not tenant_acl_active()
+        )
         lxd_warnings = [
-            warning for warning in lxd_warnings
-            if check_tenant_permission(warning.source_node, warning.project or "default", None, "view")
+            warning for warning in fan.rows
+            if project_is_visible(warning.source_node, warning.project or "default")
+            and check_tenant_permission(warning.source_node, warning.project or "default", None, "view")
         ]
         
         # Get certificate and node warnings from cert_manager
@@ -434,6 +436,9 @@ async def get_all_system_warnings(
             "certificate_warnings": cert_warnings,
             "node_warnings": node_warnings,
             "nodes": nodes_to_query,
+            "unreachable_nodes": fan.unreachable_nodes,
+            "partial_nodes": fan.partial_nodes,
+            "node_errors": fan.node_errors,
         }
         
     except Exception as e:
