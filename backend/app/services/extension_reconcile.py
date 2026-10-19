@@ -280,7 +280,11 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
             live.add(previous)
 
     revoked = 0
-    for key in list_api_keys_from_vault(vault_client) or []:
+    # important: off the event loop. The listing is one blocking Vault read per key ever minted,
+    # 1286 on the dev deployment, and this pass runs in every worker every interval. Inline, it
+    # stalled each worker's loop for the whole read on every tick.
+    keys = await asyncio.to_thread(list_api_keys_from_vault, vault_client)
+    for key in keys or []:
         install_id = key.get("extension_install_id")
         if install_id is None:
             continue
@@ -295,7 +299,9 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
             continue
 
         try:
-            revoke_install_credential(vault_client, key_id)
+            # note: a call inside a lambda, not the function passed by name, so the ratchet in
+            # test_every_write_that_ends_a_key_checks_what_it_owns.py still sees this pass end a key
+            await asyncio.to_thread(lambda: revoke_install_credential(vault_client, key_id))
         except Exception as exc:
             # One unreadable key must not abandon the rest of the pass. The next tick retries it.
             logger.warning("Reconcile could not revoke orphan %s: %s", key_id, exc)

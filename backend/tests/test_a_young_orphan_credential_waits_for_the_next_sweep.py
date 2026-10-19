@@ -54,3 +54,27 @@ def test_a_claimed_key_is_never_revoked_however_old(monkeypatch: pytest.MonkeyPa
 def test_the_cutoff_is_taken_before_the_rows_are_read() -> None:
     source = inspect.getsource(sweep._revoke_orphaned_credentials)
     assert source.index("cutoff = now_utc() - ORPHAN_MIN_AGE") < source.index("await db.execute(")
+
+
+def test_the_vault_listing_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One blocking Vault read per key ever minted must not stall the worker's event loop."""
+    import threading
+
+    from tests.test_the_reconcile_sweep_narrows_and_reclaims import FakeVault, OrphanDB
+
+    loop_thread = threading.get_ident()
+    seen: List[int] = []
+
+    def listing(_client: Any) -> List[Dict[str, Any]]:
+        seen.append(threading.get_ident())
+        return [{"id": "orphan", "extension_install_id": 99, **minted(60)}]
+
+    vault = FakeVault([])
+    monkeypatch.setattr("app.routers.integrations.list_api_keys_from_vault", listing)
+    monkeypatch.setattr(sweep, "revoke_install_credential", lambda _c, key_id: seen.append(threading.get_ident()))
+    monkeypatch.setattr(sweep.activity_logger, "log_activity", lambda **_kw: None)
+    import asyncio
+
+    count = asyncio.run(sweep._revoke_orphaned_credentials(OrphanDB(installs=[]), vault))
+    assert count == 1
+    assert len(seen) == 2 and loop_thread not in seen
