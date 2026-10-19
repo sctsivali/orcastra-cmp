@@ -169,7 +169,7 @@ function KernelAdvisoryTable({
                       <TableCell>{warning.member}</TableCell>
                       <TableCell>
                         {warning.kernel_version ? (
-                          <span className="font-mono break-all">{warning.kernel_version}</span>
+                          <span className="font-mono whitespace-nowrap">{warning.kernel_version}</span>
                         ) : (
                           <TableEmptyValue label="Not read" />
                         )}
