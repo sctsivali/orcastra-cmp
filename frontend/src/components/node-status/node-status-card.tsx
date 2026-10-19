@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LXDVersionChecker } from "@/components/lxd-version-checker";
+import { KernelAdvisoryBadge } from "@/components/kernel-advisory/kernel-advisory-badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -245,6 +246,9 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             {isPartner && (
               <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
             )}
+            {/* Partner+ for the same reason: host kernel exposure is a maintenance finding. It
+                renders nothing while every member reads as patched. */}
+            {isPartner && <KernelAdvisoryBadge clusterId={node.name} />}
           </div>
         )}
         {node.connected && node.resources && (

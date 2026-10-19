@@ -14,7 +14,7 @@ function serverRows(count) {
 }
 
 async function installInventoryHardeningFixtures(page, role, options = {}) {
-  const base = await installApiFixtures(page, role);
+  const base = await installApiFixtures(page, role, options);
   const state = {
     base,
     requests: [],

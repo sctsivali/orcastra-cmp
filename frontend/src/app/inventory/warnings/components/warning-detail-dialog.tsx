@@ -13,6 +13,8 @@ import {
   warningSeverityDisplay,
   warningStatusDisplay,
 } from "./warning-severity";
+import { CodeBlock } from "@/components/ui/code-block";
+import { KERNEL_STATE_DISPLAY, osLabel } from "@/components/kernel-advisory/kernel-advisory-display";
 
 // One dialog for all three warning tabs.
 //
@@ -21,7 +23,7 @@ import {
 // that matters most: a certificate row never showed its cluster id in full, and an offline node
 // clipped the connection error to two lines behind a tooltip, which is the one place the actual
 // reason lives.
-export type WarningKind = "platform" | "certificate" | "node";
+export type WarningKind = "platform" | "certificate" | "node" | "kernel";
 
 export interface WarningRecord {
   kind: WarningKind;
@@ -73,6 +75,64 @@ export function WarningDetailDialog({
               <DetailField label="Last Seen" value={formatDateTime(record.last_seen_at)} />
             </DetailGrid>
           </DetailSection>
+        </div>
+      </RecordDetailDialog>
+    );
+  }
+
+  if (kind === "kernel") {
+    const state = KERNEL_STATE_DISPLAY[record.state as keyof typeof KERNEL_STATE_DISPLAY] ?? KERNEL_STATE_DISPLAY.unverified;
+    const severity = warningSeverityDisplay(record.severity);
+    return (
+      <RecordDetailDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        title={`${record.member} on ${record.display_name || record.cluster_id}`}
+        recordId={record.cluster_id}
+        recordIdLabel="Cluster"
+        status={<Badge variant={state.tone}>{state.label}</Badge>}
+        size="lg"
+        footer={
+          <Button asChild size="sm" variant="outline">
+            <IntentLink href={inventoryLinks.clusters({ q: record.cluster_id })}>
+              Open in Clusters
+            </IntentLink>
+          </Button>
+        }
+      >
+        <div className="space-y-4">
+          <DetailSection title="Why">
+            <DetailGrid>
+              <DetailField label="Reason" value={record.message} span="full" />
+            </DetailGrid>
+          </DetailSection>
+          <DetailSection title="Host">
+            <DetailGrid cols={3}>
+              <DetailField label="Cluster Member" value={record.member} />
+              <DetailField label="Kernel" value={record.kernel_version} mono />
+              <DetailField label="OS" value={osLabel(record) ?? undefined} />
+              <DetailField label="Advisory" value={record.advisory_id} />
+              <DetailField label="Severity" value={severity.label} />
+              <DetailField label="Advisory Data As Of" value={record.data_as_of} />
+              <DetailField
+                label="Reference"
+                span="full"
+                value={
+                  <TableLink href={record.reference_url} external title="Open the advisory announcement">
+                    {record.reference_url}
+                  </TableLink>
+                }
+              />
+            </DetailGrid>
+          </DetailSection>
+          {record.check_command ? (
+            <DetailSection
+              title="Check On The Host"
+              description="Run on the member to confirm. A fixed kernel only counts once the host has rebooted into it."
+            >
+              <CodeBlock value={record.check_command} copyLabel="Check command" />
+            </DetailSection>
+          ) : null}
         </div>
       </RecordDetailDialog>
     );

@@ -1,3 +1,5 @@
+import type { KernelAdvisoryWarning } from "./kernel-advisory";
+
 /**
  * TypeScript type definitions for the Orcastra CMP API
  */
@@ -2099,7 +2101,16 @@ export interface SystemWarningsResponse {
   lxd_warnings: WarningInfo[];
   certificate_warnings: CertificateWarning[];
   node_warnings: CertificateWarning[];
+  /** Optional: absent from responses older than the host kernel advisories. */
+  kernel_advisories?: KernelAdvisoryWarning[];
+  /** Clusters whose kernels were not read, so their absence from kernel_advisories proves nothing. */
+  kernel_advisories_unread?: string[];
+  /** True when the kernel assessment failed outright; the empty list is then not an all-clear. */
+  kernel_advisories_failed?: boolean;
   nodes: string[];
+  unreachable_nodes?: string[];
+  partial_nodes?: string[];
+  node_errors?: Record<string, string>;
 }
 
 // ============================================

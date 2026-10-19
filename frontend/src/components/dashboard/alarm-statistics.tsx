@@ -10,6 +10,7 @@ import {
   Info,
   Flame,
   ShieldAlert,
+  ShieldX,
   Shield,
   WifiOff,
   ChevronRight } from "lucide-react";
@@ -35,10 +36,11 @@ export function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }
   const actualWarnings = (warningsData as any)?.warnings || [];
   const certWarnings = systemWarnings?.certificate_warnings || [];
   const nodeWarnings = systemWarnings?.node_warnings || [];
+  const kernelWarnings = systemWarnings?.kernel_advisories || [];
   
   // Count warnings by severity
   const counts = React.useMemo(() => {
-    const result = { critical: 0, high: 0, warning: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0 };
+    const result = { critical: 0, high: 0, warning: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0, kernels: 0 };
     
     actualWarnings.forEach((w: any) => {
       result.total++;
@@ -56,9 +58,16 @@ export function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }
       result.total++;
       result.inactiveNodes++;
     });
-    
+
+    // note: its own tile, not folded into Critical or Warning. Those tiles open the platform
+    // tab, which has no kernel rows, and a tile's number must be the count its list shows.
+    kernelWarnings.forEach(() => {
+      result.total++;
+      result.kernels++;
+    });
+
     return result;
-  }, [actualWarnings, certWarnings, nodeWarnings]);
+  }, [actualWarnings, certWarnings, nodeWarnings, kernelWarnings]);
 
   // Don't render if no warnings
   if (counts.total === 0) {
@@ -173,6 +182,22 @@ export function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }
               <div>
                 <p className="text-xl font-bold text-rose-600">{counts.inactiveNodes}</p>
                 <p className="text-xs text-muted-foreground">Inactive</p>
+              </div>
+            </Link>
+          )}
+
+          {/* Host kernels exposed to, or not verified against, a kernel advisory */}
+          {counts.kernels > 0 && (
+            <Link
+              href={inventoryLinks.warnings({ tab: "kernel" })}
+              className="flex items-center gap-3 p-3 rounded-lg border border-status-offline/40 hover:bg-muted/50 transition-colors cursor-pointer"
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
+                <ShieldX className="h-4 w-4 text-status-offline" aria-hidden="true" />
+              </div>
+              <div>
+                <p className="text-xl font-bold text-status-offline">{counts.kernels}</p>
+                <p className="text-xs text-muted-foreground">Host Kernels</p>
               </div>
             </Link>
           )}

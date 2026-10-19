@@ -23,7 +23,7 @@ export const LINK_TARGETS = {
   clusters: { path: "/inventory/clusters", search: true, facets: [] },
   certificates: { path: "/inventory/clusters/certificates", search: true, facets: ["cluster"] },
   members: { path: "/inventory/clustering/members", search: false, facets: [], reserved: ["node"] },
-  warnings: { path: "/inventory/warnings", search: false, facets: ["all.severity", "all.node", "certificates.cluster", "nodes.cluster"], reserved: ["tab"] },
+  warnings: { path: "/inventory/warnings", search: false, facets: ["all.severity", "all.node", "certificates.cluster", "nodes.cluster", "kernel.cluster"], reserved: ["tab"] },
   images: { path: "/inventory/images", search: true, facets: ["node", "project"] },
   profiles: { path: "/inventory/profiles", search: true, facets: ["node", "project"] },
   operations: { path: "/inventory/operations", search: true, facets: ["node"], reserved: ["task", "since"] },
@@ -90,12 +90,12 @@ export interface NodeSearchLink {
 }
 
 export interface WarningsLink {
-  tab?: "all" | "certificates" | "nodes";
+  tab?: "all" | "certificates" | "nodes" | "kernel";
   /** A tile bucket: expands to every raw severity that tile counted. */
   severity?: SeverityBucket | null;
   /** Platform tab: the registered node (`warningNodeValue`). */
   node?: string | null;
-  /** Certificates or nodes tab: the row's own value (`warningClusterValue`). */
+  /** Certificates, nodes or kernel tab: the row's own value (`warningClusterValue`). */
   cluster?: string | null;
 }
 
@@ -136,7 +136,7 @@ export const inventoryLinks = {
 
   warnings: (link: WarningsLink = {}) => {
     const tab = link.tab && link.tab !== "all" ? link.tab : undefined;
-    const clusterKey = tab === "certificates" ? "certificates.cluster" : "nodes.cluster";
+    const clusterKey = tab === "certificates" || tab === "kernel" ? `${tab}.cluster` : "nodes.cluster";
     return build("warnings", {
       reserved: { tab },
       facets: {

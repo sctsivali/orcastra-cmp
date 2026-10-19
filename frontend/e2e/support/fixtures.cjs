@@ -4,6 +4,8 @@ const {
   fullInstance,
   instanceMetrics,
   iso,
+  kernelAdvisories,
+  kernelWarningRows,
   monitoringDashboard,
   monitoringHistory,
   platformAvailability,
@@ -383,16 +385,27 @@ async function installApiFixtures(page, role, options = {}) {
       if (url.searchParams.has("points")) state.unexpected.push(entry);
       body = monitoringHistory(url.searchParams.get("window"));
     } else if (path === "/warnings/system/all") {
+      const kernelRows = options.kernelExposed === true ? kernelWarningRows() : [];
       body = {
-        total: 0,
-        critical: 0,
+        total: kernelRows.length,
+        critical: kernelRows.length,
         warning: 0,
         info: 0,
         lxd_warnings: [],
         certificate_warnings: [],
         node_warnings: [],
+        kernel_advisories: kernelRows,
         nodes: ["cluster-a"],
       };
+    } else if (path === "/security/kernel-advisories") {
+      // Partner and Admin only (require_partner); a tenant asking at all is a defect.
+      if (role === "tenant") {
+        state.unexpected.push(entry);
+        status = 403;
+        body = { detail: "Partner access required" };
+      } else {
+        body = kernelAdvisories({ exposed: options.kernelExposed === true });
+      }
     } else if (path === "/warnings") {
       body = { total: 0, warnings: [], nodes: ["cluster-a"], unreachable_nodes: [] };
     } else if (path === "/instances/tenant-owned-vm") {

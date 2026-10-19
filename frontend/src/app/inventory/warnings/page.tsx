@@ -28,6 +28,7 @@ import {
   type WarningKind,
   type WarningRecord,
 } from "./components/warning-detail-dialog";
+import { KernelAdvisoryTab } from "./components/kernel-advisory-tab";
 import {
   warningSeverityDisplay,
   warningSeverityLabel,
@@ -39,7 +40,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger } from "@/components/ui/tabs";
-import { AlertTriangle, Info, Flame, HelpCircle, Server, FolderOpen, Shield, Wifi, WifiOff } from "lucide-react";
+import { AlertTriangle, Info, Flame, HelpCircle, Server, FolderOpen, Shield, ShieldAlert, Wifi, WifiOff } from "lucide-react";
 import { useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -207,6 +208,7 @@ function WarningsContent() {
   // Certificate and node warnings from system warnings
   const certWarnings = useMemo(() => systemWarnings?.certificate_warnings || [], [systemWarnings]);
   const nodeWarnings = useMemo(() => systemWarnings?.node_warnings || [], [systemWarnings]);
+  const kernelWarnings = useMemo(() => systemWarnings?.kernel_advisories || [], [systemWarnings]);
   
   // important: the tab is URL state, read on every render and written on change. It used to be
   // a useState re-seeded from ?tab= on every URL change while nothing ever wrote ?tab=, so a
@@ -431,7 +433,7 @@ function WarningsContent() {
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
             <div className="text-xl md:text-2xl font-bold">
-              {allWarnings.length + certWarnings.length + nodeWarnings.length}
+              {allWarnings.length + certWarnings.length + nodeWarnings.length + kernelWarnings.length}
             </div>
           </CardContent>
         </Card>
@@ -487,6 +489,12 @@ function WarningsContent() {
             <span className="hidden sm:inline">Offline Clusters</span>
             <span className="sm:hidden">Offline</span>
             <span className="text-[10px] md:text-xs">({nodeWarnings.length})</span>
+          </TabsTrigger>
+          <TabsTrigger value="kernel" className="gap-1 md:gap-2 text-xs md:text-sm">
+            <ShieldAlert className="h-3 w-3 md:h-4 md:w-4" />
+            <span className="hidden sm:inline">Host Kernels</span>
+            <span className="sm:hidden">Kernels</span>
+            <span className="text-[10px] md:text-xs">({kernelWarnings.length})</span>
           </TabsTrigger>
         </TabsList>
 
@@ -846,6 +854,16 @@ function WarningsContent() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Own component: this page already carries three tables and their state. */}
+        <TabsContent value="kernel">
+          <KernelAdvisoryTab
+            rows={kernelWarnings}
+            unread={systemWarnings?.kernel_advisories_unread ?? []}
+            failed={systemWarnings?.kernel_advisories_failed === true}
+            onShowDetail={(record) => handleShowWarningDetail("kernel", record)}
+          />
         </TabsContent>
       </Tabs>
 

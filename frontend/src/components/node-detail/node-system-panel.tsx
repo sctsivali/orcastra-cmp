@@ -3,6 +3,7 @@
 import { Info } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { KernelAdvisoryBadge } from "@/components/kernel-advisory/kernel-advisory-badge";
 import type { NodeStatus } from "@/types";
 
 const EMPTY = "N/A";
@@ -53,6 +54,17 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
           {isPartner ? <Field label="Storage Backend" value={String(env?.storage || EMPTY)} /> : null}
           <Field label="Firewall" value={String(env?.firewall || EMPTY)} />
         </div>
+        {/* every member's verdict, patched included: this panel is where an operator reads kernels */}
+        {isPartner ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium text-muted-foreground">Kernel Advisory</p>
+            <KernelAdvisoryBadge
+              clusterId={node.name}
+              showPatched
+              fallback={<span className="text-sm text-muted-foreground">Not read yet</span>}
+            />
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
