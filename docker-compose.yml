@@ -4,8 +4,12 @@ services:
     image: postgres:17-alpine
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-postgres
     restart: always
+    # important: loopback by default, the same rule as Redis below. The backend reaches Postgres
+    # over the compose network; a bare port published it on every interface, so the LAN and the
+    # tailnet could reach the database login. POSTGRES_PORT keeps its "[address:]port" form for a
+    # deployment that deliberately exposes it (POSTGRES_PORT=0.0.0.0:5432).
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-127.0.0.1:5432}:5432"
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
