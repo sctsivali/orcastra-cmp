@@ -36,6 +36,16 @@ def _no_vault(monkeypatch):
     monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(vault_enabled=False, vault_token=None))
 
 
+@pytest.fixture(autouse=True)
+def _no_kernel_rows(monkeypatch):
+    from app.models.kernel_advisory_schemas import KernelAdvisoryResponse
+
+    async def empty(*_a, **_k):
+        return KernelAdvisoryResponse()
+
+    monkeypatch.setattr(lxd_warnings, "build_kernel_report", empty)
+
+
 def _serve(monkeypatch, by_node):
     def fetch(_service, node):
         result = by_node[node]
@@ -106,3 +116,59 @@ def test_a_tenant_acl_drops_unpermitted_projects_and_hides_reasons(monkeypatch):
     assert body["unreachable_nodes"] == ["dead"]
     assert body["node_errors"] == {}
 
+
+def _kernel_report(state: str, severity: str):
+    from datetime import date
+
+    from app.models.kernel_advisory_schemas import (
+        HostKernelRow,
+        KernelAdvisoryFinding,
+        KernelAdvisoryInfo,
+        KernelAdvisoryResponse,
+    )
+
+    finding = KernelAdvisoryFinding(advisory_id="CVE-2026-99999", state=state, severity=severity,
+                                    reason="r", check_command="uname -r", reference_url="https://x")
+    info = KernelAdvisoryInfo(id="CVE-2026-99999", summary="s", reference_url="https://x",
+                              data_as_of=date(2026, 10, 19), introduced="2.6.27", fixed_mainline="7.3-rc7")
+    host = HostKernelRow(cluster_id="c1", display_name="C1", member="m1",
+                         kernel_version="5.15.0-185-generic", findings=[finding])
+    return KernelAdvisoryResponse(advisories=[info], hosts=[host])
+
+
+def test_kernel_advisories_join_the_feed_and_its_totals(monkeypatch):
+    _serve(monkeypatch, {"c1": NodeRead(rows=[_row("a", "c1", severity="low")])})
+
+    async def report(*_a, **_k):
+        return _kernel_report("exposed", "critical")
+
+    monkeypatch.setattr(lxd_warnings, "build_kernel_report", report)
+    body = _call(["c1"])
+    assert [(k["member"], k["warning_type"], k["severity"]) for k in body["kernel_advisories"]] == [
+        ("m1", "kernel_exposed", "critical")
+    ]
+    assert body["kernel_advisories"][0]["data_as_of"] == "2026-10-19"
+    assert (body["total"], body["critical"], body["info"]) == (2, 1, 1)
+
+
+def test_a_patched_host_adds_no_warning(monkeypatch):
+    _serve(monkeypatch, {"c1": NodeRead()})
+
+    async def report(*_a, **_k):
+        return _kernel_report("patched", "info")
+
+    monkeypatch.setattr(lxd_warnings, "build_kernel_report", report)
+    body = _call(["c1"])
+    assert body["kernel_advisories"] == [] and body["total"] == 0
+
+
+def test_a_failed_kernel_read_leaves_the_rest_of_the_feed(monkeypatch):
+    _serve(monkeypatch, {"c1": NodeRead(rows=[_row("a", "c1")])})
+
+    async def broken(*_a, **_k):
+        raise RuntimeError("vault unreachable")
+
+    monkeypatch.setattr(lxd_warnings, "build_kernel_report", broken)
+    body = _call(["c1"])
+    assert [w["uuid"] for w in body["lxd_warnings"]] == ["a"]
+    assert body["kernel_advisories"] == []

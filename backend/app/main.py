@@ -954,6 +954,10 @@ Ensure your client certificates are properly configured.
     # Cluster Members Router (MicroCloud)
     from app.routers.cluster_members import router as cluster_members_router
     app.include_router(cluster_members_router, prefix=settings.api_prefix)
+
+    # Security Advisories Router (host kernel exposure per cluster member)
+    from app.routers.security_advisories import router as security_advisories_router
+    app.include_router(security_advisories_router, prefix=settings.api_prefix)
     
     # Regions Router (Geographic overview)
     from app.routers.regions import router as regions_router

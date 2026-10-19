@@ -29,6 +29,12 @@ from app.core.org_scope import (
     project_is_visible,
 )
 from app.services.lxd.lazy_client import client_for
+from app.models.kernel_advisory_schemas import KernelAdvisoryWarning
+from app.services.kernel_advisory_report import (
+    build_kernel_report,
+    kernel_severity_totals,
+    kernel_warning_rows,
+)
 from pydantic import BaseModel, Field
 from app.core.lxd_path import safe_segment
 
@@ -47,6 +53,9 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=16)
+
+# Wall clock the polled feed waits for host kernels per cluster; see build_kernel_report.
+KERNEL_FEED_WALL_SECONDS = 12.0
 
 
 class WarningInfo(BaseModel):
@@ -413,7 +422,25 @@ async def get_all_system_warnings(
 
         except Exception as e:
             logger.warning(f"Could not fetch certificate warnings: {e}")
-        
+
+        # note: from the shared per-cluster cache, with a short wall for the polled feed. A cluster
+        # still reading past it finishes in its thread and lands in the cache for the next poll.
+        # important: an empty list must not read as "every kernel is patched". Clusters whose
+        # kernels were not read are named, and a failed assessment says so.
+        kernel_rows: List[KernelAdvisoryWarning] = []
+        kernel_unread: List[str] = []
+        kernel_failed = False
+        try:
+            report = await build_kernel_report(
+                lxd_service, host=None, fresh=False, wall=KERNEL_FEED_WALL_SECONDS
+            )
+            kernel_rows = kernel_warning_rows(report)
+            kernel_unread = report.unreachable_nodes
+        except Exception as e:  # noqa: BLE001 - the rest of the feed must still answer
+            kernel_failed = True
+            logger.warning(f"Could not assess host kernels: {e}")
+        kernel_critical, kernel_warning, kernel_info = kernel_severity_totals(kernel_rows)
+
         # Calculate totals
         critical = sum(1 for w in cert_warnings if w.get("severity") == "critical")
         critical += sum(1 for w in node_warnings if w.get("severity") == "critical")
@@ -426,15 +453,18 @@ async def get_all_system_warnings(
         info = sum(1 for w in cert_warnings if w.get("severity") == "info")
         info += sum(1 for w in node_warnings if w.get("severity") == "info")
         info += sum(1 for w in lxd_warnings if w.severity.lower() in ["info", "low"])
-        
+
         return {
-            "total": len(lxd_warnings) + len(cert_warnings) + len(node_warnings),
-            "critical": critical,
-            "warning": warning,
-            "info": info,
+            "total": len(lxd_warnings) + len(cert_warnings) + len(node_warnings) + len(kernel_rows),
+            "critical": critical + kernel_critical,
+            "warning": warning + kernel_warning,
+            "info": info + kernel_info,
             "lxd_warnings": [w.model_dump() for w in lxd_warnings],
             "certificate_warnings": cert_warnings,
             "node_warnings": node_warnings,
+            "kernel_advisories": [r.model_dump(mode="json") for r in kernel_rows],
+            "kernel_advisories_unread": kernel_unread,
+            "kernel_advisories_failed": kernel_failed,
             "nodes": nodes_to_query,
             "unreachable_nodes": fan.unreachable_nodes,
             "partial_nodes": fan.partial_nodes,

@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # TTL after deploy.
 RESOURCE_SCHEMA_VERSION = "v8"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
+# Per-cluster host kernel facts (services/lxd/host_kernels.py), cleared with the cluster.
+HOST_KERNELS_CACHE_PREFIX = "host_kernels:v1"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's
 # 30s cycle, the same way the monitoring dashboard's 35s cache is paired with it.
@@ -496,6 +498,10 @@ class CacheManager:
             # get() treats Redis as authoritative, so the stale entry was served
             # for the full TTL after a cluster changed.
             self.delete_pattern("api_responses", f"cluster_members:list:host={cluster_id}:*")
+            # important: host kernel facts are keyed by the cluster id alone. A deleted id that is
+            # registered again, by another organization or for other hardware, must not be
+            # served the old members' kernels for the rest of the TTL.
+            self.delete("api_responses", f"{HOST_KERNELS_CACHE_PREFIX}:{cluster_id}")
             logger.info(f"Cleared cache for specific cluster {cluster_id}")
 
         # Always clear list caches to force fresh fetch
