@@ -79,3 +79,66 @@
 .orcastra-spider-leg {
   stroke: hsl(var(--primary));
 }
+
+/* Whole-country regions (country-areas-layer.tsx). The status class lands on the SVG path, and a
+   CSS property beats the presentation attribute Leaflet writes, so fill and stroke follow the
+   theme live without a redraw. The fill stays faint so the basemap coast still reads through. */
+.country-area {
+  fill-opacity: 0.2;
+  stroke-opacity: 0.75;
+  transition: fill-opacity 120ms ease-out;
+}
+
+.dark .country-area {
+  fill-opacity: 0.3;
+}
+
+.country-area--online {
+  fill: hsl(var(--status-online));
+  stroke: hsl(var(--status-online));
+}
+
+.country-area--partial {
+  fill: hsl(var(--status-pending));
+  stroke: hsl(var(--status-pending));
+}
+
+.country-area--offline {
+  fill: hsl(var(--status-offline));
+  stroke: hsl(var(--status-offline));
+}
+
+.country-area.leaflet-interactive:hover {
+  fill-opacity: 0.35;
+}
+
+.dark .country-area.leaflet-interactive:hover {
+  fill-opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .country-area {
+    transition: none;
+  }
+}
+
+.leaflet-container .country-area-tooltip {
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.15);
+  font-size: 12px;
+}
+
+.leaflet-container .country-area-tooltip.leaflet-tooltip-top::before {
+  border-top-color: hsl(var(--border));
+}
+
+/* Leaflet makes every marker focusable; without a visible ring a keyboard user cannot tell which
+   region Enter will select. */
+.leaflet-marker-icon.country-chip:focus-visible,
+.leaflet-marker-icon.custom-marker:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  border-radius: 9999px;
+}

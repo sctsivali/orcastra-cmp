@@ -4,7 +4,7 @@ import * as React from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
 import { useTheme } from "@/components/theme-provider";
-import { OFFLINE_BASEMAP_ATTRIBUTION, OFFLINE_BASEMAP_URL } from "@/lib/map-basemap";
+import { OFFLINE_BASEMAP_ATTRIBUTION, OFFLINE_BASEMAP_URL, loadGeoAsset } from "@/lib/map-basemap";
 import { themeColor } from "./map-icons";
 
 /**
@@ -17,29 +17,8 @@ import { themeColor } from "./map-icons";
  * infrastructure physically sits.
  */
 
-let basemapRequest: Promise<GeoJSON.FeatureCollection> | null = null;
-
-/**
- * Cached at module scope so moving between pages in the SPA does not refetch, and so two
- * mounted maps would share one request rather than racing.
- */
 function loadBasemap(): Promise<GeoJSON.FeatureCollection> {
-  if (basemapRequest === null) {
-    basemapRequest = fetch(OFFLINE_BASEMAP_URL)
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Basemap request failed with HTTP ${response.status}`);
-        }
-        return response.json() as Promise<GeoJSON.FeatureCollection>;
-      })
-      .catch((error) => {
-        // Clearing the cache lets a later mount retry instead of latching the failure for
-        // the rest of the session.
-        basemapRequest = null;
-        throw error;
-      });
-  }
-  return basemapRequest;
+  return loadGeoAsset(OFFLINE_BASEMAP_URL, (data) => data as GeoJSON.FeatureCollection);
 }
 
 interface OfflineBasemapProps {

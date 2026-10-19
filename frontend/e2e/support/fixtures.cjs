@@ -351,6 +351,8 @@ async function installApiFixtures(page, role, options = {}) {
       };
     } else if (options.instanceCreatePage === true && path === "/images/remote") {
       body = { images: [], total: 0 };
+    } else if (typeof options.regionsOverview === "function" && path === "/regions") {
+      body = options.regionsOverview();
     } else if (path === "/nodes/availability") {
       body = platformAvailability();
     } else if (path === "/nodes") {

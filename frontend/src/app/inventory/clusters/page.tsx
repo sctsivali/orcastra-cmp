@@ -4,6 +4,7 @@ import * as React from "react";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { formatHypervisorType } from "@/lib/utils";
+import { placeShort } from "@/lib/regions/place";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -453,7 +454,7 @@ function ClustersContent() {
                             variant="outline"
                             size="sm"
                             onClick={() => setLocationModal({ open: true, cluster })}
-                            title={cluster.location ? `Location: ${cluster.location.city}` : "Set Location"}
+                            title={cluster.location ? `Location: ${placeShort(cluster.location)}` : "Set Location"}
                             className={cluster.location ? "text-status-online" : "text-muted-foreground"}
                           >
                             <MapPin className="h-4 w-4" />

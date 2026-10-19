@@ -451,7 +451,7 @@ export function NodeRegisterForm() {
                   <p className="text-sm text-destructive">{errors.region_id.message}</p>
                 )}
                 <p id="region_id-hint" className="text-xs text-muted-foreground">
-                  Any regency or city in Indonesia, or a country elsewhere. This places the cluster on the regions map.
+                  Any regency or city in Indonesia, or a country elsewhere. A regency or city is pinned on the regions map; a country is shaded as a whole.
                 </p>
               </div>
 

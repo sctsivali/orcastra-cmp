@@ -16,7 +16,8 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import { useUpdateClusterLocation } from "@/hooks/use-lxd";
 import { RegionPicker, useRegionCatalog } from "@/components/regions/region-picker";
-import { regionContext, resolveRegion, toGeoLocation, type Region } from "@/lib/regions/catalog";
+import { resolveRegion, toGeoLocation, type Region } from "@/lib/regions/catalog";
+import { isWholeCountry, placeDetail, placeName } from "@/lib/regions/place";
 import type { GeoLocation } from "@/types/api";
 
 interface ClusterLocationDialogProps {
@@ -69,7 +70,7 @@ export function ClusterLocationDialog({
       });
       toast({
         title: "Location Updated",
-        description: `${cluster.display_name} is now placed in ${selected.name}, ${regionContext(selected)}.`,
+        description: `${cluster.display_name} is now placed in ${placeName(selected)}.`,
       });
       onOpenChange(false);
       onSuccess?.();
@@ -92,8 +93,8 @@ export function ClusterLocationDialog({
           <DialogDescription>
             {cluster && (
               <>
-                Where <span className="font-semibold">{cluster.display_name}</span> runs. It is
-                placed on the regions map at this point.
+                Where <span className="font-semibold">{cluster.display_name}</span> runs. A regency
+                or city is pinned on the regions map; a country is shaded as a whole.
               </>
             )}
           </DialogDescription>
@@ -104,7 +105,7 @@ export function ClusterLocationDialog({
             <div className="flex items-center gap-2 rounded-md bg-muted/50 p-2 text-sm text-muted-foreground">
               <Globe className="h-4 w-4 shrink-0" aria-hidden />
               <span>
-                Current: {current.region_name}, {current.province ?? current.country_name}
+                Current: {isWholeCountry(current) ? `${current.country_name} (whole country)` : placeName(current)}
               </span>
             </div>
           )}
@@ -119,7 +120,9 @@ export function ClusterLocationDialog({
             />
             {selected && (
               <p className="text-xs text-muted-foreground">
-                {selected.city}, {regionContext(selected)} ({selected.latitude}, {selected.longitude})
+                {isWholeCountry(selected)
+                  ? `Shown on the map as the whole of ${selected.country_name}, because the exact site is not recorded.`
+                  : `${placeDetail(selected)} (${selected.latitude}, ${selected.longitude})`}
               </p>
             )}
           </div>

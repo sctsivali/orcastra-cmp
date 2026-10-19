@@ -30,6 +30,33 @@ export type BasemapConfig = OfflineBasemapConfig | TileBasemapConfig;
 
 export const OFFLINE_BASEMAP: OfflineBasemapConfig = { mode: "offline" };
 
+const geoAssets = new Map<string, Promise<unknown>>();
+
+/**
+ * Fetches a bundled geometry file from public/geo once per page load.
+ *
+ * Cached at module scope so moving between pages in the SPA does not refetch, and so two
+ * mounted maps share one request rather than racing. A failure clears the entry, so a later
+ * mount retries instead of latching the failure for the rest of the session.
+ */
+export function loadGeoAsset<T>(url: string, parse: (data: unknown) => T): Promise<T> {
+  let request = geoAssets.get(url) as Promise<T> | undefined;
+  if (request === undefined) {
+    request = fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`${url} request failed with HTTP ${response.status}`);
+        return response.json() as Promise<unknown>;
+      })
+      .then(parse)
+      .catch((error: unknown) => {
+        geoAssets.delete(url);
+        throw error;
+      });
+    geoAssets.set(url, request);
+  }
+  return request;
+}
+
 /** Versioned so the immutable cache header in next.config.js is safe to apply. */
 export const OFFLINE_BASEMAP_URL = "/geo/world-land-50m.v1.json";
 

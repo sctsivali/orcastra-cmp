@@ -38,6 +38,7 @@ import { BasemapConfig } from "@/lib/map-basemap";
 import { RegionsMapCard } from "./regions-map-card";
 import { REGIONS } from "./regions-table-config";
 import { RegionSummary } from "@/types/api";
+import { isWholeCountry, placeDetail } from "@/lib/regions/place";
 
 function RegionCard({
   region,
@@ -65,7 +66,7 @@ function RegionCard({
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
-                  <MapPin className="h-5 w-5" />
+                  {isWholeCountry(region) ? <Globe className="h-5 w-5" aria-hidden /> : <MapPin className="h-5 w-5" aria-hidden />}
                 </div>
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
@@ -77,7 +78,7 @@ function RegionCard({
                     )}
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    {hasCountry ? `${region.city}, ${region.province ?? region.country_name}` : "No location data"}
+                    {hasCountry ? placeDetail(region) : "No location data"}
                   </CardDescription>
                   {region.facility_name && (
                     <div className="flex items-center gap-1.5 mt-1">
@@ -92,7 +93,9 @@ function RegionCard({
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-right">
-                  <p className="text-sm font-medium">{region.node_count} clusters</p>
+                  <p className="text-sm font-medium">
+                    {region.node_count === 1 ? "1 cluster" : `${region.node_count} clusters`}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {onlineClusters} online
                   </p>
@@ -181,6 +184,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   const { data, isLoading, error, refetch, refreshNow, dataUpdatedAt } = useRegionsOverview();
   const [expandedRegions, setExpandedRegions] = React.useState<Set<string>>(new Set());
   const [selectedRegion, setSelectedRegion] = React.useState<string | null>(null);
+  const [focusSignal, setFocusSignal] = React.useState(0);
 
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState<number>(GRID_PAGE_SIZE);
@@ -259,6 +263,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   // View region on map - scroll to map and zoom to location
   const handleViewOnMap = (regionId: string) => {
     setSelectedRegion(regionId);
+    setFocusSignal((n) => n + 1);
     // Scroll to map section
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -365,6 +370,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
       <RegionsMapCard
         regions={filteredRegions}
         selectedRegion={selectedRegion}
+        focusSignal={focusSignal}
         onSelectRegion={handleSelectRegion}
         basemap={basemap}
         isLoading={isLoading}

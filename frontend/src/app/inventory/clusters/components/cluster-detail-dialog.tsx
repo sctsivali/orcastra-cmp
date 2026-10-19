@@ -9,6 +9,7 @@ import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { formatContinent, formatDateTime } from "@/lib/utils";
+import { isWholeCountry } from "@/lib/regions/place";
 import { MapPin } from "lucide-react";
 import type { ClusterInfo } from "@/types/api";
 import { ClusterCertificatePanel } from "./cluster-certificate-panel";
@@ -48,6 +49,7 @@ export function ClusterDetailDialog({
   if (!cluster) return null;
 
   const location = cluster.location;
+  const wholeCountry = location ? isWholeCountry(location) : false;
   const statusMeta = clusterStatusMeta(cluster.status);
 
   return (
@@ -103,11 +105,17 @@ export function ClusterDetailDialog({
               <DetailField label="Region" value={location.region_name} />
               {location.province && <DetailField label="Province" value={location.province} />}
               <DetailField label="Country" value={location.country_name} />
-              <DetailField label="City" value={location.city} />
+              {/* A country stands for all of it: a stored city there is at most the capital an
+                  older catalogue used, never where the cluster runs. */}
+              {wholeCountry ? (
+                <DetailField label="Placement" value="Whole country, exact site not recorded" />
+              ) : (
+                <DetailField label="City" value={location.city} />
+              )}
               <DetailField label="Continent" value={formatContinent(location.continent)} />
               <DetailField label="Timezone" value={location.timezone} />
               <DetailField
-                label="Coordinates"
+                label={wholeCountry ? "Map point" : "Coordinates"}
                 value={
                   Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
                     ? `${location.latitude}, ${location.longitude}`

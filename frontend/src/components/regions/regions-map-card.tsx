@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { RegionSummary } from "@/types/api";
 import { BasemapConfig } from "@/lib/map-basemap";
+import { useCountryAreas } from "@/lib/regions/country-areas";
+import { isWholeCountry } from "@/lib/regions/place";
 import type { RegionsMapProps } from "./regions-map";
 
 const RegionsMap = dynamic<RegionsMapProps>(
@@ -35,10 +37,28 @@ function isUnplaceable(region: RegionSummary): boolean {
   return latitude === 0 && longitude === 0;
 }
 
+/** What the two marker shapes mean, shown once a whole country is on the map. */
+function MapLegend() {
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5">
+        <span aria-hidden className="h-3 w-3 shrink-0 rounded-full border-2 border-background bg-muted-foreground" />
+        Pin: exact regency or city
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span aria-hidden className="h-3 w-4 shrink-0 rounded-[2px] border border-muted-foreground bg-muted-foreground/25" />
+        Shaded: whole country, exact site not recorded
+      </span>
+    </div>
+  );
+}
+
 interface RegionsMapCardProps {
   regions: RegionSummary[];
   selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
+  // bumped by a region card's "View on Map"
+  focusSignal: number;
   basemap: BasemapConfig;
   isLoading: boolean;
 }
@@ -47,6 +67,7 @@ export function RegionsMapCard({
   regions,
   selectedRegion,
   onSelectRegion,
+  focusSignal,
   basemap,
   isLoading,
 }: RegionsMapCardProps) {
@@ -55,6 +76,8 @@ export function RegionsMapCard({
 
   const placeable = React.useMemo(() => regions.filter((r) => !isUnplaceable(r)), [regions]);
   const unplaceableCount = regions.length - placeable.length;
+  const hasCountries = placeable.some(isWholeCountry);
+  const { areas, status: areasStatus } = useCountryAreas(hasCountries);
 
   const handleBasemapFallback = React.useCallback(() => setTilesFellBack(true), []);
 
@@ -64,7 +87,7 @@ export function RegionsMapCard({
         <div className="space-y-1.5">
           <CardTitle className="text-lg">Cluster Locations</CardTitle>
           <CardDescription>
-            Click on a marker to view region details below. Scroll to zoom.
+            Click a pin, a country or its chip to see the region below. Scroll to zoom.
           </CardDescription>
         </div>
         <Button
@@ -85,13 +108,18 @@ export function RegionsMapCard({
         ) : (
           <RegionsMap
             regions={placeable}
+            countryAreas={areas}
+            areasSettled={areasStatus !== "loading"}
             fitSignal={fitSignal}
+            focusSignal={focusSignal}
             selectedRegion={selectedRegion}
             onSelectRegion={onSelectRegion}
             basemap={basemap}
             onBasemapFallback={handleBasemapFallback}
           />
         )}
+
+        {!isLoading && hasCountries && <MapLegend />}
 
         {/* Saying what the map is not showing, rather than dropping it in silence. */}
         {!isLoading && unplaceableCount > 0 && (
@@ -100,6 +128,12 @@ export function RegionsMapCard({
               ? "1 region has no location data and is not shown on the map."
               : `${unplaceableCount} regions have no location data and are not shown on the map.`}{" "}
             Set a location when registering the node, or from the cluster detail page.
+          </p>
+        )}
+
+        {!isLoading && areasStatus === "failed" && (
+          <p className="text-xs text-muted-foreground mt-2">
+            Country outlines could not be loaded, so each country is marked by its chip only.
           </p>
         )}
 

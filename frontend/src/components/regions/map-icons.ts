@@ -1,6 +1,7 @@
 import L from "leaflet";
 import { formatBytes, formatMemory } from "@/lib/utils";
 import { escapeHtml } from "@/lib/map-basemap";
+import { placeDetail } from "@/lib/regions/place";
 import { RegionSummary } from "@/types/api";
 
 /**
@@ -57,21 +58,71 @@ function createStatusIcon(color: string): L.DivIcon {
   });
 }
 
-export function getRegionIcon(region: RegionSummary): L.DivIcon {
-  const onlineCount = region.nodes.filter((n) => n.status === "online").length;
-  const totalCount = region.nodes.length;
+export type RegionStatus = "online" | "partial" | "offline";
 
-  // note: the markers are injected as raw HTML into a Leaflet DivIcon, so they take a CSS
-  // value rather than a Tailwind class. Reading the same --status-* custom properties is what
-  // keeps the map on the product's status palette in both themes instead of three hex
-  // literals that drift the first time a token is retuned.
-  if (totalCount > 0 && onlineCount === totalCount) {
-    return createStatusIcon("hsl(var(--status-online))");
-  }
-  if (onlineCount > 0) {
-    return createStatusIcon("hsl(var(--status-pending))");
-  }
-  return createStatusIcon("hsl(var(--status-offline))");
+// note: the markers are injected as raw HTML into a Leaflet DivIcon, so they take a CSS value
+// rather than a Tailwind class. Reading the same --status-* custom properties is what keeps the
+// map on the product's status palette in both themes instead of three hex literals that drift
+// the first time a token is retuned. The country outlines use the same tokens from map-theme.css.
+const STATUS_TOKEN: Record<RegionStatus, string> = {
+  online: "--status-online",
+  partial: "--status-pending",
+  offline: "--status-offline",
+};
+
+export function regionStatus(region: RegionSummary): RegionStatus {
+  const onlineCount = region.nodes.filter((n) => n.status === "online").length;
+  if (region.nodes.length > 0 && onlineCount === region.nodes.length) return "online";
+  return onlineCount > 0 ? "partial" : "offline";
+}
+
+export function getRegionIcon(region: RegionSummary): L.DivIcon {
+  return createStatusIcon(`hsl(var(${STATUS_TOKEN[regionStatus(region)]}))`);
+}
+
+const CHIP_HEIGHT = 22;
+
+/**
+ * The marker for a region that is a whole country: its ISO code on the status colour, and the
+ * cluster count when there is more than one.
+ *
+ * A pill rather than the round pin, so it does not read as a point on the ground. The shaded
+ * outline is what says where; the chip is the part a click, a keyboard and a phone-sized finger
+ * can always reach, including on a country too small to see at world zoom (Singapore, Monaco).
+ */
+export function createCountryChip(region: RegionSummary): L.DivIcon {
+  const token = STATUS_TOKEN[regionStatus(region)];
+  const count = region.node_count > 1 ? (region.node_count > 99 ? "99+" : String(region.node_count)) : "";
+  // fixed per character, so the anchor sits on the point whatever the count
+  const width = 30 + (count ? 6 + count.length * 7 : 0);
+  return L.divIcon({
+    className: "country-chip",
+    html: `
+      <div style="
+        height: ${CHIP_HEIGHT}px;
+        width: ${width}px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        border-radius: 9999px;
+        background-color: hsl(var(${token}));
+        color: hsl(var(${token}-foreground));
+        border: 2px solid hsl(var(--background));
+        box-shadow: 0 2px 5px hsl(var(--foreground) / 0.25);
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+        letter-spacing: 0.02em;
+      ">
+        <span>${escapeHtml(region.country_code)}</span>${count ? `<span style="font-weight: 500;">${count}</span>` : ""}
+      </div>
+    `,
+    iconSize: [width, CHIP_HEIGHT],
+    iconAnchor: [width / 2, CHIP_HEIGHT / 2],
+    popupAnchor: [0, -CHIP_HEIGHT / 2],
+  });
 }
 
 /**
@@ -149,7 +200,7 @@ export function createPopupContent(region: RegionSummary): string {
         ${escapeHtml(region.region_name)}
       </h3>
       <p style="font-size: 12px; color: hsl(var(--muted-foreground)); margin-bottom: 4px;">
-        ${escapeHtml(region.city)}, ${escapeHtml(region.province ?? region.country_name)}
+        ${escapeHtml(placeDetail(region))}
       </p>
       ${facilitySection}
 

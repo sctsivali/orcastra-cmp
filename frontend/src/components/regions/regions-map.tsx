@@ -12,8 +12,11 @@ import "./map-theme.css";
 import { RegionSummary } from "@/types/api";
 import { useTheme } from "@/components/theme-provider";
 import { BasemapConfig, OFFLINE_BASEMAP, OFFLINE_MAX_ZOOM } from "@/lib/map-basemap";
+import type { CountryAreas } from "@/lib/regions/country-areas";
+import { isWholeCountry } from "@/lib/regions/place";
 import { OfflineBasemap } from "./offline-basemap";
-import { createClusterIcon, createPopupContent, getRegionIcon } from "./map-icons";
+import { CountryAreasLayer, countryAreaFor, focusBounds } from "./country-areas-layer";
+import { createClusterIcon, createCountryChip, createPopupContent, getRegionIcon } from "./map-icons";
 
 /** Repeated failures mean the endpoint is wrong or gone; one is a hiccup on a single tile. */
 const TILE_ERROR_LIMIT = 4;
@@ -25,57 +28,104 @@ const WORLD_ZOOM = 2;
 const WORLD_BOUNDS = L.latLngBounds([-85, -200], [85, 200]);
 // Fitting never zooms in further than this, so one cluster still shows its surroundings.
 const FIT_MAX_ZOOM = 6;
+// A whole country with no outline to frame (the outlines failed to load) is shown from this far
+// out at most: closer in, a point inside the country reads as a site.
+const COUNTRY_POINT_ZOOM = 4;
+const FIT_PADDING: L.PointTuple = [40, 40];
+
+/** Where the map should look for one region: a country's main landmasses, or the point. */
+function regionTarget(region: RegionSummary, areas: CountryAreas | null): L.LatLngBounds | L.LatLngTuple {
+  const area = isWholeCountry(region) ? countryAreaFor(areas, region) : undefined;
+  return area ? focusBounds(area) : [region.latitude, region.longitude];
+}
+
+interface FitToRegionsProps {
+  regions: RegionSummary[];
+  areas: CountryAreas | null;
+  // false while country outlines are still loading, so the map frames once rather than twice
+  areasSettled: boolean;
+  fitSignal: number;
+  maxZoom: number;
+}
 
 /**
  * Frames every plotted region when the set of regions changes or the operator asks for it.
  * Keyed on ids and coordinates rather than the array, which the overview poll replaces every
  * cycle: re-fitting on each poll would yank the map away from wherever the operator panned.
  */
-function FitToRegions({ regions, fitSignal, maxZoom }: { regions: RegionSummary[]; fitSignal: number; maxZoom: number }) {
+function FitToRegions({ regions, areas, areasSettled, fitSignal, maxZoom }: FitToRegionsProps) {
   const map = useMap();
-  const latest = React.useRef({ regions, maxZoom });
-  latest.current = { regions, maxZoom };
+  const latest = React.useRef({ regions, areas, maxZoom });
+  latest.current = { regions, areas, maxZoom };
   const signature = regions
     .map((r) => `${r.region_id}@${r.latitude},${r.longitude}`)
     .sort()
     .join("|");
 
   React.useEffect(() => {
-    if (!map) return;
-    const points = latest.current.regions.map((r) => [r.latitude, r.longitude] as L.LatLngTuple);
+    if (!map || !areasSettled) return;
+    const { regions: current, areas: outlines } = latest.current;
     const ceiling = Math.min(FIT_MAX_ZOOM, latest.current.maxZoom);
-    if (points.length === 0) map.setView(WORLD_CENTER, WORLD_ZOOM);
-    else if (points.length === 1) map.setView(points[0], ceiling);
-    else map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: ceiling });
-  }, [map, signature, fitSignal]);
+    const bounds = L.latLngBounds([]);
+    for (const region of current) bounds.extend(regionTarget(region, outlines));
+    if (!bounds.isValid()) {
+      map.setView(WORLD_CENTER, WORLD_ZOOM);
+    } else if (bounds.getSouthWest().equals(bounds.getNorthEast())) {
+      const onlyCountries = current.every(isWholeCountry);
+      map.setView(bounds.getCenter(), onlyCountries ? Math.min(COUNTRY_POINT_ZOOM, ceiling) : ceiling);
+    } else {
+      map.fitBounds(bounds, { padding: FIT_PADDING, maxZoom: ceiling });
+    }
+  }, [map, signature, fitSignal, areasSettled]);
+
+  return null;
+}
+
+interface FocusSelectedRegionProps {
+  regions: RegionSummary[];
+  areas: CountryAreas | null;
+  selectedRegion: string | null;
+  // bumped by "View on Map", so asking for the region already selected still moves the map
+  focusSignal: number;
+  focusZoom: number;
+}
+
+/**
+ * Flies to the region the operator picked: a whole country framed on its main landmasses, any
+ * other region on its point.
+ *
+ * important: keyed on the selection alone. It used to depend on the regions array, which the
+ * overview poll replaces, so every refresh after a selection flew the map back to it.
+ */
+function FocusSelectedRegion({ regions, areas, selectedRegion, focusSignal, focusZoom }: FocusSelectedRegionProps) {
+  const map = useMap();
+  const latest = React.useRef({ regions, areas });
+  latest.current = { regions, areas };
+
+  React.useEffect(() => {
+    if (!map || !selectedRegion) return;
+    const region = latest.current.regions.find((r) => r.region_id === selectedRegion);
+    if (!region) return;
+    const target = regionTarget(region, latest.current.areas);
+    if (target instanceof L.LatLngBounds) {
+      map.flyToBounds(target, { padding: FIT_PADDING, maxZoom: focusZoom, duration: 1.5 });
+    } else {
+      const zoom = isWholeCountry(region) ? Math.min(COUNTRY_POINT_ZOOM, focusZoom) : focusZoom;
+      map.flyTo(target, zoom, { duration: 1.5 });
+    }
+  }, [map, selectedRegion, focusSignal, focusZoom]);
 
   return null;
 }
 
 interface MarkerClusterLayerProps {
   regions: RegionSummary[];
-  selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
-  focusZoom: number;
 }
 
-function MarkerClusterLayer({
-  regions,
-  selectedRegion,
-  onSelectRegion,
-  focusZoom,
-}: MarkerClusterLayerProps) {
+function MarkerClusterLayer({ regions, onSelectRegion }: MarkerClusterLayerProps) {
   const map = useMap();
   const clusterGroupRef = React.useRef<L.MarkerClusterGroup | null>(null);
-
-  React.useEffect(() => {
-    if (selectedRegion && map) {
-      const region = regions.find((r) => r.region_id === selectedRegion);
-      if (region) {
-        map.flyTo([region.latitude, region.longitude], focusZoom, { duration: 1.5 });
-      }
-    }
-  }, [selectedRegion, regions, map, focusZoom]);
 
   React.useEffect(() => {
     if (!map) return;
@@ -103,9 +153,13 @@ function MarkerClusterLayer({
     });
 
     regions.forEach((region) => {
+      const country = isWholeCountry(region);
+      // note: a country's chip joins the same cluster group as the pins, so a bubble still counts
+      // regions and a crowded corner of the map (Singapore beside Batam) merges instead of
+      // stacking chips. Its shading is drawn outside the group and stays visible either way.
       const marker = L.marker([region.latitude, region.longitude], {
-        icon: getRegionIcon(region),
-        title: region.region_name,
+        icon: country ? createCountryChip(region) : getRegionIcon(region),
+        title: country ? `${region.region_name}, whole country` : region.region_name,
       });
 
       marker.bindPopup(createPopupContent(region), {
@@ -115,6 +169,11 @@ function MarkerClusterLayer({
 
       marker.on("click", () => {
         onSelectRegion(region.region_id);
+      });
+      // Leaflet makes a marker focusable but its Enter only opens the popup and never fires
+      // click, so a keyboard user could reach a region on the map and not select it.
+      marker.on("keypress", (event: L.LeafletKeyboardEvent) => {
+        if (event.originalEvent.key === "Enter") onSelectRegion(region.region_id);
       });
 
       clusterGroup.addLayer(marker);
@@ -198,8 +257,12 @@ function BasemapLayer({ basemap, onFallback }: BasemapLayerProps) {
 
 export interface RegionsMapProps {
   regions: RegionSummary[];
+  // outlines for the whole-country regions; null until loaded, or when they failed
+  countryAreas: CountryAreas | null;
+  areasSettled: boolean;
   // bumped by the card's "Fit to clusters" button
   fitSignal?: number;
+  focusSignal?: number;
   selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
   basemap: BasemapConfig;
@@ -208,7 +271,10 @@ export interface RegionsMapProps {
 
 export default function RegionsMap({
   regions,
+  countryAreas,
+  areasSettled,
   fitSignal = 0,
+  focusSignal = 0,
   selectedRegion,
   onSelectRegion,
   basemap,
@@ -232,6 +298,7 @@ export default function RegionsMap({
   const maxZoom =
     effectiveBasemap.mode === "offline" ? OFFLINE_MAX_ZOOM : effectiveBasemap.maxZoom;
   const focusZoom = Math.min(10, maxZoom);
+  const countryRegions = React.useMemo(() => regions.filter(isWholeCountry), [regions]);
 
   return (
     <MapContainer
@@ -259,14 +326,25 @@ export default function RegionsMap({
 
       <ZoomControl position="topright" />
 
-      <FitToRegions regions={regions} fitSignal={fitSignal} maxZoom={maxZoom} />
-
-      <MarkerClusterLayer
+      <FitToRegions
         regions={regions}
+        areas={countryAreas}
+        areasSettled={areasSettled}
+        fitSignal={fitSignal}
+        maxZoom={maxZoom}
+      />
+
+      <FocusSelectedRegion
+        regions={regions}
+        areas={countryAreas}
         selectedRegion={selectedRegion}
-        onSelectRegion={onSelectRegion}
+        focusSignal={focusSignal}
         focusZoom={focusZoom}
       />
+
+      <CountryAreasLayer regions={countryRegions} areas={countryAreas} onSelectRegion={onSelectRegion} />
+
+      <MarkerClusterLayer regions={regions} onSelectRegion={onSelectRegion} />
     </MapContainer>
   );
 }
