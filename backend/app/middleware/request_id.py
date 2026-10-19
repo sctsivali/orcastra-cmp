@@ -3,6 +3,7 @@ Request ID Middleware
 Generates and propagates unique request IDs for end-to-end tracing.
 """
 
+import re
 import uuid
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -16,13 +17,24 @@ from app.core.request_security import resolve_client_ip
 # Header name for request ID propagation
 REQUEST_ID_HEADER = "X-Request-ID"
 
+# important: the request ID is always minted here. It becomes the access log's OpenSearch `_id`
+# (Fluent Bit `Id_Key request_id`, an upsert), so a caller-chosen ID let a client overwrite the
+# access record of an earlier request, its own included, and shape the bulk metadata line. The
+# caller's header is kept for correlation as `client_request_id`, and only when it is a plain token.
+_CLIENT_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
+
+
+def client_request_id(value: str | None) -> str | None:
+    """The caller's X-Request-ID when it is a plain token, else None."""
+    return value if value and _CLIENT_REQUEST_ID.fullmatch(value) else None
+
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """
     Middleware to generate and propagate request IDs.
     
-    - Generates a new UUID if X-Request-ID header is not present
-    - Propagates existing request ID if header is present
+    - Generates a new UUID for every request (see the note above on why a caller's is not used)
+    - Keeps a caller's plain-token X-Request-ID as request.state.client_request_id
     - Stores request ID in context for access by other components
     - Adds X-Request-ID header to response
     """
@@ -30,10 +42,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        # Get or generate request ID
-        request_id = request.headers.get(REQUEST_ID_HEADER)
-        if not request_id:
-            request_id = str(uuid.uuid4())
+        request_id = str(uuid.uuid4())
+        request.state.client_request_id = client_request_id(request.headers.get(REQUEST_ID_HEADER))
         
         # Extract user info from headers/session (if available)
         user_id = self._extract_user_id(request)

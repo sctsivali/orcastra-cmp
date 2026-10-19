@@ -161,6 +161,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             "@timestamp": datetime.now(timezone.utc).isoformat(),
             "log_type": "access",
             "request_id": ctx.request_id if ctx else request.state.request_id if hasattr(request.state, "request_id") else None,
+            "client_request_id": getattr(request.state, "client_request_id", None),
             "service": self.service_name,
             "version": self.version,
             "method": request.method,
