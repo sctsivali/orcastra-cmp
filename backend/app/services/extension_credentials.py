@@ -313,10 +313,14 @@ def revoke_install_credential(vault_client, key_id: str) -> None:
     _retire_key(vault_client, key_id, grace_seconds=0)
 
 
-def destroy_install_credential(vault_client, key_id: str) -> None:
-    """Remove the key entirely. Uninstall only, where nothing should be left to read."""
-    delete_api_key_from_vault(vault_client, key_id)
+def destroy_install_credential(vault_client, key_id: str) -> bool:
+    """Remove the key entirely. Uninstall only, where nothing should be left to read.
+
+    True only when Vault holds nothing of it any more, so the teardown records what it removed.
+    """
+    removed = delete_api_key_from_vault(vault_client, key_id)
     evict_api_key_cache(key_id)
+    return removed
 
 
 def destroy_signing_secret(vault_client, install_id: int) -> bool:

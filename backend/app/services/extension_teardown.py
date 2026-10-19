@@ -11,6 +11,7 @@ describing it, which is a security failure nobody notices. Order for fail-safety
 failure mode is denial rather than continued access.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -131,14 +132,16 @@ async def teardown_install(
     """
     done: List[str] = []
 
-    destroy_install_credential(vault_client, api_key_id)
-    done.append("vault:api_key_metadata")
-    done.append("vault:api_key_secret")
+    # note: off the event loop (one Vault call per record under the key), and recorded only when
+    # Vault confirms nothing of the key is left, the same rule as the two entries below.
+    if await asyncio.to_thread(lambda: destroy_install_credential(vault_client, api_key_id)):
+        done.append("vault:api_key_metadata")
+        done.append("vault:api_key_secret")
     done.append("process:key_metadata_cache")
 
     if previous_api_key_id:
-        destroy_install_credential(vault_client, previous_api_key_id)
-        done.append("vault:superseded_api_key")
+        if await asyncio.to_thread(lambda: destroy_install_credential(vault_client, previous_api_key_id)):
+            done.append("vault:superseded_api_key")
 
     # important: these two swallow their own failures, so calling them proves nothing. They are
     # the entries that matter most, because a Vault-side failure leaves real secret material

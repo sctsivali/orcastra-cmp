@@ -444,6 +444,9 @@ class VaultClient:
             # Invalidate all related list caches
             cache = get_cache()
             if cache:
+                # note: the cached copy of the data path too. Only the data delete used to drop it,
+                # so a permanently deleted descriptor was still served from the mirror for its TTL.
+                cache.delete("vault", path.replace("secret/metadata/", "secret/data/", 1))
                 # Invalidate all parent list caches
                 path_parts = path.split("/")
                 for i in range(len(path_parts), 0, -1):

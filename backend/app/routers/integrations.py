@@ -1004,18 +1004,46 @@ def list_api_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
         return []
 
 
-def delete_api_key_from_vault(vault_client, key_id: str):
-    """Delete API key from Vault."""
+def api_key_vault_records(vault_client, key_id: str) -> List[str]:
+    """Every KV v2 metadata path under one API key, descriptor last.
+
+    note: the descriptor goes last so a delete that stops part way still leaves the key findable,
+    and retryable from the UI, rather than an orphaned secret nothing describes.
+    """
+    base = f"secret/metadata/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}"
     try:
-        vault_client.vault_delete(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata"
-        )
-        vault_client.vault_delete(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
-        )
-        logger.info(f"Deleted API key {key_id} from Vault")
-    except Exception as e:
-        logger.warning(f"Failed to delete API key from Vault: {e}")
+        users = vault_client.vault_list(f"{base}/users", use_cache=False) or []
+    except Exception:  # noqa: BLE001 - no mappings listed is no mappings to remove
+        users = []
+    return [f"{base}/users/{u.rstrip('/')}" for u in users] + [f"{base}/secret", f"{base}/metadata"]
+
+
+def delete_api_key_from_vault(vault_client, key_id: str) -> bool:
+    """Delete an API key from Vault for good. True only when nothing of it can still be read.
+
+    important: metadata deletes, not data deletes. A KV v2 data delete only marks the latest
+    version deleted, so a "deleted" key stayed in the LIST, its secret could still be undeleted
+    from version history, and every reconcile pass read each one back as a 404 (1286 of them,
+    about 17 audit lines a second, on the dev deployment). A policy without delete on
+    secret/metadata falls back to the data delete, which at least stops the key working.
+    """
+    failed = []
+    for path in api_key_vault_records(vault_client, key_id):
+        try:
+            vault_client.vault_delete_metadata(path)
+            continue
+        except Exception as e:  # noqa: BLE001 - tried again below as a data delete
+            logger.warning(f"Permanent delete of {path} failed, falling back to a data delete: {e}")
+        try:
+            vault_client.vault_delete(path.replace("secret/metadata/", "secret/data/", 1))
+        except Exception as e:  # noqa: BLE001 - one record must not keep the others alive
+            failed.append(path)
+            logger.warning(f"Failed to delete {path} from Vault: {e}")
+    if failed:
+        logger.warning(f"API key {key_id} left {len(failed)} Vault record(s) behind")
+        return False
+    logger.info(f"Deleted API key {key_id} from Vault")
+    return True
 
 
 def save_user_mapping_to_vault(vault_client, api_key_id: str, user_mapping: ExternalUserMapping):
@@ -2543,6 +2571,18 @@ OWNER_SETS_NOT_SAVED = (
 )
 
 
+KEY_DELETE_INCOMPLETE = (
+    "The API key was not fully removed from the credential store. It may still be listed; "
+    "try the delete again once the credential store is reachable."
+)
+
+
+def _raise_if_incomplete(removed: bool) -> None:
+    """An incomplete key delete is a 503, never a reported success."""
+    if not removed:
+        raise HTTPException(status_code=503, detail=KEY_DELETE_INCOMPLETE)
+
+
 async def _write_key_then_commit(
     db: AsyncSession, key_id: str, handed_off: List[Any], write: Callable[[], None]
 ) -> None:
@@ -2563,7 +2603,9 @@ async def _write_key_then_commit(
             await db.rollback()
             raise HTTPException(status_code=503, detail=OWNERSHIP_UNKNOWN_DETAIL) from None
     try:
-        write()
+        # note: off the event loop. A delete is one Vault call per record under the key, each with
+        # its own timeout, and a degraded Vault would otherwise stall every request on the worker.
+        await asyncio.to_thread(write)
     finally:
         # note: also when the write raised. It may have landed before its reply was lost.
         evict_api_key_cache(key_id)
@@ -3151,7 +3193,7 @@ async def delete_api_key(
                 handed_off = await apply_owner_handoffs(db, key_id, handoffs, remove=True)
 
                 # Delete from Vault
-                await _write_key_then_commit(db, key_id, handed_off, lambda: delete_api_key_from_vault(vault_client, key_id))
+                await _write_key_then_commit(db, key_id, handed_off, lambda: _raise_if_incomplete(delete_api_key_from_vault(vault_client, key_id)))
         record_owner_handoffs(handed_off, key_id=key_id, action="delete", actor_email=_rbac.email, remove=True)
 
         # Clear all scoped cache variants (the validation cache went with the delete)
