@@ -240,13 +240,17 @@ test("Project and instance candidates stay interactive while authoritative check
 test("Authoritative project removal clears a provisional target", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "Fail-closed target proof needs one profile");
 
+  let releaseAuthoritativeProjects;
+  const authoritativeProjectsGate = new Promise((resolve) => {
+    releaseAuthoritativeProjects = resolve;
+  });
   await authenticate(page.context(), "partner");
   const api = await installApiFixtures(page, "partner", {
     snapshotPage: true,
     snapshotReadSequences: {
       projects: [
         {
-          delayMs: 1_000,
+          responseGate: authoritativeProjectsGate,
           body: {
             host: "cluster-a",
             projects: [
@@ -274,6 +278,9 @@ test("Authoritative project removal clears a provisional target", async ({ page 
   await selectOption(page, dialog, "Cluster", "Core Cluster");
   await selectOption(page, dialog, "Project", "tenant-a");
   await selectOption(page, dialog, "Instance", "tenant-owned-vm");
+  // note: the authoritative list lands only once the provisional target is complete. A fixed 1s
+  // delay raced the three picks, and on a slow runner the instance list re-rendered under the click
+  releaseAuthoritativeProjects();
 
   await expect(
     dialog.getByText("The filtered project is no longer available. Choose another project."),
