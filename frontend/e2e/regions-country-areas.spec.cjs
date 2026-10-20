@@ -104,26 +104,38 @@ function markedRegions(page) {
 async function pointOnOutline(page, code) {
   // elementFromPoint only sees the viewport, and on a phone the map sits below the stat tiles
   await page.locator(".leaflet-container").scrollIntoViewIfNeeded();
-  const point = await page.evaluate((cls) => {
-    const path = document.querySelector(`path.country-area-${cls}`);
-    const frame = document.querySelector(".leaflet-container").getBoundingClientRect();
-    if (!path) return null;
-    const box = path.getBoundingClientRect();
-    // note: elementFromPoint hit-tests an interactive SVG path on its painted fill, so a point it
-    // resolves to the path is inside the outline and not under a chip; no geometry API needed
-    for (let fy = 0.5; fy < 1; fy += 0.04) {
-      for (const sy of [1, -1]) {
-        for (let fx = 0.05; fx < 1; fx += 0.05) {
-          const x = box.left + box.width * fx;
-          const y = box.top + box.height * (0.5 + sy * (fy - 0.5));
-          if (x < frame.left + 4 || x > frame.right - 4 || y < frame.top + 4 || y > frame.bottom - 4) continue;
-          if (document.elementFromPoint(x, y) === path) return { x, y };
-        }
-      }
-    }
-    return null;
-  }, code);
-  expect(point, `no reachable point on the ${code} outline`).not.toBeNull();
+  // note: the path joins the DOM before the SVG renderer draws it, as a 0x0 box, so wait for a
+  // drawn outline that has stopped moving; a point read off a moving map misses on the click
+  await expect.poll(() => outlineWidth(page, code), { timeout: 8_000 }).toBeGreaterThan(0);
+  await settledWidth(page, code);
+  let point = null;
+  await expect
+    .poll(
+      async () => {
+        point = await page.evaluate((cls) => {
+          const path = document.querySelector(`path.country-area-${cls}`);
+          const frame = document.querySelector(".leaflet-container").getBoundingClientRect();
+          if (!path) return null;
+          const box = path.getBoundingClientRect();
+          // note: elementFromPoint hit-tests an interactive SVG path on its painted fill, so a point it
+          // resolves to the path is inside the outline and not under a chip; no geometry API needed
+          for (let fy = 0.5; fy < 1; fy += 0.04) {
+            for (const sy of [1, -1]) {
+              for (let fx = 0.05; fx < 1; fx += 0.05) {
+                const x = box.left + box.width * fx;
+                const y = box.top + box.height * (0.5 + sy * (fy - 0.5));
+                if (x < frame.left + 4 || x > frame.right - 4 || y < frame.top + 4 || y > frame.bottom - 4) continue;
+                if (document.elementFromPoint(x, y) === path) return { x, y };
+              }
+            }
+          }
+          return null;
+        }, code);
+        return point;
+      },
+      { message: `no reachable point on the ${code} outline`, timeout: 5_000 },
+    )
+    .not.toBeNull();
   return point;
 }
 
