@@ -68,7 +68,8 @@ make lint-frontend    # eslint
 ```
 
 These are the same gates CI runs (`.github/workflows/ci.yml`), so a green local run means a
-green pipeline.
+green pipeline. GitHub runs that pipeline only for pull requests and when someone starts it from
+the Actions tab, so for a direct push these local gates are the only check.
 
 ## Security Reports
 

@@ -8,13 +8,23 @@
 # make test-backend-docker (inspects a running container), make test-frontend (calls an npm
 # script that does not exist), and the Playwright harness in /root/qa-orcastra, which drives real
 # Authentik SSO against a Tailscale address.
+#
+# note: hosted minutes on a private repository are metered. Running on every push to main and dev
+# billed about 56 runner-minutes per push and that exhausted the plan. The pipeline now runs on
+# pull requests and by hand from the Actions tab. full_browser_matrix matters only on a branch
+# whose copy of this file has the browser job; this branch has none. Before a direct push here,
+# run the local gates listed in CONTRIBUTING.md.
 
 name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      full_browser_matrix:
+        description: Run the browser suite in all four viewport and theme projects
+        type: boolean
+        default: false
 
 permissions:
   contents: read
