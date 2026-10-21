@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSession } from "next-auth/react";
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type PersonalizationContextType } from "@/types/personalization";
-import { Role, resolveRoles } from "@/types/rbac";
+import { Role, resolveRoles, hasMappedRole } from "@/types/rbac";
 import { PERSONALIZATION_COOKIE, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { usePersonalizationSync } from "./personalization/use-personalization-sync";
@@ -77,9 +77,12 @@ export function PersonalizationProvider({ children, initialSettings }: {
     accessToken: accessToken ?? undefined,
     scopeKey,
   };
+  // A caller with no role sees only the access notice and the backend refuses its reads, so
+  // there is nothing to fetch and every attempt would be a 403 (issue #17).
+  const mayRead = !Array.isArray(session?.user?.groups) || hasMappedRole(session.user.groups);
   const { refreshSettings } = usePersonalizationSync({
     ...actor,
-    authenticated: isAuthenticated,
+    authenticated: isAuthenticated && mayRead,
     sessionLoading: status === "loading" && !session,
     orgBacked, personalRowRef, lastLocalEditRef, setSettings, setIsLoading,
   });

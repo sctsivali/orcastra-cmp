@@ -11,6 +11,9 @@ import { usePathname } from "next/navigation";
 import { BreakGlassModal } from "@/components/break-glass/break-glass-modal";
 import { useNavigationProgress } from "./navigation/navigation-progress";
 import { TaskPanel } from "@/components/task-panel";
+import { AccessBlockedNotice } from "@/components/access-blocked-notice";
+import { useAccessGate } from "@/hooks/use-access-gate";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 // Dynamically import TerminalManager to avoid SSR issues with xterm
 const TerminalManager = dynamic(
@@ -34,6 +37,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const { pending: navPending } = useNavigationProgress();
   const isAuthPage = pathname.startsWith("/auth");
   const isLandingPage = pathname === "/";
+  const access = useAccessGate({ enabled: !isAuthPage });
   const [mounted, setMounted] = React.useState(false);
   
   // Client-side only mounting to avoid hydration issues with Date
@@ -59,6 +63,22 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
 
   if (isAuthPage) {
     return <>{children}</>;
+  }
+
+  // Issue #17: before any of the shell, so a caller with no role or no cluster access never
+  // mounts the sidebar, the task panel or a page whose reads the backend would refuse.
+  if (access.state === "checking") {
+    return <LoadingLottiePage />;
+  }
+  if (access.state !== "allowed") {
+    return (
+      <AccessBlockedNotice
+        state={access.state}
+        email={access.email}
+        rechecking={access.rechecking}
+        onCheckAgain={access.checkAgain}
+      />
+    );
   }
 
   return (

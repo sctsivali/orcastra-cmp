@@ -364,6 +364,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-settings-hardening.mjs
 	@echo "$(COLOR_GREEN)Checking the sign-in return path...$(COLOR_RESET)"
 	@node scripts/checks/check-auth-callback.mjs
+	@echo "$(COLOR_GREEN)Checking the access gate...$(COLOR_RESET)"
+	@node scripts/checks/check-access-gate.mjs
 	@echo "$(COLOR_GREEN)Checking task journal pagination and duration behavior...$(COLOR_RESET)"
 	@node scripts/checks/check-task-journal-behavior.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal theme...$(COLOR_RESET)"

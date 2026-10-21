@@ -148,8 +148,8 @@ export const AUTHENTIK_GROUP_MAP: Record<string, Role> = {
 // Utility functions
 // ---------------------------------------------------------------------------
 
-/** Resolve Authentik groups to internal roles. */
-export function resolveRoles(groups: string[]): Role[] {
+/** The roles these Authentik groups map to, with no default: empty means no role at all. */
+export function resolveMappedRoles(groups: string[]): Role[] {
   const roles = new Set<Role>();
   for (const g of groups) {
     const key = g.toLowerCase().trim();
@@ -162,7 +162,24 @@ export function resolveRoles(groups: string[]): Role[] {
       }
     }
   }
-  return roles.size > 0 ? Array.from(roles) : [Role.TENANT];
+  return Array.from(roles);
+}
+
+/** Whether any group maps to an Orcastra role. The backend refuses a session without one. */
+export function hasMappedRole(groups: string[]): boolean {
+  return resolveMappedRoles(groups).length > 0;
+}
+
+/**
+ * Resolve Authentik groups to internal roles.
+ *
+ * note: a caller with no role group still resolves to Tenant here, because permission checks
+ * need a role to compare against. Whether the caller may use the dashboard at all is
+ * hasMappedRole, which the access gate in MainLayout decides on first.
+ */
+export function resolveRoles(groups: string[]): Role[] {
+  const roles = resolveMappedRoles(groups);
+  return roles.length > 0 ? roles : [Role.TENANT];
 }
 
 /** Get highest-privilege role. */

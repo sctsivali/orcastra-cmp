@@ -7,7 +7,7 @@
  * Shows when user is authenticated.
  */
 
-import { signOut, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import { useState } from "react";
 import {
   DropdownMenu,
@@ -20,10 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { LogOut, User, Shield, Loader2 } from "lucide-react";
-
-// Authentik end_session endpoint for federated logout
-// Uses environment variable to avoid hardcoded URLs
-const AUTHENTIK_LOGOUT_URL = process.env.NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL || "";
+import { federatedSignOut } from "@/lib/sign-out";
 
 export function UserNav() {
   const { data: session, status } = useSession();
@@ -55,15 +52,7 @@ export function UserNav() {
   const handleSignOut = async () => {
     setIsSigningOut(true);
     try {
-      // First, sign out from NextAuth (clears local session)
-      await signOut({ redirect: false });
-      
-      // Then redirect to Authentik logout to end the SSO session
-      // This ensures user is fully logged out from the identity provider
-      const postLogoutRedirect = encodeURIComponent(
-        `${window.location.origin}/auth/signin`
-      );
-      window.location.href = `${AUTHENTIK_LOGOUT_URL}?post_logout_redirect_uri=${postLogoutRedirect}`;
+      await federatedSignOut();
     } catch (error) {
       console.error("Sign out error:", error);
       setIsSigningOut(false);

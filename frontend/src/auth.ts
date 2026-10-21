@@ -9,6 +9,7 @@ import NextAuth from "next-auth";
 import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
+import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -47,6 +48,8 @@ declare module "next-auth/jwt" {
     // Unix seconds. Earliest a failed refresh may be retried. Kept separate from expiresAt
     // so the cooldown never has to lie about when the access token actually expires.
     retryAfter?: number;
+    // Unix seconds the groups were last read from an issued access token.
+    groupsReadAt?: number;
   }
 }
 
@@ -165,6 +168,12 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       throw tokens;
     }
 
+    // A role granted or removed in Authentik reaches the session here (issue #17). A token with
+    // no readable claim keeps the groups it had: Authentik sends [] for "none", so a missing
+    // claim is a broken mapping, and /me/access still answers for the backend's own reading.
+    const groups = readGroupsClaim(tokens.access_token);
+    if (!groups) console.warn("[AUTH] Refreshed access token carried no groups claim; keeping the session's groups");
+
     return {
       ...token,
       accessToken: tokens.access_token,
@@ -172,6 +181,10 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       refreshToken: tokens.refresh_token ?? token.refreshToken,
       error: undefined,
       retryAfter: undefined,
+      // important: stamped on every successful grant, claim or not. It is the floor under the
+      // notice's forced refresh, and a token without the claim must not lift it.
+      groupsReadAt: nowSeconds,
+      ...(groups ? { groups, roles: roleGroups(groups) } : {}),
     };
   } catch (error) {
     // Compact log - avoid dumping the full stack on every request
@@ -233,20 +246,27 @@ function refreshAccessTokenDeduped(token: JWT): Promise<JWT> {
 
 type JwtParams = Parameters<NonNullable<NonNullable<NextAuthConfig["callbacks"]>["jwt"]>>[0];
 
-async function jwtCallback({ token, user, account }: JwtParams): Promise<JWT> {
+// The access notice's "Check again" may force one refresh, at most this often per session, so a
+// held-down button cannot spend the rotating refresh token in a loop.
+const ROLE_RECHECK_FLOOR_S = 20;
+
+async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT> {
   // Initial sign in
   if (account && user) {
     // Use EMAIL as the persistent user identifier.
     // This is more reliable than the Authentik sub, which can change per session.
     const persistentUserId = user.email || user.id;
+    // The backend decides on the access token's claim, so the session starts from the same one.
+    const groups = readGroupsClaim(account.access_token) ?? (user as User).groups ?? [];
 
     return {
       ...token,
       accessToken: account.access_token,
       refreshToken: account.refresh_token,
       expiresAt: account.expires_at,
-      groups: (user as User).groups || [],
-      roles: (user as User).roles || [],
+      groups,
+      roles: roleGroups(groups),
+      groupsReadAt: Math.floor(Date.now() / 1000),
       // CRITICAL: use email as the persistent user ID. The Authentik sub changes per
       // session, email is stable.
       authentikId: persistentUserId,
@@ -254,6 +274,17 @@ async function jwtCallback({ token, user, account }: JwtParams): Promise<JWT> {
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
+
+  // important: the client's update() payload is only a signal here. Nothing in it is copied into
+  // the token; the groups come from the IdP's answer to the refresh grant.
+  const recheckRoles =
+    trigger === "update" &&
+    (session as { refreshRoles?: unknown } | null | undefined)?.refreshRoles === true &&
+    nowSeconds - (token.groupsReadAt ?? 0) >= ROLE_RECHECK_FLOOR_S &&
+    !(token.retryAfter && nowSeconds < token.retryAfter);
+  if (recheckRoles) {
+    return await refreshAccessTokenDeduped(token);
+  }
 
   // Still comfortably valid. On the background path the skew makes this the branch that hands
   // the IdP round trip to the session poll instead of to a navigation.
