@@ -300,7 +300,8 @@ async def run_abort(
         if resource.resource_type != "instance":
             continue
         state = dict(resource.safe_result or {})
-        if state.get("target_start_attempted"):
+        refused = bool(state.get("target_start_refused")) and not state.get("target_started")
+        if state.get("target_start_attempted") and not refused:
             await _manual_recovery(
                 job,
                 worker_id,
@@ -319,6 +320,10 @@ async def run_abort(
             )
             if target is not None:
                 ours = (target.get("config") or {}).get(MIGRATION_JOB_MARKER) == job.job_id
+                if ours and refused and state.get("target_identity_hash"):
+                    # A copy or import keeps user.* keys, marker included: discard only the very
+                    # object this job adopted.
+                    ours = executor.instance_identity_fingerprint(target) == state["target_identity_hash"]
                 if not ours or _status(target) != "stopped":
                     await _manual_recovery(
                         job,

@@ -73,6 +73,8 @@ class FakeCluster:
         self.instances: dict[tuple[str, str], dict[str, Any]] = {}
         self.images: dict[str, list[dict[str, Any]]] = {}
         self.refuse: set[tuple[str, str]] = set()
+        # (action, name) whose operation is accepted, then fails, as LXD's start validation does.
+        self.fail_async: set[tuple[str, str]] = set()
         self.calls: list[tuple[str, str]] = []
         self.client = SimpleNamespace(cluster=self, api=SimpleNamespace(networks=SimpleNamespace(cluster=self)))
 
@@ -132,6 +134,10 @@ def _cluster(client: Any) -> FakeCluster:
 
 def _op() -> str:
     return f"op-{next(_COUNTER)}"
+
+
+# operation id -> the daemon's error, for operations that settle as failed.
+_FAILED_OPS: dict[str, str] = {}
 
 
 # executor -----------------------------------------------------------------------------------
@@ -216,6 +222,10 @@ def submit_instance_state(client: Any, *, project: str, name: str, action: str, 
     cluster = _cluster(client)
     cluster.check(action, name)
     record = cluster.instances[(project, name)]
+    if (action, name) in cluster.fail_async:
+        op = _op()
+        _FAILED_OPS[op] = f'Failed start validation for device "eth0": MAC address already defined on another NIC ({name})'
+        return op
     if action == "start":
         # LXD's checkAddressConflict: another instance on the same member and network with the
         # same name blocks a start, stopped or in another project.
@@ -347,7 +357,10 @@ def install(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     async def blocking(fn: Any, *args: Any, label: str, timeout: Any = None, **kwargs: Any) -> Any:
         return fn(*args, **kwargs)
 
-    async def settled(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def settled(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        operation_id = kwargs.get("operation_id", args[1] if len(args) > 1 else None)
+        if operation_id in _FAILED_OPS:
+            return {"settled": True, "failed": True, "err": _FAILED_OPS[operation_id]}
         return {"settled": True, "failed": False}
 
     async def lease() -> None:

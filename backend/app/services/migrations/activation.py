@@ -19,7 +19,7 @@ from app.services.lxd.root_disk import root_pool
 from . import executor, repository
 from .completion import target_completion_events
 from .context import _assert_mutation_lease, _fenced_job_update, _resource_update
-from .contracts import MigrationLeaseLost, MigrationUnknown, _blocking
+from .contracts import MigrationLeaseLost, MigrationUnknown, TargetStartRefused, _blocking
 from .operation_wait import await_operation
 from .project_policy import MIGRATION_JOB_MARKER
 from .retention_store import enter_source_retention
@@ -103,7 +103,11 @@ async def _change_state(
     intent_key: str,
     kind: str,
 ) -> dict[str, Any]:
-    state = {**state, intent_key: True}
+    # important: a refusal proves the target never ran only on its first start. A later attempt
+    # follows one whose outcome was unknown, which may have run the target and taken writes, so
+    # the flag is reset with every attempt and only ever set on the first.
+    first_attempt = not state.get(intent_key)
+    state = {**state, intent_key: True, "target_start_refused": False}
     await _resource_update(resource.resource_id, state="cutting_over", safe_result=state)
     await _assert_mutation_lease()
     try:
@@ -139,7 +143,21 @@ async def _change_state(
         except executor.OperationForgotten:
             outcome = {"settled": True, "failed": False}
         if outcome.get("failed"):
-            raise MigrationUnknown(outcome.get("err") or f"Could not {action} '{name}'.")
+            message = outcome.get("err") or f"Could not {action} '{name}'."
+            # Member relocation moves the one and only copy: there is nothing to discard, so a
+            # refusal there stays with reconciliation rather than an abort that cannot help.
+            if kind == "start_target" and first_attempt and job.strategy != "member_relocation":
+                current = await _read(client, project, name, f"migration.refused_{kind}[{name}]")
+                if _status(current) == "stopped":
+                    # important: a settled, failed start that leaves the target stopped is a
+                    # definitive refusal (ex; LXD's start validation finding the MAC or the name
+                    # already in use on that member): the target never ran. Treated as unknown,
+                    # reconciliation re-adopted it and started it again on every backoff while
+                    # the fenced source stayed down, then gave up into manual recovery.
+                    state = {**state, "target_start_refused": True}
+                    await _resource_update(resource.resource_id, state="cutting_over", safe_result=state)
+                    raise TargetStartRefused(message)
+            raise MigrationUnknown(message)
     record = await _read(client, project, name, f"migration.verify_{kind}[{name}]")
     if _status(record) != ("running" if action == "start" else "stopped"):
         raise MigrationUnknown(f"'{name}' did not reach the state requested by {action}.")
@@ -297,7 +315,15 @@ async def finish_transfer(
         for index, (resource, state, contract) in enumerate(transferred):
             state = await fence_source_nics(job, resource, state, source_client)
             transferred[index] = (resource, state, contract)
-    await _activate(job, transferred, source_client, target_client)
+    try:
+        await _activate(job, transferred, source_client, target_client)
+    except TargetStartRefused as exc:
+        # The abort runner deletes only a stopped target carrying this job's marker, unfences and
+        # restarts the source, and stays manual when another target already ran.
+        from .rollback import abort_before_activation
+
+        await abort_before_activation(job, worker_id, source_client, target_client, reason=exc)
+        return
     for resource, state, contract in transferred:
         running = state.get("original_status") == "running"
         await _validate_pair(

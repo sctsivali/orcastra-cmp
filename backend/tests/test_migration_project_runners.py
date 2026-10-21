@@ -138,6 +138,25 @@ async def test_a_refused_transfer_aborts_and_undoes_only_what_the_job_created(mo
     assert source.instances[("web", "db-1")]["status"] == "Stopped"
 
 
+async def test_a_target_start_the_daemon_refuses_aborts_instead_of_retrying(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LXD accepts the start, then its start validation fails (ex; a MAC already on that member).
+
+    The target never ran, so this is an abort: found live, where treating it as unknown made
+    reconciliation start it again on every backoff while the fenced source stayed down.
+    """
+    source, target = _source(), _target()
+    target.fail_async.add(("start", "web-1"))
+
+    job, _resources, calls = await _relocate(monkeypatch, source, target)
+
+    assert calls["finished"][0]["phase"] == "failed"
+    assert calls["finished"][0]["error_code"] == "target_start_refused"
+    assert "web" not in target.projects
+    assert not target.instances
+    assert source.instances[("web", "web-1")]["status"] == "Running"
+    assert source.instances[("web", "db-1")]["status"] == "Stopped"
+
+
 async def test_a_crash_after_submission_adopts_the_target_instead_of_copying_twice(monkeypatch: pytest.MonkeyPatch) -> None:
     source, target = _source(), _target()
     install(monkeypatch)

@@ -236,7 +236,16 @@ async def run_project_abort(
 ) -> None:
     resources = await _resources(job.job_id)
     instances = _of_type(resources, "instance")
-    if any((resource.safe_result or {}).get("target_start_attempted") for resource in instances):
+    # A start the daemon refused left that target stopped and unused; only one that may have run
+    # makes the abort manual.
+    if any(
+        (resource.safe_result or {}).get("target_start_attempted")
+        and not (
+            (resource.safe_result or {}).get("target_start_refused")
+            and not (resource.safe_result or {}).get("target_started")
+        )
+        for resource in instances
+    ):
         await _manual_recovery(
             job,
             worker_id,

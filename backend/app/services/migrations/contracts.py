@@ -52,6 +52,12 @@ class TransferFailed(RuntimeError):
     """The daemon definitively refused or failed a step before any target was activated."""
 
 
+class TargetStartRefused(TransferFailed):
+    """The daemon refused to start a staged target, which is still stopped: it never ran."""
+
+    code = "target_start_refused"
+
+
 _worker_fence: contextvars.ContextVar[Optional[tuple[str, str, int]]] = (
     contextvars.ContextVar("migration_worker_fence", default=None)
 )
