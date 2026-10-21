@@ -56,6 +56,21 @@ export const MIGRATION_STEPS = [
 
 /** The steps the wizard itself walks. The rest describe what happens after Start. */
 export const PLANNING_STEP_COUNT = 7;
+/** `?step=` values, in step order, so a refreshed or shared plan link reopens where it was. */
+export const PLANNING_STEP_KEYS = [
+  "source",
+  "destination",
+  "strategy",
+  "mappings",
+  "preflight",
+  "recovery",
+  "review",
+] as const;
+
+export function planningStepFromKey(key: string | null | undefined): number | null {
+  const index = PLANNING_STEP_KEYS.indexOf(key as (typeof PLANNING_STEP_KEYS)[number]);
+  return index >= 0 ? index : null;
+}
 export const MIN_RETENTION_HOURS = 1;
 export const MAX_RETENTION_HOURS = 168;
 

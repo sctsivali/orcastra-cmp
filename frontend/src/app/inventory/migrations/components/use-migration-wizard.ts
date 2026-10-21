@@ -82,6 +82,8 @@ export function useMigrationWizard({
   onOpenChange,
   writeDisabledReason,
   rollout,
+  initialStep,
+  onStepChange,
 }: {
   open: boolean;
   seed?: MigrationWizardSeed;
@@ -91,6 +93,9 @@ export function useMigrationWizard({
   onOpenChange: (open: boolean) => void;
   writeDisabledReason?: string;
   rollout: MigrationRollout;
+  /** The step a plan link names. A plan opened without one starts at Preflight. */
+  initialStep?: number | null;
+  onStepChange?: (step: number) => void;
 }) {
   const defaultRetention = rollout.defaultRetentionHours ?? 24;
   const [step, setStep] = React.useState(0);
@@ -150,8 +155,9 @@ export function useMigrationWizard({
     if (!open || !planId || loadedPlanRef.current === planId) return;
     setPlan(null);
     setPlanDirty(false);
-    setStep(4);
+    setStep(initialStep ?? 4);
     setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, planId]);
 
   React.useEffect(() => {
@@ -160,9 +166,16 @@ export function useMigrationWizard({
     setDraft(draftFromPlan(planQuery.data));
     setPlan(planQuery.data);
     setPlanDirty(false);
-    setStep(4);
+    setStep(initialStep ?? 4);
     setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, planId, planQuery.data]);
+
+  // Keep the plan link on the step in view. Only once the plan is this wizard's own, so a link
+  // being loaded is not overwritten by the step shown while it loads.
+  React.useEffect(() => {
+    if (open && planId && loadedPlanRef.current === planId) onStepChange?.(step);
+  }, [open, planId, step, onStepChange, plan]);
 
   // A deep link names the instance but not its member. Fill it from inventory once known.
   const sourceInstance = (instanceQuery.data?.vms ?? []).find((instance) => instance.name === draft.resourceName);

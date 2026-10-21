@@ -39,6 +39,21 @@ export function replaceQuery(pathname: string, params: URLSearchParams | string)
 }
 
 /**
+ * Push `pathname?params` as a new history entry, for an overlay that Back should close (a dialog
+ * opened from the page), not for state that Back should walk past.
+ */
+export function pushQuery(pathname: string, params: URLSearchParams | string): void {
+  if (typeof window === "undefined") return;
+  const query = typeof params === "string" ? params : params.toString();
+  window.history.pushState({}, "", query ? `${pathname}?${query}` : pathname);
+}
+
+/** Leave the current history entry the way the browser's Back button does. */
+export function goBack(): void {
+  if (typeof window !== "undefined") window.history.back();
+}
+
+/**
  * The query string as the browser holds it right now. `useSearchParams` reports the rendered
  * value, which lags a write by one commit; a writer composing on top of another writer's change
  * in the same tick needs the live one.

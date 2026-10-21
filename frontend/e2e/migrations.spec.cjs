@@ -220,6 +220,7 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
 
   await expect(page).toHaveURL(/\bplan=plan-resume\b/);
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Review the strategy" })).toBeVisible();
+  await expect(page).toHaveURL(/\bstep=strategy\b/);
   expect(api.createdBodies).toHaveLength(1);
   expect(api.createdBodies[0]).toMatchObject({
     scope: "instance",
@@ -232,13 +233,41 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
   );
   expect(createRequest.headers).not.toHaveProperty("idempotency-key");
 
+  // A refresh keeps the step in view; a plan link that names no step opens at Preflight.
   await page.reload();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Review the strategy" })).toBeVisible();
+  await page.goto("/inventory/migrations?plan=plan-resume");
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Review preflight" })).toBeVisible();
   await expect(page.getByText("Plan revision 1", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Preflight Passed" })).toBeVisible();
+  await expect(page).toHaveURL(/\bstep=preflight\b/);
 
   await expectProjectTheme(page, testInfo);
   await expectNoHorizontalOverflow(page);
+  await expectCleanMigrationHarness(api);
+});
+
+test("Back closes a wizard opened from the Migration Center, and Close leaves no extra entry", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner");
+  const dialog = page.getByRole("dialog");
+
+  await page.goto("/inventory/migrations");
+  await page.getByRole("button", { name: "New Migration" }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  await page.goBack();
+  await expect(dialog).toHaveCount(0);
+  await expect(page).toHaveURL(/\/inventory\/migrations$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Migration Center" })).toBeVisible();
+
+  // Close steps back over the entry the wizard opened, so the next Back leaves the page at once.
+  await page.getByRole("button", { name: "New Migration" }).click();
+  await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  await closeDialog(page);
+  await expect(dialog).toHaveCount(0);
+  await expect(page).toHaveURL(/\/inventory\/migrations$/);
+  await page.goBack();
+  await expect(page).not.toHaveURL(/\/inventory\/migrations/);
   await expectCleanMigrationHarness(api);
 });
 

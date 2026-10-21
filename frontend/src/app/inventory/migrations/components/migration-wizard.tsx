@@ -42,6 +42,8 @@ interface MigrationWizardProps {
   onStarted: (job: MigrationJob) => void;
   writeDisabledReason?: string;
   rollout: MigrationRollout;
+  initialStep?: number | null;
+  onStepChange?: (step: number) => void;
 }
 
 export function MigrationWizard(props: MigrationWizardProps) {

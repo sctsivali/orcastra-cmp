@@ -24,7 +24,13 @@ import { endpointLabel, migrationInView, type MigrationView } from "./migration-
 import { MigrationJobDialog } from "./migration-job-dialog";
 import { MigrationJobTable } from "./migration-job-table";
 import { MigrationWizard } from "./migration-wizard";
-import type { MigrationWizardSeed, ProjectRelocationMode } from "./migration-wizard-model";
+import { useOverlayHistory } from "./use-overlay-history";
+import {
+  PLANNING_STEP_KEYS,
+  planningStepFromKey,
+  type MigrationWizardSeed,
+  type ProjectRelocationMode,
+} from "./migration-wizard-model";
 
 const PROJECT_MODES: readonly ProjectRelocationMode[] = ["member", "cluster", "rename"];
 
@@ -77,6 +83,8 @@ function MigrationCenterContent() {
   const jobId = searchParams.get("job");
   const planId = searchParams.get("plan");
   const wizardOpen = (centerEnabled && searchParams.get("new") === "1") || !!planId;
+  const initialStep = planningStepFromKey(searchParams.get("step"));
+  const overlayOpen = wizardOpen || !!jobId;
 
   const seed = React.useMemo<MigrationWizardSeed>(() => {
     const scope = searchParams.get("scope");
@@ -115,10 +123,13 @@ function MigrationCenterContent() {
     [pathname],
   );
 
+  const { openOverlay, closeOverlay } = useOverlayHistory(pathname, overlayOpen, patchQuery);
+
   const closeWizard = React.useCallback(() => {
-    patchQuery({
+    closeOverlay({
       new: null,
       plan: null,
+      step: null,
       scope: null,
       source_cluster: null,
       source_project: null,
@@ -127,7 +138,15 @@ function MigrationCenterContent() {
       intent: null,
       source_member: null,
     });
-  }, [patchQuery]);
+  }, [closeOverlay]);
+
+  const syncStep = React.useCallback(
+    (step: number) => {
+      const key = PLANNING_STEP_KEYS[step];
+      if (key && currentQuery().get("step") !== key) patchQuery({ step: key });
+    },
+    [patchQuery],
+  );
 
   const loadedJobs = React.useMemo(
     () => uniqueJobs(jobsQuery.data?.pages),
@@ -238,7 +257,7 @@ function MigrationCenterContent() {
           <Button
             className="min-h-11 sm:min-h-10"
             disabled={!centerEnabled || !!writeDisabledReason}
-            onClick={() => patchQuery({ new: "1", plan: null, job: null })}
+            onClick={() => openOverlay({ new: "1", plan: null, job: null, step: null })}
             title={
               planWriteDisabledReason ??
               "Create a migration plan and run side-effect-free preflight"
@@ -345,7 +364,7 @@ function MigrationCenterContent() {
                   jobs={jobs}
                   emptyTitle="No active migrations"
                   emptyDescription="Queued and in-progress jobs appear here."
-                  onOpen={(id) => patchQuery({ job: id, plan: null, new: null })}
+                  onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
                 />
               )}
             </TabsContent>
@@ -361,7 +380,7 @@ function MigrationCenterContent() {
                   jobs={jobs}
                   emptyTitle="No migration needs attention"
                   emptyDescription="Blocked, uncertain, failed, and overdue jobs appear here."
-                  onOpen={(id) => patchQuery({ job: id, plan: null, new: null })}
+                  onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
                 />
               )}
             </TabsContent>
@@ -377,7 +396,7 @@ function MigrationCenterContent() {
                   jobs={jobs}
                   emptyTitle="No migration history"
                   emptyDescription="Completed, cancelled, and failed jobs appear here."
-                  onOpen={(id) => patchQuery({ job: id, plan: null, new: null })}
+                  onOpen={(id) => openOverlay({ job: id, plan: null, new: null })}
                 />
               )}
             </TabsContent>
@@ -391,7 +410,7 @@ function MigrationCenterContent() {
               ) : (
                 <MigrationDraftTable
                   plans={draftPlans}
-                  onOpen={(id) => patchQuery({ plan: id, new: null, job: null })}
+                  onOpen={(id) => openOverlay({ plan: id, new: null, job: null, step: null })}
                 />
               )}
             </TabsContent>
@@ -404,17 +423,22 @@ function MigrationCenterContent() {
         onOpenChange={(next) => !next && closeWizard()}
         seed={seed}
         planId={planId}
-        onPlanIdChange={(id) => patchQuery({ plan: id, new: id ? null : "1" })}
+        onPlanIdChange={(id) => patchQuery(id ? { plan: id, new: null } : { plan: null, new: "1", step: null })}
+        initialStep={initialStep}
+        onStepChange={syncStep}
         onStarted={(job) =>
           patchQuery({
             job: job.job_id,
             new: null,
             plan: null,
+            step: null,
             scope: null,
             source_cluster: null,
             source_project: null,
             resource_name: null,
             mode: null,
+            intent: null,
+            source_member: null,
           })
         }
         writeDisabledReason={planWriteDisabledReason}
@@ -429,7 +453,7 @@ function MigrationCenterContent() {
 
       <MigrationJobDialog
         jobId={jobId}
-        onOpenChange={(next) => !next && patchQuery({ job: null })}
+        onOpenChange={(next) => !next && closeOverlay({ job: null })}
         writeDisabledReason={writeDisabledReason}
       />
     </div>
