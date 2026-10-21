@@ -165,6 +165,7 @@ async function installMigrationFixtures(page, role, options = {}) {
       return;
     }
     if (method === "GET" && path === "/projects") {
+      if (options.projectsGate) await options.projectsGate;
       await json(route, [
         { host: "cluster-a", projects: [{ name: "default", description: "", config: {}, used_by: [], host: "cluster-a", tags: [] }], total: 1, reachable: true, error: null },
         { host: "cluster-b", projects: [{ name: "target-project", description: "", config: {}, used_by: [], host: "cluster-b", tags: [] }], total: 1, reachable: true, error: null },

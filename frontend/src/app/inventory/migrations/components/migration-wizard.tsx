@@ -126,7 +126,8 @@ export function MigrationWizard(props: MigrationWizardProps) {
                   instances={queries.instanceQuery.data?.vms ?? []}
                   targetMembers={queries.memberQuery.data?.members ?? []}
                   targetPools={(queries.poolQuery.data as StoragePoolListResponse | undefined)?.pools ?? []}
-                  inventoryLoading={queries.clusterQuery.isLoading || queries.projectQuery.isLoading}
+                  inventoryLoading={queries.clusterQuery.isLoading}
+                  projectsLoading={queries.projectQuery.isLoading}
                   resourceLoading={
                     queries.instanceQuery.isLoading || queries.memberQuery.isLoading || queries.poolQuery.isLoading
                   }

@@ -43,7 +43,9 @@ interface MigrationSourceDestinationProps {
   instances: VMInfo[];
   targetMembers: ClusterMember[];
   targetPools: StoragePoolInfo[];
+  /** The cluster list. The project list loads on its own and only gates the project pickers. */
   inventoryLoading: boolean;
+  projectsLoading: boolean;
   resourceLoading: boolean;
   inventoryError?: string | null;
 }
@@ -58,6 +60,7 @@ export function MigrationSourceDestination({
   targetMembers,
   targetPools,
   inventoryLoading,
+  projectsLoading,
   resourceLoading,
   inventoryError,
 }: MigrationSourceDestinationProps) {
@@ -198,10 +201,10 @@ export function MigrationSourceDestination({
                 })
               }
               options={sourceProjects}
-              placeholder="Choose a source project"
+              placeholder={projectsLoading ? "Loading projects" : "Choose a source project"}
               searchPlaceholder="Search projects"
               emptyText="No project available on this cluster"
-              disabled={!draft.sourceCluster || inventoryLoading}
+              disabled={!draft.sourceCluster || projectsLoading}
             />
           </div>
         </div>
@@ -293,6 +296,7 @@ export function MigrationSourceDestination({
       targetMembers={targetMembers}
       targetPools={targetPools}
       inventoryLoading={inventoryLoading}
+      projectsLoading={projectsLoading}
       resourceLoading={resourceLoading}
       inventoryError={inventoryError}
     />

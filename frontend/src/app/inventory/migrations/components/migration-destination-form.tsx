@@ -24,6 +24,7 @@ export function MigrationDestinationForm({
   targetMembers,
   targetPools,
   inventoryLoading,
+  projectsLoading,
   resourceLoading,
   inventoryError,
 }: {
@@ -34,6 +35,7 @@ export function MigrationDestinationForm({
   targetMembers: ClusterMember[];
   targetPools: StoragePoolInfo[];
   inventoryLoading: boolean;
+  projectsLoading: boolean;
   resourceLoading: boolean;
   inventoryError?: string | null;
 }) {
@@ -150,10 +152,10 @@ export function MigrationDestinationForm({
               onChange({ targetProject: next ? "" : value, mappings: emptyMigrationMappings(), acknowledgements: [] });
             }}
             options={projectOptions}
-            placeholder={inventoryLoading ? "Loading projects" : "Choose a project"}
+            placeholder={projectsLoading ? "Loading projects" : "Choose a project"}
             searchPlaceholder="Search projects"
             emptyText="No project reported on this cluster"
-            disabled={!draft.targetCluster || inventoryLoading}
+            disabled={!draft.targetCluster || projectsLoading}
           />
           {creating && (
             <div className="space-y-1">

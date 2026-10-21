@@ -422,6 +422,27 @@ test("copy of a running source explains the stop and a failed draft read can ret
   await expectCleanMigrationHarness(api);
 });
 
+test("the source cluster picker does not wait for the project inventory", async ({ page }) => {
+  // The all-projects read fans out to every cluster. A slow one must hold only the project
+  // pickers, never the cluster picker in front of them.
+  await authenticate(page.context(), "partner");
+  let releaseProjects;
+  const projectsGate = new Promise((resolve) => {
+    releaseProjects = resolve;
+  });
+  const api = await installMigrationFixtures(page, "partner", { projectsGate });
+
+  await page.goto("/inventory/migrations?new=1");
+  await choose(page, "Source cluster", "Cluster A");
+  const project = page.getByLabel("Source project", { exact: true });
+  await expect(project).toBeDisabled();
+  await expect(project).toContainText("Loading projects");
+
+  releaseProjects();
+  await choose(page, "Source project", "default");
+  await expectCleanMigrationHarness(api);
+});
+
 test("copy can target a specific destination member under a suggested new name", async ({ page }) => {
   await authenticate(page.context(), "partner");
   const api = await installMigrationFixtures(page, "partner", { createdPlanId: "plan-copy-member" });
