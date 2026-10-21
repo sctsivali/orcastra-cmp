@@ -451,6 +451,34 @@ test("copy of a running source explains the stop and a failed draft read can ret
   await expectCleanMigrationHarness(api);
 });
 
+test("read-only mode still opens the wizard from the row menu and the center, and refuses only Start", async ({ page }) => {
+  // Planning is not a write. The server refuses execute in read-only mode, so the entry points
+  // answer to permission and rollout only, and the wizard says why Start is unavailable.
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { readOnly: true, instanceListPage: true });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto("/inventory/instances");
+  await page.getByRole("button", { name: "Actions for instance source-vm in default on cluster-a" }).click();
+  const move = page.getByRole("menuitem", { name: /^Move Instance/ });
+  await expect(move).toBeEnabled();
+  await move.click();
+  await expect(page).toHaveURL(/\/inventory\/migrations\?.*\bnew=1\b/);
+  await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  await expect(page.getByLabel("Instance name", { exact: true })).toContainText("source-vm");
+  await expect(dialog.getByText("Execution is unavailable", { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/Disabled in read-only mode\. A saved draft can still be reviewed/)).toBeVisible();
+  await closeDialog(page);
+
+  await page.goto("/inventory/migrations");
+  const newMigration = page.getByRole("button", { name: "New Migration" });
+  await expect(newMigration).toBeEnabled();
+  await newMigration.click();
+  await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
+  expect(api.mutations).toEqual([]);
+  await expectCleanMigrationHarness(api);
+});
+
 test("the source cluster picker does not wait for the project inventory", async ({ page }) => {
   // The all-projects read fans out to every cluster. A slow one must hold only the project
   // pickers, never the cluster picker in front of them.

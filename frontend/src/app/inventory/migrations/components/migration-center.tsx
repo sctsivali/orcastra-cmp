@@ -254,13 +254,15 @@ function MigrationCenterContent() {
             lastUpdatedAt={jobsQuery.dataUpdatedAt}
             onRefresh={() => Promise.all([jobsQuery.refetch(), plansQuery.refetch()])}
           />
+          {/* Planning is not a write: read-only mode refuses Start inside the wizard, not this. */}
           <Button
             className="min-h-11 sm:min-h-10"
-            disabled={!centerEnabled || !!writeDisabledReason}
+            disabled={!centerEnabled}
             onClick={() => openOverlay({ new: "1", plan: null, job: null, step: null })}
             title={
-              planWriteDisabledReason ??
-              "Create a migration plan and run side-effect-free preflight"
+              centerEnabled
+                ? "Create a migration plan and run side-effect-free preflight"
+                : "New migrations are turned off on this deployment"
             }
           >
             <Plus className="mr-2 h-4 w-4" aria-hidden />

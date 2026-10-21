@@ -75,6 +75,10 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
     };
   };
   const manage = readOnly ?? permissionReason("operate");
+  // note: Copy and Move only open the wizard, and planning is not a write: the server refuses
+  // execute in read-only mode and the wizard says so on its Start step. So they answer to the
+  // permission and the migration rollout, never to read-only.
+  const plan = permissionReason("operate");
   const consoleReason = permissionReason("console");
 
   const actions: RowAction[] = [];
@@ -106,14 +110,14 @@ export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] 
         label: "Copy Instance",
         icon: Copy,
         onSelect: input.onCopy,
-        unavailableReason: manage ?? migrationCopyUnavailableReason,
+        unavailableReason: plan ?? migrationCopyUnavailableReason,
       },
       {
         id: "move",
         label: "Move Instance",
         icon: ArrowLeftRight,
         onSelect: input.onMove,
-        unavailableReason: manage ?? migrationMoveUnavailableReason,
+        unavailableReason: plan ?? migrationMoveUnavailableReason,
       },
       { id: "rebuild", label: "Rebuild Instance", icon: RefreshCw, onSelect: input.onRebuild, unavailableReason: manage },
       {

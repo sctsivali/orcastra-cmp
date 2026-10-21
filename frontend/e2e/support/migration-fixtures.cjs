@@ -80,7 +80,8 @@ function cluster(clusterId) {
 }
 
 async function installMigrationFixtures(page, role, options = {}) {
-  const base = await installApiFixtures(page, role);
+  // instanceListPage admits the Instances page's own event socket for a spec that starts there.
+  const base = await installApiFixtures(page, role, { instanceListPage: options.instanceListPage === true });
   const plans = new Map((options.plans ?? []).map((plan) => [plan.plan_id, plan]));
   const jobs = new Map((options.jobs ?? []).map((job) => [job.job_id, job]));
   const state = {
