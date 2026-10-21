@@ -42,6 +42,7 @@ from app.services.lxd.proxy import (
 from app.services.activity_logger import get_activity_logger
 from app.services.integration_cluster_state import server_type_name, stamp_cluster_rows
 from app.services.lxd.availability import require_client, unreachable_detail
+from app.services.lxd.fanout import is_read_timeout
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.failover_config import project_failover_config
 from app.services.lxd.limited_write_reach import (
@@ -4697,11 +4698,9 @@ async def raw_proxy(
         except BlockingPoolFull:
             raise HTTPException(status_code=503, detail="Proxy saturated, retry shortly")
 
-        if not client:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Cluster {request.cluster_id} is not connected"
-            )
+        # note: the shared 503 names the breaker's recorded reason (an untrusted certificate, a
+        # failed reconnect), which "not connected" alone never told an integrator.
+        client = require_client(client, request.cluster_id)
 
         # important: `project` is authorised above from request.project, so a copy of it
         # inside `path` is not the caller's to set. Dropping it closes a scope bypass: a key
@@ -4859,7 +4858,14 @@ async def raw_proxy(
             )
 
         except BlockingTimeout as timeout_error:
-            health.record_failure(request.cluster_id, str(timeout_error))
+            # important: a read that outlived the cap is a slow cluster, not an unreachable one.
+            # The pooled session never retries a connect (Retry(connect=0)), so a dead host fails
+            # fast as a connect error below and is still recorded. Tripping the breaker here
+            # turned one heavy list (a recursive network read on a host with a hundred
+            # interfaces) into 60 s of 503 for every caller of the cluster, provisioning included.
+            # A write keeps tripping it: its outcome is unknown, so callers should back off.
+            if method not in ("GET", "HEAD", "OPTIONS"):
+                health.record_failure(request.cluster_id, str(timeout_error))
             _audit_raw_proxy(api_key, request, method, project, "failure", error="timeout")
             logger.warning(
                 f"Raw proxy timeout: {method} {request.path} on {request.cluster_id}/{project} "
@@ -4891,6 +4897,16 @@ async def raw_proxy(
             # bug in our own response handling marked the cluster dead for 60s. That now costs
             # more than it did: connection.get_client consults the same breaker, so a wrongly
             # tripped cluster disappears from the dashboard's own read paths too.
+            # A read timeout means TCP and TLS completed and LXD is still working: slow, not
+            # unreachable, the distinction _validate_connection already makes. It answers 504 and
+            # leaves the breaker alone. A connect failure or connect timeout still trips it.
+            # important: not isinstance(ReadTimeout). The pooled session mounts Retry(read=0), so a
+            # GET that outlives the read budget arrives as ConnectionError(MaxRetryError(
+            # ReadTimeoutError)) and a stalled body as ConnectionError(ReadTimeoutError).
+            if is_read_timeout(api_error):
+                _audit_raw_proxy(api_key, request, method, project, "failure", error="timeout")
+                logger.warning(f"Raw proxy read timeout: {method} {request.path} on {request.cluster_id}/{project}")
+                return RawProxyResponse(status_code=504, data=None, error=str(api_error))
             if isinstance(api_error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
                 health.record_failure(request.cluster_id, str(api_error))
             logger.error(f"LXD API error: {api_error}")
