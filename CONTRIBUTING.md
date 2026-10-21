@@ -67,8 +67,25 @@ make test-frontend    # typecheck + structural guards
 make lint-frontend    # eslint
 ```
 
-These are the same gates CI runs (`.github/workflows/ci.yml`), so a green local run means a
-green pipeline.
+Those are the quick checks while you work. Before you push, run the whole pipeline on your
+machine:
+
+```bash
+make ci-local                              # every job in .github/workflows/ci.yml
+make ci-local STAGES="guards frontend"     # a subset of: commits guards backend frontend e2e
+make ci-local E2E_PROJECTS=desktop-light   # one browser project instead of all four
+```
+
+GitHub runs CI only for pull requests (with one browser project) and when someone starts it from
+the Actions tab, where "Run workflow" can ask for all four browser projects. A push straight to a
+branch is not checked there, so `make ci-local` is the gate for it.
+
+The runner reads the guard list, the toolchain versions and the browser job's environment from
+`ci.yml`, so it cannot fall behind the pipeline. The pinned Node and Playwright are installed once
+under `~/.cache/orcastra-ci-local`, and the journal PostgreSQL contracts get a throwaway database
+container when Docker is available (`CI_LOCAL_POSTGRES=skip` to opt out). It tests the working
+tree rather than a commit, so commit first if you want the result CI would see. Commit messages are
+linted against the branch's upstream; set `CI_LOCAL_BASE=<remote>/<branch>` if it has none.
 
 ## Security Reports
 

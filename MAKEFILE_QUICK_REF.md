@@ -37,6 +37,10 @@ make dev                     # Run all with logs visible
 make shell-backend           # Shell into backend container
 make redis-cli               # Open Redis CLI
 
+# Checks
+make ci-local                # Every CI job on this machine, run before a push
+make ci-local STAGES=backend # One stage: commits guards backend frontend e2e
+
 # Quick Actions
 make quick-start             # First time setup and start
 make quick-restart           # Quick restart everything

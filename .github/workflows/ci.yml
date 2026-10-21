@@ -7,13 +7,23 @@
 # What is deliberately NOT here, because it needs the dev VM and cannot work on a hosted runner:
 # make test-backend-docker (inspects a running container) and the credentialed Playwright harness
 # in /root/qa-orcastra, which drives real Authentik SSO against a private address.
+#
+# note: hosted minutes on a private repository are metered. Running on every push to main and dev
+# billed about 56 runner-minutes per push, four of them browser jobs, and that exhausted the plan.
+# The pipeline now runs on pull requests with one browser project, and by hand from the Actions
+# tab (with the full four-project matrix on request). The gate before a direct push is
+# `make ci-local`, which runs every job below on the developer's machine from this same file.
 
 name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      full_browser_matrix:
+        description: Run the browser suite in all four viewport and theme projects
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -361,6 +371,8 @@ jobs:
   # One job per Playwright project (viewport and theme), run in parallel. The whole suite in one job
   # had grown to 29m23s against this 30 minute timeout; each project alone runs in about 6-8 minutes
   # plus the build. Roles are chosen inside each test, so a project is the natural split.
+  # Pull requests run desktop-light only; a manual run with full_browser_matrix runs all four, and
+  # `make ci-local` runs all four by default. `inputs` is empty outside workflow_dispatch.
   browser-e2e:
     name: Browser role and behavior QA (${{ matrix.project }})
     runs-on: ubuntu-latest
@@ -369,7 +381,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [desktop-light, mobile-dark, desktop-dark, mobile-light]
+        project: ${{ fromJSON(inputs.full_browser_matrix && '["desktop-light","mobile-dark","desktop-dark","mobile-light"]' || '["desktop-light"]') }}
     permissions:
       contents: read
     env:

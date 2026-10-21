@@ -1,7 +1,7 @@
 # Makefile for Orcastra CMP
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: export-openapi release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend test-qa-artifacts lint-qa-artifacts install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: ci-local export-openapi release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend test-qa-artifacts lint-qa-artifacts install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
@@ -13,7 +13,7 @@ endif
 # Test and lint gates are hermetic and must not need deployment secrets just to let
 # GNU make parse their recipes. Load the local deployment environment only when at
 # least one requested goal can actually consume it.
-ENV_INDEPENDENT_GOALS := test-backend test-frontend lint-backend lint-frontend test-qa-artifacts lint-qa-artifacts
+ENV_INDEPENDENT_GOALS := test-backend test-frontend lint-backend lint-frontend test-qa-artifacts lint-qa-artifacts ci-local
 LOAD_LOCAL_ENV := 1
 ifneq ($(strip $(MAKECMDGOALS)),)
 ifeq ($(strip $(filter-out $(ENV_INDEPENDENT_GOALS),$(MAKECMDGOALS))),)
@@ -375,6 +375,13 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@echo "$(COLOR_GREEN)Checking the documentation index...$(COLOR_RESET)"
 	@node scripts/checks/check-doc-index.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
+
+# Hosted CI runs only on pull requests and by hand, so this is the gate before a direct push: every
+# job of .github/workflows/ci.yml, read from that file, on this machine. STAGES picks a subset of
+# commits guards backend frontend e2e; E2E_PROJECTS the browser projects; CI_LOCAL_BASE the commit
+# range base when the branch has no upstream. Scrubbed like test-backend, and for the same reason.
+ci-local: ## Run every CI job locally (the gate before a direct push)
+	@$(ENV_SCRUB) bash scripts/ci-local.sh $(STAGES)
 
 setup-hooks: ## Point git at the repo's hooks (run once per clone)
 	@git config core.hooksPath .githooks
