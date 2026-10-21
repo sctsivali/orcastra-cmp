@@ -38,7 +38,7 @@ import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { MigrationAction, MigrationJob } from "@/types/migrations";
 import { Role } from "@/types/rbac";
 import { MigrationActionDialog, migrationActionCopy } from "./migration-action-dialog";
-import { endpointLabel, jobProgress, migrationStatusMeta } from "./migration-format";
+import { endpointLabel, jobProgress, migrationStatusMeta, strategyLabel } from "./migration-format";
 import { MigrationResourceTable } from "./migration-resource-table";
 import { MigrationRetentionPanel } from "./migration-retention-panel";
 
@@ -190,7 +190,7 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                   <div className="grid gap-3 sm:grid-cols-2">
                     <DetailField label="Source" value={endpointLabel(job.source)} mono />
                     <DetailField label="Destination" value={endpointLabel(job.target)} mono />
-                    <DetailField label="Strategy" value={job.strategy ? formatLabel(job.strategy) : "Capability driven"} />
+                    <DetailField label="Strategy" value={strategyLabel(job)} />
                     <DetailField label="Current Phase" value={formatLabel(job.phase)} />
                     <DetailField label="Started" value={formatDateTime(job.created_at)} />
                     <DetailField

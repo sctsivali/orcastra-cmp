@@ -726,6 +726,8 @@ test("job detail shows retention, offers Finalize and Roll Back, and keeps stale
 
   await page.getByRole("button", { name: "retained-vm", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Source Retention" })).toBeVisible();
+  // The transfer method in operator words, never the raw enum.
+  await expect(page.getByRole("dialog").getByText("Transfer between clusters", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Roll Back" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Finalize" }).click();
   await expect(page.getByRole("heading", { name: "Finalize This Move" })).toBeVisible();

@@ -20,7 +20,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { MigrationJob } from "@/types/migrations";
-import { endpointLabel, endpointPrimary, jobProgress, migrationStatusMeta, operationLabel } from "./migration-format";
+import { endpointLabel, endpointPrimary, jobProgress, migrationStatusMeta, operationLabel, strategyLabel } from "./migration-format";
 
 const MIGRATION_JOBS = defineTable<MigrationJob>()({
   id: "migration-job",
@@ -155,7 +155,7 @@ function MigrationJobTableContent({
                   </TableCell>
                   <TableCell>
                     {operationLabel(job)}
-                    {job.strategy && <TableSubText>{formatLabel(job.strategy)}</TableSubText>}
+                    {job.strategy && <TableSubText>{strategyLabel(job)}</TableSubText>}
                   </TableCell>
                   <TableCell>
                     <Badge variant={status.tone}>{status.label}</Badge>

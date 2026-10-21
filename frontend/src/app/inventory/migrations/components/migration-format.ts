@@ -98,6 +98,25 @@ export function findingRemediation(finding: MigrationIssue): string | null {
   return finding.remediation ?? null;
 }
 
+const STRATEGY_LABEL: Record<string, string> = {
+  cross_cluster_pull: "Transfer between clusters",
+  member_relocation: "Relocate to another member",
+  project_relocation: "Recreate the project and transfer its instances",
+};
+
+/**
+ * The transfer method in operator words. `same_cluster_copy` is also how a move inside one
+ * cluster stages its target, so for a move it must not read "copy": the source is retained,
+ * not left running beside a copy.
+ */
+export function strategyLabel(item: { intent?: string | null; strategy?: string | null }): string {
+  if (!item.strategy) return "Decided by preflight";
+  if (item.strategy === "same_cluster_copy") {
+    return item.intent === "move" ? "Transfer inside the cluster" : "Copy inside the cluster";
+  }
+  return STRATEGY_LABEL[item.strategy] ?? formatLabel(item.strategy);
+}
+
 /** What an operator would call the job: a project relocation is not a "move project". */
 export function operationLabel(job: Pick<MigrationJob, "intent" | "scope" | "strategy">): string {
   if (job.scope === "project") {

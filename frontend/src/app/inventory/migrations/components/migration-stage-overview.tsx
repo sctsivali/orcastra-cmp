@@ -6,17 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { MigrationPlan } from "@/types/migrations";
-import { planHasRunningSource } from "./migration-format";
+import { planHasRunningSource, strategyLabel } from "./migration-format";
 import { MigrationFindings } from "./migration-findings";
 import { MigrationResourceTable } from "./migration-resource-table";
 import { SummaryField } from "./migration-summary-field";
-
-const STRATEGY_LABEL: Record<string, string> = {
-  same_cluster_copy: "Copy inside the cluster",
-  cross_cluster_pull: "Transfer between clusters",
-  member_relocation: "Relocate to another member",
-  project_relocation: "Recreate the project and transfer its instances",
-};
 
 function recoverySummary(plan: MigrationPlan): string {
   if (plan.intent === "copy") return "Source stays as it is";
@@ -66,7 +59,7 @@ export function MigrationStageStrategy({ plan }: { plan: MigrationPlan }) {
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryField
           label="Strategy"
-          value={plan.strategy ? STRATEGY_LABEL[plan.strategy] ?? formatLabel(plan.strategy) : "Decided by preflight"}
+          value={strategyLabel(plan)}
         />
         <SummaryField label="Downtime" value={running ? "For the transfer time" : "None, the source is stopped"} />
         <SummaryField label={plan.intent === "copy" ? "Source" : "Recovery"} value={recoverySummary(plan)} />
