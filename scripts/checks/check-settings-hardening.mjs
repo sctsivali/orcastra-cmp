@@ -24,7 +24,9 @@ function load(relativePath, dependencies = {}) {
 
 const types = load("frontend/src/types/personalization.ts");
 const preferences = load("frontend/src/components/personalization/preferences.ts", { "@/types/personalization": types });
-const cache = load("frontend/src/app/settings/components/browser-cache.ts");
+const cache = load("frontend/src/app/settings/components/browser-cache.ts", {
+  "@tanstack/react-query": frontendRequire("@tanstack/react-query"),
+});
 const tabs = load("frontend/src/app/settings/settings-tabs.ts");
 
 assert.equal(tabs.settingsTabPath("general"), "/settings");
@@ -147,5 +149,31 @@ await assert.rejects(cache.clearBrowserReadCache(failedClient, () => true), /Syn
 assert.equal(failedClient.getQueryState(["instances", "synthetic-actor"]).status, "error");
 unsubscribeFailure();
 failedClient.clear();
+
+// A view that depends on a reset read unmounts while its own reads refetch: the task panel renders
+// only on known /system/settings, so the reset unmounts it and React Query cancels its summary
+// read with nothing to revert to. That rejects with CancelledError, which is not a failed clear.
+const unmountClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+const slowRead = (ms, value) => ({ signal }) => new Promise((resolveRead, rejectRead) => {
+  const timer = setTimeout(() => resolveRead(value), ms);
+  signal.addEventListener("abort", () => { clearTimeout(timer); rejectRead(new Error("aborted")); });
+});
+const settingsObserver = new QueryObserver(unmountClient, { queryKey: ["system-settings"], queryFn: slowRead(10, { task_journal_enabled: true }) });
+const summaryObserver = new QueryObserver(unmountClient, { queryKey: ["tasks", "synthetic-actor", "summary"], queryFn: slowRead(40, { total: 1 }) });
+const unsubscribeSettings = settingsObserver.subscribe(() => {});
+let unsubscribeSummary = summaryObserver.subscribe(() => {});
+await Promise.all([settingsObserver.refetch(), summaryObserver.refetch()]);
+// React unmounts after a commit, so the panel goes away once the summary refetch is in flight.
+const unmountOnReset = settingsObserver.subscribe((result) => {
+  if (result.data === undefined && unsubscribeSummary) {
+    setTimeout(() => { unsubscribeSummary?.(); unsubscribeSummary = null; }, 5);
+  }
+});
+assert.equal(await cache.clearBrowserReadCache(unmountClient, () => true), true, "a view unmounted by the reset must not fail the clear");
+assert.deepEqual(unmountClient.getQueryData(["system-settings"]), { task_journal_enabled: true });
+unmountOnReset();
+unsubscribeSettings();
+unsubscribeSummary?.();
+unmountClient.clear();
 
 console.log("settings hardening: canonical slugs, organization versions, retired reads, and browser-cache mutation preservation passed");
