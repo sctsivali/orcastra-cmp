@@ -8,7 +8,7 @@
 import NextAuth from "next-auth";
 import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
-import { callbackPath, redirectTo } from "@/lib/auth-redirect";
+import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -326,10 +326,12 @@ export const authConfig: NextAuthConfig = {
         return true;
       }
 
-      // Redirect logged-in users away from auth pages
+      // Redirect logged-in users away from auth pages, to the page the sign-in was for when it
+      // names a safe one (a second tab, a bookmarked sign-in step), else home.
       if (isOnAuthPage) {
         if (isLoggedIn) {
-          return Response.redirect(redirectTo(nextUrl, host, "/"));
+          const target = safeCallbackPath(nextUrl.searchParams.get("callbackUrl"), nextUrl.origin) ?? "/";
+          return Response.redirect(redirectTo(nextUrl, host, target));
         }
         return true; // Allow access to auth pages for non-logged-in users
       }

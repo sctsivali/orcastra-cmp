@@ -37,7 +37,10 @@ export function redirectTo(
   pathname: string,
   params?: Record<string, string>
 ): URL {
-  const target = new URL(pathname, redirectOrigin(nextUrl, hostHeader));
+  const origin = redirectOrigin(nextUrl, hostHeader);
+  let target = new URL(pathname, origin);
+  // A path that resolves to another origin ("//host") is never followed, whoever produced it.
+  if (target.origin !== new URL(origin).origin) target = new URL("/", origin);
   for (const [key, value] of Object.entries(params ?? {})) {
     target.searchParams.set(key, value);
   }
@@ -47,4 +50,36 @@ export function redirectTo(
 /** The page to return to after sign-in, relative so it resolves on whichever origin signs in. */
 export function callbackPath(nextUrl: URL): string {
   return `${nextUrl.pathname}${nextUrl.search}`;
+}
+
+// A throwaway origin to resolve a relative candidate against. Anything that resolves elsewhere
+// ("//host", "/\host", a scheme, tab or newline tricks the URL parser strips) was never a path here.
+const PATH_PROBE_ORIGIN = "http://callback.invalid";
+
+/**
+ * `raw` as a same-origin page to return to after sign-in, normalized, or null.
+ *
+ * important: the value redirected to is the one this parsed, never `raw` itself, so what was
+ * checked is what is followed. `origin` admits an absolute URL on that origin, which next-auth's
+ * own `/api/auth/signin` hands over; without it only a path is accepted. The auth pages and the
+ * API are never a destination: one loops back here, the other is not a page.
+ */
+export function safeCallbackPath(raw: string | null | undefined, origin?: string): string | null {
+  if (!raw) return null;
+  const base = origin ?? PATH_PROBE_ORIGIN;
+  const isOwnUrl = !!origin && (raw === origin || raw.startsWith(`${origin}/`) || raw.startsWith(`${origin}?`));
+  if (!raw.startsWith("/") && !isOwnUrl) return null;
+  let url: URL;
+  try {
+    url = new URL(raw, base);
+  } catch {
+    return null;
+  }
+  if (url.origin !== base) return null;
+  // important: dot segments are folded after the origin is fixed, so "/.//evil.com",
+  // "/a/..//evil.com" and "/%2e//evil.com" all parse as this origin with the path "//evil.com",
+  // and that path, followed as a Location, is a scheme-relative URL to another host.
+  if (url.pathname.startsWith("//")) return null;
+  if (/^\/(?:auth|api)(?:\/|$)/i.test(url.pathname)) return null;
+  return `${url.pathname}${url.search}${url.hash}`;
 }

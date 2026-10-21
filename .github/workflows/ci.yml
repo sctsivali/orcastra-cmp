@@ -328,6 +328,9 @@ jobs:
       - name: Settings behavior
         run: node scripts/checks/check-settings-hardening.mjs .
 
+      - name: Sign-in return path
+        run: node scripts/checks/check-auth-callback.mjs .
+
       - name: Task journal behavior
         run: node scripts/checks/check-task-journal-behavior.mjs .
 

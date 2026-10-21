@@ -7,7 +7,7 @@
  */
 
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/card";
 import { AlertTriangle, ArrowLeft, LogIn, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { recallReturnPath } from "@/lib/auth-return";
 
 // Error details mapping
 const errorDetails: Record<string, { title: string; description: string }> = {
@@ -71,6 +72,12 @@ function ErrorContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get("error") || "Default";
   const { title, description } = errorDetails[error] || errorDetails.Default;
+  // note: read after mount, because the server render has no tab storage to agree with.
+  const [signInHref, setSignInHref] = useState("/auth/signin");
+  useEffect(() => {
+    const returnPath = recallReturnPath();
+    if (returnPath) setSignInHref(`/auth/signin?${new URLSearchParams({ callbackUrl: returnPath })}`);
+  }, []);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-4">
@@ -90,7 +97,7 @@ function ErrorContent() {
         <CardContent className="space-y-4">
           {/* Action Buttons */}
           <div className="flex flex-col gap-3">
-            <Link href="/auth/signin" className="w-full">
+            <Link href={signInHref} className="w-full">
               <Button className="w-full" size="lg">
                 <LogIn className="mr-2 h-4 w-4" />
                 Back to sign in

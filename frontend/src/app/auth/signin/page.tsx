@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, LogIn, ShieldCheck, AlertCircle } from "lucide-react";
+import { safeCallbackPath } from "@/lib/auth-redirect";
+import { forgetReturnPath, recallReturnPath, rememberReturnPath } from "@/lib/auth-return";
 
 // Error messages mapping
 const errorMessages: Record<string, string> = {
@@ -42,9 +44,19 @@ const errorMessages: Record<string, string> = {
 function SignInContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get("error");
-  const callbackUrl = searchParams.get("callbackUrl") || "/";
+  const requested = searchParams.get("callbackUrl");
   const [isLoading, setIsLoading] = useState(false);
   const [autoRedirect, setAutoRedirect] = useState(true);
+
+  // A failed sign-in comes back here (or via /auth/error) without its callbackUrl, so the page
+  // asked for is kept for the tab and recalled on the retry. A plain visit forgets a stale one.
+  useEffect(() => {
+    if (requested) rememberReturnPath(safeCallbackPath(requested, window.location.origin));
+    else if (!error) forgetReturnPath();
+  }, [requested, error]);
+
+  const resolveCallbackUrl = () =>
+    safeCallbackPath(requested, window.location.origin) ?? (error ? recallReturnPath() : null) ?? "/";
 
   // Auto-redirect to Authentik after a short delay
   useEffect(() => {
@@ -60,7 +72,7 @@ function SignInContent() {
     setIsLoading(true);
     setAutoRedirect(false);
     try {
-      await signIn("authentik", { callbackUrl });
+      await signIn("authentik", { callbackUrl: resolveCallbackUrl() });
     } catch (err) {
       console.error("Sign in error:", err);
       setIsLoading(false);
