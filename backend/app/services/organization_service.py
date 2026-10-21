@@ -8,7 +8,7 @@ import re
 import logging
 from typing import Optional
 
-from sqlalchemy import select, delete, func
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -142,6 +142,26 @@ class OrganizationService:
         await self.db.commit()
         await self.db.refresh(org)
         return org
+
+    async def migration_history(self, org_id: int) -> tuple[int, int]:
+        """Migration jobs and plans that name this organization, as source or target.
+
+        Their foreign keys are RESTRICT on purpose: a migration record is audit history and is
+        never detached from the organization it ran for.
+        """
+        from app.models.migration_models import MigrationJob, MigrationPlan
+
+        jobs = await self.db.scalar(
+            select(func.count()).select_from(MigrationJob).where(
+                or_(MigrationJob.source_organization_id == org_id, MigrationJob.target_organization_id == org_id)
+            )
+        )
+        plans = await self.db.scalar(
+            select(func.count()).select_from(MigrationPlan).where(
+                or_(MigrationPlan.source_organization_id == org_id, MigrationPlan.target_organization_id == org_id)
+            )
+        )
+        return int(jobs or 0), int(plans or 0)
 
     async def delete_organization(self, org_id: int) -> bool:
         """Delete organization (cascades members + cluster bindings)."""

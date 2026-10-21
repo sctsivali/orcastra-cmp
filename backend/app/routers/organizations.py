@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -348,7 +349,29 @@ async def delete_organization(
     if org is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     async with _guard_organization_write(db, org_id):
-        if not await svc.delete_organization(org_id):
+        # important: migration records keep their organization (RESTRICT foreign keys), so an
+        # organization with any is refused up front with the reason. It used to reach the delete
+        # and answer 500 from the database's refusal.
+        jobs, plans = await svc.migration_history(org_id)
+        if jobs or plans:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"This organization still owns migration history ({jobs} jobs, {plans} plans). "
+                    "Migration records are kept for audit and stay with the organization they ran "
+                    "for, so it cannot be deleted."
+                ),
+            )
+        try:
+            deleted = await svc.delete_organization(org_id)
+        except IntegrityError as exc:
+            await db.rollback()
+            logger.warning("Organization %s delete refused by a foreign key: %s", org_id, exc.orig)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This organization is still referenced by other records, so it was not deleted.",
+            ) from exc
+        if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
 
 
