@@ -86,8 +86,13 @@ def test_nothing_known_is_503_not_an_empty_list(monkeypatch):
     tc, _ = _app(RegistryRead(cluster_ids=[], source=None, readable=False), monkeypatch)
     r = tc.get("/nodes/names")
     assert r.status_code == 503
-    assert "registry" in r.json()["detail"].lower()
+    # One body for every route that cannot read the registry (issue #15), so the dashboard can
+    # say "Vault is sealed or unavailable" rather than a generic failure.
+    assert r.json()["detail"]["error"] == "vault_unavailable"
+    assert "vault" in r.json()["detail"]["message"].lower()
     assert r.headers["x-orcastra-registry-readable"] == "false"
+    assert r.headers["retry-after"] == "15"
+    assert r.headers["cache-control"] == "no-store"
 
 
 def test_a_readable_empty_registry_is_a_plain_empty_list(monkeypatch):

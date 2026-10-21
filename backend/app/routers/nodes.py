@@ -37,6 +37,7 @@ from app.core.org_scope import (
 from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.core.vault_client import get_vault_client
 from app.core import vault_status
+from app.core.registry_guard import require_known_registry, vault_unavailable_error
 from app.core.org_scope import apply_cluster_filter
 from app.services.lxd_certs.storage import RegistryRead
 from app.core.cache import (
@@ -70,7 +71,6 @@ NODES_AVAILABILITY_PROBE_TIMEOUT = 20.0
 # The Vault LIST budget (3s connect, 10s read, see core/vault_client.VAULT_LIST_TIMEOUT) plus
 # margin. Past it the request is answered from the last known registry, never left waiting.
 REGISTRY_READ_TIMEOUT = 12.0
-REGISTRY_UNAVAILABLE_DETAIL = "Cluster registry is temporarily unavailable"
 
 
 async def _read_registry(lxd_service: LXDService) -> RegistryRead:
@@ -209,6 +209,9 @@ async def get_nodes_status(
     
     # Not in cache - fetch fresh data using ASYNC PARALLEL version
     statuses = await lxd_service.check_nodes_status_async()
+    # important: before the cache write below. An unreadable registry with nothing known used to
+    # be cached here for 180 s as an empty fleet with all_connected=True (issue #15).
+    require_known_registry([status.name for status in statuses])
     
     # note: a second Vault sweep used to live here, adding any cluster the fan-out had not
     # already returned. It was unreachable: check_nodes_status_async iterates the same
@@ -264,11 +267,7 @@ async def get_node_names(
     if read.readable:
         return read.cluster_ids
     if read.source is None:
-        raise HTTPException(
-            status_code=503,
-            detail=REGISTRY_UNAVAILABLE_DETAIL,
-            headers={"X-Orcastra-Registry-Readable": "false", "Cache-Control": "no-store"},
-        )
+        raise vault_unavailable_error()
     response.headers["X-Orcastra-Registry-Readable"] = "false"
     response.headers["Cache-Control"] = "no-store"
     return read.cluster_ids
@@ -304,7 +303,7 @@ async def get_nodes_availability(
     except lxd_status.RegistryUnavailable:
         # A lost registry with nothing known: the probe would read an empty fleet and report
         # it as "no clusters". While the last known registry is served the probe runs over it.
-        raise HTTPException(status_code=503, detail=REGISTRY_UNAVAILABLE_DETAIL)
+        raise vault_unavailable_error()
     except (BlockingTimeout, BlockingPoolFull) as exc:
         # Degrade to "we could not tell", never to "everything is offline". A picker that
         # marks a healthy fleet dead because a probe was slow is worse than one with no marks.

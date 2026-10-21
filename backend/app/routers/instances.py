@@ -41,6 +41,7 @@ from app.services.lxd_service import (
 )
 from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
+from app.core.registry_guard import require_known_registry
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.database import get_db
 from app.core.error_sanitizer import sanitize_error
@@ -335,6 +336,9 @@ async def list_instances(
                 else []
             )
         else:
+            # An unreadable registry with nothing known is not an empty fleet (issue #15): the
+            # denominator is empty too, so the answer would be 200, zero rows, nothing unreachable.
+            require_known_registry(lxd_service.get_node_names())
             response_nodes = connected_nodes
             # Keep the established denominator as a compatibility guard for service doubles and
             # older mixed-version workers. The detailed fan-out also names clusters that answered
@@ -411,6 +415,8 @@ async def list_instances(
             logger.warning("Not caching instances list: no cluster answered")
         
         return vm_list_for_tier(response, caller_tier())
+    except HTTPException:
+        raise
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))

@@ -27,6 +27,8 @@ from app.models.schemas import (
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.vault_client import get_vault_client
+from app.core import vault_probe
+from app.core.registry_guard import require_known_registry, vault_unavailable_error
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
 from app.services.lxd.exceptions import LXDLocalStorageError
 from app.services.lxd.exceptions import LXDAuthorizationError
@@ -94,13 +96,13 @@ def get_cert_manager() -> LXDCertificateManager:
     
     try:
         vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-        
-        # Health check
-        if not vault_client.health_check():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Vault server is not accessible or unhealthy"
-            )
+
+        # important: the cached seal probe, not VaultClient.health_check(). That made three
+        # attempts on every request to any of these routes, and its 503 said only "unhealthy",
+        # so a sealed Vault read the same as a network fault (issue #15). The probe answers once
+        # per ten seconds per worker and the refusal carries the structured vault_unavailable.
+        if vault_probe.seal_probe().state != "ok":
+            raise vault_unavailable_error()
         
         cert_manager = LXDCertificateManager(
             vault_client=vault_client,
@@ -924,6 +926,8 @@ async def list_clusters(
         cluster_ids = apply_cluster_filter(
             await asyncio.to_thread(cert_manager.list_clusters, use_cache=not fresh)
         )
+        # An unreadable registry with nothing known is not "no clusters registered".
+        require_known_registry(cluster_ids)
         
         # Fetch all cluster info in parallel for better performance
         tasks = [
@@ -952,6 +956,8 @@ async def list_clusters(
         
         return cluster_list_for_tier(response, caller_tier())
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list clusters: {e}")
         raise HTTPException(

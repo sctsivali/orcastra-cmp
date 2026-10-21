@@ -23,7 +23,7 @@ import urllib3
 # This is expected behavior when connecting to LXD with self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from app.core import build_identity, vault_status
+from app.core import build_identity, vault_probe, vault_status
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.middleware import (
@@ -1065,6 +1065,12 @@ Ensure your client certificates are properly configured.
         # something says so. This is the only signal that tells them apart from outside the
         # process. `error` carries a class name and a short reason, never a Vault address.
         vault = vault_status.snapshot()
+        # The seal probe's last answer, read without asking Vault (this route must never wait on
+        # it). None until something has probed: the dashboard's status poll or a cluster route.
+        last_probe = vault_probe.peek()
+        vault["probe"] = (
+            {"state": last_probe.state, "checked_at": last_probe.checked_at} if last_probe else None
+        )
         if vault.get("registry_readable") is False:
             if vault.get("registry_source") == "last_known":
                 logger.error(

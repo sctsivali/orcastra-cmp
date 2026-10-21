@@ -66,7 +66,13 @@ def mark_readable() -> None:
 
 # What a requests exception string carries that an unauthenticated /health must not: the Vault
 # URL ("for url: http://vault:8200/v1/...") and the connection pool's host and port.
-_URL_FRAGMENT = re.compile(r"\s*for url:\s*\S+|\(host='[^']*',\s*port=\d+\)|https?://\S+", re.IGNORECASE)
+_URL_FRAGMENT = re.compile(
+    r"\s*for url:\s*\S+|\(host='[^']*',\s*port=\d+\)|https?://\S+"
+    # urllib3's inner reasons name the peer too: "Connection to 10.0.0.5 timed out",
+    # "Failed to resolve 'vault.internal'", "HTTPConnection(host='vault', port=8200)".
+    r"|(?<=Connection to )[^\s:,)]+(?::\d+)?|(?<=resolve )'[^']*'|\('[^']*',\s*\d+\)",
+    re.IGNORECASE,
+)
 
 
 def public_error(error: str) -> str:
@@ -113,6 +119,15 @@ def failed_within(seconds: float) -> bool:
     """True when the last read failed less than `seconds` ago."""
     with _lock:
         return _last_ok is False and _last_at is not None and time.time() - _last_at < seconds
+
+
+def registry_unknown() -> bool:
+    """The last read failed and no last known registry was served: an empty list means nothing.
+
+    None (nothing has tried yet) is not unknown, and neither is a failure that served the memo.
+    """
+    with _lock:
+        return _last_ok is False and _last_source is None
 
 
 def registry_readable() -> Optional[bool]:

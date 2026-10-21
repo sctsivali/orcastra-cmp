@@ -41,6 +41,7 @@ from app.services.lxd.hardware import (
     cpu_vendor_from_sockets,
     storage_types_from_disks,
 )
+from app.core.registry_guard import require_known_registry
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
 import time
 from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
@@ -199,6 +200,9 @@ async def get_regions_overview(
         
                 # Get org-scoped cluster list
                 cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
+                # An unreadable registry with nothing known is not an empty map, and the branch
+                # below would cache it for 120 s (issue #15).
+                require_known_registry(cluster_ids)
 
                 if not cluster_ids:
                     response = RegionsOverviewResponse(
@@ -545,6 +549,8 @@ async def get_regions_overview(
 
                 return response
 
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Error building regions overview: {e}")
                 raise HTTPException(status_code=500, detail=str(e))

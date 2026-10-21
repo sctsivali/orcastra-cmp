@@ -100,6 +100,9 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "identity_provider_unavailable": (
             "The identity provider could not be reached to verify this sign-in. Retry shortly."
         ),
+        "vault_unavailable": (
+            "Cluster data cannot be read because the secret store (Vault) is sealed or unavailable."
+        ),
     },
 }
 

@@ -32,6 +32,7 @@ from app.services.monitoring_history_store import (
     record_point,
 )
 from app.services.monitoring_memory import apply_member_memory
+from app.core.registry_guard import require_known_registry
 from app.services.monitoring_sweep import SweepTimer, count_warnings, inventory_note, log_sweep, read_fleet
 from app.services.ws_session_guard import close_when_session_ends
 from app.core.ws_auth import ws_user
@@ -183,6 +184,9 @@ async def get_monitoring_dashboard(
         fleet = await read_fleet(lxd_service, timer)
         all_vms, connected_nodes = fleet.vms, fleet.connected
         node_statuses_list = fleet.statuses
+        # An unreadable registry with nothing known is not a fleet of zeros (issue #15). The
+        # background collector builds through here too, so it records no zero point either.
+        require_known_registry([node.name for node in node_statuses_list])
         
         # apply tenant ACL filtering
         all_vms = [
@@ -536,6 +540,8 @@ async def get_monitoring_dashboard(
     # note: nothing to unwind on the error paths any more. The old code had to pop a
     # pre-advanced timestamp so the next request would retry; a failed rebuild now simply
     # writes nothing and the next arrival takes the ordinary miss path.
+    except HTTPException:
+        raise
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error in monitoring: {e}")
         raise HTTPException(status_code=503, detail=str(e))

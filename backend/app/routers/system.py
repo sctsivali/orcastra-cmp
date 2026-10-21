@@ -7,7 +7,7 @@ from typing import Optional
 from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.core import build_identity
@@ -34,6 +34,9 @@ from app.models.system_resources import (  # noqa: F401
     WorkersInfo,
 )
 from app.services.system_resources import collect_resource_usage
+from app.core.rbac import is_admin
+from app.services.lxd.lxd_service import LXDService, get_lxd_service
+from app.services.vault_health import VaultState, resolve_vault_health
 
 router = APIRouter(
     prefix="/system",
@@ -153,6 +156,62 @@ async def get_system_settings():
             settings, "migration_default_retention_hours", 24
         ),
     )
+
+
+class VaultStatusDetail(BaseModel):
+    """Administrator-only: why, in a class name and a short reason, never an address."""
+    reason: Optional[str] = None
+    registry_error: Optional[str] = None
+    registry_checked_at: Optional[float] = None
+
+
+class VaultStatusResponse(BaseModel):
+    """What the dashboard's Vault notice shows (issue #15)."""
+    state: VaultState
+    checked_at: float
+    # "vault" when the last registry read answered, "last_known" when a memo is being served.
+    registry_source: Optional[Literal["vault", "last_known"]] = None
+    detail: Optional[VaultStatusDetail] = None
+
+
+_vault_status_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vault_status")
+
+
+@router.get("/vault-status", response_model=VaultStatusResponse, response_model_exclude_none=True)
+async def get_vault_status(
+    response: Response,
+    fresh: bool = False,
+    lxd_service: LXDService = Depends(get_lxd_service),
+    user: AuthenticatedUser = Depends(require_tenant()),
+):
+    """Whether Vault is sealed, uninitialized, unreachable or refusing the cluster registry.
+
+    `fresh` is the notice's "Check now": it re-probes an answer older than two seconds. Every
+    role sees the state, because every role sees what it does to the cluster lists; only an
+    Administrator sees the reason.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        health = await run_blocking(
+            resolve_vault_health,
+            lxd_service.cert_manager,
+            force=fresh,
+            timeout=20,
+            label="system.vault_status",
+            executor=_vault_status_executor,
+            max_in_flight=4,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        raise HTTPException(status_code=503, detail="The Vault status could not be read in time") from exc
+    source = health.registry_source if health.registry_source in ("vault", "last_known") else None
+    detail = None
+    if user is not None and is_admin(user):
+        detail = VaultStatusDetail(
+            reason=health.reason,
+            registry_error=health.registry_error,
+            registry_checked_at=health.registry_checked_at,
+        )
+    return VaultStatusResponse(state=health.state, checked_at=health.checked_at, registry_source=source, detail=detail)
 
 
 @router.get("/cache/stats")

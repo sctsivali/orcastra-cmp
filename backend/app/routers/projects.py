@@ -61,6 +61,7 @@ from app.core.org_scope import (
 )
 from app.services import project_grants
 from app.core.single_flight import single_flight
+from app.core.registry_guard import require_known_registry
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.services.activity_logger import get_activity_logger
 from app.services.migration_fence import (
@@ -277,6 +278,8 @@ async def list_all_projects(
     
     try:
         node_names = lxd_service.get_node_names()
+        # An unreadable registry with nothing known is not "no projects" (issue #15).
+        require_known_registry(node_names)
         logger.info(f"Fetching projects from {len(node_names)} nodes in parallel")
         
         # Helper to fetch projects for a single host
@@ -362,6 +365,8 @@ async def list_all_projects(
         
         return all_projects
         
+    except HTTPException:
+        raise
     except LXDLocalUnavailableError as e:
         logger.warning("Project inventory is locally unavailable: %s", e)
         raise HTTPException(
