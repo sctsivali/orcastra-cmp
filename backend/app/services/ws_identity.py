@@ -60,6 +60,9 @@ async def check_identity(user: AuthenticatedUser) -> IdentityCheck:
         _readings[email] = (now, reading)
     if reading.roles is None:
         return IdentityCheck(reading.reason in ENDED_REASONS, reading.reason)
+    if not reading.has_role:
+        # note: an answer, not a failure: the account is live but every role group was removed.
+        return IdentityCheck(True, "no_role_assigned")
     return IdentityCheck(False, "active", reading.roles)
 
 

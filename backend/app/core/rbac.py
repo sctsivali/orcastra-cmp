@@ -156,10 +156,10 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
-    """Map Authentik groups to roles (no cache)."""
+def mapped_roles(group_names: list[str]) -> list[Role]:
+    """The roles these Authentik group names map to, with no default: empty means no role."""
     roles: list[Role] = []
-    for group in user.groups:
+    for group in group_names:
         group_lower = group.lower().strip()
         if group_lower in AUTHENTIK_GROUP_MAP:
             roles.append(AUTHENTIK_GROUP_MAP[group_lower])
@@ -167,7 +167,17 @@ def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
             stripped = group_lower[5:]
             if stripped in AUTHENTIK_GROUP_MAP:
                 roles.append(AUTHENTIK_GROUP_MAP[stripped])
-    return list(set(roles)) if roles else [Role.TENANT]
+    return list(set(roles))
+
+
+def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
+    """Map Authentik groups to roles (no cache).
+
+    note: still answers TENANT for a caller with no role group, because tenant grants, the
+    integration rebind and the role reader resolve through here and a key or membership row is not
+    a session. Whether a session may act at all is decided by refuse_unmapped below.
+    """
+    return mapped_roles(user.groups) or [Role.TENANT]
 
 
 def roles_for_group_names(group_names: list[str]) -> list[Role]:
@@ -217,6 +227,41 @@ def has_permission(user: AuthenticatedUser, permission: Permission) -> bool:
     return permission in get_user_permissions(roles)
 
 
+NO_ROLE_ASSIGNED = "no_role_assigned"
+NO_ROLE_ASSIGNED_MESSAGE = (
+    "This account has no role in Orcastra yet. Ask an administrator to assign one."
+)
+
+
+def has_mapped_role(user: AuthenticatedUser) -> bool:
+    """Whether any of the caller's groups maps to an Orcastra role."""
+    return bool(mapped_roles(user.groups))
+
+
+def refuse_unmapped(request: Request, user: AuthenticatedUser) -> None:
+    """Refuse a signed-in caller whose groups map to no role (issue #17).
+
+    important: such a caller used to resolve to Tenant and receive 200 with empty lists, which reads
+    as a broken or emptied deployment. A role is now required before any session route answers.
+    Integration keys and MCP authenticate elsewhere and never reach this.
+    """
+    if has_mapped_role(user):
+        return
+    request.state.user_role = None
+    logger.warning(f"RBAC denied (no role): user={user.user_id} path={request.url.path}")
+    activity_logger.log_activity(
+        action="rbac.access_denied",
+        target_type="endpoint",
+        target_id=request.url.path,
+        result="denied",
+        details={"reason": NO_ROLE_ASSIGNED, "method": request.method},
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": NO_ROLE_ASSIGNED, "message": NO_ROLE_ASSIGNED_MESSAGE},
+    )
+
+
 def _populate_request_state(request: Request, user: AuthenticatedUser) -> None:
     """Write resolved RBAC info into request.state AND RequestContext for logging."""
     roles = resolve_roles(user)
@@ -254,6 +299,7 @@ def require_roles(*allowed_roles: Role):
                 groups=["admin"], roles=["role_admin"],
             )
         _populate_request_state(request, user)
+        refuse_unmapped(request, user)
         user_roles = resolve_roles(user)
         user_max = max(ROLE_HIERARCHY.get(r, 0) for r in user_roles)
         required_min = min(ROLE_HIERARCHY.get(r, 0) for r in allowed_roles)
@@ -295,6 +341,7 @@ def require_permissions(*required_permissions: Permission):
                 groups=["admin"], roles=["role_admin"],
             )
         _populate_request_state(request, user)
+        refuse_unmapped(request, user)
         user_roles = resolve_roles(user)
         user_perms = get_user_permissions(user_roles)
         missing = set(required_permissions) - user_perms
@@ -336,6 +383,7 @@ def require_authenticated():
                 groups=["admin"], roles=["role_admin"],
             )
         _populate_request_state(request, user)
+        refuse_unmapped(request, user)
         return user
     return _dependency
 

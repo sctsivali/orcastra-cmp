@@ -1013,6 +1013,10 @@ Ensure your client certificates are properly configured.
     # User Groups Router (Admin user assignment + Authentik sync)
     from app.routers.user_groups import router as user_groups_router
     app.include_router(user_groups_router, prefix=settings.api_prefix)
+
+    # The caller's own access verdict. The one session route a caller with no role may reach.
+    from app.routers.me import router as me_router
+    app.include_router(me_router, prefix=settings.api_prefix)
     
     # Tenant Access Policy Router (ACL system)
     from app.routers.tenant_access import router as tenant_access_router

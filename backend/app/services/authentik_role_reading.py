@@ -24,7 +24,7 @@ from typing import Any, Iterable, Mapping, Optional, Protocol
 
 import httpx
 
-from app.core.rbac import Role, roles_for_group_names
+from app.core.rbac import Role, mapped_roles, roles_for_group_names
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,9 @@ class RoleReading:
 
     roles: Optional[frozenset[Role]]
     reason: str
+    # False when the groups map to no role and `roles` holds only the Tenant default. A session
+    # needs a mapped role (rbac.refuse_unmapped); a key rebind reads `roles` and ignores this.
+    has_role: bool = True
 
 
 class CurrentRoleReader(Protocol):
@@ -48,7 +51,8 @@ def unknown_role(reason: str) -> RoleReading:
 
 
 def known_roles(group_names: Iterable[str]) -> RoleReading:
-    return RoleReading(frozenset(roles_for_group_names(list(group_names))), "read")
+    names = list(group_names)
+    return RoleReading(frozenset(roles_for_group_names(names)), "read", bool(mapped_roles(names)))
 
 
 def _json_object(response: httpx.Response) -> Optional[Mapping[str, Any]]:

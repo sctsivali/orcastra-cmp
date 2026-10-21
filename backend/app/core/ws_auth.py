@@ -18,6 +18,7 @@ from fastapi import Depends, WebSocket, WebSocketException, status
 
 from app.core.auth import AuthenticatedUser, get_ws_user
 from app.core.config import Settings, get_settings
+from app.core.rbac import has_mapped_role
 from app.core.ws_ticket import TICKET_TTL_SECONDS, TicketClaims, socket_target
 from app.core.ws_ticket_store import get_ws_ticket_store
 
@@ -76,14 +77,27 @@ def ws_user(kind: str) -> Callable[..., Awaitable[Optional[AuthenticatedUser]]]:
             if presented_token and not settings.ws_query_token_enabled:
                 logger.warning("WebSocket refused: a %s socket presented a token beside its ticket", kind)
                 return None
-            return user
+            return None if _refused_without_role(kind, user) else user
         if presented_token:
             if not settings.ws_query_token_enabled:
                 logger.warning("WebSocket refused: a %s socket presented ?token=, which is no longer accepted", kind)
                 return None
-            return await get_ws_user(websocket, settings)
+            user = await get_ws_user(websocket, settings)
+            return None if _refused_without_role(kind, user) else user
         logger.warning("WebSocket refused: a %s socket presented no ticket", kind)
         return None
 
     dependency.__name__ = f"ws_user_{kind}"
     return dependency
+
+
+def _refused_without_role(kind: str, user: Optional[AuthenticatedUser]) -> bool:
+    """Whether a caller identified for a socket has no Orcastra role and must be refused.
+
+    important: the REST routes refuse such a caller (rbac.refuse_unmapped); a socket that let one in
+    would hand it the live feeds the access notice is meant to keep from it (issue #17).
+    """
+    if user is None or has_mapped_role(user):
+        return False
+    logger.warning("WebSocket refused: a %s socket opened by a caller with no role", kind)
+    return True
