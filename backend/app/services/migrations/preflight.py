@@ -506,11 +506,25 @@ def _check_capacity(
             return
         headroom = mobility.pool_headroom(target_client, target_pool)
     if any(value is None for value in footprints):
-        result.block(
-            "source_footprint_unverified",
-            "One or more source disk allocations or snapshot sizes could not be measured.",
-            "Restore authoritative disk and snapshot size reporting, then run preflight again.",
-        )
+        unstarted = [
+            name
+            for name, value in zip(instance_names, footprints)
+            if value is None and mobility.instance_footprint(source_client, name, source_project) == 0
+        ]
+        if unstarted:
+            result.block(
+                "source_footprint_unverified",
+                f"{', '.join(unstarted)} report no disk usage yet, which LXD does for an instance "
+                "that was never started, so the transfer cannot be sized.",
+                "Start and stop the instance once, or give its root disk an explicit size, then run "
+                "preflight again.",
+            )
+        else:
+            result.block(
+                "source_footprint_unverified",
+                "One or more source disk allocations or snapshot sizes could not be measured.",
+                "Restore authoritative disk and snapshot size reporting, then run preflight again.",
+            )
     if headroom is None:
         result.block(
             "target_capacity_unverified",
@@ -553,6 +567,12 @@ def _instance_transfer_bytes(
         if not isinstance(root, dict):
             return None
         provisioned = parse_lxd_size(root.get("size"))
+        if usage == 0 and provisioned is None:
+            # important: 0 is what LXD reports for an instance that was never started (on zfs a
+            # clone of its image with no bytes of its own), yet a transfer still writes the whole
+            # root. Without an explicit root size there is nothing honest to size it by, so it
+            # stays unmeasured; _check_capacity says why and how to fix it.
+            return None
         current = max(usage, provisioned or 0)
         snapshots = _get_collection(
             client.api.instances[safe_segment(name)].snapshots,

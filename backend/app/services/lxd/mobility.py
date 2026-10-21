@@ -136,8 +136,15 @@ def instance_footprint(client, instance_name: str, project: str) -> Optional[int
             client.api.instances[safe_segment(instance_name)].state.get(params=_project_params(project))
         ) or {}
         disks = state.get("disk") or {}
-        total = sum(int(d.get("usage") or 0) for d in disks.values() if isinstance(d, dict))
-        return total or None
+        # important: a reported 0 is a measurement, not a missing one. A volume that was never
+        # written past its image (an instance created and never started) holds no bytes of its
+        # own, and reading 0 as unknown refused to move it with "size reporting" blamed.
+        reported = [
+            d.get("usage") for d in disks.values() if isinstance(d, dict) and d.get("usage") is not None
+        ]
+        if not reported:
+            return None
+        return sum(int(value) for value in reported)
     except Exception as exc:  # noqa: BLE001 - a missing figure is not a failure to move
         logger.debug("Could not read footprint for %s: %s", instance_name, exc)
         return None
