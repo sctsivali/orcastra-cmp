@@ -954,7 +954,7 @@ class InstanceManager:
         """
         client = self.connection_manager.get_cached_client(node_name)
         if client is None:
-            if health.is_tripped(node_name):
+            if health.known_unreachable(node_name):
                 raise LXDConnectionError("Instance inventory is temporarily unavailable")
             raise LXDLocalUnavailableError("Instance inventory is temporarily unavailable")
         endpoint = self._get_node_endpoint(node_name)

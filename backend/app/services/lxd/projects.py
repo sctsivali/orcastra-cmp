@@ -246,10 +246,10 @@ class ProjectManager:
             
             if client is None:
                 # get_cached_client() also returns None for a known remote outage. Preserve
-                # that distinction: fleet reads may safely render a breaker-tripped host as
-                # partial, while a genuinely cold local worker must fail the whole response
+                # that distinction: fleet reads may safely render a host this worker last saw
+                # fail as partial, while a genuinely cold local worker must fail the whole response
                 # so it cannot cache a false remote outage.
-                if health.is_tripped(host):
+                if health.known_unreachable(host):
                     raise LXDConnectionError(
                         f"Connection to {host} is temporarily unavailable"
                     )

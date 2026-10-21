@@ -289,6 +289,8 @@ def test_scoped_inventory_does_not_start_a_vault_reconnect_after_cache_miss(monk
     )
     get_endpoint = Mock(return_value="endpoint")
     monkeypatch.setattr(manager, "_get_node_endpoint", get_endpoint)
+    # A cold worker: it holds no client and has never seen this host fail.
+    instance_module.health.clear(HOST)
 
     with pytest.raises(LXDLocalUnavailableError):
         manager._fetch_project_inventory_node(HOST, "qa")
@@ -299,16 +301,27 @@ def test_scoped_inventory_does_not_start_a_vault_reconnect_after_cache_miss(monk
     get_cluster_certificate.assert_not_called()
 
 
-def test_scoped_inventory_preserves_a_remote_breaker_failure(monkeypatch):
+@pytest.mark.parametrize("lapsed", [False, True], ids=["tripped", "trip-lapsed"])
+def test_scoped_inventory_preserves_a_remote_breaker_failure(monkeypatch, lapsed):
     manager = InstanceManager.__new__(InstanceManager)
     manager.connection_manager = SimpleNamespace(get_cached_client=Mock(return_value=None))
     manager.cert_manager = None
     get_endpoint = Mock(return_value="endpoint")
     monkeypatch.setattr(manager, "_get_node_endpoint", get_endpoint)
-    monkeypatch.setattr(instance_module.health, "is_tripped", lambda host: host == HOST)
+    health = instance_module.health
+    health.record_failure(HOST, "connect failed: ClientConnectionFailed")
+    try:
+        if lapsed:
+            # Between two retries of a dead peer its trip has lapsed and nothing has connected.
+            with health._lock:
+                failed_at, reason, kind = health._failed[HOST]
+                health._failed[HOST] = (failed_at - health.DEFAULT_TTL - 1, reason, kind)
+            assert not health.is_tripped(HOST)
 
-    with pytest.raises(LXDConnectionError) as caught:
-        manager._fetch_project_inventory_node(HOST, "qa")
+        with pytest.raises(LXDConnectionError) as caught:
+            manager._fetch_project_inventory_node(HOST, "qa")
+    finally:
+        health.clear(HOST)
 
     assert not isinstance(caught.value, LXDLocalUnavailableError)
     assert str(caught.value) == "Instance inventory is temporarily unavailable"

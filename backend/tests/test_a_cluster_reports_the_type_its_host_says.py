@@ -92,6 +92,9 @@ class _CertManager:
 
 
 class _ConnectionManager:
+    def get_cached_client(self, cluster_id):
+        return self.get_client(cluster_id)
+
     def get_client(self, cluster_id, *args, **kwargs):
         info = HOST_INFO.get(cluster_id)
         return _Client(info) if info else None

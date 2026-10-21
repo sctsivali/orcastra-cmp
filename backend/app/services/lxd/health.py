@@ -28,6 +28,9 @@ _failed: Dict[str, Tuple[float, str, str]] = {}
 # that lost its connection stays disconnected after the trip expires (until the healer retries),
 # and breaker_sync needs to know that window too.
 _last_failed: Dict[str, float] = {}
+# cluster_id -> (reason, kind) of that last failure, kept and cleared with _last_failed. A reader that
+# skips a known-dead cluster still has to say whether it was offline or refusing our certificate.
+_last_verdict: Dict[str, Tuple[str, str]] = {}
 
 
 def record_failure(cluster_id: str, reason: str = "", *, kind: str = KIND_OFFLINE) -> None:
@@ -40,6 +43,7 @@ def record_failure(cluster_id: str, reason: str = "", *, kind: str = KIND_OFFLIN
         now = time.time()
         _failed[cluster_id] = (now, reason or "unreachable", kind)
         _last_failed[cluster_id] = now
+        _last_verdict[cluster_id] = (reason or "unreachable", kind)
 
 
 def clear(cluster_id: str) -> None:
@@ -47,6 +51,7 @@ def clear(cluster_id: str) -> None:
     with _lock:
         _failed.pop(cluster_id, None)
         _last_failed.pop(cluster_id, None)
+        _last_verdict.pop(cluster_id, None)
 
 
 def is_tripped(cluster_id: str, ttl: float = DEFAULT_TTL) -> bool:
@@ -60,6 +65,24 @@ def is_tripped(cluster_id: str, ttl: float = DEFAULT_TTL) -> bool:
         # expired - evict so the next probe runs fresh
         del _failed[cluster_id]
         return False
+
+
+def known_unreachable(cluster_id: str) -> bool:
+    """True while this worker's last word on the cluster is a failure, tripped or not.
+
+    note: this outlives the TTL on purpose. A dead peer is retried only once the trip expires, so
+    between trips is_tripped is False while nothing has connected since. Fleet reads use this to
+    tell that peer apart from a worker that simply has not connected yet, which answered the whole
+    project inventory with 503 most of the time on a fleet with offline clusters.
+    """
+    with _lock:
+        return cluster_id in _failed or cluster_id in _last_failed
+
+
+def last_failure(cluster_id: str) -> Optional[Tuple[str, str]]:
+    """(reason, kind) of the failure behind known_unreachable, or None once a connect succeeded."""
+    with _lock:
+        return _last_verdict.get(cluster_id)
 
 
 def get_reason(cluster_id: str) -> Optional[str]:
@@ -96,3 +119,4 @@ def forget_unregistered(registered: Iterable[str]) -> None:
         for cluster_id in (set(_failed) | set(_last_failed)) - keep:
             _failed.pop(cluster_id, None)
             _last_failed.pop(cluster_id, None)
+            _last_verdict.pop(cluster_id, None)

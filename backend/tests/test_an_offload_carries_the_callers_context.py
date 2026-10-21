@@ -26,7 +26,7 @@ APP = Path(__file__).resolve().parents[1] / "app"
 # Every raw `run_in_executor` whose callable is not context-wrapped, by file. Lower a number
 # when you convert a site; never raise one.
 BASELINE: Dict[str, int] = {
-    "routers/cluster_registration.py": 3,
+    "routers/cluster_registration.py": 2,
     "routers/file_transfer.py": 1,
     "routers/image_uploads.py": 3,
     "routers/ipam.py": 1,

@@ -25,6 +25,7 @@ from app.models.schemas import (
     GeoLocation,
 )
 from app.core.config import get_settings
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.vault_client import get_vault_client
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
 from app.services.lxd.exceptions import LXDLocalStorageError
@@ -693,32 +694,36 @@ async def check_cluster_authentication(
         )
 
 
-async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateManager) -> Optional[ClusterInfo]:
-    """Helper function to get cluster info asynchronously for parallel processing.
-    
+def _cluster_info_blocking(
+    cluster_id: str, cert_manager: LXDCertificateManager, *, force: bool = False
+) -> Optional[ClusterInfo]:
+    """One cluster list row. Blocking: run it through ``_get_cluster_info_async``.
+
     This function also ensures connected clusters are added to the connection manager
     so they can be used for subsequent API calls (instances, networks, etc.).
-    
+
     Auto-reconnection priority:
     1. Try to use existing connection from connection manager
-    2. If not connected, try to reconnect using stored connection info
-    3. If still not connected, verify connection using cert_manager
+    2. If this worker last saw the cluster fail, report that verdict (unless ``force``)
+    3. Otherwise reconnect using Vault certs, then fall back to a probe
     """
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-    
     try:
-        loop = asyncio.get_event_loop()
-        
         # First, check if we already have a valid connection in the pool
         from app.services.lxd_service import get_lxd_service
-        from app.core.config import get_settings
-        
-        _settings = get_settings()
+        from app.services.lxd import health as lxd_health
+
         lxd_service = get_lxd_service()
-        
+        manager = lxd_service.connection_manager
+        verdict = None if force else lxd_health.last_failure(cluster_id)
+
         # Try to get client (this will auto-reconnect if connection info is stored)
-        existing_client = lxd_service.connection_manager.get_client(cluster_id)
+        # note: not for a cluster this worker saw fail and holds no client for. get_client's
+        # auto-reconnect is a dial of its own once the trip lapses (about 8s against a dead
+        # peer whose credentials are still cached), and it is the healer's job to pay it.
+        if verdict is not None and manager.get_cached_client(cluster_id) is None:
+            existing_client = None
+        else:
+            existing_client = manager.get_client(cluster_id)
         
         connected = False
         # important: reachable is tracked separately from connected because they answer
@@ -734,6 +739,16 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
             connected = True
             reachable = True
             logger.debug(f"Cluster {cluster_id} already connected in pool")
+        elif verdict is not None:
+            # important: this worker already knows the cluster is down, tripped or between two
+            # retries. Dialing anyway cost a forced connect per dead cluster on every cold list
+            # read, which is how five offline clusters made the list take 40s. The background
+            # healer keeps retrying them and clears the verdict on its first success; Refresh
+            # sends fresh=true, and that still forces a real recheck.
+            # note: only the kind is used. The reason is raw exception text from whichever path
+            # failed last, so it stays in the logs and derive_status words the row, as the
+            # availability rows do (services/lxd/status.py).
+            reachable = verdict[1] == lxd_health.KIND_UNAUTHORIZED
         else:
             # No valid connection, try to reconnect using Vault certs
             try:
@@ -742,7 +757,7 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
                 
                 # Keep the client this returns: reading its cached host_info below is how the
                 # type is resolved, and a second get_client would pay for another revalidation.
-                live_client = lxd_service.connection_manager.connect_with_vault_cert(
+                live_client = manager.connect_with_vault_cert(
                     cluster_id=cluster_id,
                     endpoint=info["metadata"]["endpoint"],
                     cert_content=cert_data["client.crt"],
@@ -764,8 +779,7 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
                 connected, reachable, error_msg = probe.trusted, probe.reachable, probe.message
         
         # Get cluster info (may already be cached from above)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            info = await loop.run_in_executor(executor, cert_manager.get_cluster_info, cluster_id)
+        info = cert_manager.get_cluster_info(cluster_id)
         
         current_status, _reason_code, derived_message = derive_status(
             connected=connected, reachable=reachable, error=error_msg
@@ -833,6 +847,49 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
         )
 
 
+# note: sized for a fleet's worth of rows at once. A row's own sockets carry (3, 8)s budgets,
+# so the wall cap below only bounds how long the list waits for a row, never a leaked thread.
+_cluster_list_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="cluster-list")
+_CLUSTER_ROW_TIMEOUT_SECONDS = 30.0
+# The wall also counts time queued behind other lists' rows, so the queue is bounded too: past
+# this many rows in flight a row is refused at once rather than waiting out its wall.
+_CLUSTER_ROW_MAX_IN_FLIGHT = 64
+_ROW_UNFINISHED = "The status check did not finish in time. Refresh to try again."
+
+
+async def _get_cluster_info_async(
+    cluster_id: str, cert_manager: LXDCertificateManager, *, force: bool = False
+) -> Optional[ClusterInfo]:
+    """Build one list row on a worker thread, so the rows are probed side by side.
+
+    important: the row build is blocking (pooled-client revalidation, Vault reads, a TLS
+    connect). Awaited inline, asyncio.gather ran the rows one after another on the loop thread
+    and parked this worker for the whole list.
+    """
+    try:
+        return await run_blocking(
+            _cluster_info_blocking,
+            cluster_id,
+            cert_manager,
+            force=force,
+            timeout=_CLUSTER_ROW_TIMEOUT_SECONDS,
+            label=f"clusters.list[{cluster_id}]",
+            executor=_cluster_list_executor,
+            max_in_flight=_CLUSTER_ROW_MAX_IN_FLIGHT,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        logger.warning(f"Cluster {cluster_id} status read did not finish: {exc}")
+        return ClusterInfo(
+            cluster_id=cluster_id,
+            display_name=cluster_id,
+            endpoint="unknown",
+            cluster_type=None,
+            status=ClusterStatus.ERROR,
+            has_certificate=False,
+            error_message=_ROW_UNFINISHED,
+        )
+
+
 @router.get(
     "",
     response_model=ClusterListResponse,
@@ -869,7 +926,10 @@ async def list_clusters(
         )
         
         # Fetch all cluster info in parallel for better performance
-        tasks = [_get_cluster_info_async(cluster_id, cert_manager) for cluster_id in cluster_ids]
+        tasks = [
+            _get_cluster_info_async(cluster_id, cert_manager, force=fresh)
+            for cluster_id in cluster_ids
+        ]
         clusters = await asyncio.gather(*tasks)
         
         # Filter out None values (shouldn't happen but just in case)
@@ -880,8 +940,12 @@ async def list_clusters(
             total=len(clusters)
         )
         
-        # Cache the response for 120 seconds
-        if cache and get_resource_list_generation(cache, "clusters") == list_generation:
+        # important: a row that did not finish says nothing about its cluster. Cached, it would
+        # show every reader of this scope an error row for the whole TTL.
+        unfinished = any(c.error_message == _ROW_UNFINISHED for c in clusters)
+        if cache and unfinished:
+            logger.info("Not caching clusters list: a row did not finish in time")
+        elif cache and get_resource_list_generation(cache, "clusters") == list_generation:
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
         elif cache:
             logger.info("Not caching clusters list: cluster metadata changed during the read")

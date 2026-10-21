@@ -47,7 +47,7 @@ TOLERATES_NONE = {
     # by UnreachableIsNotTheSameAsErroringTests
     # .test_the_raise_is_not_swallowed_by_the_helper_s_own_broad_handler.
     ("cluster_members.py", "list_cluster_members"),
-    ("cluster_registration.py", "_get_cluster_info_async"),
+    ("cluster_registration.py", "_cluster_info_blocking"),
     # Reads the pooled client only to resolve the hypervisor family from its cached host_info.
     # A None client means the type is left unreported, which is the honest answer; 503 here
     # would be a regression, since reporting the status of an offline cluster is the job.

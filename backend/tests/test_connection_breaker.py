@@ -143,6 +143,26 @@ def test_the_breaker_expires_so_a_cluster_is_reprobed(manager) -> None:
     assert manager.get_client(CLUSTER) == "client"
 
 
+def test_a_lapsed_trip_is_still_a_known_outage_until_a_connect_succeeds(manager) -> None:
+    """Expiry re-opens the door to a retry. It is not evidence that the cluster came back.
+
+    Fleet reads ask this to tell a dead peer apart from a worker that has never connected. Read
+    as is_tripped, every dead cluster looked like a cold worker between two retries.
+    """
+    assert not health.known_unreachable(CLUSTER)
+
+    health.record_failure(CLUSTER, "certificate not trusted", kind=health.KIND_UNAUTHORIZED)
+    time.sleep(0.05)
+    assert not health.is_tripped(CLUSTER, ttl=0.01)
+    assert health.known_unreachable(CLUSTER)
+    # The verdict outlives the trip with it, so a reader can still tell refused from offline.
+    assert health.last_failure(CLUSTER) == ("certificate not trusted", health.KIND_UNAUTHORIZED)
+
+    health.clear(CLUSTER)
+    assert not health.known_unreachable(CLUSTER)
+    assert health.last_failure(CLUSTER) is None
+
+
 def test_the_breaker_remembers_whether_the_host_answered(manager) -> None:
     """A tripped cluster still has to be classifiable.
 

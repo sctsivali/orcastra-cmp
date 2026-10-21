@@ -253,6 +253,8 @@ async def test_project_cache_miss_does_not_probe_or_reconnect(monkeypatch):
         return fn(*args)
 
     monkeypatch.setattr(projects_module, "run_blocking", _bounded)
+    # A cold worker: it holds no client and has never seen this host fail.
+    projects_module.health.clear(HOST)
 
     with pytest.raises(LXDLocalUnavailableError):
         await manager.list_projects(HOST)
@@ -261,8 +263,18 @@ async def test_project_cache_miss_does_not_probe_or_reconnect(monkeypatch):
     assert reconnects == []
 
 
+def _lapse_trip(health, host):
+    """Age a recorded failure past the breaker TTL, as a dead peer between two retries is."""
+    with health._lock:
+        failed_at, reason, kind = health._failed[host]
+        health._failed[host] = (failed_at - health.DEFAULT_TTL - 1, reason, kind)
+
+
+# A dead peer is retried only after its trip lapses, so between retries nothing is tripped and
+# nothing has connected. Reading that as a cold worker answered the fleet inventory with 503.
 @pytest.mark.asyncio
-async def test_project_breaker_is_a_remote_partial_failure(monkeypatch):
+@pytest.mark.parametrize("lapsed", [False, True], ids=["tripped", "trip-lapsed"])
+async def test_project_breaker_is_a_remote_partial_failure(monkeypatch, lapsed):
     manager = ProjectManager(
         SimpleNamespace(get_cached_client=lambda _host: None),
         SimpleNamespace(
@@ -276,10 +288,16 @@ async def test_project_breaker_is_a_remote_partial_failure(monkeypatch):
         return fn(*args)
 
     monkeypatch.setattr(projects_module, "run_blocking", _bounded)
-    monkeypatch.setattr(projects_module.health, "is_tripped", lambda host: host == HOST)
+    projects_module.health.record_failure(HOST, "connect failed: ClientConnectionFailed")
+    try:
+        if lapsed:
+            _lapse_trip(projects_module.health, HOST)
+            assert not projects_module.health.is_tripped(HOST)
 
-    with pytest.raises(LXDConnectionError) as caught:
-        await manager.list_projects(HOST)
+        with pytest.raises(LXDConnectionError) as caught:
+            await manager.list_projects(HOST)
+    finally:
+        projects_module.health.clear(HOST)
 
     assert not isinstance(caught.value, LXDLocalUnavailableError)
     assert str(caught.value) == f"Connection to {HOST} is temporarily unavailable"

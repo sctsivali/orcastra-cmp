@@ -84,7 +84,7 @@ BASELINE = {
     # note: only calls inside an `async def` count. The per-node fan-out helpers are plain
     # `def`s that already run in a thread, so they never appeared here and are not the debt
     # this tracks. What is left below is genuine: a blocking revalidation on the event loop.
-    "app/routers/cluster_registration.py": 1,
+    "app/routers/cluster_registration.py": 0,
     "app/routers/console.py": 0,
     "app/routers/my_keys.py": 3,
     "app/services/lxd/lxd_service.py": 0,
