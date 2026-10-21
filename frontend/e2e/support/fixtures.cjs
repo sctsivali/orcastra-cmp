@@ -295,6 +295,19 @@ async function installApiFixtures(page, role, options = {}) {
         snapshot_schedules_enabled: true,
         task_journal_enabled: false,
       };
+    } else if (path === "/system/vault-status") {
+      // The shell's Vault notice reads this on every page (issue #15); a healthy Vault shows nothing.
+      body = { state: "ok", checked_at: Date.now() / 1000, registry_source: "vault" };
+    } else if (path === "/me/access") {
+      // Asked only by a Tenant session (issue #17), which a fixture actor can become mid-test by
+      // a downgrade; the fixture Tenant has access.
+      body = {
+        email: `${role}@e2e.invalid`,
+        role: "tenant",
+        has_role: true,
+        blocked_reason: null,
+        tenant_access: { total_clusters: 1, total_rules: 1 },
+      };
     } else if (path === "/instances/write-policy") {
       const host = url.searchParams.get("host");
       if (host !== configuredSnapshotTarget.host) {
