@@ -12,6 +12,7 @@ import { BreakGlassModal } from "@/components/break-glass/break-glass-modal";
 import { useNavigationProgress } from "./navigation/navigation-progress";
 import { TaskPanel } from "@/components/task-panel";
 import { AccessBlockedNotice } from "@/components/access-blocked-notice";
+import { VaultNotice } from "@/components/vault-notice";
 import { useAccessGate } from "@/hooks/use-access-gate";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 
@@ -104,6 +105,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Hide header on full-page terminal/console views */}
         {!isFullPageTerminalOrConsole && <Header />}
+        {/* Issue #15: a sealed or unreachable Vault, said on every page rather than read as "no clusters" */}
+        {!isFullPageTerminalOrConsole && <VaultNotice />}
         <main
           aria-busy={navPending || undefined}
           className={cn(

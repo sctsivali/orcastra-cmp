@@ -30,6 +30,13 @@ const AUTHORITY_READ_ERRORS = {
     kind: "failed",
     reason: "the sign-in service could not be reached to verify this session; retry shortly",
   },
+  // A sealed or unreachable Vault with no cluster list known from before (issue #15). Not
+  // "no clusters": the clusters are still registered and come back once Vault is unsealed.
+  vault_unavailable: {
+    status: 503,
+    kind: "failed",
+    reason: "the secret store (Vault) is sealed or unavailable, so cluster data cannot be read until it recovers",
+  },
 } as const satisfies Record<
   string,
   { status: number; kind: ReadErrorKind; reason: string }

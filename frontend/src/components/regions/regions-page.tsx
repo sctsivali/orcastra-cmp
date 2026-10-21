@@ -273,7 +273,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
       <div className="container py-8">
         <Card className="border-destructive">
           <CardContent className="pt-6">
-            <p className="text-destructive">Failed to load regions: {String(error)}</p>
+            <p className="text-destructive">Failed to load regions: {error instanceof Error ? error.message : String(error)}</p>
             <Button onClick={() => refetch()} className="mt-4">
               <RefreshCw className="h-4 w-4 mr-2" />
               Retry

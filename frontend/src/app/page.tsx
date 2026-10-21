@@ -11,6 +11,9 @@ import { usePersonalization } from "@/components/personalization-provider";
 import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useAllProjects, useInstances, useNodeAvailability } from "@/hooks/use-lxd";
+import { EMPTY_VALUE } from "@/components/ui/table-text";
+
+const UNREADABLE = "Could not be read";
 
 export default function HomePage() {
   const { settings } = usePersonalization();
@@ -19,9 +22,14 @@ export default function HomePage() {
   // important: through the owning hooks. These were three bare useQuery calls on the same keys
   // with different options, so whether the counters on this page moved depended on which other
   // component happened to be mounted in the same tab session to carry the interval.
-  const { data: nodesData, isLoading: isLoadingNodes } = useNodeAvailability();
-  const { data: vmsData, isLoading: isLoadingVMs } = useInstances();
-  const { data: projectsData, isLoading: isLoadingProjects } = useAllProjects();
+  const { data: nodesData, isLoading: isLoadingNodes, isError: nodesError } = useNodeAvailability();
+  const { data: vmsData, isLoading: isLoadingVMs, isError: vmsError } = useInstances();
+  const { data: projectsData, isLoading: isLoadingProjects, isError: projectsError } = useAllProjects();
+  // A read that failed with nothing from before is not a zero (issue #15: a sealed Vault made
+  // every counter here read 0). Each card says it could not be read instead.
+  const nodesFailed = nodesError && !nodesData;
+  const vmsFailed = vmsError && !vmsData;
+  const projectsFailed = projectsError && !projectsData;
 
   const totalNodes = nodesData?.total_count || 0;
   const connectedNodes = nodesData?.online_count || 0;
@@ -145,12 +153,12 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Total Clusters</CardDescription>
             <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalNodes}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : nodesFailed ? EMPTY_VALUE : animatedTotalNodes}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              {isStatsLoading ? <Skeleton className="h-4 w-24 inline-block" /> : `${connectedNodes} connected`}
+              {isStatsLoading ? <Skeleton className="h-4 w-24 inline-block" /> : nodesFailed ? UNREADABLE : `${connectedNodes} connected`}
             </p>
           </CardContent>
         </Card>
@@ -159,12 +167,12 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Total Instances</CardDescription>
             <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalVMs}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedTotalVMs}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              Across all clusters
+              {vmsFailed ? UNREADABLE : "Across all clusters"}
             </p>
           </CardContent>
         </Card>
@@ -173,12 +181,12 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Running</CardDescription>
             <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedRunningVMs}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : vmsFailed ? EMPTY_VALUE : animatedRunningVMs}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              Active instances
+              {vmsFailed ? UNREADABLE : "Active instances"}
             </p>
           </CardContent>
         </Card>
@@ -187,12 +195,12 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Total Projects</CardDescription>
             <CardTitle className="text-4xl">
-              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalProjects}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : projectsFailed ? EMPTY_VALUE : animatedTotalProjects}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              Configured projects
+              {projectsFailed ? UNREADABLE : "Configured projects"}
             </p>
           </CardContent>
         </Card>

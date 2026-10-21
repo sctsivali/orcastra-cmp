@@ -334,6 +334,9 @@ jobs:
       - name: Access gate
         run: node scripts/checks/check-access-gate.mjs .
 
+      - name: Vault notice
+        run: node scripts/checks/check-vault-notice.mjs .
+
       - name: Task journal behavior
         run: node scripts/checks/check-task-journal-behavior.mjs .
 

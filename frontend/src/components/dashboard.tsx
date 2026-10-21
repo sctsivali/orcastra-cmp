@@ -18,10 +18,11 @@ import {
   queryKeys } from "@/hooks/use-lxd";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/use-permissions";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 
 export function Dashboard() {
-  const { data: vmsData, isLoading: vmsLoading, refetch, dataUpdatedAt } = useInstances();
+  const { data: vmsData, isLoading: vmsLoading, refetch, dataUpdatedAt, isError: vmsFailed, error: vmsError } = useInstances();
   const { data: projectsData, isLoading: projectsLoading, error: projectsError, dataUpdatedAt: projectsUpdatedAt } = useAllProjects();
   const { data: clustersData, isLoading: clustersLoading } = useClusters();
   const queryClient = useQueryClient();
@@ -84,6 +85,18 @@ export function Dashboard() {
           Retry
         </Button>
       </div>
+    );
+  }
+
+  // important: a failed fleet read with nothing from before rendered every counter as 0, which a
+  // sealed Vault turned into "this deployment is empty" (issue #15). Say that it could not be read.
+  if (vmsFailed && !vmsData) {
+    return (
+      <ReadErrorState
+        noun="inventory"
+        error={vmsError}
+        onRetry={() => void handleOverviewRefresh().catch(() => undefined)}
+      />
     );
   }
 
