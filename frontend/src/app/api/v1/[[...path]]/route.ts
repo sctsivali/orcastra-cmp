@@ -10,7 +10,9 @@
  * compressed payload, which truncates the body in the browser. buildForwardHeaders asks the
  * backend for `identity` precisely so that cannot happen, which is what makes it safe to
  * stream the body through instead of buffering it. If the backend ever compresses anyway we
- * drop both headers below and let Node chunk the response.
+ * drop both headers below and let Node chunk the response. The browser leg is gzipped here
+ * instead (lib/proxy-compression.ts), because Next's own compression never applies to a
+ * route handler's response.
  *
  * note: because the body streams, an upstream failure that happens mid-body reaches the
  * client as a truncated response rather than the 502 JSON below, whose headers have already
@@ -19,6 +21,12 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { inspectRequestTarget } from "@/lib/request-security";
+import {
+  gzipBody,
+  isCompressibleType,
+  shouldCompress,
+  varyOnAcceptEncoding,
+} from "@/lib/proxy-compression";
 
 // Docker-internal backend URL (no browser access needed)
 const BACKEND_URL =
@@ -241,9 +249,23 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
       responseHeaders.delete("content-length");
     }
     // else: identity confirmed, so the upstream content-length is accurate. Keeping it is
-    // what gives the browser a real progress bar on downloads such as the PFX export.
+    // what gives the browser a real progress bar on a download that sends one.
 
-    return new Response(body, {
+    // The browser leg is compressed here, because Next's own compression never reaches a route
+    // handler (lib/proxy-compression.ts says why). Only JSON and text with a known length of at
+    // least 1 KB, only for a client that accepts gzip: downloads, uploads and streams pass through.
+    let outgoing: ReadableStream<Uint8Array> | null = body;
+    if (!isNullBody && isCompressibleType(responseHeaders)) {
+      varyOnAcceptEncoding(responseHeaders);
+      if (
+        upstream.body &&
+        shouldCompress(req.method, upstream.status, req.headers.get("accept-encoding"), responseHeaders)
+      ) {
+        outgoing = gzipBody(upstream.body, responseHeaders);
+      }
+    }
+
+    return new Response(outgoing, {
       status: upstream.status,
       statusText: upstream.statusText,
       headers: responseHeaders,
