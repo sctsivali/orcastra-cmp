@@ -28,6 +28,7 @@ from app.models.system_resources import (
     ContainerMemory,
     CPUInfo,
     DiskInfo,
+    HostCpuTimes,
     HostFilesystem,
     HostInfo,
     MemoryInfo,
@@ -108,15 +109,18 @@ def _self_process() -> Any:
     return _SELF_PROCESS
 
 
-def _host_cpu_percent() -> Optional[Tuple[float, float]]:
+def _host_cpu_reading() -> Tuple[HostCpuTimes, Optional[Tuple[float, float]]]:
     # important: psutil 7 keeps the cpu_percent(interval=None) baseline per thread and the
     # collector runs on a fresh asyncio.to_thread worker, so psutil's helper would answer 0.0
     # on every call; a positive interval would sleep on the request path instead. The busy
     # and total jiffies go through our own process-wide sampler.
+    # note: that sampler is per worker, so its window is the gap since this worker last
+    # answered, which can be minutes. The raw counters go out too, and the panel measures
+    # its own poll-to-poll window from them whichever worker answers.
     times = psutil.cpu_times()
     busy = float(sum(getattr(times, field, 0.0) for field in _HOST_BUSY_FIELDS))
     total = busy + float(getattr(times, "idle", 0.0)) + float(getattr(times, "iowait", 0.0))
-    return _HOST_CPU.sample(busy, total)
+    return HostCpuTimes(busy_seconds=busy, total_seconds=total), _HOST_CPU.sample(busy, total)
 
 
 def _container_cpu_percent(reading: cgroup.ContainerCpuReading, capacity: float) -> Optional[Tuple[float, float]]:
@@ -135,7 +139,7 @@ def _prime_container_sampler() -> None:
 
 def _prime_samplers() -> None:
     if psutil is not None:
-        _quiet(_host_cpu_percent)
+        _quiet(_host_cpu_reading)
         _quiet(_prime_container_sampler)
 
 
@@ -172,12 +176,11 @@ def _collect_host_filesystems() -> List[HostFilesystem]:
     return filesystems
 
 
-def _host_cpu_info() -> CPUInfo:
+def _host_cpu_info(sample: Optional[Tuple[float, float]]) -> CPUInfo:
     logical = psutil.cpu_count(logical=True) or 1
     physical = psutil.cpu_count(logical=False) or logical
     freq = _quiet(psutil.cpu_freq)
     load = _quiet(getattr(psutil, "getloadavg", lambda: (None, None, None)), (None, None, None))
-    sample = _host_cpu_percent()
     return CPUInfo(
         percent=sample[0] if sample else 0.0,
         count_logical=logical,
@@ -195,8 +198,9 @@ def _collect_host() -> HostInfo:
     swap = psutil.swap_memory()
     boot_epoch = psutil.boot_time()
     is_vm, vendor = cgroup.detect_virtualization()
+    cpu_times, sample = _host_cpu_reading()
     return HostInfo(
-        cpu=_host_cpu_info(),
+        cpu=_host_cpu_info(sample),
         memory=MemoryInfo(
             total=mem.total,
             available=mem.available,
@@ -211,6 +215,8 @@ def _collect_host() -> HostInfo:
         uptime_seconds=round(time.time() - boot_epoch, 1),
         is_virtual_machine=is_vm,
         platform_vendor=vendor,
+        cpu_times=cpu_times,
+        cpu_window_seconds=sample[1] if sample else None,
     )
 
 

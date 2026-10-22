@@ -314,6 +314,29 @@ def test_host_cpu_percent_never_sleeps(fake_cgroup, fake_psutil):
     assert fake_psutil.state["cpu_percent_calls"] == [], "psutil.cpu_percent is never called"
 
 
+def test_host_cpu_counters_go_out_so_a_client_can_measure_its_own_window(fake_cgroup, fake_psutil, monkeypatch):
+    # The sampler is per worker: with four workers a poll can land on one that last answered
+    # minutes ago and report a percent over that whole gap. The raw counters are machine-wide,
+    # so the delta between any two answers is the busy share over the client's own window.
+    sr._HOST_CPU.reset()
+    monkeypatch.setattr(time, "monotonic", lambda: 100.0)
+    first = _collect().host
+    assert first.cpu_times.busy_seconds == 150.0, "user + system"
+    assert first.cpu_times.total_seconds == 960.0, "busy + idle + iowait"
+    assert first.cpu_window_seconds is None, "no previous sample, so no window"
+
+    times = fake_psutil.state["times"]
+    times["user"] += 30.0
+    times["idle"] += 70.0
+    monkeypatch.setattr(time, "monotonic", lambda: 107.0)
+    second = _collect().host
+    busy = second.cpu_times.busy_seconds - first.cpu_times.busy_seconds
+    total = second.cpu_times.total_seconds - first.cpu_times.total_seconds
+    assert (busy, total) == (30.0, 100.0)
+    assert round(busy / total * 100, 1) == second.cpu.percent, "same formula as the server's own percent"
+    assert second.cpu_window_seconds == 7.0, "the window the server's percent covers is stated"
+
+
 # --- filesystems ----------------------------------------------------------------------------
 
 def test_the_disk_row_is_the_host_filesystem_behind_the_bind_mounts(fake_cgroup, fake_psutil):
@@ -455,6 +478,7 @@ def test_the_legacy_keys_keep_their_shape(fake_cgroup, fake_psutil):
     assert isinstance(body["memory"]["total"], int)
     assert body["timestamp"].endswith("+00:00")
     assert set(body) - set(LEGACY_TOP_LEVEL) == {"host", "network_scope"}, "only additions"
+    assert {"cpu_times", "cpu_window_seconds"} <= set(body["host"]), "the host block carries the raw cpu counters"
 
 
 # --- role gate ------------------------------------------------------------------------------

@@ -154,8 +154,23 @@ class HostFilesystem(BaseModel):
     percent: float
 
 
+class HostCpuTimes(BaseModel):
+    """Cumulative CPU seconds since boot, summed over every CPU.
+
+    The counters are machine-wide, so a client can take the delta of two readings answered by
+    different workers and get a busy percent over its own poll window.
+    """
+    busy_seconds: float
+    total_seconds: float
+
+
 class HostInfo(BaseModel):
-    """The kernel's view of the machine, unclamped by cgroup limits."""
+    """The kernel's view of the machine, unclamped by cgroup limits.
+
+    `cpu.percent` is measured against the answering worker's previous sample, so
+    `cpu_window_seconds` says how long that window was; `cpu_times` lets a client measure
+    its own window instead.
+    """
     cpu: CPUInfo
     memory: MemoryInfo
     filesystems: List[HostFilesystem] = []
@@ -163,6 +178,8 @@ class HostInfo(BaseModel):
     uptime_seconds: float
     is_virtual_machine: Optional[bool] = None
     platform_vendor: Optional[str] = None
+    cpu_times: Optional[HostCpuTimes] = None
+    cpu_window_seconds: Optional[float] = None
 
 
 class SystemResourceUsage(BaseModel):
