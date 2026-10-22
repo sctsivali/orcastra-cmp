@@ -66,13 +66,12 @@ class CachePrewarm:
                 ttl=120,
             )
 
-            # Pre-warm storage pool resources cache
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key("storage_pool_resources:all"),
-                self._fetch_storage_pool_resources,
-                ttl=60,
-            )
+            # Storage pool resources are warmed through their own handler.
+            # important: the fetcher this replaced called pylxd directly from this coroutine,
+            # serially per cluster, on the leader's event loop: a median 5.7 s and up to 13.9 s
+            # in which that worker answered no request at all. The handler reads every cluster
+            # in its thread pool, and it writes the entry itself behind its generation fence.
+            await self._prewarm_storage_pool_resources()
 
             # Pre-warm cluster availability so a node picker never pays for a probe sweep.
             # important: unlike the list fan-outs above, an all-offline result IS the answer
@@ -175,33 +174,10 @@ class CachePrewarm:
             logger.debug(f"Availability pre-warm fetch failed: {e}")
             return None
 
-    async def _fetch_storage_pool_resources(self):
-        """Fetch storage pool resources for cache warming."""
+    async def _prewarm_storage_pool_resources(self):
+        """Warm GET /storage/pools/resources-all by calling the endpoint's own handler."""
         try:
-            from app.routers.storage_pools import _serialize_pool_resources
-            all_resources = {}
-            answered = 0
-            nodes = self._lxd_service.connection_manager.get_node_names()
-            for node_name in nodes:
-                try:
-                    client = self._lxd_service.get_client_with_reconnect(node_name)
-                    if client is None:
-                        continue
-                    pools = client.storage_pools.all()
-                    answered += 1
-                    for pool in pools:
-                        try:
-                            resources = pool.resources.get()
-                            all_resources[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            if nodes and not answered:
-                # counting answers, not entries: a fleet that is up but has no pools is a
-                # legitimate empty result, an outage is not.
-                return None
-            return {"resources": all_resources}
+            from app.routers.storage_pools import get_all_storage_pool_resources
+            await get_all_storage_pool_resources(lxd_service=self._lxd_service, fresh=False)
         except Exception as e:
             logger.debug(f"Storage pool resources pre-warm failed: {e}")
-            return None

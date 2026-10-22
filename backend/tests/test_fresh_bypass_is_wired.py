@@ -1326,12 +1326,13 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
 
         # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
         # routers/vms.py list_vms, routers/regions.py get_regions_overview,
-        # routers/storage_pools.py resources-all, services/lxd/status.py _build_response.
+        # services/lxd/status.py _build_response.
         # note: no instances:list. That prewarm wrote a key GET /instances never reads.
+        # note: no storage_pool_resources. It is warmed through its own handler, which writes
+        # the entry with its own TTL and fence (test_prewarm_reads_pool_resources_off_the_loop).
         expected = {
             "vms:list": 180,
             "regions:overview": 120,
-            "storage_pool_resources:all": 60,
             "nodes:availability": 45,
         }
         from app.core import cache as cache_module
