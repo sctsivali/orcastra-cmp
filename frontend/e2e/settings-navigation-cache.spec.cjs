@@ -93,7 +93,7 @@ for (const role of ["admin", "partner"]) {
     await expect(page.getByRole("tab", { name: "Personalization", exact: true })).toHaveAttribute("aria-selected", "true");
     await page.goForward();
     await expect(page).toHaveURL(/\/settings\/dashboard-host$/);
-    await expect(page.getByRole("heading", { name: "Error Loading System Information" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Could not load dashboard host figures" })).toBeVisible();
     await page.getByRole("tab", { name: "General", exact: true }).focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/settings$/);
