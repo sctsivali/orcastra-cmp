@@ -83,6 +83,7 @@ import {
   SnapshotRestoreRequest,
   SnapshotActionResponse,
 } from "@/types";
+import { noteServedStale } from "@/lib/served-stale";
 
 const API_PREFIX = "/api/v1";
 
@@ -651,6 +652,7 @@ async function _fetchAPIInternal<T>(
     }
 
     if (bodyError) throw bodyError;
+    noteServedStale(body, response.headers.get("X-Orcastra-Cache"));
     return body as T;
   } catch (error) {
     // Handle network errors or timeout

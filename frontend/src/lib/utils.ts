@@ -333,6 +333,18 @@ export function formatContinent(value: string | null | undefined): string | unde
   return CONTINENT_NAMES[code] ?? trimmed;
 }
 
+/**
+ * A server collection time (ISO string) as epoch milliseconds, or 0 when absent or unreadable.
+ *
+ * Lists served from the backend cache carry the time their read finished (`collected_at`). A
+ * "last updated" label must show that, not when the browser received the body, or a cached
+ * answer reads as current. Callers fall back to React Query's dataUpdatedAt on 0.
+ */
+export function collectedAtMs(collectedAt: string | null | undefined): number {
+  const parsed = collectedAt ? Date.parse(collectedAt) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 // Relative age of a timestamp, for "last updated" labels in dense toolbars.
 // Kept local rather than pulling in date-fns' formatDistanceToNow, whose
 // "less than a minute ago" phrasing is too long for a table header.

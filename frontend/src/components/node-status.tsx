@@ -25,6 +25,7 @@ import {
   ClusterGridToolbar,
   type ClusterSortField,
 } from "./node-status/cluster-grid-toolbar";
+import { collectedAtMs } from "@/lib/utils";
 
 const nodeId = (node: NodeStatus) => node.name;
 
@@ -100,11 +101,6 @@ function LoadingSkeleton() {
 interface NodeStatusCardsProps {
   /** Refresh the whole overview instead of just this section. Must reject on failure. */
   onRefresh?: () => Promise<unknown> | unknown;
-}
-
-function clustersCollectedAt(collectedAt: string | null | undefined): number {
-  const parsed = collectedAt ? Date.parse(collectedAt) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 // The boundary lives here, next to the useTableFilters read that needs it, so the section can
@@ -223,7 +219,7 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
               fetch time, so cards behind a 180 s cache read "10s ago" while minutes old. */}
           <RefreshButton
             label="Refresh overview"
-            lastUpdatedAt={clustersCollectedAt(data?.collected_at) || dataUpdatedAt}
+            lastUpdatedAt={collectedAtMs(data?.collected_at) || dataUpdatedAt}
             onRefresh={onRefresh ?? refreshNow}
           />
         </div>

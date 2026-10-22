@@ -72,6 +72,7 @@ import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { InstanceSpecificationDialog } from "@/components/instance-specification/instance-specification-dialog";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
+import { collectedAtMs } from "@/lib/utils";
 
 function instanceRecordId(instance: VMInfo): string {
   return `${instance.host}\u0000${instance.project || "default"}\u0000${instance.name}`;
@@ -341,7 +342,7 @@ function InstancesContent() {
         </div>
         <RefreshButton
           label="Refresh instances"
-          lastUpdatedAt={dataUpdatedAt}
+          lastUpdatedAt={collectedAtMs((data as VMListResponse | undefined)?.collected_at) || dataUpdatedAt}
           onRefresh={refreshNow}
         />
       </div>

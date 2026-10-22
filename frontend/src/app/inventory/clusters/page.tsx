@@ -3,7 +3,7 @@
 import * as React from "react";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { formatHypervisorType } from "@/lib/utils";
+import { collectedAtMs, formatHypervisorType } from "@/lib/utils";
 import { placeShort } from "@/lib/regions/place";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -303,7 +303,7 @@ function ClustersContent() {
             <CardTitle>Cluster Overview</CardTitle>
             <RefreshButton
               label="Refresh clusters"
-              lastUpdatedAt={dataUpdatedAt}
+              lastUpdatedAt={collectedAtMs(data?.collected_at) || dataUpdatedAt}
               onRefresh={refreshNow}
             />
           </div>

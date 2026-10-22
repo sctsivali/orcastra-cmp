@@ -20,6 +20,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { collectedAtMs } from "@/lib/utils";
 
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, dataUpdatedAt, isError: vmsFailed, error: vmsError } = useInstances();
@@ -122,7 +123,7 @@ export function Dashboard() {
         projectsError={projectsError}
         vmsData={vmsData?.vms || []}
         refetch={refetch}
-        lastUpdatedAt={dataUpdatedAt}
+        lastUpdatedAt={collectedAtMs(vmsData?.collected_at) || dataUpdatedAt}
         projectsUpdatedAt={projectsUpdatedAt}
       />
     </div>

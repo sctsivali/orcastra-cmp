@@ -2,7 +2,13 @@
 
 import * as React from "react";
 import { ChunkReloadReset } from "@/components/chunk-reload-reset";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import {
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+  type Query,
+} from "@tanstack/react-query";
 import { ThemeProvider } from "./theme-provider";
 import { PersonalizationProvider } from "./personalization-provider";
 import { StorageCleanupProvider } from "./storage-cleanup-provider";
@@ -12,6 +18,7 @@ import { NavigationProgressProvider } from "./navigation/navigation-progress";
 import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
 import { POLL_MS } from "@/lib/query-config";
+import { STALE_FOLLOW_UP_DELAYS_MS, wasServedStale } from "@/lib/served-stale";
 import { onAuthActorChanged, onTokenRefreshed } from "@/lib/api";
 import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
 import type { PersonalizationSettings } from "@/types/personalization";
@@ -46,8 +53,40 @@ function QueryInvalidationBridge() {
   return null;
 }
 
+/**
+ * Ask again once the backend has replaced a stale answer (lib/served-stale.ts).
+ *
+ * At most STALE_FOLLOW_UP_DELAYS_MS.length looks per query while its answers stay stale, only
+ * for a query something is still watching, and only while the page is visible: a hidden tab
+ * catches up on its own poll.
+ */
+function convergeOnFreshData(getClient: () => QueryClient | undefined) {
+  const followUps = new Map<string, number>();
+  return (data: unknown, query: Query<unknown, unknown, unknown, readonly unknown[]>) => {
+    if (!wasServedStale(data)) {
+      followUps.delete(query.queryHash);
+      return;
+    }
+    const attempt = followUps.get(query.queryHash) ?? 0;
+    const delay = STALE_FOLLOW_UP_DELAYS_MS[attempt];
+    if (delay === undefined) return;
+    followUps.set(query.queryHash, attempt + 1);
+    setTimeout(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      const client = getClient();
+      if (!client || client.getQueryCache().get(query.queryHash) !== query) return;
+      void client.refetchQueries({ queryKey: query.queryKey, exact: true, type: "active" });
+    }, delay);
+  };
+}
+
 function makeQueryClient() {
-  const client = new QueryClient({
+  let client: QueryClient | undefined;
+  const onStaleAnswer = convergeOnFreshData(() => client);
+  client = new QueryClient({
+    queryCache: new QueryCache({
+      onSuccess: (data, query) => onStaleAnswer(data, query),
+    }),
     defaultOptions: {
       queries: {
         // Increase staleTime to reduce refetching

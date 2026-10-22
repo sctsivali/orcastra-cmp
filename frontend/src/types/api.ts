@@ -134,6 +134,8 @@ export interface VMListResponse {
   has_more: boolean;
   /** Clusters that could not answer this inventory read. */
   unreachable_nodes?: string[];
+  /** When the list was read off the clusters; a cached answer keeps its read time. */
+  collected_at?: string | null;
 }
 
 /** How LXD resolved a CPU or memory limit for an instance. */
@@ -1396,6 +1398,8 @@ export interface ClusterAuthCheckResponse {
 export interface ClusterListResponse {
   clusters: ClusterInfo[];
   total: number;
+  /** When the list was read; a cached answer keeps its read time. */
+  collected_at?: string | null;
 }
 
 /** Machine-readable reason behind a status. Copy keys off this, never off `reason`. */
