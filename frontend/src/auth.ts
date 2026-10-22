@@ -48,6 +48,9 @@ declare module "next-auth/jwt" {
     // Unix seconds. Earliest a failed refresh may be retried. Kept separate from expiresAt
     // so the cooldown never has to lie about when the access token actually expires.
     retryAfter?: number;
+    // Unix seconds. The same, for a refresh that failed on the request path. Only the request
+    // path waits for it; see refreshAccessToken.
+    requestRetryAfter?: number;
     // Unix seconds the groups were last read from an issued access token.
     groupsReadAt?: number;
   }
@@ -181,6 +184,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       refreshToken: tokens.refresh_token ?? token.refreshToken,
       error: undefined,
       retryAfter: undefined,
+      requestRetryAfter: undefined,
       // important: stamped on every successful grant, claim or not. It is the floor under the
       // notice's forced refresh, and a token without the claim must not lift it.
       groupsReadAt: nowSeconds,
@@ -191,6 +195,8 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
     const reason = error instanceof Error ? error.message : String(error);
     console.warn(`[AUTH] Token refresh failed: ${reason}`);
 
+    // Cooldown lives here, not in expiresAt, so expiresAt stays truthful.
+    const cooldownUntil = nowSeconds + TOKEN_REFRESH_COOLDOWN_SECONDS;
     return {
       ...token,
       // important: the request path must not be able to mark the session errored. It is the
@@ -199,9 +205,13 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       // the token it already has: nothing on the server reads the access token, so a stale one
       // changes nothing about what renders. Recovery runs through the 401 handler in lib/api.ts
       // and the background poll, which both keep their ability to raise the banner.
-      ...(ON_REQUEST_PATH ? {} : { error: "RefreshAccessTokenError" }),
-      // Cooldown lives here, not in expiresAt, so expiresAt stays truthful.
-      retryAfter: nowSeconds + TOKEN_REFRESH_COOLDOWN_SECONDS,
+      // important: and its cooldown binds only the request path. A miss on the 3 s budget says
+      // the IdP was slow, not down. When it also held back the nodejs path, the 401 handler's
+      // session update got the expired token back and the banner stayed up for the whole
+      // cooldown (one IdP answer at 3006 ms, 2026-10-22).
+      ...(ON_REQUEST_PATH
+        ? { requestRetryAfter: cooldownUntil }
+        : { error: "RefreshAccessTokenError", retryAfter: cooldownUntil }),
     };
   }
 }
@@ -250,6 +260,13 @@ type JwtParams = Parameters<NonNullable<NonNullable<NextAuthConfig["callbacks"]>
 // held-down button cannot spend the rotating refresh token in a loop.
 const ROLE_RECHECK_FLOOR_S = 20;
 
+// A failed refresh is not retried until its cooldown passes. The request path also waits out its
+// own failures; the background path waits only for a background failure.
+function coolingDown(token: JWT, nowSeconds: number): boolean {
+  const until = Math.max(token.retryAfter ?? 0, ON_REQUEST_PATH ? (token.requestRetryAfter ?? 0) : 0);
+  return nowSeconds < until;
+}
+
 async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT> {
   // Initial sign in
   if (account && user) {
@@ -281,7 +298,7 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
     trigger === "update" &&
     (session as { refreshRoles?: unknown } | null | undefined)?.refreshRoles === true &&
     nowSeconds - (token.groupsReadAt ?? 0) >= ROLE_RECHECK_FLOOR_S &&
-    !(token.retryAfter && nowSeconds < token.retryAfter);
+    !coolingDown(token, nowSeconds);
   if (recheckRoles) {
     return await refreshAccessTokenDeduped(token);
   }
@@ -293,7 +310,7 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
   }
 
   // A previous refresh failed. Wait out the cooldown rather than hammering the IdP.
-  if (token.retryAfter && nowSeconds < token.retryAfter) {
+  if (coolingDown(token, nowSeconds)) {
     return token;
   }
 

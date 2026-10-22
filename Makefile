@@ -364,6 +364,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-settings-hardening.mjs
 	@echo "$(COLOR_GREEN)Checking the sign-in return path...$(COLOR_RESET)"
 	@node scripts/checks/check-auth-callback.mjs
+	@echo "$(COLOR_GREEN)Checking the token refresh cooldown...$(COLOR_RESET)"
+	@node scripts/checks/check-token-refresh-cooldown.mjs
 	@echo "$(COLOR_GREEN)Checking the access gate...$(COLOR_RESET)"
 	@node scripts/checks/check-access-gate.mjs
 	@echo "$(COLOR_GREEN)Checking the Vault notice...$(COLOR_RESET)"
