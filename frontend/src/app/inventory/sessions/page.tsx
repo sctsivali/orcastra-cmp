@@ -269,6 +269,11 @@ function ActiveSessionsTab() {
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
   activeRequestScopeRef.current = requestScopeKey;
+  // note: the bearer is read at call time. As a dependency of fetchSessions it re-ran the
+  // loading fetch on every silent rotation (about every four minutes), flashing the loader and
+  // restarting the poll. An actor change is handled by the actorScope reset above.
+  const accessTokenRef = useRef(actorAccessToken);
+  accessTokenRef.current = actorAccessToken;
 
   // Session routes survive a same-document sign-out/sign-in. Gate actor-owned state during
   // render so the next actor cannot see the previous rows while effect cleanup is pending.
@@ -344,8 +349,9 @@ function ActiveSessionsTab() {
     setError(null);
     try {
       const params = new URLSearchParams({ scope });
+      const bearer = accessTokenRef.current;
       const res = await fetch(`${API_URL}/api/v1/console/sessions/active?${params}`, {
-        headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
+        headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
@@ -380,17 +386,30 @@ function ActiveSessionsTab() {
         activeRequestScopeRef.current === requestScope
       ) setLoading(false);
     }
-  }, [actorAccessToken, actorScope, isAuthenticated, scope]);
+  }, [actorScope, isAuthenticated, scope]);
 
   useEffect(() => { void fetchSessions(true).catch(() => {}); }, [fetchSessions]);
 
+  // The 5 s poll runs only while the page is visible: a hidden tab asking every five seconds buys
+  // nobody anything. Coming back catches up at once rather than waiting out the interval.
   useEffect(() => {
     if (!autoRefresh) {
       if (pollRef.current) clearInterval(pollRef.current);
       return;
     }
-    pollRef.current = setInterval(() => void fetchSessions(false).catch(() => {}), 5000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      void fetchSessions(false).catch(() => {});
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    pollRef.current = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [autoRefresh, fetchSessions]);
 
   const sorted = useMemo(
@@ -662,6 +681,9 @@ function SessionHistoryTab() {
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
   activeRequestScopeRef.current = requestScopeKey;
+  // note: read at call time, as in ActiveSessionsTab: a silent rotation re-read the whole trail.
+  const accessTokenRef = useRef(actorAccessToken);
+  accessTokenRef.current = actorAccessToken;
 
   // Keyed on actor and scope, as on the Active tab.
   const logsAreCurrent = logsRequestScope === requestScopeKey;
@@ -742,8 +764,9 @@ function SessionHistoryTab() {
           offset: String(offset),
           scope,
         });
+        const bearer = accessTokenRef.current;
         const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-          headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
+          headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
@@ -790,7 +813,7 @@ function SessionHistoryTab() {
         activeRequestScopeRef.current === requestScope
       ) setLoading(false);
     }
-  }, [actorAccessToken, actorScope, isAuthenticated, scope]);
+  }, [actorScope, isAuthenticated, scope]);
 
   useEffect(() => { void fetchLogs(true).catch(() => {}); }, [fetchLogs]);
 
