@@ -93,6 +93,21 @@ def _isolate_rate_sampler(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_vault_status():
+    """Every test starts with no registry verdict.
+
+    note: the verdict is module state. A test that drove a registry read into a failure left it
+    "unknown", and a later test whose fixture registry is empty then answered 503: it passed or
+    failed depending on which file pytest happened to collect before it.
+    """
+    from app.core import vault_status
+
+    vault_status.reset()
+    yield
+    vault_status.reset()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_response_cache(monkeypatch):
     """A memory-only response cache and empty single-flight and SWR state for every test.
 
