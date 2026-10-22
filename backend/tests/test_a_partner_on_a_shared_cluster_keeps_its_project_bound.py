@@ -388,6 +388,8 @@ AGGREGATE_ONLY = {
     # disclosure of what runs on it. The dashboard's per-instance consumers come only from rows
     # check_tenant_permission kept, and that check applies project_is_visible first.
     "get_monitoring_dashboard",
+    # get_monitoring_dashboard's body, moved into the builder it hands to swr.serve().
+    "build_dashboard",
     "get_node_metrics",
 }
 

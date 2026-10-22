@@ -25,7 +25,8 @@ from app.services.lxd_service import (
     get_lxd_service,
     LXDOperationError,
 )
-from app.core.single_flight import single_flight
+from app.core import swr
+from app.core.swr import Built
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import (
@@ -185,60 +186,47 @@ def _nodes_for_project_scope(response: NodesStatusResponse) -> NodesStatusRespon
         200: {"description": "Cluster status retrieved successfully"},
     }
 )
-@single_flight("nodes:status")
 async def get_nodes_status(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get the status of every registered Cluster."""
-    
-    # Try to get from cache first (180 second cache)
-    # note: this TTL is the client's poll interval too. Keep the two in step, and keep the
-    # comments honest: they read 120 for a while after the value moved to 180.
+    # note: the 180 s soft TTL is the client's poll interval too. Keep the two in step. Past it
+    # the body is still served for SWR_MAX_STALE_SECONDS while one background read replaces it.
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key(NODES_STATUS_CACHE_KEY)
-    cached_response = None if fresh else cache.get("api_responses", cache_key)
-    if cached_response is not None:
-        logger.debug("Returning cached nodes status")
-        return _nodes_for_project_scope(NodesStatusResponse(**cached_response))
-    capacity_generation = get_resource_list_generation(
-        cache,
-        CAPACITY_GENERATION_KIND,
-    )
-    
-    # Not in cache - fetch fresh data using ASYNC PARALLEL version
-    statuses = await lxd_service.check_nodes_status_async()
-    # important: before the cache write below. An unreadable registry with nothing known used to
-    # be cached here for 180 s as an empty fleet with all_connected=True (issue #15).
-    require_known_registry([status.name for status in statuses])
-    
-    # note: a second Vault sweep used to live here, adding any cluster the fan-out had not
-    # already returned. It was unreachable: check_nodes_status_async iterates the same
-    # apply_cluster_filter(cert_manager.list_clusters()) set, so the difference it computed
-    # was always empty and its failure logs never appeared once in seven days of production
-    # logs. Removed rather than left as dead weight on the hottest read in the app.
 
-    # important: stamped here, where the fan-out finished, and then carried through the cache
-    # verbatim. Restamping on the cached read at the top of this function would report a
-    # three-minute-old body as current, which is the whole failure this field exists to expose.
-    response = NodesStatusResponse(
-        nodes=statuses,
-        all_connected=all(node.connected for node in statuses),
-        collected_at=datetime.now(timezone.utc),
+    async def build() -> Built:
+        statuses = await lxd_service.check_nodes_status_async()
+        # important: before anything is cached. An unreadable registry with nothing known used to
+        # be cached here for 180 s as an empty fleet with all_connected=True (issue #15).
+        require_known_registry([status.name for status in statuses])
+
+        # note: a second Vault sweep used to live here, adding any cluster the fan-out had not
+        # already returned. It was unreachable: check_nodes_status_async iterates the same
+        # apply_cluster_filter(cert_manager.list_clusters()) set, so the difference it computed
+        # was always empty and its failure logs never appeared once in seven days of production
+        # logs. Removed rather than left as dead weight on the hottest read in the app.
+
+        # important: stamped here, where the fan-out finished, and then carried through the cache
+        # verbatim. Restamping on a cached read would report a three-minute-old body as current,
+        # which is the whole failure this field exists to expose.
+        response = NodesStatusResponse(
+            nodes=statuses,
+            all_connected=all(node.connected for node in statuses),
+            collected_at=datetime.now(timezone.utc),
+        )
+        return Built(value=response, body=response.model_dump(), fresh_for=180)
+
+    served = await swr.serve(
+        cache=cache,
+        base_key=NODES_STATUS_CACHE_KEY,
+        fresh=fresh,
+        build=build,
+        generation=lambda: get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
+        label="cluster status",
     )
-    
-    # Cache the response for 180 seconds (enterprise TTL)
-    if (
-        get_resource_list_generation(cache, CAPACITY_GENERATION_KIND)
-        == capacity_generation
-    ):
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug("Cached nodes status for 180 seconds")
-    else:
-        logger.info("Not caching nodes status: capacity changed during the read")
-    
-    return _nodes_for_project_scope(response)
+    return _nodes_for_project_scope(served.as_model(NodesStatusResponse))
 
 
 
@@ -466,8 +454,7 @@ async def update_node(
         if cache:
             cache.invalidate_resource_cache("clusters", "regions")
             cache.invalidate_capacity_cache()
-            # trailing * so every org-scope suffix goes with it
-            cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+            cache.invalidate_availability_cache()
             cache.invalidate_cluster_cache(node_name)
             logger.info(f"Invalidated caches after updating Cluster {node_name}")
         

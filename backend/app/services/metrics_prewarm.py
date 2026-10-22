@@ -32,11 +32,7 @@ class CachePrewarm:
             # build theirs. Without get_scope_cache_key() they lacked the
             # ":scope=all" suffix, so nothing ever read them and every request
             # after a TTL expiry still paid the full cold cost.
-            from app.core.cache import (
-                NODES_AVAILABILITY_CACHE_KEY,
-                NODES_AVAILABILITY_CACHE_TTL,
-                REGIONS_OVERVIEW_CACHE_KEY,
-            )
+            from app.core.cache import REGIONS_OVERVIEW_CACHE_KEY
             from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
@@ -73,17 +69,12 @@ class CachePrewarm:
             # in its thread pool, and it writes the entry itself behind its generation fence.
             await self._prewarm_storage_pool_resources()
 
-            # Pre-warm cluster availability so a node picker never pays for a probe sweep.
+            # Pre-warm cluster availability so a node picker never pays for a probe sweep. The
+            # resolver owns its key: it answers from a fresh entry, serves a stale one while one
+            # background read replaces it, and writes behind its own generation fence.
             # important: unlike the list fan-outs above, an all-offline result IS the answer
-            # here and must be cached. Those refuse an empty result because an empty list
-            # cannot be told apart from "nobody answered"; here "everything is offline" is
-            # precisely the fact the picker needs to show.
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY),
-                self._fetch_availability,
-                ttl=NODES_AVAILABILITY_CACHE_TTL,
-            )
+            # here and is cached. "Everything is offline" is precisely the fact a picker needs.
+            await self._prewarm_availability()
             
         except Exception as e:
             logger.warning(f"Failed to pre-warm caches: {e}")
@@ -164,15 +155,13 @@ class CachePrewarm:
             logger.debug(f"Regions pre-warm fetch failed: {e}")
             return None
     
-    async def _fetch_availability(self):
-        """Fetch cluster availability for cache warming."""
+    async def _prewarm_availability(self):
+        """Warm cluster availability through the resolver the endpoints share."""
         try:
             from app.services.lxd import status as lxd_status
-            result = await lxd_status.resolve_availability(self._lxd_service)
-            return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+            await lxd_status.resolve_availability(self._lxd_service)
         except Exception as e:
-            logger.debug(f"Availability pre-warm fetch failed: {e}")
-            return None
+            logger.debug(f"Availability pre-warm failed: {e}")
 
     async def _prewarm_storage_pool_resources(self):
         """Warm GET /storage/pools/resources-all by calling the endpoint's own handler."""

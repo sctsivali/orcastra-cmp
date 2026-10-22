@@ -109,6 +109,8 @@ def test_dashboard_only_caches_the_generation_it_read(monkeypatch, advance: bool
     cache = _GenerationCache()
     monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)
     monkeypatch.setattr(monitoring, "get_scope_cache_key", _scoped)
+    # swr.serve builds the dashboard's key itself, from the same scope.
+    monkeypatch.setattr("app.core.swr.get_scope_cache_key", _scoped)
     monkeypatch.setattr(monitoring, "get_node_metadata_store", lambda: _MetadataStore())
     monkeypatch.setattr(monitoring, "tenant_acl_active", lambda: False)
     monkeypatch.setattr(monitoring, "_last_history_store_times", {})

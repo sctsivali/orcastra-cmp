@@ -31,7 +31,7 @@ def test_no_module_state_holds_the_dashboard_body():
 
 def test_the_cache_key_is_scope_suffixed():
     """Partner and admin must never share an entry."""
-    assert monitoring.MONITORING_DASHBOARD_CACHE_KEY == "monitoring:dashboard:v2"
+    assert monitoring.MONITORING_DASHBOARD_CACHE_KEY == "monitoring:dashboard:v3"
     assert monitoring._DASHBOARD_CACHE_TTL == 35
 
 
@@ -67,7 +67,7 @@ def test_a_cache_hit_is_served_from_the_shared_cache(monkeypatch):
         online_nodes=2,
     ).model_dump()
 
-    cache = _Cache({("api_responses", "monitoring:dashboard:v2:scope=all"): body})
+    cache = _Cache({("api_responses", "monitoring:dashboard:v3:scope=all"): body})
     monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)
 
     result = asyncio.run(
@@ -79,7 +79,7 @@ def test_a_cache_hit_is_served_from_the_shared_cache(monkeypatch):
     assert result.online_nodes == 2
     # The timestamp is the collection time carried in the cached body, not read time.
     assert result.timestamp == datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
-    assert ("api_responses", "monitoring:dashboard:v2:scope=all") in cache.reads
+    assert ("api_responses", "monitoring:dashboard:v3:scope=all") in cache.reads
     assert cache.writes == [], "a cache hit must not rewrite the entry"
 
 
@@ -89,7 +89,7 @@ def test_a_forced_read_bypasses_the_shared_cache(monkeypatch):
         timestamp=datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
     ).model_dump()
 
-    cache = _Cache({("api_responses", "monitoring:dashboard:v2:scope=all"): body})
+    cache = _Cache({("api_responses", "monitoring:dashboard:v3:scope=all"): body})
     monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)
 
     # The fan-out is not stubbed, so a bypass must get past the cache and fail on the cluster
@@ -99,4 +99,4 @@ def test_a_forced_read_bypasses_the_shared_cache(monkeypatch):
             monitoring.get_monitoring_dashboard(lxd_service=_ExplodingLXD(), fresh=True)
         )
 
-    assert ("api_responses", "monitoring:dashboard:v2:scope=all") not in cache.reads
+    assert ("api_responses", "monitoring:dashboard:v3:scope=all") not in cache.reads

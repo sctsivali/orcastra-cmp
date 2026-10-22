@@ -338,7 +338,7 @@ async def test_remote_project_failure_keeps_healthy_fleet_rows(monkeypatch):
         ),
     )
 
-    rows = await projects_router.list_all_projects.__wrapped__(
+    rows = await projects_router.list_all_projects(
         lxd_service=_Service(),
         fresh=True,
     )
@@ -373,7 +373,7 @@ async def test_local_project_unavailability_is_503_and_never_cached(monkeypatch)
     )
 
     with pytest.raises(HTTPException) as caught:
-        await projects_router.list_all_projects.__wrapped__(
+        await projects_router.list_all_projects(
             lxd_service=_Service(),
             fresh=True,
         )

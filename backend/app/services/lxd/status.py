@@ -13,21 +13,26 @@ returns `metadata.auth`, which is the entire online / not_authorized / offline d
 
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app.core.blocking import run_blocking
 from app.core.cache import (
+    AVAILABILITY_GENERATION_KIND,
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_AVAILABILITY_CACHE_TTL,
     NODES_STATUS_CACHE_KEY,
     get_cache_manager,
+    get_resource_list_generation,
 )
 from app.core.config import get_settings
 from app.core.node_metadata import get_node_metadata_store
 from app.core.org_scope import apply_cluster_filter, get_scope_cache_key
-from app.core.single_flight import single_flight
+from app.core import swr
+from app.core.cache_envelope import unwrap
+from app.core.swr import Built
 from app.core.type_utils import resolve_cluster_type
 from app.models.cluster_status import AvailabilityReason, ClusterStatus, derive_status
 from app.models.schemas import ClusterAvailability, ClusterAvailabilityResponse
@@ -355,32 +360,46 @@ def probe_clusters(
     return rows
 
 
-def _build_response(cache, cache_key: str, rows, source: str) -> ClusterAvailabilityResponse:
-    """Build the availability body and cache it.
+def _build_response(rows, source: str) -> ClusterAvailabilityResponse:
+    """Build the availability body.
 
     note: an all-offline result IS the answer here and is cached like any other. That differs
     from the list fan-outs elsewhere, which refuse to cache an empty result because an empty
     list cannot be told apart from "nobody answered". Here the difference is the payload.
     """
-    response = ClusterAvailabilityResponse(
+    return ClusterAvailabilityResponse(
         clusters=rows,
         online_count=sum(1 for row in rows if row.status == ClusterStatus.ONLINE),
         total_count=len(rows),
         source=source,
         generated_at=_now(),
     )
-    if cache:
-        _store(cache, cache_key, response)
-    return response
 
 
-def _store(cache, cache_key: str, response: ClusterAvailabilityResponse) -> None:
-    cache.set(
-        "api_responses",
-        cache_key,
-        response.model_dump(mode="json"),
-        ttl=NODES_AVAILABILITY_CACHE_TTL,
-    )
+def _fresh_body(cache, key: str) -> Optional[Any]:
+    """A cached body inside its soft TTL, or None.
+
+    important: only a fresh entry may answer here. These keys are now kept past their TTL for
+    stale-while-revalidate, and a reader outside core/swr.serve() never triggers the background
+    read that replaces a stale one, so it must not serve it either.
+    """
+    getter = getattr(cache, "get_entry", None)
+    if getter is None:
+        return cache.get("api_responses", key)
+    raw, _authoritative = getter("api_responses", key)
+    if raw is None:
+        return None
+    entry = unwrap(raw)
+    return entry.value if entry.is_fresh(time.time()) else None
+
+
+def _project_nodes_body(cache, key_for: Callable[[str], str]) -> Optional[ClusterAvailabilityResponse]:
+    # The node-status page fills this key. Riding it costs one Redis read and keeps every picker
+    # from generating its own fan-out.
+    nodes_body = _fresh_body(cache, key_for(NODES_STATUS_CACHE_KEY))
+    if nodes_body is None:
+        return None
+    return _build_response(project_from_nodes_body(nodes_body), "nodes_cache")
 
 
 def peek_availability(
@@ -393,27 +412,24 @@ def peek_availability(
     because a key is bounded by its grant, not by an org scope.
     """
     cache = get_cache_manager()
-    cached = cache.get("api_responses", key_for(NODES_AVAILABILITY_CACHE_KEY))
+    cached = _fresh_body(cache, key_for(NODES_AVAILABILITY_CACHE_KEY))
     if cached is not None:
-        # note: overwrite `source`, and only `source`. The stored body records how it was
-        # first produced, so returning it verbatim reports "probe" on every cache hit and
-        # makes the field useless for the one question it exists to answer. `generated_at`
-        # is deliberately left as stored: restamping it would claim data was built now.
-        return ClusterAvailabilityResponse(**{**cached, "source": "availability_cache"})
+        return _from_cache(cached)
+    return _project_nodes_body(cache, key_for)
 
-    # The node-status page and the metrics prewarm both fill this key. Riding it costs one
-    # Redis read and keeps every picker from generating its own fan-out.
-    nodes_body = cache.get("api_responses", key_for(NODES_STATUS_CACHE_KEY))
-    if nodes_body is not None:
-        return _build_response(None, "", project_from_nodes_body(nodes_body), "nodes_cache")
-    return None
+
+def _from_cache(body: Any) -> ClusterAvailabilityResponse:
+    # note: overwrite `source`, and only `source`. The stored body records how it was first
+    # produced, so returning it verbatim reports "probe" on every cache hit and makes the field
+    # useless for the one question it exists to answer. `generated_at` is deliberately left as
+    # stored: restamping it would claim data was built now.
+    return ClusterAvailabilityResponse(**{**body, "source": "availability_cache"})
 
 
 class RegistryUnavailable(Exception):
     """The cluster registry could not be read and nothing is known from before."""
 
 
-@single_flight("nodes:availability")
 async def resolve_availability(
     lxd_service, *, fresh: bool = False
 ) -> ClusterAvailabilityResponse:
@@ -432,50 +448,67 @@ async def resolve_availability(
     org-scope filter. `probe_clusters` documents why that filter cannot be left to the layer
     below: contextvars do not cross into the worker threads.
 
-    important: the single-flight collapse sits here rather than on `/nodes/availability`, where
-    it used to. On the route it only collapsed arrivals at that one endpoint, so a picker open
-    reaching this through `/integrations/available-clusters` started a fan-out of its own beside
-    the one already running for the same scope. The rebuild is what needs collapsing, and this is
-    the rebuild.
+    important: the collapse sits here rather than on `/nodes/availability`, where it used to.
+    On the route it only collapsed arrivals at that one endpoint, so a picker open reaching this
+    through `/integrations/available-clusters` started a fan-out of its own beside the one
+    already running for the same scope. swr.serve() collapses a miss through single_flight and
+    serves an entry past its TTL while one background read replaces it.
 
     Raises BlockingTimeout or BlockingPoolFull when the probe cannot run. Callers decide what
     that means for them; it is never "every cluster is offline".
     """
     cache = get_cache_manager()
-    availability_key = get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY)
 
-    if not fresh:
-        peeked = peek_availability()
-        if peeked is not None:
-            if peeked.source == "nodes_cache":
-                # A projection is cached like a probe so the next picker open is one read.
-                _store(cache, availability_key, peeked)
-            return peeked
+    async def build() -> Built:
+        if not fresh:
+            # A projection is cached like a probe so the next picker open is one read.
+            projected = _project_nodes_body(cache, get_scope_cache_key)
+            if projected is not None:
+                return Built(
+                    value=projected,
+                    body=projected.model_dump(mode="json"),
+                    fresh_for=NODES_AVAILABILITY_CACHE_TTL,
+                )
+        # note: the registry read is a Vault LIST with its own budget (core/vault_client), so it
+        # runs off the loop; inline it parked every request for the length of a lost LIST. A lost
+        # registry with nothing known is the one case this cannot answer: probing an empty fleet
+        # would report "no clusters". While the last known registry is served the probe runs over
+        # it like any other read.
+        registry = await asyncio.to_thread(lxd_service.cert_manager.read_registry)
+        if not registry.readable and registry.source is None:
+            raise RegistryUnavailable()
+        cluster_ids = apply_cluster_filter(registry.cluster_ids)
+        rows = await run_blocking(
+            probe_clusters,
+            cluster_ids,
+            cert_manager=lxd_service.cert_manager,
+            connection_manager=lxd_service.connection_manager,
+            settings=get_settings(),
+            # Only an operator-initiated recheck may re-probe past the breaker. An ordinary
+            # picker open, and every background refresh, must not walk a fleet of dead clusters
+            # paying connect timeouts.
+            force=fresh,
+            timeout=AVAILABILITY_PROBE_TIMEOUT,
+            label="nodes.availability",
+            executor=_availability_executor,
+            # important: without a cap, _acquire never raises and the pool-full path is dead
+            # code. The collapse covers same-scope arrivals; this bounds what it cannot, sweeps
+            # for *different* scopes queueing up on a degraded fleet.
+            max_in_flight=4,
+        )
+        response = _build_response(rows, "probe")
+        return Built(
+            value=response,
+            body=response.model_dump(mode="json"),
+            fresh_for=NODES_AVAILABILITY_CACHE_TTL,
+        )
 
-    # note: the registry read is a Vault LIST with its own budget (core/vault_client), so it
-    # runs off the loop; inline it parked every request for the length of a lost LIST. A lost
-    # registry with nothing known is the one case this cannot answer: probing an empty fleet
-    # would report "no clusters". While the last known registry is served the probe runs over
-    # it like any other read.
-    registry = await asyncio.to_thread(lxd_service.cert_manager.read_registry)
-    if not registry.readable and registry.source is None:
-        raise RegistryUnavailable()
-    cluster_ids = apply_cluster_filter(registry.cluster_ids)
-    rows = await run_blocking(
-        probe_clusters,
-        cluster_ids,
-        cert_manager=lxd_service.cert_manager,
-        connection_manager=lxd_service.connection_manager,
-        settings=get_settings(),
-        # Only an operator-initiated recheck may re-probe past the breaker. An ordinary
-        # picker open must not walk a fleet of dead clusters paying connect timeouts.
-        force=fresh,
-        timeout=AVAILABILITY_PROBE_TIMEOUT,
-        label="nodes.availability",
-        executor=_availability_executor,
-        # important: without a cap, _acquire never raises and the pool-full path is dead code.
-        # single_flight collapses same-scope arrivals; this bounds what it cannot, sweeps for
-        # *different* scopes queueing up on a degraded fleet.
-        max_in_flight=4,
+    served = await swr.serve(
+        cache=cache,
+        base_key=NODES_AVAILABILITY_CACHE_KEY,
+        fresh=fresh,
+        build=build,
+        generation=lambda: get_resource_list_generation(cache, AVAILABILITY_GENERATION_KIND),
+        label="cluster availability",
     )
-    return _build_response(cache, availability_key, rows, "probe")
+    return served.value if served.built else _from_cache(served.body)

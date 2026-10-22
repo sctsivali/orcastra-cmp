@@ -198,7 +198,8 @@ class MetricsCollector(CachePrewarm):
             from app.routers.monitoring import get_monitoring_dashboard
 
             # The leader builds the dashboard through the endpoint's own code path, which also
-            # stores the history point. fresh=True so every cycle is a new reading.
+            # stores the history point. fresh=True so every cycle is a new reading. Readers do
+            # not wait for it: swr.serve answers them from the cache before taking any lock.
             result = await get_monitoring_dashboard(lxd_service=self._lxd_service, fresh=True)
             # A long sweep must not let the lease lapse under it.
             self._leading = self._claim_collection_lease()

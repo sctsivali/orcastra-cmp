@@ -106,7 +106,7 @@ async def test_project_list_read_cannot_restore_cache_after_invalidation(
     monkeypatch.setattr(projects, "filter_projects_by_acl", lambda _host, names: names)
     monkeypatch.setattr(projects, "project_is_visible", lambda _host, _project: True)
 
-    response = await projects.list_all_projects.__wrapped__(
+    response = await projects.list_all_projects(
         lxd_service=Service(),
         fresh=True,
     )

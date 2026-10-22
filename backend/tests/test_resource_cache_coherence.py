@@ -163,7 +163,7 @@ def test_capacity_read_racing_an_instance_change_is_not_cached(monkeypatch) -> N
     monkeypatch.setattr(nodes, "get_cache_manager", lambda: manager)
 
     response = asyncio.run(
-        nodes.get_nodes_status.__wrapped__(
+        nodes.get_nodes_status(
             lxd_service=Service(),
             fresh=True,
             _rbac=None,

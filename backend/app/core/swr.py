@@ -144,7 +144,9 @@ async def serve(
 def _read(cache: Any, key: str) -> tuple[Optional[Entry], bool]:
     getter = getattr(cache, "get_entry", None)
     if getter is not None:
-        raw, authoritative = getter(NAMESPACE, key)
+        result = getter(NAMESPACE, key)
+        # note: a catch-all cache double answers None here rather than a pair.
+        raw, authoritative = result if isinstance(result, tuple) else (result, True)
     else:
         # A cache double without get_entry: its get() hands back whatever was set.
         raw, authoritative = cache.get(NAMESPACE, key), True

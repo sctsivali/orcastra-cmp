@@ -49,7 +49,6 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
-from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
 from app.core.node_metadata import get_node_metadata_store
@@ -57,6 +56,8 @@ from app.models.cluster_status import ClusterStatus, derive_status
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 from app.core.tenant_visibility import tenant_acl_active
+from app.core import swr
+from app.core.swr import Built
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,8 @@ _last_history_store_times: Dict[str, float] = {}
 # hot; do not split this into one key per cluster.
 # note: v2 since the body gained nullable CPU fields. During a rolling deploy an older worker
 # must never parse a body it cannot validate, and the v1 entries simply expire.
-MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard:v2"
+# v3: the body moved into the stale-while-revalidate envelope (core/cache_envelope.py).
+MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard:v3"
 _DASHBOARD_CACHE_TTL = 35
 # The scope the background collector refreshes: admins and the collector itself.
 COLLECTED_SCOPE_KEY = "dashboard:scope=all"
@@ -140,9 +142,9 @@ def cached_dashboard() -> Optional[MonitoringDashboardResponse]:
         logger.warning("Ignoring an unreadable cached monitoring dashboard: %s", exc)
         return None
 
-# note: no herd lock here any more. single_flight("monitoring:dashboard") serialises arrivals
-# per scope key, including ordinary cache misses, which is what the local lock was approximating
-# with a pre-advanced timestamp that pinned a stale body for 35s whenever a rebuild raised.
+# note: no herd lock here any more. swr.serve collapses arrivals per scope key on a miss or a
+# forced read, which is what the local lock was approximating with a pre-advanced timestamp that
+# pinned a stale body for 35s whenever a rebuild raised.
 
 
 @router.get(
@@ -151,7 +153,6 @@ def cached_dashboard() -> Optional[MonitoringDashboardResponse]:
     summary="Get monitoring dashboard data",
     description="Get comprehensive monitoring data including cluster metrics, instance stats, storage, and network info.",
 )
-@single_flight("monitoring:dashboard")
 async def get_monitoring_dashboard(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -166,16 +167,9 @@ async def get_monitoring_dashboard(
     # note: scope_key keeps the "dashboard" base because _monitoring_history_key maps off it.
     scope_key = get_scope_cache_key("dashboard")
     cache = get_cache_manager()
-    dashboard_key = get_scope_cache_key(MONITORING_DASHBOARD_CACHE_KEY)
 
-    if not fresh:
-        cached_response = cached_dashboard()
-        if cached_response is not None:
-            logger.debug("Returning cached dashboard response (background collector)")
-            return cached_response
-    monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
-
-    try:
+    async def build_dashboard() -> Built:
+        monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
         start_time = time.time()
         timer = SweepTimer()
 
@@ -518,28 +512,32 @@ async def get_monitoring_dashboard(
         # unreachable one. Caching that pins the misreading for the TTL, and a
         # fresh=true bypass would let an operator replace real data with it. Leaving
         # the previous entry in place means they keep seeing stale-but-true numbers
-        # and the next request retries.
-        if connected_nodes:
-            if (
-                _resource_generation(cache, _MONITORING_CACHE_KIND)
-                == monitoring_generation
-            ):
-                cache.set(
-                    "api_responses",
-                    dashboard_key,
-                    response.model_dump(),
-                    ttl=_dashboard_ttl(scope_key),
-                )
-            else:
-                logger.info("Not caching monitoring dashboard: data changed during the read")
-        else:
+        # and the next request retries. A change during the read is refused by swr.serve
+        # through the monitoring generation.
+        if not connected_nodes:
             logger.warning("Not caching monitoring dashboard: no cluster answered")
+        return Built(
+            value=response,
+            body=response.model_dump(),
+            fresh_for=_dashboard_ttl(scope_key) if connected_nodes else None,
+        )
 
-        return response
+    # note: the collector rebuilds through here with fresh=True every cycle. swr.serve reads the
+    # cache before any lock, so a reader never waits behind that rebuild; only a real miss or
+    # another forced read collapses onto it.
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key=MONITORING_DASHBOARD_CACHE_KEY,
+            fresh=fresh,
+            build=build_dashboard,
+            generation=lambda: _resource_generation(cache, _MONITORING_CACHE_KIND),
+            label="monitoring dashboard",
+        )
+        return served.as_model(MonitoringDashboardResponse)
 
-    # note: nothing to unwind on the error paths any more. The old code had to pop a
-    # pre-advanced timestamp so the next request would retry; a failed rebuild now simply
-    # writes nothing and the next arrival takes the ordinary miss path.
+    # note: nothing to unwind on the error paths. A failed rebuild writes nothing and the next
+    # arrival takes the ordinary miss path.
     except HTTPException:
         raise
     except LXDConnectionError as e:

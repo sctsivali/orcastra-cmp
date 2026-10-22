@@ -95,7 +95,45 @@ def _is_router_get(node: ast.AST) -> bool:
     return False
 
 
+def _serves_through_swr(node: ast.AST) -> bool:
+    """True when the handler answers through core/swr.serve(), which reads the response cache."""
+    return any(
+        isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and sub.func.attr == "serve"
+        and isinstance(sub.func.value, ast.Name)
+        and sub.func.value.id == "swr"
+        for sub in ast.walk(node)
+    )
+
+
+def _swr_writes(fn: ast.AST) -> list:
+    """Built(...) results that swr.serve() will cache: any fresh_for other than a literal None."""
+    out = []
+    for sub in ast.walk(fn):
+        if not (isinstance(sub, ast.Call) and getattr(sub.func, "id", None) == "Built"):
+            continue
+        fresh_for = next((kw.value for kw in sub.keywords if kw.arg == "fresh_for"), None)
+        if isinstance(fresh_for, ast.Constant) and fresh_for.value is None:
+            continue
+        out.append(sub)
+    return out
+
+
+def _swr_write_is_conditional(call: ast.Call) -> bool:
+    """`fresh_for=<ttl> if <name> else None`: cached only when the named signal holds."""
+    fresh_for = next((kw.value for kw in call.keywords if kw.arg == "fresh_for"), None)
+    return (
+        isinstance(fresh_for, ast.IfExp)
+        and isinstance(fresh_for.test, ast.Name)
+        and isinstance(fresh_for.orelse, ast.Constant)
+        and fresh_for.orelse.value is None
+    )
+
+
 def _reads_response_cache(node: ast.AST) -> bool:
+    if _serves_through_swr(node):
+        return True
     for sub in ast.walk(node):
         if not isinstance(sub, ast.Call):
             continue
@@ -233,7 +271,8 @@ class DegradedFanOutTests(unittest.TestCase):
                 continue
             sets = [c for c in self._calls(fn, "set", "cache") if _writes_response_cache(c)]
             sets += _dashboard_cache_writes(fn)
-            if not sets:
+            swr_writes = _swr_writes(fn)
+            if not sets and not swr_writes:
                 continue
             checked += 1
 
@@ -261,6 +300,14 @@ class DegradedFanOutTests(unittest.TestCase):
             guarded = self._guarded_call_ids(fn, guard_names)
             for call in sets:
                 if id(call) not in guarded:
+                    offenders.append(f"{path.name}:{call.lineno} {fn.name} caches unguarded")
+            # A stale-while-revalidate builder guards through `fresh_for=<ttl> if <signal> else
+            # None`, and the signal must be the connected-nodes half of the fan-out.
+            for call in swr_writes:
+                fresh_for = next(kw.value for kw in call.keywords if kw.arg == "fresh_for")
+                if not (
+                    _swr_write_is_conditional(call) and fresh_for.test.id in guard_names
+                ) and id(call) not in guarded:
                     offenders.append(f"{path.name}:{call.lineno} {fn.name} caches unguarded")
 
         # note: 2 since GET /monitoring/network was removed; it summed counters the list path
@@ -296,7 +343,11 @@ class DegradedFanOutTests(unittest.TestCase):
             if not reports:
                 continue
             sets = [c for c in self._calls(fn, "set", "cache") if _writes_response_cache(c)]
-            if not sets:
+            # A stale-while-revalidate handler caches through what its builder returns. Its
+            # conditional form (`fresh_for=30 if answered else None`) is a guard in itself.
+            swr_writes = _swr_writes(fn)
+            sets += [c for c in swr_writes if not _swr_write_is_conditional(c)]
+            if not sets and not swr_writes:
                 continue
             checked += 1
 
@@ -603,7 +654,9 @@ class SingleFlightDecoratorTests(unittest.TestCase):
                 getattr(getattr(d, "func", d), "id", None) == "single_flight"
                 for d in fn.decorator_list
             )
-            if not decorated:
+            # swr.serve() collapses a miss or a forced read through single_flight.run_collapsed
+            # after its lock-free cache read (test_swr_handlers_are_wired.py).
+            if not decorated and not _serves_through_swr(fn):
                 offenders.append(f"{path.name}:{fn.lineno} {fn.name}")
 
         self.assertGreaterEqual(checked, 12, "the scan stopped finding fleet fan-outs")
@@ -1325,15 +1378,13 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                 )
 
         # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
-        # routers/vms.py list_vms, routers/regions.py get_regions_overview,
-        # services/lxd/status.py _build_response.
+        # routers/vms.py list_vms, routers/regions.py get_regions_overview.
         # note: no instances:list. That prewarm wrote a key GET /instances never reads.
-        # note: no storage_pool_resources. It is warmed through its own handler, which writes
-        # the entry with its own TTL and fence (test_prewarm_reads_pool_resources_off_the_loop).
+        # note: no storage_pool_resources and no nodes:availability. Both are warmed through
+        # their own handler or resolver, which writes the entry with its own TTL and fence.
         expected = {
             "vms:list": 180,
             "regions:overview": 120,
-            "nodes:availability": 45,
         }
         from app.core import cache as cache_module
 

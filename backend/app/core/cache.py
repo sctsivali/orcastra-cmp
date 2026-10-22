@@ -43,14 +43,19 @@ logger = logging.getLogger(__name__)
 # render a member's shared pools as its own disk and an over-committed member as idle for a
 # TTL after deploy.
 RESOURCE_SCHEMA_VERSION = "v8"
-NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
+# e1: the body moved into the stale-while-revalidate envelope (core/cache_envelope.py). A build
+# from before it would read an envelope as a status body, so the key changes rather than the shape.
+NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}:e1"
 # Per-cluster host kernel facts (services/lxd/host_kernels.py), cleared with the cluster.
 HOST_KERNELS_CACHE_PREFIX = "host_kernels:v1"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's
 # 30s cycle, the same way the monitoring dashboard's 35s cache is paired with it.
-NODES_AVAILABILITY_CACHE_KEY = f"nodes:availability:{RESOURCE_SCHEMA_VERSION}"
+NODES_AVAILABILITY_CACHE_KEY = f"nodes:availability:{RESOURCE_SCHEMA_VERSION}:e1"
 NODES_AVAILABILITY_CACHE_TTL = 45
+# Advanced with every availability clearance, so a read in flight cannot write back a picture of
+# the registry from before a cluster was added, removed or re-pinned.
+AVAILABILITY_GENERATION_KIND = "availability"
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
 # Not under the `instances:` pattern on purpose: it must survive the clearance it records.
 INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
@@ -678,9 +683,7 @@ class CacheManager:
         failures: list[Exception] = []
         for clear in (
             lambda: self.invalidate_capacity_cache(require_shared=True),
-            lambda: self.delete_pattern(
-                "api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*", require_shared=True,
-            ),
+            lambda: self.invalidate_availability_cache(require_shared=True),
             lambda: self.invalidate_resource_cache("cluster_members", require_shared=True),
         ):
             try:
@@ -692,10 +695,23 @@ class CacheManager:
                 f"{len(failures)} shared fleet cache operation(s) failed"
             ) from failures[0]
 
+    def invalidate_availability_cache(self, *, require_shared: bool = False) -> None:
+        """Fence, then clear, every scope's cluster availability.
+
+        note: the trailing * takes every org-scope suffix. The fence comes first so a read that
+        began before this cannot write its result back once the keys are gone.
+        """
+        self._advance_resource_generation(
+            AVAILABILITY_GENERATION_KIND, require_shared=require_shared
+        )
+        self.delete_pattern(
+            "api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*", require_shared=require_shared
+        )
+
     def invalidate_node_cache(self, cluster_id: str, scope_keys: tuple[str, ...]) -> None:
         """Refresh one cluster and only the requesting scope's aggregate projections."""
         failures: list[Exception] = []
-        for kind in (CAPACITY_GENERATION_KIND, "cluster_members"):
+        for kind in (CAPACITY_GENERATION_KIND, "cluster_members", AVAILABILITY_GENERATION_KIND):
             try:
                 self._advance_resource_generation(kind, require_shared=True)
             except CacheInvalidationError as exc:

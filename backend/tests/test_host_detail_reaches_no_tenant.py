@@ -26,6 +26,7 @@ from app.routers import instances as instances_module
 from app.routers import storage_pools as pools_module
 from app.routers import vms as vms_module
 from app.services.lxd_service import get_lxd_service
+from app.core.cache_envelope import unwrap
 
 HOST = "shared-cluster"
 NAME = "web-1"
@@ -168,7 +169,11 @@ def test_the_instance_list_hides_host_detail_from_a_tenant_only(monkeypatch, tie
         assert (row["host_endpoint"], row["location"]) == expected
         assert row["config"] == (TENANT_VM_CONFIG if tier == "tenant" else VM_CONFIG)
         assert row["expanded_devices"] == (TENANT_VM_DEVICES if tier == "tenant" else VM_DEVICES)
-    stored = [value for key, (value, _) in manager.memory_cache.cache.items() if "instances:list" in key]
+    stored = [
+        unwrap(value).value
+        for key, (value, _) in manager.memory_cache.cache.items()
+        if "instances:list" in key
+    ]
     assert stored and stored[0]["vms"][0]["host_endpoint"] == ENDPOINT, "the cache keeps the full body"
     assert stored[0]["vms"][0]["config"] == VM_CONFIG
 
@@ -209,7 +214,7 @@ def test_a_cached_cluster_list_reaches_a_tenant_without_the_endpoint(monkeypatch
     }
 
     def read():
-        manager.set("api_responses", get_scope_cache_key("clusters:list:all"), body, ttl=60)
+        manager.set("api_responses", get_scope_cache_key("clusters:list:all:e1"), body, ttl=60)
         return client.get("/clusters")
 
     response = _as(tier, read)

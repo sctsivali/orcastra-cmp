@@ -8,7 +8,7 @@ import asyncio
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException, Depends, status
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.models.schemas import (
     ClusterRegisterRequest,
@@ -34,7 +34,6 @@ from app.services.lxd.exceptions import LXDLocalStorageError
 from app.services.lxd.exceptions import LXDAuthorizationError
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.cache import (
-    NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
     get_resource_list_generation,
 )
@@ -55,6 +54,8 @@ from app.services.lxd_certs import trust_cleanup
 from app.services.lxd_certs import trust_cleanup_store as trust_store
 from app.services.region_catalog import get_region_catalog
 from app.core.database import get_db
+from app.core import swr
+from app.core.swr import Built
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
@@ -369,8 +370,7 @@ async def register_cluster(
             # Invalidate nodes status cache
             cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
             cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
-            # trailing * so every org-scope suffix goes with it
-            cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+            cache.invalidate_availability_cache()
             # Invalidate regions overview (all scopes) so the inventory/monitoring
             # overview reflects the new cluster without a manual refresh
             cache.delete_pattern("api_responses", "regions:*")
@@ -907,17 +907,8 @@ async def list_clusters(
     from app.core.cache import get_cache_manager
     
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key("clusters:list:all")
-    
-    # Try cache first (unless fresh=true)
-    if not fresh and cache:
-        cached_response = cache.get("api_responses", cache_key)
-        if cached_response is not None:
-            logger.debug("Returning cached clusters list")
-            return cluster_list_for_tier(ClusterListResponse(**cached_response), caller_tier())
-    list_generation = get_resource_list_generation(cache, "clusters") if cache else None
-    
-    try:
+
+    async def build() -> Built:
         # When fresh=True, bypass Vault list cache to get latest data
         # This ensures deleted clusters don't appear in the list
         # important: apply org-scope filter so partners/tenants only see their own
@@ -928,34 +919,44 @@ async def list_clusters(
         )
         # An unreadable registry with nothing known is not "no clusters registered".
         require_known_registry(cluster_ids)
-        
-        # Fetch all cluster info in parallel for better performance
+
+        # Fetch all cluster info in parallel for better performance.
+        # note: `force=fresh` is captured, so a background refresh (always fresh=False) never
+        # forces a probe past the reachability breaker.
         tasks = [
             _get_cluster_info_async(cluster_id, cert_manager, force=fresh)
             for cluster_id in cluster_ids
         ]
         clusters = await asyncio.gather(*tasks)
-        
+
         # Filter out None values (shouldn't happen but just in case)
         clusters = [c for c in clusters if c is not None]
-        
+
         response = ClusterListResponse(
             clusters=clusters,
-            total=len(clusters)
+            total=len(clusters),
+            collected_at=datetime.now(timezone.utc),
         )
-        
+
         # important: a row that did not finish says nothing about its cluster. Cached, it would
         # show every reader of this scope an error row for the whole TTL.
-        unfinished = any(c.error_message == _ROW_UNFINISHED for c in clusters)
-        if cache and unfinished:
+        finished = not any(c.error_message == _ROW_UNFINISHED for c in clusters)
+        if not finished:
             logger.info("Not caching clusters list: a row did not finish in time")
-        elif cache and get_resource_list_generation(cache, "clusters") == list_generation:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        elif cache:
-            logger.info("Not caching clusters list: cluster metadata changed during the read")
-        
-        return cluster_list_for_tier(response, caller_tier())
-        
+        return Built(value=response, body=response.model_dump(), fresh_for=180 if finished else None)
+
+    try:
+        # e1: the body moved into the stale-while-revalidate envelope and gained collected_at.
+        served = await swr.serve(
+            cache=cache,
+            base_key="clusters:list:all:e1",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "clusters"),
+            label="clusters list",
+        )
+        return cluster_list_for_tier(served.as_model(ClusterListResponse), caller_tier())
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1291,7 +1292,7 @@ async def delete_cluster(
                 # Clear nodes status cache to ensure UI updates immediately
                 cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
                 cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
-                cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+                cache.invalidate_availability_cache()
                 cache.delete("api_responses", get_scope_cache_key("nodes:status"))
                 cache.delete("api_responses", "nodes:status:scope=all")
                 
@@ -1643,7 +1644,7 @@ async def repin_cluster_certificate(
     from app.services.lxd_service import get_lxd_service
 
     cache = get_cache_manager()
-    cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+    cache.invalidate_availability_cache()
     cache.delete_pattern("api_responses", "regions:*")
     # A client pooled before the re-pin was built against the old certificate, so drop it and
     # let the next call reconnect and re-check against the pin this just wrote.

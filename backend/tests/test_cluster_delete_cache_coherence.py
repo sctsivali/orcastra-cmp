@@ -26,7 +26,7 @@ def test_cluster_delete_uses_broad_invalidators_and_keeps_targeted_cleanup() -> 
         assert obsolete not in source
 
     # Node pickers and status have independent caches and must still be refreshed.
-    assert "NODES_AVAILABILITY_CACHE_KEY" in source
+    assert "cache.invalidate_availability_cache()" in source
     assert "NODES_STATUS_CACHE_KEY" in source
 
 

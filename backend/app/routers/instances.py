@@ -41,6 +41,8 @@ from app.services.lxd_service import (
 )
 from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
+from app.core import swr
+from app.core.swr import Built
 from app.core.registry_guard import require_known_registry
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.database import get_db
@@ -263,7 +265,6 @@ async def get_instance_write_policy(
     summary="List all instances",
     description="Get a list of all instances (containers and VMs) across all connected clusters.",
 )
-@single_flight("instances:list")
 async def list_instances(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     project: Optional[str] = Query(None, description="LXD project to list. Omit for every project the caller may see."),
@@ -296,21 +297,19 @@ async def list_instances(
             limit=limit,
             has_more=False,
         )
-    # Try cache first (scope+ACL aware, 30s TTL). The project is part of the key, as it is
-    # for profiles: two callers asking for two projects must not share one body.
+    # Scope+ACL aware: get_scope_cache_key inside swr.serve() adds the caller's scope. The project
+    # is part of the key, as it is for profiles: two callers asking for two projects must not
+    # share one body.
+    # v3: the body moved into the stale-while-revalidate envelope and gained collected_at. v2
+    # kept rolling deployments from serving a scoped-host 200/empty response cached by a build
+    # that could not distinguish an empty project from an unreachable selected cluster.
     cache = get_cache_manager()
-    # v2 keeps rolling deployments from serving a scoped-host 200/empty response cached by a
-    # build that could not distinguish an empty project from an unreachable selected cluster.
-    cache_key = get_scope_cache_key(
-        f"instances:list:v2:host={host}:project={project or '*'}:status={status}:type={instance_type}:o={offset}:l={limit}"
+    base_key = (
+        f"instances:list:v3:host={host}:project={project or '*'}:status={status}"
+        f":type={instance_type}:o={offset}:l={limit}"
     )
-    cached_response = None if fresh else cache.get("api_responses", cache_key)
-    if cached_response is not None:
-        logger.debug(f"Returning cached instances list for {cache_key}")
-        return vm_list_for_tier(VMListResponse(**cached_response), caller_tier())
-    
-    try:
-        generation = cache.instance_list_generation()
+
+    async def build() -> Built:
         if host and project:
             all_vms, connected_nodes, incomplete_nodes = (
                 await lxd_service.list_vms_in_project_with_failures(host, project)
@@ -319,7 +318,7 @@ async def list_instances(
             all_vms, connected_nodes, incomplete_nodes = (
                 await lxd_service.list_all_vms_with_failures()
             )
-        
+    
         # Filter by host if provided
         if host:
             all_vms = [vm for vm in all_vms if vm.host == host]
@@ -352,15 +351,15 @@ async def list_instances(
         # depth if a service implementation ever returns rows outside the requested project.
         if project:
             all_vms = [vm for vm in all_vms if (vm.project or "default") == project]
-        
+    
         # Filter by status if provided
         if status:
             all_vms = [vm for vm in all_vms if vm.status == status]
-        
+    
         # Filter by instance type if provided
         if instance_type:
             all_vms = [vm for vm in all_vms if vm.type == instance_type]
-        
+    
         # Apply tenant ACL filtering (project + instance level)
         #
         # important: the ACL alone does not cover a Partner. get_tenant_acl_rules returns None
@@ -380,7 +379,7 @@ async def list_instances(
                 "view",
             )
         ]
-        
+
         response = VMListResponse(
             total=len(all_vms),
             vms=all_vms[offset:offset + limit] if limit > 0 else all_vms,
@@ -389,8 +388,9 @@ async def list_instances(
             offset=offset,
             limit=limit,
             has_more=(offset + limit < len(all_vms)) if limit > 0 else False,
+            collected_at=datetime.now(timezone.utc),
         )
-        
+
         # important: do not remember an answer nobody gave. When every cluster is
         # unreachable the connection breaker short-circuits the fan-out and this
         # endpoint still returns 200 with an empty list, so caching it would pin
@@ -401,20 +401,22 @@ async def list_instances(
         cacheable_answer = (
             host in connected_nodes if host is not None else bool(connected_nodes)
         )
-        if cacheable_answer:
-            if cache.instance_list_generation() != generation:
-                # important: an invalidation ran while this read was in flight (a create
-                # landed, a background start finished). What was read is already the old
-                # picture; writing it back would pin it for the TTL right after the clearance
-                # meant to remove it.
-                logger.info("Not caching instances list: an instance changed during the read")
-            else:
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
-                logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
-        else:
+        if not cacheable_answer:
             logger.warning("Not caching instances list: no cluster answered")
-        
-        return vm_list_for_tier(response, caller_tier())
+        # note: an invalidation while this read was in flight (a create landed, a background
+        # start finished) is refused by swr.serve through the instance list generation.
+        return Built(value=response, body=response.model_dump(), fresh_for=30 if cacheable_answer else None)
+
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key=base_key,
+            fresh=fresh,
+            build=build,
+            generation=cache.instance_list_generation,
+            label="instances list",
+        )
+        return vm_list_for_tier(served.as_model(VMListResponse), caller_tier())
     except HTTPException:
         raise
     except LXDConnectionError as e:

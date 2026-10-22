@@ -195,6 +195,14 @@ class VMListResponse(BaseModel):
     offset: int = Field(0, description="Offset of the returned page")
     limit: int = Field(0, description="Page size (0 = all)")
     has_more: bool = Field(False, description="Whether more items exist beyond this page")
+    collected_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "When this list was read off the clusters. A cached answer keeps the time of its "
+            "read, so a client must show this, not the time it received the body. None means "
+            "unknown."
+        ),
+    )
 
 
 class VMCreateRequest(BaseModel):
@@ -1376,6 +1384,10 @@ class ClusterListResponse(BaseModel):
     """Response for listing all clusters."""
     clusters: List[ClusterInfo] = Field(..., description="List of registered clusters")
     total: int = Field(..., description="Total number of clusters")
+    collected_at: Optional[datetime] = Field(
+        None,
+        description="When this list was read. A cached answer keeps the time of its read. None means unknown.",
+    )
 
 
 class ClusterDeleteResponse(BaseModel):

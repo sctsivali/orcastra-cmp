@@ -207,7 +207,7 @@ def test_a_connected_host_with_an_empty_project_is_cacheable(monkeypatch):
     assert first.json()["unreachable_nodes"] == []
     assert second.json()["unreachable_nodes"] == []
     assert service.reads == 1, "a connected host proved that this project is empty"
-    assert any("instances:list:v2" in key for key in manager.memory_cache.cache)
+    assert any("instances:list:v3" in key for key in manager.memory_cache.cache)
 
 
 def test_a_pre_fix_scoped_cache_entry_is_ignored(monkeypatch):

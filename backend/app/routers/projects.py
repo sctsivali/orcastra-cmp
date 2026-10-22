@@ -60,9 +60,10 @@ from app.core.org_scope import (
     visible_projects_for,
 )
 from app.services import project_grants
-from app.core.single_flight import single_flight
 from app.core.registry_guard import require_known_registry
 from app.core.cache import get_cache_manager, get_resource_list_generation
+from app.core import swr
+from app.core.swr import Built
 from app.services.activity_logger import get_activity_logger
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -261,22 +262,15 @@ def _refuse_cap_above_hardware(
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
-@single_flight("projects:list")
 async def list_all_projects(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
     """List all projects across all LXD nodes."""
-    # Try cache first (180 second cache)
+    # 30 s soft TTL, then served for SWR_MAX_STALE_SECONDS while one background read replaces it.
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key("projects:list:all")
-    cached_response = None if fresh else cache.get("api_responses", cache_key)
-    if cached_response is not None:
-        logger.debug("Returning cached projects list")
-        return [ProjectListResponse(**item) for item in cached_response]
-    list_generation = get_resource_list_generation(cache, PROJECT_LIST_CACHE_KIND)
-    
-    try:
+
+    async def build() -> Built:
         node_names = lxd_service.get_node_names()
         # An unreadable registry with nothing known is not "no projects" (issue #15).
         require_known_registry(node_names)
@@ -350,21 +344,29 @@ async def list_all_projects(
                 ))
 
         # important: an outage must not be remembered as the answer. See instances.py.
-        if (
-            answered
-            and get_resource_list_generation(cache, PROJECT_LIST_CACHE_KIND)
-            == list_generation
-        ):
-            cache_data = [proj.model_dump() for proj in all_projects]
-            cache.set("api_responses", cache_key, cache_data, ttl=30)
-            logger.debug("Cached projects list for 30 seconds")
-        elif answered:
-            logger.info("Not caching projects list: a project mutation completed during the read")
-        else:
+        if not answered:
             logger.warning("Not caching projects list: no node answered")
-        
-        return all_projects
-        
+        return Built(
+            value=all_projects,
+            body=[proj.model_dump() for proj in all_projects],
+            fresh_for=30 if answered else None,
+        )
+
+    try:
+        # e1: the body moved into the stale-while-revalidate envelope. The list stays a bare
+        # array, so its age travels only in the X-Orcastra-Cache-Age header.
+        served = await swr.serve(
+            cache=cache,
+            base_key="projects:list:all:e1",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, PROJECT_LIST_CACHE_KIND),
+            label="projects list",
+        )
+        if served.built:
+            return served.value
+        return [ProjectListResponse(**item) for item in served.body]
+
     except HTTPException:
         raise
     except LXDLocalUnavailableError as e:

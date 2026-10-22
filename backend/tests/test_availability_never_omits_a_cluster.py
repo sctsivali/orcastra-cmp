@@ -170,9 +170,14 @@ def test_the_probe_result_is_cached_with_the_endpoints_ttl(client):
 
     tc, cache = client
     tc.get("/nodes/availability")
+    from app.core.swr import SWR_MAX_STALE_SECONDS
+
     written = [(k, v) for k, v in cache.writes.items() if NODES_AVAILABILITY_CACHE_KEY in k]
     assert written, f"nothing was cached; saw {list(cache.writes)}"
-    assert written[0][1][1] == NODES_AVAILABILITY_CACHE_TTL
+    value, ttl = written[0][1]
+    # The endpoint's TTL is the soft one; the entry is kept for the stale window past it.
+    assert value["s"] == NODES_AVAILABILITY_CACHE_TTL
+    assert ttl == NODES_AVAILABILITY_CACHE_TTL + SWR_MAX_STALE_SECONDS
 
 
 def test_an_all_offline_result_is_still_cached(client):

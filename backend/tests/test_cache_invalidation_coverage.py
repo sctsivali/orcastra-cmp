@@ -53,14 +53,26 @@ INVALIDATORS = {
     "invalidate_cluster_reachability",
     "invalidate_node_cache",
     "invalidate_all_node_caches",
+    "invalidate_availability_cache",
     "delete_pattern",
     "delete",
 }
 
 
 def _caches_a_list(tree: ast.AST) -> bool:
-    """True if any handler in this module writes into the api_responses namespace."""
+    """True if any handler in this module writes into the api_responses namespace.
+
+    A handler served through core/swr.serve() writes there too, through its builder.
+    """
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "serve"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "swr"
+        ):
+            return True
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
