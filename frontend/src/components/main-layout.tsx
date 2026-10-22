@@ -15,6 +15,8 @@ import { AccessBlockedNotice } from "@/components/access-blocked-notice";
 import { VaultNotice } from "@/components/vault-notice";
 import { useAccessGate } from "@/hooks/use-access-gate";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useTerminalStore } from "@/lib/terminal-store";
+import { useConsoleStore } from "@/lib/console-store";
 
 // Dynamically import TerminalManager to avoid SSR issues with xterm
 const TerminalManager = dynamic(
@@ -39,6 +41,13 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const isAuthPage = pathname.startsWith("/auth");
   const isLandingPage = pathname === "/";
   const access = useAccessGate({ enabled: !isAuthPage });
+  // important: mount each floating window manager only once its store holds a window. They pull
+  // xterm, react-rnd, react-draggable and react-resizable, about 167 KB gzipped, which every cold
+  // page load downloaded for an operator with no terminal or console open. Both stores rehydrate
+  // from localStorage synchronously, and this layout never renders on the server, so windows
+  // restored after a reload are counted on the first render.
+  const hasTerminals = useTerminalStore((s) => s.terminals.length > 0);
+  const hasConsoles = useConsoleStore((s) => s.consoles.length > 0);
   const [mounted, setMounted] = React.useState(false);
   
   // Client-side only mounting to avoid hydration issues with Date
@@ -146,10 +155,10 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       {!isFullPageTerminalOrConsole && (
         <>
           {/* Terminal Manager - renders floating terminal windows */}
-          <TerminalManager />
-          
+          {hasTerminals && <TerminalManager />}
+
           {/* Console Manager - renders floating console windows (SPICE for VMs) */}
-          <ConsoleManager />
+          {hasConsoles && <ConsoleManager />}
         </>
       )}
 
