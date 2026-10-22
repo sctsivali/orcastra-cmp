@@ -26,7 +26,7 @@ import {
 } from "@/lib/api";
 import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
 import type { PersonalizationSettings } from "@/types/personalization";
-import type { Session } from "next-auth";
+import { unmaskSession, type HydratedSession } from "@/lib/hydrated-session";
 
 /**
  * Refetches queries that errored under an expired token once the access token
@@ -155,10 +155,12 @@ export function Providers({
   // tree, and handed down so the server and the browser render the same sidebar on the first
   // pass. See the note on PersonalizationProvider's initialSettings prop.
   initialPersonalization?: PersonalizationSettings | null;
-  // A comfortably valid session read by the root layout (auth-session.ts), or undefined to let
-  // the browser fetch one as before. Never null.
-  initialSession?: Session;
+  // A comfortably valid session read by the root layout (auth-session.ts), its token masked, or
+  // undefined to let the browser fetch one as before. Never null.
+  initialSession?: HydratedSession;
 }) {
+  // Unmasked in memory only; the document carries the masked form (lib/hydrated-session.ts).
+  const session = React.useMemo(() => unmaskSession(initialSession), [initialSession]);
   const [queryClient, setQueryClient] = React.useState(getQueryClient);
   const queryClientRef = React.useRef(queryClient);
 
@@ -179,7 +181,7 @@ export function Providers({
   );
 
   return (
-    <AuthProvider session={initialSession}>
+    <AuthProvider session={session}>
       <QueryClientProvider client={queryClient}>
         <QueryInvalidationBridge />
         <ChunkReloadReset />

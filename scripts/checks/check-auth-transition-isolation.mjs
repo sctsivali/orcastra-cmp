@@ -425,7 +425,6 @@ const personalizationProvider = readFileSync(
 
 const authSession = readFileSync(join(root, "frontend/src/auth-session.ts"), "utf8");
 const rootLayout = readFileSync(join(root, "frontend/src/app/layout.tsx"), "utf8");
-const nextConfig = readFileSync(join(root, "frontend/next.config.js"), "utf8");
 const nextAuthReact = readFileSync(
   requireFromFrontend.resolve("next-auth/react").replace(/react\.(?:d\.ts|js)$/, "react.js"),
   "utf8",
@@ -444,6 +443,38 @@ const authSessionImporters = sourceFiles(join(root, "frontend/src"))
   .map((path) => path.slice(join(root, "frontend/src").length + 1));
 const hydrateReader = authSession.slice(authSession.indexOf("export async function readHydratableSession"));
 
+// The masked token round trip, run for real: masking is what keeps a bearer next to echoed
+// attacker text in a compressed document from leaking through its length (BREACH).
+// note: the frontend runs on Node 24 and in browsers, both with a global WebCrypto; the host's
+// Node 18 only exposes it as a module.
+globalThis.crypto ??= (await import("node:crypto")).webcrypto;
+const hydratedSession = compileCommonJs("frontend/src/lib/hydrated-session.ts", {});
+{
+  const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJxYS1hZG1pbiJ9.c2lnbmF0dXJl-_x";
+  const first = hydratedSession.maskToken(token);
+  const second = hydratedSession.maskToken(token);
+  assert.notEqual(first, second, "two masks of one token must differ");
+  assert.ok(!first.includes(token) && !first.includes("eyJ"), "a masked token must not carry the token");
+  assert.equal(hydratedSession.unmaskToken(first), token);
+  assert.equal(hydratedSession.unmaskToken(second), token);
+  for (const bad of ["", "abc", "a.b.c", "!!.??", "AA.AAAA"]) {
+    assert.equal(hydratedSession.unmaskToken(bad), undefined, `malformed mask accepted: ${bad}`);
+  }
+  const session = hydratedSession.unmaskSession({ expires: "x", user: { id: "u" }, maskedAccessToken: first });
+  assert.equal(session.accessToken, token);
+  assert.equal("maskedAccessToken" in session, false);
+  assert.equal(hydratedSession.unmaskSession(undefined), undefined);
+  assert.equal(hydratedSession.unmaskSession({ expires: "x", user: { id: "u" }, maskedAccessToken: "bad" }), undefined);
+}
+
+// Every Cache-Control rule next.config.js declares, evaluated rather than pattern-matched: a
+// hydrated document must keep Next's own private, no-store, which any configured rule replaces.
+const nextConfigModule = requireFromFrontend(join(root, "frontend/next.config.js"));
+const pageCacheRules = (await nextConfigModule.headers())
+  .filter((rule) => rule.headers.some((h) => h.key.toLowerCase() === "cache-control"))
+  .map((rule) => rule.source)
+  .filter((source) => !/^\/geo\//.test(source));
+
 const structuralChecks = [
   // Session hydration (auth-session.ts). A server component cannot persist a rotated refresh
   // token, so the peek instance must never refresh, and a doubtful session must stay undefined.
@@ -455,9 +486,16 @@ const structuralChecks = [
   ],
   [
     !/return null/.test(hydrateReader) &&
-      /accessToken: session\.accessToken/.test(hydrateReader) &&
+      /maskedAccessToken: maskToken\(session\.accessToken\)/.test(hydrateReader) &&
+      !/accessToken: session\.accessToken/.test(hydrateReader) &&
       !/\.\.\.session\b/.test(hydrateReader),
-    "readHydratableSession can return null or serialize more than its whitelisted projection",
+    "readHydratableSession can return null, an unmasked token, or more than its projection",
+  ],
+  [
+    /const session = React\.useMemo\(\(\) => unmaskSession\(initialSession\), \[initialSession\]\)/.test(providers) &&
+      /<AuthProvider session=\{session\}>/.test(providers) &&
+      /<Providers [^>]*initialSession=\{initialSession\}/.test(rootLayout),
+    "the layout's masked session is not unmasked in memory before SessionProvider",
   ],
   [
     JSON.stringify(authSessionImporters) === JSON.stringify(["app/layout.tsx"]) &&
@@ -472,8 +510,8 @@ const structuralChecks = [
     "a hydrated session is not refreshed once in the background after the bearer is installed",
   ],
   [
-    !/source:\s*'\/:path\*'[\s\S]{0,400}Cache-Control/.test(nextConfig),
-    "next.config.js sets Cache-Control on every page; a hydrated document must stay no-store",
+    pageCacheRules.length === 0,
+    `next.config.js sets Cache-Control on page routes, replacing Next's no-store: ${pageCacheRules}`,
   ],
   [
     /hasInitialSession = props\.session !== undefined/.test(nextAuthReact) &&

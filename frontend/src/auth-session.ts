@@ -20,8 +20,8 @@
  * the fallback covers it.
  */
 import NextAuth from "next-auth";
-import type { Session } from "next-auth";
 import { authConfig } from "@/auth";
+import { maskToken, type HydratedSession } from "@/lib/hydrated-session";
 
 // Covers server render to client mount plus one background refresh (10 s budget, auth.ts), so a
 // request sent with the hydrated bearer cannot reach the backend expired before the refresh lands.
@@ -46,16 +46,16 @@ const { auth: peekSession } = NextAuth({
  * loading and its poll never fetches, which wedges the tab. And an explicit projection, never
  * the raw result: in a server component next-auth builds `{ user: token, ...session }`, so a
  * session callback that ever stopped returning `user` would serialize the whole JWT, refresh
- * token included, into the HTML.
+ * token included, into the HTML. The access token itself travels masked (lib/hydrated-session.ts).
  */
-export async function readHydratableSession(): Promise<Session | undefined> {
+export async function readHydratableSession(): Promise<HydratedSession | undefined> {
   try {
     const session = await peekSession();
     if (!session?.user || !session.accessToken || session.error) return undefined;
     const { id, name, email, image, groups, roles } = session.user;
     return {
       expires: session.expires,
-      accessToken: session.accessToken,
+      maskedAccessToken: maskToken(session.accessToken),
       user: {
         id,
         name: name ?? null,
