@@ -188,6 +188,10 @@ const checks = [
         "session reads must not use a lagging module-global token during actor transitions",
       ],
       [
+        /if \(bound\.scope !== requestActorScope\) return;\s*const actorAccessToken = bound\.token;/,
+        "a session read must only carry the token of the actor it was made for",
+      ],
+      [
         /activeActorScopeRef\.current !== requestActorScope/,
         "late session responses must verify their actor",
       ],

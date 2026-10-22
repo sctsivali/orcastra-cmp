@@ -269,11 +269,12 @@ function ActiveSessionsTab() {
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
   activeRequestScopeRef.current = requestScopeKey;
-  // note: the bearer is read at call time. As a dependency of fetchSessions it re-ran the
-  // loading fetch on every silent rotation (about every four minutes), flashing the loader and
-  // restarting the poll. An actor change is handled by the actorScope reset above.
-  const accessTokenRef = useRef(actorAccessToken);
-  accessTokenRef.current = actorAccessToken;
+  // note: the bearer is read at call time, paired with the actor it belongs to. As a dependency
+  // of fetchSessions it re-ran the loading fetch on every silent rotation (about every four
+  // minutes), flashing the loader and restarting the poll. A request is only sent with the token
+  // of the actor it was made for; an actor change is handled by the actorScope reset above.
+  const actorTokenRef = useRef({ scope: actorScope, token: actorAccessToken });
+  actorTokenRef.current = { scope: actorScope, token: actorAccessToken };
 
   // Session routes survive a same-document sign-out/sign-in. Gate actor-owned state during
   // render so the next actor cannot see the previous rows while effect cleanup is pending.
@@ -349,9 +350,11 @@ function ActiveSessionsTab() {
     setError(null);
     try {
       const params = new URLSearchParams({ scope });
-      const bearer = accessTokenRef.current;
+      const bound = actorTokenRef.current;
+      if (bound.scope !== requestActorScope) return;
+      const actorAccessToken = bound.token;
       const res = await fetch(`${API_URL}/api/v1/console/sessions/active?${params}`, {
-        headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+        headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
@@ -681,9 +684,10 @@ function SessionHistoryTab() {
   const requestControllerRef = useRef<AbortController | null>(null);
   activeActorScopeRef.current = actorScope;
   activeRequestScopeRef.current = requestScopeKey;
-  // note: read at call time, as in ActiveSessionsTab: a silent rotation re-read the whole trail.
-  const accessTokenRef = useRef(actorAccessToken);
-  accessTokenRef.current = actorAccessToken;
+  // note: read at call time and paired with its actor, as in ActiveSessionsTab: a silent
+  // rotation re-read the whole trail.
+  const actorTokenRef = useRef({ scope: actorScope, token: actorAccessToken });
+  actorTokenRef.current = { scope: actorScope, token: actorAccessToken };
 
   // Keyed on actor and scope, as on the Active tab.
   const logsAreCurrent = logsRequestScope === requestScopeKey;
@@ -764,9 +768,11 @@ function SessionHistoryTab() {
           offset: String(offset),
           scope,
         });
-        const bearer = accessTokenRef.current;
+        const bound = actorTokenRef.current;
+        if (bound.scope !== requestActorScope) return;
+        const actorAccessToken = bound.token;
         const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-          headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+          headers: actorAccessToken ? { Authorization: `Bearer ${actorAccessToken}` } : {},
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
