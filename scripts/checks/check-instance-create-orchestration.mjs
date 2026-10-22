@@ -413,8 +413,12 @@ requireText(hooksPath, hooks, [
   '["projectUsage", scopeKey, host, project, opts?.requestEpoch ?? 0]',
   "queryFn: ({ signal }) => projectAPI.usage(host, project, { signal })",
   "[STORAGE_POOL_LIST_KEY, scopeKey, host, opts?.requestEpoch ?? 0]",
-  '["storageVolumes", scopeKey, pool, host, opts?.requestEpoch ?? 0]',
-  '"networks",\n      scopeKey,\n      host,\n      project ?? null,\n      opts?.requestEpoch ?? 0',
+  // The volume and network lists key through shared factories (the sidebar warms the same keys);
+  // both the call and the factory must keep the scope, the project and the request epoch.
+  "queryKeys.storageVolumesFor(scopeKey, pool, host, opts?.requestEpoch)",
+  '["storageVolumes", actorScope, pool, host, requestEpoch ?? 0]',
+  "queryKeys.networksFor(scopeKey, host, project, opts?.requestEpoch)",
+  '["networks", actorScope, host, project ?? null, requestEpoch ?? 0]',
   '"profile",\n      scopeKey,\n      name,\n      host,\n      project ?? null,\n      opts?.requestEpoch ?? 0',
   "queryFn: ({ signal }) => api.profiles.get(name, host, project, { signal })",
   "queryKeys.instanceWritePolicy(scopeKey, host)",

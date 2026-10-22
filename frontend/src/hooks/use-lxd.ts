@@ -29,6 +29,7 @@ import {
   api,
   fetchAPI,
   isAuthActorSynchronized,
+  type ReadOptions,
 } from "@/lib/api";
 import {
   VMCreateRequest,
@@ -122,6 +123,21 @@ export const queryKeys = {
   images: ["images"] as const,
   imagesByHost: (actorScope: string, host: string) =>
     ["images", actorScope, host] as const,
+  // The list keys below are shared by their hooks and by the sidebar's hover warm-up
+  // (components/sidebar/nav-config.tsx). Two literals for one key is how the warm-up came to
+  // fill seven entries no page ever read.
+  imagesFor: (actorScope: string) => [...queryKeys.images, actorScope] as const,
+  networksFor: (actorScope: string, host?: string, project?: string, requestEpoch?: number) =>
+    ["networks", actorScope, host, project ?? null, requestEpoch ?? 0] as const,
+  storagePoolsFor: (actorScope: string, host?: string, requestEpoch?: number) =>
+    ["storagePools", actorScope, host, requestEpoch ?? 0] as const,
+  storageVolumesFor: (actorScope: string, pool?: string, host?: string, requestEpoch?: number) =>
+    ["storageVolumes", actorScope, pool, host, requestEpoch ?? 0] as const,
+  profilesFor: (actorScope: string, host?: string, project?: string) =>
+    ["profiles", actorScope, host, project ?? null] as const,
+  ipamFor: (actorScope: string, host?: string) => ["ipam", actorScope, host] as const,
+  networkAclsFor: (host?: string, project?: string) =>
+    ["networkACLs", host, project ?? null] as const,
   // A store read is keyed apart from the host's fleet slice, which useImages(host) owns with a
   // different shape (an array of one response).
   imageStore: (actorScope: string, host: string, project: string) =>
@@ -356,7 +372,7 @@ export function useImages(host?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
     queryKey: host
       ? queryKeys.imagesByHost(scopeKey, host)
-      : [...queryKeys.images, scopeKey],
+      : queryKeys.imagesFor(scopeKey),
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: async (read) => {
       if (host) {
@@ -1004,7 +1020,7 @@ export function useWarnings(host?: string, options: { enabled?: boolean } = {}) 
 export function useIPAM(host?: string) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["ipam", scopeKey, host],
+    queryKey: queryKeys.ipamFor(scopeKey, host),
     queryFn: (read) => api.ipam.list(host, read),
     enabled: isAuthenticated,
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1042,6 +1058,27 @@ export function useStoragePoolList(
   });
 }
 
+/** The storage pool list with its capacity, as the pools page reads it and the sidebar warms it. */
+export async function readStoragePools(host: string | undefined, read: ReadOptions) {
+  // important: the capacity read is secondary and must not be able to fail the list. It
+  // fans out to every cluster, so it is the likelier of the two to time out, and losing it
+  // used to blank the whole page under "No storage pools found" while the list itself had
+  // answered. An operator reading that would look for pools that were never gone.
+  // `capacityFailed` is what lets the surface say which of the two happened, instead of
+  // rendering an absent reading the same way as a reading of nothing.
+  const [poolsData, resourcesData] = await Promise.all([
+    api.storagePools.list(host, read) as Promise<Record<string, unknown>>,
+    (api.storagePools.getResourcesAll(read) as Promise<Record<string, unknown> | null>)
+      .then((value) => ({ ok: true as const, value }))
+      .catch(() => ({ ok: false as const, value: null })),
+  ]);
+  return {
+    ...poolsData,
+    capacityFailed: !resourcesData.ok,
+    resources: (resourcesData.value as Record<string, unknown>)?.resources || {},
+  };
+}
+
 export function useStoragePools(
   host?: string,
   opts?: { enabled?: boolean; requestEpoch?: number },
@@ -1050,26 +1087,8 @@ export function useStoragePools(
   const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     enabled: isAuthenticated && (opts?.enabled ?? true),
-    queryKey: ["storagePools", scopeKey, host, opts?.requestEpoch ?? 0],
-    queryFn: async (read) => {
-      // important: the capacity read is secondary and must not be able to fail the list. It
-      // fans out to every cluster, so it is the likelier of the two to time out, and losing it
-      // used to blank the whole page under "No storage pools found" while the list itself had
-      // answered. An operator reading that would look for pools that were never gone.
-      // `capacityFailed` is what lets the surface say which of the two happened, instead of
-      // rendering an absent reading the same way as a reading of nothing.
-      const [poolsData, resourcesData] = await Promise.all([
-        api.storagePools.list(host, read) as Promise<Record<string, unknown>>,
-        (api.storagePools.getResourcesAll(read) as Promise<Record<string, unknown> | null>)
-          .then((value) => ({ ok: true as const, value }))
-          .catch(() => ({ ok: false as const, value: null })),
-      ]);
-      return {
-        ...poolsData,
-        capacityFailed: !resourcesData.ok,
-        resources: (resourcesData.value as Record<string, unknown>)?.resources || {},
-      };
-    },
+    queryKey: queryKeys.storagePoolsFor(scopeKey, host, opts?.requestEpoch),
+    queryFn: (read) => readStoragePools(host, read),
     // Always enabled - fetches all pools when host is undefined
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
@@ -1125,7 +1144,7 @@ export function useStorageVolumes(
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
-    queryKey: ["storageVolumes", scopeKey, pool, host, opts?.requestEpoch ?? 0],
+    queryKey: queryKeys.storageVolumesFor(scopeKey, pool, host, opts?.requestEpoch),
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.storageVolumes.list(host, pool, read),
     // Matched to the 180s backend response cache: capacity and state move without
@@ -1219,13 +1238,7 @@ export function useNetworks(
   return useRefreshableQuery({
     // important: the project belongs in the key. Without it React Query serves one project's
     // rows to another project's caller from cache.
-    queryKey: [
-      "networks",
-      scopeKey,
-      host,
-      project ?? null,
-      opts?.requestEpoch ?? 0,
-    ],
+    queryKey: queryKeys.networksFor(scopeKey, host, project, opts?.requestEpoch),
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.networks.list(host, project, read),
     // Matched to the 180s backend response cache: capacity and state move without
@@ -1281,7 +1294,7 @@ export function useDeleteNetwork() {
 /** @param project omit for every project. See useNetworks. */
 export function useNetworkACLs(host?: string, project?: string) {
   return useRefreshableQuery({
-    queryKey: ["networkACLs", host, project ?? null],
+    queryKey: queryKeys.networkAclsFor(host, project),
     queryFn: (read) => api.networkACLs.list(host, project, read),
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1375,7 +1388,7 @@ export function useUpdateNetworkACL() {
 export function useProfiles(host?: string, project?: string, opts?: { enabled?: boolean }) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
-    queryKey: ["profiles", scopeKey, host, project ?? null],
+    queryKey: queryKeys.profilesFor(scopeKey, host, project),
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryFn: (read) => api.profiles.list(host, project, read),
     // Always enabled - fetches all profiles when host is undefined

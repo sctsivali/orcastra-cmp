@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import type { QueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { queryKeys } from "@/hooks/use-lxd";
+import { queryKeys, readStoragePools } from "@/hooks/use-lxd";
 import type { NavGroup, NavItem, PermissionFlags, RoleGate } from "./types";
 
 // Single source of truth for the sidebar information architecture. Pinned top-level
@@ -167,29 +167,28 @@ export function buildPrefetchMap(
         staleTime: 0,
       });
     },
+    // note: every key below comes from queryKeys and every read from the same call the page's
+    // hook makes (hooks/use-lxd.ts). Literal keys here filled seven entries no page ever read.
     "/inventory/networks": () => {
-      queryClient.prefetchQuery({ queryKey: ["networks", undefined], queryFn: () => api.networks.list(), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.networksFor(actorScope), queryFn: ({ signal }) => api.networks.list(undefined, undefined, { signal }), staleTime: 120_000 });
     },
     "/inventory/storage-pools": () => {
-      queryClient.prefetchQuery({ queryKey: ["storagePools", undefined], queryFn: async () => {
-        const [pools, resources] = await Promise.all([api.storagePools.list() as Promise<any>, api.storagePools.getResourcesAll() as Promise<any>]);
-        return { ...pools, resources: resources?.resources || {} };
-      }, staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.storagePoolsFor(actorScope), queryFn: ({ signal }) => readStoragePools(undefined, { signal }), staleTime: 120_000 });
     },
     "/inventory/storage-volumes": () => {
-      queryClient.prefetchQuery({ queryKey: ["storageVolumes", undefined, undefined], queryFn: () => api.storageVolumes.list(), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.storageVolumesFor(actorScope), queryFn: ({ signal }) => api.storageVolumes.list(undefined, undefined, { signal }), staleTime: 120_000 });
     },
     "/inventory/images": () => {
-      queryClient.prefetchQuery({ queryKey: ["images", undefined], queryFn: () => api.images.listAll(), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.imagesFor(actorScope), queryFn: ({ signal }) => api.images.listAll({ signal }), staleTime: 120_000 });
     },
     "/inventory/profiles": () => {
-      queryClient.prefetchQuery({ queryKey: ["profiles", undefined], queryFn: () => api.profiles.list(), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.profilesFor(actorScope), queryFn: ({ signal }) => api.profiles.list(undefined, undefined, { signal }), staleTime: 120_000 });
     },
     "/inventory/ipam": () => {
-      queryClient.prefetchQuery({ queryKey: ["ipam", undefined], queryFn: () => api.ipam.list(), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.ipamFor(actorScope), queryFn: ({ signal }) => api.ipam.list(undefined, { signal }), staleTime: 120_000 });
     },
     "/inventory/network-acls": () => {
-      queryClient.prefetchQuery({ queryKey: ["networkACLs", undefined], queryFn: () => api.networkACLs.list(), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.networkAclsFor(), queryFn: ({ signal }) => api.networkACLs.list(undefined, undefined, { signal }), staleTime: 120_000 });
     },
     "/regions": () => {
       queryClient.prefetchQuery({ queryKey: ["regions", "overview"], queryFn: () => api.regions.getOverview(), staleTime: 60_000 });
