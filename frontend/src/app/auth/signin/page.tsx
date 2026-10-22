@@ -12,7 +12,7 @@
 
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -41,12 +41,40 @@ const errorMessages: Record<string, string> = {
   Default: "An authentication error occurred. Please try again.",
 };
 
+// One automatic hand-off to the identity provider per tab within this window. Coming back here
+// without an error sooner than that means the sign-in did not stick (a cookie the browser
+// refused, a clock skew), and redirecting again would only loop between the two hosts.
+const AUTO_SIGNIN_KEY = "orcastra-auto-signin-at";
+const AUTO_SIGNIN_LOOP_MS = 10_000;
+
+function autoSignInBounced(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const last = Number(window.sessionStorage.getItem(AUTO_SIGNIN_KEY) || 0);
+    return Date.now() - last < AUTO_SIGNIN_LOOP_MS;
+  } catch {
+    return false;
+  }
+}
+
+function markAutoSignIn(): void {
+  try {
+    window.sessionStorage.setItem(AUTO_SIGNIN_KEY, String(Date.now()));
+  } catch {
+    // Storage blocked: the redirect still happens, only the loop guard is lost.
+  }
+}
+
 function SignInContent() {
   const searchParams = useSearchParams();
   const error = searchParams.get("error");
   const requested = searchParams.get("callbackUrl");
-  const [isLoading, setIsLoading] = useState(false);
-  const [autoRedirect, setAutoRedirect] = useState(true);
+  // note: read once, on the client. TokenSync renders nothing on the server, so this page's first
+  // render is always in the browser.
+  const [bounced] = useState(() => !error && autoSignInBounced());
+  const [isLoading, setIsLoading] = useState(!error && !bounced);
+  const [autoRedirect, setAutoRedirect] = useState(!bounced);
+  const autoStartedRef = useRef(false);
 
   // A failed sign-in comes back here (or via /auth/error) without its callbackUrl, so the page
   // asked for is kept for the tab and recalled on the retry. A plain visit forgets a stale one.
@@ -58,14 +86,14 @@ function SignInContent() {
   const resolveCallbackUrl = () =>
     safeCallbackPath(requested, window.location.origin) ?? (error ? recallReturnPath() : null) ?? "/";
 
-  // Auto-redirect to Authentik after a short delay
+  // Hand off to Authentik straight away. It used to wait a fixed 1.5 s first, which every sign-in
+  // and every return after an expired session paid, for no recorded reason. The ref keeps React's
+  // development double effect from starting a second attempt.
   useEffect(() => {
-    if (!error && autoRedirect) {
-      const timer = setTimeout(() => {
-        handleSignIn();
-      }, 1500);
-      return () => clearTimeout(timer);
-    }
+    if (error || !autoRedirect || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    markAutoSignIn();
+    void handleSignIn();
   }, [error, autoRedirect]);
 
   const handleSignIn = async () => {
@@ -117,6 +145,12 @@ function SignInContent() {
                 Redirecting to sign in...
               </p>
             </div>
+          )}
+
+          {bounced && !error && (
+            <p className="text-center text-sm text-muted-foreground">
+              Automatic sign-in did not finish. Sign in to try again.
+            </p>
           )}
 
           {/* Sign In Button */}
