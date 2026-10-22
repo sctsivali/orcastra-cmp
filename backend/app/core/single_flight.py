@@ -16,9 +16,12 @@ per subject; TTL expiry is not limited by anything, and it lands hardest exactly
 when the most tabs are open. Polling clients make this worse, because queries
 created in the same tick share a deadline for the life of the page.
 
-The lock is held across a cache hit as well, which costs one Redis GET of
-serialisation per scope and is what keeps the fast path from needing to know
-whether it is about to hit or miss.
+The decorator holds the lock across a cache hit as well, which costs one Redis
+GET of serialisation per scope and is what keeps the fast path from needing to
+know whether it is about to hit or miss. Handlers served through
+core/swr.serve() read the cache before taking any lock and use run_collapsed()
+only for a real miss or a forced refresh, so a warm reader never queues behind
+a rebuild.
 
 Scoped to one worker process. With WEB_CONCURRENCY=4 the worst case is 4
 concurrent rebuilds instead of one per request, which is the bound that matters.
@@ -28,9 +31,11 @@ import asyncio
 import functools
 import logging
 import time
-from typing import Dict
+from typing import Awaitable, Callable, Dict, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 _locks: Dict[str, asyncio.Lock] = {}
@@ -79,6 +84,44 @@ def rebuilt_since(key: str, arrived_at: float) -> bool:
     asked to skip, which on a prewarmed key means it never rebuilds at all.
     """
     return _last_rebuild.get(key, 0.0) > arrived_at
+
+
+def is_rebuilding(key: str) -> bool:
+    """True while a request in this worker holds or awaits the rebuild lock for `key`."""
+    return _waiters.get(key, 0) > 0
+
+
+async def run_collapsed(
+    key: str,
+    *,
+    forced: bool,
+    arrived_at: float,
+    rebuild: Callable[[], Awaitable[T]],
+    reread: Callable[[], Optional[T]],
+) -> T:
+    """The decorator's collapse, for a caller that has already read its cache and missed.
+
+    Same contract as single_flight below: an unforced caller re-reads inside the lock and
+    takes the body the leader just wrote; a forced caller whose leader already rebuilt after
+    it arrived takes that rebuild; otherwise it rebuilds, and only a forced rebuild that
+    finished marks the key. `reread` returns None when nothing usable is cached.
+    """
+    lock = rebuild_lock(key)
+    try:
+        async with lock:
+            if not forced or rebuilt_since(key, arrived_at):
+                if forced:
+                    logger.info("Serving %s from a concurrent rebuild", key)
+                cached = reread()
+                if cached is not None:
+                    return cached
+                # The leader wrote nothing (its answer was not cacheable): rebuild, unmarked.
+                return await rebuild()
+            result = await rebuild()
+            mark_rebuilt(key)
+            return result
+    finally:
+        release_lock(key)
 
 
 def single_flight(key_prefix: str):

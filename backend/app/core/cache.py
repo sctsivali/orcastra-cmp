@@ -12,6 +12,7 @@ from functools import wraps
 from collections import OrderedDict
 import hashlib
 from app.core.cache_glob import compile_cache_glob
+from app.core.cache_envelope import is_envelope, unwrap
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,21 @@ class CacheManager:
         Get value from cache.
         Tries Redis first, falls back to memory cache.
         Automatically decrypts data from sensitive namespaces.
+
+        note: a value written through the stale-while-revalidate envelope (cache_envelope.py)
+        comes back as its plain body, so every reader that predates SWR keeps working on keys
+        that SWR now writes.
+        """
+        raw, _authoritative = self.get_entry(namespace, key)
+        return unwrap(raw).value if is_envelope(raw) else raw
+
+    def get_entry(self, namespace: str, key: str) -> tuple[Optional[Any], bool]:
+        """The raw cached value and whether the store that answered is authoritative.
+
+        Authoritative means Redis answered, or this deployment runs without Redis. A value from
+        the per-worker memory fallback while a configured Redis is failing is not: another
+        worker's invalidation could not have reached it, so a reader must not treat it as more
+        than today's Redis-down fallback (stale-while-revalidate counts it as a miss once stale).
         """
         cache_key = self._make_key(namespace, key)
         should_decrypt = self._should_encrypt(namespace)
@@ -319,7 +335,7 @@ class CacheManager:
                     # Decrypt if from sensitive namespace
                     if should_decrypt:
                         data = self._decrypt_data(data)
-                    return data
+                    return data, True
             except redis.TimeoutError:
                 logger.warning(f"Redis timeout for key: {cache_key}, falling back to memory")
             except Exception as e:
@@ -333,9 +349,11 @@ class CacheManager:
         # their TTL expires. The memory cache is a Redis-is-down fallback only.
         if redis_answered:
             logger.debug(f"Cache MISS (redis authoritative): {cache_key}")
-            return None
+            return None, True
 
         # Redis unavailable/errored -> degraded mode, fall back to memory cache.
+        # note: getattr because a few tests build a bare manager without __init__.
+        authoritative = not getattr(self, "_redis_configured", False)
         cached = self.memory_cache.get(cache_key)
         if cached:
             value, expiry = cached
@@ -344,13 +362,13 @@ class CacheManager:
                 # Decrypt if from sensitive namespace
                 if should_decrypt:
                     value = self._decrypt_data(value)
-                return value
+                return value, authoritative
             else:
                 # Expired, remove it
                 self.memory_cache.delete(cache_key)
         
         logger.debug(f"Cache MISS: {cache_key}")
-        return None
+        return None, authoritative
     
     def set(
         self,

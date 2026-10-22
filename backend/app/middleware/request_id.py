@@ -73,6 +73,13 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         
         # Add request ID to response headers
         response.headers[REQUEST_ID_HEADER] = request_id
+        # What the response cache served (core/swr.py): the frontend reads it to ask again once
+        # a background read has replaced a stale body, and operators read it in the browser.
+        cache_state = context.extra.get("cache")
+        if cache_state:
+            response.headers["X-Orcastra-Cache"] = cache_state
+            if context.extra.get("cache_age_s") is not None:
+                response.headers["X-Orcastra-Cache-Age"] = str(int(context.extra["cache_age_s"]))
         
         return response
     

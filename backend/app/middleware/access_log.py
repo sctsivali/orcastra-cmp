@@ -174,6 +174,9 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             "user": user_info,
             "client": client_info,
             "error": error_message,
+            # Response cache outcome (core/swr.py); absent on endpoints that do not use it.
+            "cache": ctx.extra.get("cache") if ctx else None,
+            "cache_age_s": ctx.extra.get("cache_age_s") if ctx else None,
         }
     
     def _log_access(self, access_log: dict, status_code: int) -> None:

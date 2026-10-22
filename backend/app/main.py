@@ -671,6 +671,13 @@ async def lifespan(app: FastAPI):
         logger.info("Background metrics collector stopped")
     except Exception:
         pass
+
+    # Cancel stale-while-revalidate reads still in flight
+    try:
+        from app.core import swr
+        await swr.shutdown()
+    except Exception:
+        pass
     
     # Stop session tracker cleanup
     try:

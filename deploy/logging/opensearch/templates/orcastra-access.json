@@ -96,6 +96,12 @@
               "type": "keyword"
             }
           }
+        },
+        "cache": {
+          "type": "keyword"
+        },
+        "cache_age_s": {
+          "type": "float"
         }
       }
     }

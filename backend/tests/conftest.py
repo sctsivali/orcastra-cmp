@@ -93,6 +93,29 @@ def _isolate_rate_sampler(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_response_cache(monkeypatch):
+    """A memory-only response cache and empty single-flight and SWR state for every test.
+
+    important: inside the backend container the `redis` hostname resolves, so a handler a test
+    calls directly would otherwise read and write the running app's cache, and a background
+    stale-while-revalidate read could outlive the test that started it.
+    """
+    from app.core import cache as cache_module
+    from app.core import single_flight, swr
+    from app.core.cache import CacheManager
+
+    monkeypatch.setattr(cache_module, "_global_cache", CacheManager(redis_url=None))
+    single_flight._locks.clear()
+    single_flight._waiters.clear()
+    single_flight._last_rebuild.clear()
+    swr._refreshing.clear()
+    yield
+    for task in list(swr._refreshing.values()):
+        task.cancel()
+    swr._refreshing.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_monitoring_history_store():
     """Start every test with an empty history fallback buffer, body memo and import marks.
 
