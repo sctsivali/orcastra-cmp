@@ -528,8 +528,8 @@ function fetchHeavyRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T>
  * reaches the server, but the query parameter is deliberately not sent. These handlers do
  * not read the response cache, so FastAPI dropped the unknown parameter while the
  * middleware still charged the request against the scarce per-operator bypass budget: the
- * click cost budget and changed nothing. Applies to /operations, /warnings, /server,
- * /identities, /groups, /network-acls and /certificates.
+ * click cost budget and changed nothing. Applies to /operations, /server, /identities,
+ * /groups, /network-acls and /certificates.
  */
 function fetchUncachedRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
   return fetchAPI<T>(
@@ -1996,9 +1996,11 @@ export const imageUploadAPI = {
 
 // Warning Operations
 export const warningAPI = {
+  // note: fetchRead, not fetchUncachedRead. The backend caches both warning feeds per scope
+  // now, so a refresh has to send fresh=true to reach the clusters.
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/warnings?host=${encodeURIComponent(host)}` : "/warnings";
-    return fetchUncachedRead(endpoint, opts);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (uuid: string, host: string) => {
@@ -2288,7 +2290,7 @@ export const certificateAPI = {
   },
 
   getSystemWarnings: async (opts: ReadOptions = {}): Promise<SystemWarningsResponse> => {
-    return fetchUncachedRead<SystemWarningsResponse>("/warnings/system/all", opts);
+    return fetchRead<SystemWarningsResponse>("/warnings/system/all", opts);
   },
 
   cleanupPending: async (): Promise<{ success: boolean; message: string; cleaned_count: number }> => {
