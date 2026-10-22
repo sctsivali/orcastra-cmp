@@ -33,6 +33,11 @@ export function usePersonalizationSync({
   const previousScopeRef = React.useRef<string | null>(null);
   const checkInFlightRef = React.useRef(false);
   currentScopeRef.current = scopeKey;
+  // important: read the bearer through a ref. As a dependency it made every silent rotation
+  // (about every four minutes) look like a reason to re-read, so all three preference reads ran
+  // again and the poll restarted. An actor change is fenced by scopeKey and onAuthActorChanged.
+  const accessTokenRef = React.useRef(accessToken);
+  accessTokenRef.current = accessToken;
 
   const refreshSettings = React.useCallback(async (expectedVersion?: OrgPreferencesVersion): Promise<boolean> => {
     if (!userId || !authenticated) return false;
@@ -43,7 +48,7 @@ export function usePersonalizationSync({
     const canApply = () => isCurrent() && lastLocalEditRef.current === localEdit;
 
     if (!orgBacked) {
-      const personal = await readPersonalPreferences(accessToken, isCurrent);
+      const personal = await readPersonalPreferences(accessTokenRef.current, isCurrent);
       if (!personal.ok || !canApply()) return false;
       personalRowRef.current = personal.value;
       setSettings(personal.value);
@@ -51,13 +56,13 @@ export function usePersonalizationSync({
     }
 
     const [organization, personal] = await Promise.all([
-      readOrgPreferences(accessToken, isCurrent),
-      readPersonalPreferences(accessToken, isCurrent),
+      readOrgPreferences(accessTokenRef.current, isCurrent),
+      readPersonalPreferences(accessTokenRef.current, isCurrent),
     ]);
     if (!organization.ok || !personal.ok || !canApply()) return false;
     // important: membership or preferences may change while the payload is in flight. Read the
     // version after the payload and only apply the organization/version pair still current.
-    const current = await readOrgVersion(accessToken, isCurrent);
+    const current = await readOrgVersion(accessTokenRef.current, isCurrent);
     if (!current.ok || !sameOrgVersion(organization.value, current.value) || !canApply()) return false;
     if (expectedVersion && !sameOrgVersion(expectedVersion, current.value)) return false;
     const base = organization.value.settings;
@@ -67,7 +72,7 @@ export function usePersonalizationSync({
     // A null updated_at is a valid baseline, so the organization's first save triggers refresh.
     appliedVersionRef.current = current.value;
     return true;
-  }, [userId, authenticated, scopeKey, accessToken, orgBacked, lastLocalEditRef, personalRowRef, setSettings]);
+  }, [userId, authenticated, scopeKey, orgBacked, lastLocalEditRef, personalRowRef, setSettings]);
 
   React.useEffect(() => onAuthActorChanged(() => {
     requestRevisionRef.current += 1;
@@ -106,7 +111,7 @@ export function usePersonalizationSync({
       const actorFence = captureActorMutationFence(scopeKey);
       const isCurrent = () => !retired && currentScopeRef.current === scopeKey && isActorMutationFenceCurrent(actorFence);
       try {
-        const current = await readOrgVersion(accessToken, isCurrent);
+        const current = await readOrgVersion(accessTokenRef.current, isCurrent);
         if (current.ok && isCurrent() && !sameOrgVersion(appliedVersionRef.current, current.value)) {
           await refreshSettings(current.value);
         }
@@ -124,7 +129,7 @@ export function usePersonalizationSync({
       clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [authenticated, userId, scopeKey, accessToken, orgBacked, refreshSettings]);
+  }, [authenticated, userId, scopeKey, orgBacked, refreshSettings]);
 
   return { refreshSettings: React.useCallback(async () => { await refreshSettings(); }, [refreshSettings]) };
 }
