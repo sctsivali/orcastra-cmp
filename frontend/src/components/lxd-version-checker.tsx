@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Badge } from "@/components/ui/badge";
+import { ActionChip } from "@/components/ui/action-chip";
 import { AlertCircle, CheckCircle, Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -178,12 +178,14 @@ export function LXDVersionChecker({ currentVersion, nodeType }: LXDVersionChecke
   // Repository label differs
   const repoLabel = isIncus ? "Repository:" : "Channel:";
 
+  // note: "Latest" is passive, so it is text beside the version rather than a chip. The card's one
+  // solid chip is its connection status; a second green pill only competed with it.
   if (versionInfo.isLatest) {
     return (
-      <Badge variant="positive" className="gap-1">
-        <CheckCircle className="h-3 w-3" />
+      <span className="inline-flex items-center gap-1">
+        <CheckCircle className="h-3 w-3 text-status-online" aria-hidden="true" />
         Latest
-      </Badge>
+      </span>
     );
   }
 
@@ -192,12 +194,9 @@ export function LXDVersionChecker({ currentVersion, nodeType }: LXDVersionChecke
       <DialogTrigger asChild>
         {/* A real button: a div trigger never takes focus, so a keyboard user could not open the
             upgrade instructions at all. */}
-        <Badge asChild variant="caution" className="gap-1 cursor-pointer hover:opacity-90">
-          <button type="button">
-            <AlertCircle className="h-3 w-3" aria-hidden="true" />
-            Update Available
-          </button>
-        </Badge>
+        <ActionChip icon={AlertCircle} iconClassName="text-status-pending">
+          Update Available
+        </ActionChip>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader className="pb-4">
@@ -214,7 +213,7 @@ export function LXDVersionChecker({ currentVersion, nodeType }: LXDVersionChecke
             </div>
             <div className="flex justify-between items-center py-2 border-b">
               <span className="text-sm font-medium text-muted-foreground">Latest Version:</span>
-              <span className="text-sm font-semibold text-green-600">{versionInfo.latestVersion}</span>
+              <span className="text-sm font-semibold text-status-online">{versionInfo.latestVersion}</span>
             </div>
             <div className="flex justify-between items-center py-2 border-b">
               <span className="text-sm font-medium text-muted-foreground">{repoLabel}</span>
