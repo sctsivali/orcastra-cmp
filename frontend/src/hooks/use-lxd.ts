@@ -1972,8 +1972,12 @@ export function useClusters(fresh: boolean = false) {
     refetchInterval: fleetInterval,
     refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
-    staleTime: 0, // Always consider stale to ensure fresh data after deletion
-    refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after registration/deletion
+    // note: a 30 s window, not 0 with refetchOnMount "always". Those predate the coherence
+    // registry: every register, delete, certificate, location and auth-check now invalidates
+    // the "clusters" family (lib/mutation-coherence.ts), so the only thing "always" still bought
+    // was a request on every quick hop between pages. A visit after 30 s refetches as before.
+    staleTime: 30 * 1000,
+    refetchOnMount: true,
   });
 }
 
