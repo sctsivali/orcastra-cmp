@@ -186,7 +186,7 @@ export function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }
             </Link>
           )}
 
-          {/* Host kernels exposed to, or not verified against, a kernel advisory */}
+          {/* Kernel CVE findings: one per member and CVE that is affected or not confirmed patched */}
           {counts.kernels > 0 && (
             <Link
               href={inventoryLinks.warnings({ tab: "kernel" })}
@@ -197,7 +197,7 @@ export function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }
               </div>
               <div>
                 <p className="text-xl font-bold text-status-offline">{counts.kernels}</p>
-                <p className="text-xs text-muted-foreground">Host Kernels</p>
+                <p className="text-xs text-muted-foreground">Kernel CVEs</p>
               </div>
             </Link>
           )}

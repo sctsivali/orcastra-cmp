@@ -111,7 +111,7 @@ export function WarningDetailDialog({
               <DetailField label="Cluster Member" value={record.member} />
               <DetailField label="Kernel" value={record.kernel_version} mono />
               <DetailField label="OS" value={osLabel(record) ?? undefined} />
-              <DetailField label="Advisory" value={record.advisory_id} />
+              <DetailField label="CVE" value={record.advisory_id} />
               <DetailField label="Severity" value={severity.label} />
               <DetailField label="Advisory Data As Of" value={record.data_as_of} />
               <DetailField

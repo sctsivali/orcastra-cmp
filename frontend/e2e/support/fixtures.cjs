@@ -4,14 +4,13 @@ const {
   fullInstance,
   instanceMetrics,
   iso,
-  kernelAdvisories,
-  kernelWarningRows,
   monitoringDashboard,
   monitoringHistory,
   platformAvailability,
   platformNodes,
   tenantSpecifications,
 } = require("./api-fixture-data.cjs");
+const { kernelAdvisories, kernelWarningRows } = require("./kernel-advisory-fixtures.cjs");
 const {
   fulfillSnapshotCreate,
   fulfillSnapshotRead,
@@ -375,7 +374,7 @@ async function installApiFixtures(page, role, options = {}) {
         status = 503;
         body = { detail: "Fixture node inventory unavailable" };
       } else {
-        body = platformNodes();
+        body = platformNodes({ serverVersion: options.nodeServerVersion });
       }
     } else if (path === "/instances/specifications") {
       body = tenantSpecifications({ empty: state.tenantEmpty });
@@ -398,11 +397,13 @@ async function installApiFixtures(page, role, options = {}) {
       if (url.searchParams.has("points")) state.unexpected.push(entry);
       body = monitoringHistory(url.searchParams.get("window"));
     } else if (path === "/warnings/system/all") {
-      const kernelRows = options.kernelExposed === true ? kernelWarningRows() : [];
+      // options.kernel: "patched" (default), "exposed", "unconfirmed" or "two" (kernel-advisory-fixtures.cjs)
+      const kernelRows = kernelWarningRows(options.kernel);
+      const critical = kernelRows.filter((r) => r.severity === "critical").length;
       body = {
         total: kernelRows.length,
-        critical: kernelRows.length,
-        warning: 0,
+        critical,
+        warning: kernelRows.length - critical,
         info: 0,
         lxd_warnings: [],
         certificate_warnings: [],
@@ -417,7 +418,7 @@ async function installApiFixtures(page, role, options = {}) {
         status = 403;
         body = { detail: "Partner access required" };
       } else {
-        body = kernelAdvisories({ exposed: options.kernelExposed === true });
+        body = kernelAdvisories(options.kernel);
       }
     } else if (path === "/warnings") {
       body = { total: 0, warnings: [], nodes: ["cluster-a"], unreachable_nodes: [] };

@@ -7,17 +7,12 @@ import { TableLink } from "@/components/ui/table-link";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { formatDateTime } from "@/lib/utils";
 import type { HostKernelRow, KernelAdvisoryInfo } from "@/types/kernel-advisory";
-import { KERNEL_STATE_DISPLAY, osLabel, rowState } from "./kernel-advisory-display";
-
-function scoreText(score: KernelAdvisoryInfo["scores"][number]): string {
-  const parts = [score.score !== null ? score.score.toFixed(1) : null, score.rating].filter(Boolean);
-  return `${score.source}: ${parts.join(" ")}`;
-}
+import { KERNEL_STATE_DISPLAY, advisoryTitle, osLabel, rowState, scoreText } from "./kernel-advisory-display";
 
 /** What one advisory is, where it is fixed and how current the data is. */
 export function KernelAdvisorySummary({ advisory }: { advisory: KernelAdvisoryInfo }) {
   return (
-    <DetailSection title={advisory.name ? `${advisory.id} (${advisory.name})` : advisory.id}>
+    <DetailSection title={advisoryTitle(advisory.id, advisory.name)}>
       <p className="text-sm text-muted-foreground">{advisory.summary}</p>
       <DetailGrid cols={2}>
         <DetailField label="Severity" value={advisory.scores.map(scoreText).join(", ")} span="full" />
@@ -40,8 +35,17 @@ export function KernelAdvisorySummary({ advisory }: { advisory: KernelAdvisoryIn
   );
 }
 
+/** A CVE a finding names but the response carries no record for: say so rather than drop it. */
+export function UnknownAdvisorySummary({ id }: { id: string }) {
+  return (
+    <DetailSection title={id}>
+      <p className="text-sm text-muted-foreground">No advisory details were returned for this CVE.</p>
+    </DetailSection>
+  );
+}
+
 /**
- * Every member's kernel and verdict, the commands that settle an unverified one, and what
+ * Every member's kernel and verdict, the commands that settle an unconfirmed one, and what
  * could not be read.
  *
  * important: no mitigation is offered beyond a reboot into a fixed kernel. The vendors list no
@@ -90,7 +94,8 @@ export function KernelAdvisoryMembers({
                   </DetailGrid>
                   {row.findings.map((finding) => (
                     <p key={finding.advisory_id} className="text-sm text-muted-foreground">
-                      {finding.reason}
+                      {/* the CVE id keeps each reason attributable once a member carries two */}
+                      <span className="font-medium text-foreground">{finding.advisory_id}</span>: {finding.reason}
                     </p>
                   ))}
                 </li>

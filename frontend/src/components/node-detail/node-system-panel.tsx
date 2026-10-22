@@ -57,11 +57,12 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
         {/* every member's verdict, patched included: this panel is where an operator reads kernels */}
         {isPartner ? (
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-medium text-muted-foreground">Kernel Advisory</p>
+            <p className="text-sm font-medium text-muted-foreground">Kernel CVEs</p>
             <KernelAdvisoryBadge
               clusterId={node.name}
               showPatched
               fallback={<span className="text-sm text-muted-foreground">Not read yet</span>}
+              unreadFallback={<span className="text-sm text-muted-foreground">Could not be read</span>}
             />
           </div>
         ) : null}

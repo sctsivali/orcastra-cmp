@@ -129,7 +129,8 @@ function nodeResources() {
   };
 }
 
-function platformNodes() {
+// `serverVersion` moves cluster-a off the latest LXD so the card offers its update instead.
+function platformNodes({ serverVersion = "6.9" } = {}) {
   return {
     all_connected: false,
     collected_at: iso(),
@@ -143,7 +144,7 @@ function platformNodes() {
         status: "online",
         node_type: "LXD",
         clustered: false,
-        server_version: "6.9",
+        server_version: serverVersion,
         api_version: "1.0",
         auth: "trusted",
         error: null,
@@ -156,7 +157,7 @@ function platformNodes() {
           os_name: "Ubuntu",
           os_version: "24.04",
           server: "lxd",
-          server_version: "6.9",
+          server_version: serverVersion,
           driver: "lxc",
           driver_version: "6.0",
           storage: "zfs",
@@ -452,101 +453,10 @@ function monitoringHistory(windowSeconds = 300) {
   }));
 }
 
-const KERNEL_ADVISORY_URL = "https://lists.openwall.net/linux-cve-announce/2026/10/15/2";
-
-// cluster-a's member as the dashboard reads it. `exposed` mirrors a real Ubuntu 22.04 host on
-// 2026-10-19 (no Ubuntu fix published); the default reads as patched so specs that never look
-// at kernels see no new badge.
-function kernelAdvisories({ exposed = false } = {}) {
-  const finding = exposed
-    ? {
-        advisory_id: "CVE-2026-99999",
-        state: "exposed",
-        severity: "critical",
-        reason:
-          "Ubuntu had not published a fixed 5.15 kernel as of 2026-10-19. Livepatch can fix a running kernel without changing its version. Only a reboot into a fixed kernel clears this; an installed kernel that is not running does not.",
-        check_command:
-          "zgrep -m1 CVE-2026-99999 /usr/share/doc/linux-modules-$(uname -r)/changelog.Debian.gz; canonical-livepatch status",
-        fixed_in: null,
-        reference_url: KERNEL_ADVISORY_URL,
-      }
-    : {
-        advisory_id: "CVE-2026-99999",
-        state: "patched",
-        severity: "info",
-        reason: "Kernel at or above the upstream fix (6.12.113).",
-        check_command: null,
-        fixed_in: null,
-        reference_url: KERNEL_ADVISORY_URL,
-      };
-  return {
-    advisories: [
-      {
-        id: "CVE-2026-99999",
-        name: "PwnEscape",
-        summary: "IPv4 checksum metadata from a KVM guest can corrupt the host's IPv4 header.",
-        scores: [
-          { source: "Linux CNA", score: 9.3, vector: "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", rating: "Critical" },
-          { source: "Red Hat", score: 8.8, vector: "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H", rating: "Important" },
-          { source: "Ubuntu", score: null, vector: null, rating: "Medium" },
-        ],
-        reference_url: KERNEL_ADVISORY_URL,
-        data_as_of: "2026-10-19",
-        introduced: "2.6.27",
-        fixed_upstream: ["5.10.272", "5.15.223", "6.1.190", "6.6.159", "6.12.113", "6.18.57", "7.2.11"],
-        fixed_mainline: "7.3-rc7",
-      },
-    ],
-    hosts: [
-      {
-        cluster_id: "cluster-a",
-        display_name: "Core Cluster",
-        member: "cluster-a",
-        clustered: false,
-        members_listed: true,
-        kernel_version: exposed ? "5.15.0-185-generic" : "6.12.113",
-        os_name: "Ubuntu",
-        os_version: "22.04",
-        vm_capable: true,
-        read_error: null,
-        collected_at: iso(),
-        findings: [finding],
-      },
-    ],
-    counts: { exposed: exposed ? 1 : 0, unverified: 0, patched: exposed ? 0 : 1 },
-    unreachable_nodes: ["cluster-unreachable"],
-    partial_nodes: [],
-    node_errors: { "cluster-unreachable": "unreachable: no connection to the cluster" },
-  };
-}
-
-/** The `/warnings/system/all` rows the exposed reading produces. */
-function kernelWarningRows() {
-  const report = kernelAdvisories({ exposed: true });
-  return report.hosts.map((host) => ({
-    cluster_id: host.cluster_id,
-    display_name: host.display_name,
-    member: host.member,
-    warning_type: "kernel_exposed",
-    advisory_id: "CVE-2026-99999",
-    state: "exposed",
-    severity: "critical",
-    message: host.findings[0].reason,
-    kernel_version: host.kernel_version,
-    os_name: host.os_name,
-    os_version: host.os_version,
-    check_command: host.findings[0].check_command,
-    reference_url: KERNEL_ADVISORY_URL,
-    data_as_of: "2026-10-19",
-  }));
-}
-
 module.exports = {
   fullInstance,
   instanceMetrics,
   iso,
-  kernelAdvisories,
-  kernelWarningRows,
   monitoringDashboard,
   monitoringHistory,
   platformAvailability,

@@ -246,7 +246,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             {isPartner && (
               <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
             )}
-            {/* Partner+ for the same reason: host kernel exposure is a maintenance finding. It
+            {/* Partner+ for the same reason: an open kernel CVE is a maintenance finding. The chip
                 renders nothing while every member reads as patched. */}
             {isPartner && <KernelAdvisoryBadge clusterId={node.name} />}
           </div>

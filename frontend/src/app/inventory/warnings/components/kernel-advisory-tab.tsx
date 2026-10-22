@@ -28,7 +28,7 @@ const STATE_ORDER: KernelAdvisoryState[] = ["exposed", "unverified", "patched"];
 
 const KERNEL_WARNINGS = defineTable<KernelAdvisoryWarning>()({
   id: "kernel",
-  searchPlaceholder: "Search host kernels",
+  searchPlaceholder: "Search kernel CVEs",
   // the cluster id, the member and the kernel string are what an operator copies from a shell
   searchExtra: (w) => [w.cluster_id, w.member, w.kernel_version ?? ""],
   defaultSort: { field: "state", direction: "asc" },
@@ -41,6 +41,8 @@ const KERNEL_WARNINGS = defineTable<KernelAdvisoryWarning>()({
       facet: (w) => warningClusterValue(w),
       facetSpec: { role: "node" } },
     { field: "member", label: "Cluster Member", sort: (w) => w.member, search: (w) => w.member, filter: fromSort("text") },
+    // one row per member and CVE, so the id is what tells two rows of one member apart
+    { field: "cve", label: "CVE", sort: (w) => w.advisory_id, search: (w) => w.advisory_id, facet: (w) => w.advisory_id },
     { field: "kernel", label: "Kernel", sort: (w) => w.kernel_version ?? "", search: (w) => w.kernel_version ?? "", filter: fromSort("text") },
     {
       field: "state",
@@ -66,7 +68,7 @@ interface KernelAdvisoryTabProps {
   onShowDetail: (record: KernelAdvisoryWarning) => void;
 }
 
-/** The Kernel tab: members whose running kernel is exposed or cannot be verified. */
+/** The Kernel CVEs tab: one row per member and CVE that is affected or cannot be confirmed patched. */
 export function KernelAdvisoryTab(props: KernelAdvisoryTabProps) {
   // note: the filters live in the query string. The page already sits in a Suspense boundary,
   // but the boundary belongs beside the reader so this tab stays correct wherever it is mounted.
@@ -102,20 +104,20 @@ function KernelAdvisoryTable({
     <Card>
       <CardHeader className="p-4 md:p-6 space-y-4">
         <div>
-          <CardTitle className="text-base md:text-lg">Host Kernels</CardTitle>
+          <CardTitle className="text-base md:text-lg">Kernel CVEs</CardTitle>
           <CardDescription className="text-xs md:text-sm">
-            Cluster members whose running kernel is exposed to a known host kernel advisory, or could not be verified
+            Cluster members whose running kernel is affected by a known kernel CVE, or could not be confirmed as patched
           </CardDescription>
         </div>
         <UnreachableNodesBanner noun="host kernels" nodes={unread} />
-        <TableToolbar filters={filters} noun="host kernels" />
+        <TableToolbar filters={filters} noun="kernel CVE findings" />
       </CardHeader>
       <CardContent className="p-0 md:p-6 md:pt-0">
         {sorted.length === 0 ? (
           filters.activeFilterCount > 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <ShieldAlert className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No host kernel matches the current filters</p>
+              <p>No kernel CVE matches the current filters</p>
               <p className="text-sm mt-1">
                 {filters.activeFilterCount} filter{filters.activeFilterCount === 1 ? "" : "s"} active. This does not
                 mean every kernel is patched.
@@ -127,13 +129,13 @@ function KernelAdvisoryTable({
           ) : failed ? (
             <div className="text-center py-8 text-muted-foreground">
               <ShieldAlert className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>Host kernels could not be assessed</p>
+              <p>Kernel CVEs could not be assessed</p>
               <p className="text-sm mt-1">This is not an all-clear. Refresh the page, or read a cluster&apos;s kernels from its card.</p>
             </div>
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               <ShieldCheck className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No exposed or unverified host kernel</p>
+              <p>No open kernel CVEs</p>
               <p className="text-sm mt-1">Every cluster member that answered runs a kernel with the known fixes</p>
             </div>
           )
@@ -144,6 +146,7 @@ function KernelAdvisoryTable({
                 <TableRow>
                   <SortableTableHead className="min-w-[120px]" label="Cluster" field="cluster" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead className="min-w-[120px]" label="Cluster Member" field="member" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead className="min-w-[130px]" label="CVE" field="cve" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead className="min-w-[160px]" label="Kernel" field="kernel" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead className="min-w-[90px]" label="State" field="state" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead className="min-w-[90px]" label="Severity" field="severity" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -159,7 +162,7 @@ function KernelAdvisoryTable({
                         <p className="font-medium">
                           <TableLink
                             onClick={() => onShowDetail(warning)}
-                            aria-label={`Show kernel advisory for ${warning.member} on ${warningClusterValue(warning)}`}
+                            aria-label={`Show ${warning.advisory_id} for ${warning.member} on ${warningClusterValue(warning)}`}
                           >
                             {warningClusterValue(warning)}
                           </TableLink>
@@ -167,6 +170,7 @@ function KernelAdvisoryTable({
                         <TableSubText><NodeLink clusterId={warning.cluster_id} /></TableSubText>
                       </TableCell>
                       <TableCell>{warning.member}</TableCell>
+                      <TableCell className="whitespace-nowrap">{warning.advisory_id}</TableCell>
                       <TableCell>
                         {warning.kernel_version ? (
                           <span className="font-mono whitespace-nowrap">{warning.kernel_version}</span>
