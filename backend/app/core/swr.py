@@ -36,7 +36,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from app.core.cache_envelope import Entry, unwrap, wrap
 from app.core.org_scope import get_scope_cache_key
 from app.core.request_context import get_request_context
-from app.core.single_flight import is_rebuilding, run_collapsed
+from app.core.single_flight import is_rebuilding, rebuild_lock, release_lock, run_collapsed
 from app.services.collector_leadership import CollectorLease
 
 logger = logging.getLogger(__name__)
@@ -245,14 +245,23 @@ async def _refresh(
 ) -> None:
     started = monotonic()
     wrote = False
+    # important: under the same per-key rebuild lock a miss or a forced refresh takes. Two reads of
+    # one list running side by side in this worker meet in the bounded per-cluster pools below
+    # them, and the second is refused: live QA saw a Refresh on /projects answer 503 ("Project list
+    # for central-1 is temporarily unavailable") because it landed while the background read held
+    # that cluster's slot. Holding the lock queues the refresh behind it instead; it then reads
+    # the clusters itself, because a background read never marks a rebuild.
+    lock = rebuild_lock(key)
     try:
-        built = await _build_and_store(cache, key, base_key, build, generation, label)
+        async with lock:
+            built = await _build_and_store(cache, key, base_key, build, generation, label)
         wrote = built.fresh_for is not None
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - a failed background read keeps the stale entry
         logger.warning("Background refresh of %s failed: %s: %s", label, type(exc).__name__, exc)
     finally:
+        release_lock(key)
         logger.info(
             "swr refresh %s %d ms wrote=%s", label, round((monotonic() - started) * 1000), wrote
         )

@@ -10,7 +10,7 @@ import pytest
 
 from app.core import org_scope, single_flight, swr
 from app.core.cache import CacheManager
-from app.core.cache_envelope import is_envelope
+from app.core.cache_envelope import is_envelope, wrap
 from app.core.request_context import RequestContext, set_request_context
 from tests._loop_probes import SAFETY_TIMEOUT
 
@@ -158,18 +158,24 @@ async def test_an_invalidation_during_a_background_read_keeps_its_result_out(cac
     assert served.state == swr.MISS and after.calls == 1
 
 
-async def test_an_older_background_read_never_overwrites_a_newer_forced_one(cache, clock):
-    await _serve(cache, _Builder())
-    clock.now += 31
-    slow = _Builder(gated=True)
-    await _serve(cache, slow)
-    await asyncio.wait_for(slow.entered.wait(), SAFETY_TIMEOUT)
-    clock.now += 1
-    forced = await _serve(cache, lambda: _forced_body(), fresh=True)
-    assert forced.state == swr.BYPASS
-    slow.release.set()
-    await _settle()
-    assert cache.get(swr.NAMESPACE, _key()) == {"forced": True}
+async def test_an_older_read_never_overwrites_a_newer_one_from_another_worker(cache, clock):
+    """In one worker a forced read queues behind a background one (the lock). Across workers it
+    does not, so a slow background read can finish after another worker's forced read: the
+    write records when each build started, and the older one stands down."""
+    newer_started = clock.now + 5
+    cache.set(
+        swr.NAMESPACE,
+        _key(),
+        wrap({"tag": "newer"}, stored_at=newer_started + 1, build_started_at=newer_started, fresh_for=30),
+        ttl=210,
+    )
+
+    async def older() -> swr.Built:
+        return swr.Built(value={"tag": "older"}, body={"tag": "older"}, fresh_for=30)
+
+    # This build started at clock.now, before the other worker's.
+    await swr._build_and_store(cache, _key(), BASE, older, None, "things")
+    assert cache.get(swr.NAMESPACE, _key()) == {"tag": "newer"}
 
 
 async def _forced_body() -> swr.Built:
@@ -431,3 +437,28 @@ async def test_an_invalidation_landing_during_the_write_is_not_outlived(cache, c
     served = await _serve(cache, _Builder(), generation=lambda: generation["token"])
     assert served.state == swr.MISS
     assert cache.get(swr.NAMESPACE, _key()) is None, "a body written across an invalidation must go"
+
+
+async def test_a_forced_refresh_queues_behind_a_background_read_instead_of_racing_it(cache, clock):
+    await _serve(cache, _Builder())
+    clock.now += 31
+    background = _Builder(tag="bg", gated=True)
+    await _serve(cache, background)
+    await asyncio.wait_for(background.entered.wait(), SAFETY_TIMEOUT)
+
+    order = []
+
+    async def forced_build() -> swr.Built:
+        order.append("forced-start")
+        return swr.Built(value={"tag": "forced"}, body={"tag": "forced"}, fresh_for=30)
+
+    forced = asyncio.create_task(_serve(cache, forced_build, fresh=True))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert order == [], "a forced read must not run beside a background read of the same list"
+    background.release.set()
+    served = await asyncio.wait_for(forced, SAFETY_TIMEOUT)
+    assert order == ["forced-start"]
+    assert served.state == swr.BYPASS, "the refresh still reads the clusters itself"
+    await _settle()
+    assert cache.get(swr.NAMESPACE, _key()) == {"tag": "forced"}
