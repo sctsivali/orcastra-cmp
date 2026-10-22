@@ -92,13 +92,12 @@ const BADGE_OVERRIDE_BASELINE = 0;
 // documentation/ui/table-conventions.md: a guard that inspects only the element you thought of
 // misses the same defect one level deeper.
 
-// A tint computed at runtime, `style={{ backgroundColor: `${color}15` }}`. The one live site is
-// components/tag-manager.tsx, and it is the one place the pattern is sanctioned: getTagColor
-// derives the colour from the tag's own prefix, so the colour is data, and
-// documentation/ui/table-conventions.md protects it by name. A rule that had to be waived at
-// its only call site is a rule somebody deletes.
+// A tint computed at runtime, `style={{ backgroundColor: `${color}15` }}`. The last live site was
+// the tag chip in components/tag-manager.tsx. Its colour is data (getTagColor derives it from the
+// tag's prefix), so it now lives in a square swatch beside neutral text (components/tag-chips.tsx)
+// instead of tinting the chip under same-hue text that measured near 2:1.
 // Ratchet: may fall, never rise.
-const COMPUTED_TINT_BASELINE = 1;
+const COMPUTED_TINT_BASELINE = 0;
 
 // A tint and its foreground split across two keys of one config object. Pairing arbitrary
 // sibling keys needs a parser.

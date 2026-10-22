@@ -129,8 +129,9 @@ function nodeResources() {
   };
 }
 
-// `serverVersion` moves cluster-a off the latest LXD so the card offers its update instead.
-function platformNodes({ serverVersion = "6.9" } = {}) {
+// `serverVersion` moves cluster-a off the latest LXD so the card offers its update instead;
+// `tags` gives cluster-a tags for the tag chip and the Tags facet.
+function platformNodes({ serverVersion = "6.9", tags = [] } = {}) {
   return {
     all_connected: false,
     collected_at: iso(),
@@ -148,7 +149,7 @@ function platformNodes({ serverVersion = "6.9" } = {}) {
         api_version: "1.0",
         auth: "trusted",
         error: null,
-        tags: [],
+        tags,
         environment: {
           architectures: ["x86_64"],
           kernel: "Linux",

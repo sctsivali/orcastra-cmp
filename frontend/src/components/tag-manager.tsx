@@ -20,77 +20,17 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { TagBadge, TagSwatch, TagToggle } from "./tag-chips";
 import {
-  TagCategory,
   TagGrouped,
   TAG_CATEGORY_PREFIXES,
-  classifyTag,
   getTagDisplayName,
   getTagColor,
   groupTags,
 } from "@/types/api";
 
-// ============================================
-// Tag Badge Component (Enhanced with Categories)
-// ============================================
-
-interface TagBadgeProps {
-  tag: string;
-  onRemove?: () => void;
-  showCategory?: boolean;
-  size?: "sm" | "default";
-  className?: string;
-}
-
-export function TagBadge({
-  tag,
-  onRemove,
-  showCategory = false,
-  size = "default",
-  className,
-}: TagBadgeProps) {
-  const { prefix, value, category } = classifyTag(tag);
-  const color = getTagColor(tag);
-  const displayName = getTagDisplayName(tag);
-
-  return (
-    <Badge
-      variant="secondary"
-      className={cn(
-        "gap-1 transition-all whitespace-nowrap",
-        size === "sm" ? "text-xs py-0 h-5 px-1.5" : "text-xs py-0.5 px-2",
-        className
-      )}
-      style={{
-        backgroundColor: `${color}15`,
-        borderColor: `${color}40`,
-        color: color,
-        border: `1px solid ${color}40`,
-      }}
-    >
-      <span
-        className="w-2 h-2 rounded-full"
-        style={{ backgroundColor: color }}
-      />
-      {showCategory && prefix && (
-        <span className="font-medium opacity-70">{category}:</span>
-      )}
-      <span>{displayName}</span>
-      {onRemove && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="ml-0.5 hover:bg-black/10 rounded-full p-0.5 transition-colors"
-        >
-          <X className="h-3 w-3" />
-        </button>
-      )}
-    </Badge>
-  );
-}
+// TagBadge lives in tag-chips.tsx; re-exported so existing imports from here keep working.
+export { TagBadge } from "./tag-chips";
 
 // ============================================
 // Main Tag Manager Component (Enterprise-Grade)
@@ -258,14 +198,8 @@ export function TagManager({
 
                   return (
                     <div key={key} className="space-y-1">
-                      <div
-                        className="text-xs font-medium flex items-center gap-1.5"
-                        style={{ color }}
-                      >
-                        <span
-                          className="w-2 h-2 rounded-full"
-                          style={{ backgroundColor: color }}
-                        />
+                      <div className="text-xs font-medium flex items-center gap-1.5 text-muted-foreground">
+                        <TagSwatch color={color} />
                         {name}
                       </div>
                       <div className="flex flex-wrap gap-1.5 pl-3.5">
@@ -297,22 +231,13 @@ export function TagManager({
             {/* Prefix selector */}
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(TAG_CATEGORY_PREFIXES).map(([prefix, info]) => (
-                <Badge
+                <TagToggle
                   key={prefix}
-                  variant="outline"
-                  className={cn(
-                    "cursor-pointer text-xs transition-all hover:scale-105",
-                    selectedPrefix === prefix && "ring-2"
-                  )}
-                  style={{
-                    backgroundColor: selectedPrefix === prefix ? `${info.color}30` : `${info.color}10`,
-                    borderColor: info.color,
-                    color: info.color,
-                  }}
-                  onClick={() => setSelectedPrefix(selectedPrefix === prefix ? null : prefix)}
-                >
-                  {info.name}
-                </Badge>
+                  label={info.name}
+                  color={info.color}
+                  pressed={selectedPrefix === prefix}
+                  onPressedChange={(on) => setSelectedPrefix(on ? prefix : null)}
+                />
               ))}
             </div>
 
@@ -320,10 +245,7 @@ export function TagManager({
             <div className="flex gap-2">
               <div className="flex-1 relative">
                 {selectedPrefix && (
-                  <span
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium"
-                    style={{ color: TAG_CATEGORY_PREFIXES[selectedPrefix]?.color }}
-                  >
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
                     {selectedPrefix}
                   </span>
                 )}
@@ -352,10 +274,7 @@ export function TagManager({
           <div className="grid grid-cols-2 gap-1.5">
             {Object.entries(TAG_CATEGORY_PREFIXES).map(([prefix, info]) => (
               <div key={prefix} className="flex items-center gap-1.5">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: info.color }}
-                />
+                <TagSwatch color={info.color} />
                 <code className="text-xs bg-muted px-1 rounded">{prefix}</code>
                 <span>- {info.name}</span>
               </div>
@@ -380,9 +299,8 @@ export function TagManager({
       {visibleTags.map((tag, index) => (
         <React.Fragment key={tag}>
           <TagBadge tag={tag} size="sm" />
-          {index < visibleTags.length - 1 && (
-            <span className="text-xs text-muted-foreground">,</span>
-          )}
+          {/* the gap separates the chips on screen; the comma still separates them when read aloud */}
+          {index < visibleTags.length - 1 && <span className="sr-only">,</span>}
         </React.Fragment>
       ))}
 
@@ -391,7 +309,7 @@ export function TagManager({
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           {hasMoreTags ? (
             <>
-              <span className="text-xs text-muted-foreground">,</span>
+              <span className="sr-only">,</span>
               <DialogTrigger asChild>
                 <Button
                   variant="ghost"
@@ -405,9 +323,7 @@ export function TagManager({
           ) : (
             tags.length < maxTags && (
               <>
-                {tags.length > 0 && (
-                  <span className="text-xs text-muted-foreground">,</span>
-                )}
+                {tags.length > 0 && <span className="sr-only">,</span>}
                 <DialogTrigger asChild>
                   <Button
                     variant="ghost"
@@ -524,34 +440,21 @@ export function TagFilter({
 
                 return (
                   <div key={prefix} className="space-y-1.5">
-                    <div
-                      className="text-xs font-medium flex items-center gap-1.5"
-                      style={{ color: info.color }}
-                    >
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: info.color }}
-                      />
+                    <div className="text-xs font-medium flex items-center gap-1.5 text-muted-foreground">
+                      <TagSwatch color={info.color} />
                       {info.name}
                     </div>
                     <div className="flex flex-wrap gap-1 pl-3.5">
                       {categoryTags.map((value) => {
                         const fullTag = `${prefix}${value}`;
-                        const isSelected = selectedTags.includes(fullTag);
                         return (
-                          <Badge
+                          <TagToggle
                             key={fullTag}
-                            variant={isSelected ? "default" : "outline"}
-                            className="cursor-pointer text-xs transition-all"
-                            style={{
-                              backgroundColor: isSelected ? info.color : `${info.color}15`,
-                              borderColor: info.color,
-                              color: isSelected ? "white" : info.color,
-                            }}
-                            onClick={() => toggleTag(fullTag)}
-                          >
-                            {value}
-                          </Badge>
+                            label={value}
+                            color={info.color}
+                            pressed={selectedTags.includes(fullTag)}
+                            onPressedChange={() => toggleTag(fullTag)}
+                          />
                         );
                       })}
                     </div>
@@ -562,24 +465,20 @@ export function TagFilter({
               {/* Other tags */}
               {groupedAvailableTags.other.length > 0 && (
                 <div className="space-y-1.5">
-                  <div className="text-xs font-medium flex items-center gap-1.5 text-gray-600">
-                    <span className="w-2 h-2 rounded-full bg-gray-400" />
+                  <div className="text-xs font-medium flex items-center gap-1.5 text-muted-foreground">
+                    <TagSwatch color={getTagColor("")} />
                     Other
                   </div>
                   <div className="flex flex-wrap gap-1 pl-3.5">
-                    {groupedAvailableTags.other.map((tag) => {
-                      const isSelected = selectedTags.includes(tag);
-                      return (
-                        <Badge
-                          key={tag}
-                          variant={isSelected ? "default" : "outline"}
-                          className="cursor-pointer text-xs"
-                          onClick={() => toggleTag(tag)}
-                        >
-                          {tag}
-                        </Badge>
-                      );
-                    })}
+                    {groupedAvailableTags.other.map((tag) => (
+                      <TagToggle
+                        key={tag}
+                        label={tag}
+                        color={getTagColor(tag)}
+                        pressed={selectedTags.includes(tag)}
+                        onPressedChange={() => toggleTag(tag)}
+                      />
+                    ))}
                   </div>
                 </div>
               )}
@@ -587,25 +486,15 @@ export function TagFilter({
           ) : (
             // Flat view
             <div className="flex flex-wrap gap-1.5">
-              {filteredTags.map((tag) => {
-                const isSelected = selectedTags.includes(tag);
-                const color = getTagColor(tag);
-                return (
-                  <Badge
-                    key={tag}
-                    variant={isSelected ? "default" : "outline"}
-                    className="cursor-pointer text-xs transition-all"
-                    style={{
-                      backgroundColor: isSelected ? color : `${color}15`,
-                      borderColor: color,
-                      color: isSelected ? "white" : color,
-                    }}
-                    onClick={() => toggleTag(tag)}
-                  >
-                    {getTagDisplayName(tag)}
-                  </Badge>
-                );
-              })}
+              {filteredTags.map((tag) => (
+                <TagToggle
+                  key={tag}
+                  label={getTagDisplayName(tag)}
+                  color={getTagColor(tag)}
+                  pressed={selectedTags.includes(tag)}
+                  onPressedChange={() => toggleTag(tag)}
+                />
+              ))}
             </div>
           )}
         </div>

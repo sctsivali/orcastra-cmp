@@ -27,16 +27,16 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 
-// What is left after this pass. All five are the tag manager, whose badges are filter toggles
-// rather than dialog openers: they want a segmented-control pass with the keyboard, not a bulk
-// attribute edit, because their name should change with state.
+// What is left after this pass. Four of the five were the tag manager's filter and prefix
+// toggles; they are real buttons with aria-pressed now (components/tag-chips.tsx TagToggle). The
+// one left is tag-manager-legacy.tsx, which nothing imports.
 //
 // The sixth was the dashboard project card. This note used to say the badge there sat beside "a
 // real chevron button that already does the same thing", which was not true: the chevron was a
 // bare div with an onClick, so neither affordance took focus and the expanded instance list was
 // unreachable without a mouse. Both are now one real button carrying aria-expanded.
 // Lower it when you fix one.
-const BADGE_ONCLICK_BASELINE = 5;
+const BADGE_ONCLICK_BASELINE = 1;
 
 // Dialogs still bounding their own height and scrolling their own content, so their titles
 // scroll away. Each is a large file that wants its own pass. It was 8, then 7 when
