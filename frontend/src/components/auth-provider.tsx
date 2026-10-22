@@ -13,7 +13,8 @@
  * - Gates children rendering until token is ready (prevents race conditions)
  */
 
-import { SessionProvider, useSession, signIn } from "next-auth/react";
+import { SessionProvider, useSession, signIn, __NEXTAUTH } from "next-auth/react";
+import type { Session } from "next-auth";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { getActorQueryScope } from "@/hooks/use-query-scope";
 import {
@@ -40,8 +41,9 @@ const SESSION_REFRESH_INTERVAL_S = 4 * 60;
  * Also handles RefreshAccessTokenError - shows a re-login prompt
  * when the IdP is reachable, but avoids redirect loops when it's down.
  */
-function TokenSync({ children }: { children: ReactNode }) {
+function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: boolean }) {
   const { data: session, status, update: updateSession } = useSession();
+  const alignedRef = useRef(false);
   const [synchronizedAuth, setSynchronizedAuth] = useState<
     { token: string | null; actorScope: string | null } | undefined
   >(undefined);
@@ -152,6 +154,21 @@ function TokenSync({ children }: { children: ReactNode }) {
     isAuthContextSynchronized(null, null);
   const authContextReady = authenticatedContextReady || unauthenticatedContextReady;
 
+  // A session hydrated from the server skips next-auth's mount fetch, which is also what used to
+  // refresh a token inside the 120 s background skew at load. Read it once, in the background, so
+  // the token is in the same state it always was after a load and the 4-minute poll stays aligned
+  // with it. Nothing waits on this read.
+  //
+  // important: gated on authenticatedContextReady, which is first true on the second commit.
+  // Effects run child first, so on the first commit SessionProvider has not yet installed
+  // __NEXTAUTH._getSession and calling it would hit the no-op it starts as. The "storage" event is
+  // what next-auth itself fires after signIn and signOut: one GET, no loading flip, no broadcast.
+  useEffect(() => {
+    if (!hydrated || alignedRef.current || !authenticatedContextReady) return;
+    alignedRef.current = true;
+    void __NEXTAUTH._getSession({ event: "storage" });
+  }, [hydrated, authenticatedContextReady]);
+
   // Returning null commits an unmount only on initial resolution, sign-out, or a direct
   // authenticated A -> B transition. The effect then installs B and triggers a clean remount;
   // silent token rotation for the same actor never crosses this gate.
@@ -179,11 +196,14 @@ function TokenSync({ children }: { children: ReactNode }) {
 
 interface AuthProviderProps {
   children: ReactNode;
+  /** A session read on the server (auth-session.ts), or undefined to fetch one. Never null. */
+  session?: Session;
 }
 
-export function AuthProvider({ children }: AuthProviderProps) {
+export function AuthProvider({ children, session }: AuthProviderProps) {
   return (
     <SessionProvider
+      session={session}
       refetchInterval={SESSION_REFRESH_INTERVAL_S}
       // the 4-minute poll already keeps the token inside Authentik's ~5-minute
       // lifetime. Refetching on tab focus adds nothing and is actively harmful:
@@ -192,7 +212,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       // and do not poll while offline, for the same reason
       refetchWhenOffline={false}
     >
-      <TokenSync>{children}</TokenSync>
+      <TokenSync hydrated={session !== undefined}>{children}</TokenSync>
     </SessionProvider>
   );
 }

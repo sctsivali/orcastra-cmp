@@ -423,7 +423,63 @@ const personalizationProvider = readFileSync(
   "utf8",
 );
 
+const authSession = readFileSync(join(root, "frontend/src/auth-session.ts"), "utf8");
+const rootLayout = readFileSync(join(root, "frontend/src/app/layout.tsx"), "utf8");
+const nextConfig = readFileSync(join(root, "frontend/next.config.js"), "utf8");
+const nextAuthReact = readFileSync(
+  requireFromFrontend.resolve("next-auth/react").replace(/react\.(?:d\.ts|js)$/, "react.js"),
+  "utf8",
+);
+// Every source file importing the server-side session reader: only the root layout may.
+const { readdirSync, statSync } = await import("node:fs");
+function sourceFiles(dir) {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sourceFiles(path);
+    return /\.(?:ts|tsx)$/.test(name) ? [path] : [];
+  });
+}
+const authSessionImporters = sourceFiles(join(root, "frontend/src"))
+  .filter((path) => /from ["']@\/auth-session["']/.test(readFileSync(path, "utf8")))
+  .map((path) => path.slice(join(root, "frontend/src").length + 1));
+const hydrateReader = authSession.slice(authSession.indexOf("export async function readHydratableSession"));
+
 const structuralChecks = [
+  // Session hydration (auth-session.ts). A server component cannot persist a rotated refresh
+  // token, so the peek instance must never refresh, and a doubtful session must stay undefined.
+  [
+    !/refreshAccessToken|jwtCallback/.test(authSession) &&
+      /token\.error/.test(authSession) &&
+      /token\.expiresAt - nowSeconds >= HYDRATE_MIN_VALIDITY_S/.test(authSession),
+    "the server-side session peek can refresh a token or accept one without a validity margin",
+  ],
+  [
+    !/return null/.test(hydrateReader) &&
+      /accessToken: session\.accessToken/.test(hydrateReader) &&
+      !/\.\.\.session\b/.test(hydrateReader),
+    "readHydratableSession can return null or serialize more than its whitelisted projection",
+  ],
+  [
+    JSON.stringify(authSessionImporters) === JSON.stringify(["app/layout.tsx"]) &&
+      !/from ["']@\/auth["']/.test(rootLayout),
+    `only the root layout may read the server session, never through auth(): ${authSessionImporters}`,
+  ],
+  [
+    /<SessionProvider\s+session=\{session\}/.test(authProvider) &&
+      /<TokenSync hydrated=\{session !== undefined\}>/.test(authProvider) &&
+      /if \(!hydrated \|\| alignedRef\.current \|\| !authenticatedContextReady\) return;/.test(authProvider) &&
+      /__NEXTAUTH\._getSession\(\{ event: "storage" \}\)/.test(authProvider),
+    "a hydrated session is not refreshed once in the background after the bearer is installed",
+  ],
+  [
+    !/source:\s*'\/:path\*'[\s\S]{0,400}Cache-Control/.test(nextConfig),
+    "next.config.js sets Cache-Control on every page; a hydrated document must stay no-store",
+  ],
+  [
+    /hasInitialSession = props\.session !== undefined/.test(nextAuthReact) &&
+      /storageEvent \|\| __NEXTAUTH\._session === undefined/.test(nextAuthReact),
+    "next-auth/react no longer behaves as the session hydration relies on; re-verify after upgrading",
+  ],
   [
     /getActorQueryScope\(session\)/.test(authProvider) &&
       /setAccessToken\(token, scope\)/.test(authProvider) &&

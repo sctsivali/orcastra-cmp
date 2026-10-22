@@ -12,6 +12,7 @@ import {
   parsePersonalizationHint,
 } from "@/lib/personalization-cookie";
 import { DOCK_COOKIE, parseDockCookie } from "@/lib/dock-cookie";
+import { readHydratableSession } from "@/auth-session";
 
 export const metadata: Metadata = {
   title: "Orcastra CMP",
@@ -130,7 +131,9 @@ export default async function RootLayout({
 }) {
   // Read the collapse preference on the server so the sidebar width and the content
   // margin are correct in the first byte of HTML. Absent cookie means expanded.
-  const cookieStore = await cookies();
+  // The session is read alongside so the first client render already holds the bearer and
+  // fires its data requests without waiting on /api/auth/session (auth-session.ts).
+  const [cookieStore, initialSession] = await Promise.all([cookies(), readHydratableSession()]);
   const sidebarCollapsed = cookieStore.get("orcastra-sidebar-collapsed")?.value === "true";
   // The task panel's open state and height, for the same first-byte reason.
   const initialDock = parseDockCookie(cookieStore.get(DOCK_COOKIE)?.value);
@@ -158,7 +161,7 @@ export default async function RootLayout({
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}
       >
-        <Providers initialPersonalization={initialPersonalization}>
+        <Providers initialPersonalization={initialPersonalization} initialSession={initialSession}>
           <LayoutProvider initialCollapsed={sidebarCollapsed} initialDock={initialDock}>
             <MainLayout>{children}</MainLayout>
             <Toaster />
