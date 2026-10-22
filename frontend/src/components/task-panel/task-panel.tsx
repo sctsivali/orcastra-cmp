@@ -271,6 +271,7 @@ function TaskPanelInner() {
           onToggle={onToggle}
           onExpandTo={onExpandTo}
           refreshNow={refreshNow}
+          lastUpdatedAt={summary.dataUpdatedAt}
           showOperator={isPartner}
           caretRef={caretRef}
         />

@@ -24,7 +24,7 @@ export interface RefreshButtonProps
   lastUpdatedAt?: number | null;
   /** Toast title used when the refresh fails. */
   errorTitle?: string;
-  /** Keeps the timestamp out of the layout where there is no room for it. */
+  /** Keeps the timestamp out of the layout where there is no room for it; the tooltip still says when. */
   hideTimestamp?: boolean;
   iconClassName?: string;
 }
@@ -65,9 +65,11 @@ export function RefreshButton({
       : `Refreshing… ${elapsedSeconds}s`
     : `Updated ${relative}`;
 
+  // note: keyed on the timestamp, not on showTimestamp, so a compact control with no room for
+  // the label (the task dock) still answers "when" on hover and focus.
   const tooltip = pending
     ? "Refreshing…"
-    : showTimestamp
+    : lastUpdatedAt
       ? `Last updated ${formatClockTime(lastUpdatedAt)} · ${label}`
       : label;
 

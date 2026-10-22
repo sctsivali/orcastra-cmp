@@ -27,6 +27,8 @@ export interface DockStripProps {
   /** A trigger clicked while collapsed: open on that tab. */
   onExpandTo: (tab: DockTab) => void;
   refreshNow: () => Promise<unknown>;
+  /** When the task summary last answered; the strip has no room for it, so the tooltip says it. */
+  lastUpdatedAt: number;
   /** Partner and above: the cluster-naming notice and the Operations link. */
   showOperator: boolean;
   caretRef: React.RefObject<HTMLButtonElement>;
@@ -51,6 +53,7 @@ export function DockStrip({
   onToggle,
   onExpandTo,
   refreshNow,
+  lastUpdatedAt,
   showOperator,
   caretRef,
 }: DockStripProps) {
@@ -133,6 +136,7 @@ export function DockStrip({
       <RefreshButton
         label={tab === "log" && open ? "Refresh log" : tab === "queue" && open ? "Refresh queue" : "Refresh tasks"}
         hideTimestamp
+        lastUpdatedAt={lastUpdatedAt}
         variant="ghost"
         className="h-7 w-7 shrink-0"
         onRefresh={refreshNow}
