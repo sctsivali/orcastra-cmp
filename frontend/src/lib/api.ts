@@ -83,7 +83,6 @@ import {
   SnapshotRestoreRequest,
   SnapshotActionResponse,
 } from "@/types";
-import { noteServedStale } from "@/lib/served-stale";
 
 const API_PREFIX = "/api/v1";
 
@@ -482,6 +481,36 @@ export function freshParam(endpoint: string, fresh?: boolean): string {
   if (!fresh) return endpoint;
   return endpoint.includes("?") ? `${endpoint}&fresh=true` : `${endpoint}?fresh=true`;
 }
+
+/**
+ * Which response bodies the backend served past their cache TTL (X-Orcastra-Cache: stale).
+ *
+ * The backend answers a fan-out list from its last read for up to three minutes past the TTL
+ * while one background read replaces it (backend core/swr.py). Left alone, the page would keep
+ * that older body until its next poll, which for the fleet lists is three minutes away. The
+ * QueryCache in components/providers.tsx asks again a few seconds later instead, when the
+ * replacement has normally landed.
+ *
+ * note: keyed by the parsed body object, so a query function that reshapes the body (rather
+ * than returning it) simply converges on its own poll, as before. Kept in this module because
+ * the transport is compiled on its own by the structural checks.
+ */
+const staleBodies = new WeakSet<object>();
+
+function noteServedStale(body: unknown, cacheHeader: string | null): void {
+  if (cacheHeader === "stale" && body !== null && typeof body === "object") {
+    staleBodies.add(body);
+  }
+}
+
+export function wasServedStale(data: unknown): boolean {
+  return data !== null && typeof data === "object" && staleBodies.has(data);
+}
+
+// The background read usually lands within a fan-out's duration; a second, later look covers a
+// slow one. Two looks per stale answer, never more: a cluster that stays down must not turn this
+// into a poll.
+export const STALE_FOLLOW_UP_DELAYS_MS = [4_000, 12_000] as const;
 
 /** Options accepted by the read methods that back a refresh control. */
 export interface ReadOptions {

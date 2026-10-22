@@ -18,8 +18,12 @@ import { NavigationProgressProvider } from "./navigation/navigation-progress";
 import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
 import { POLL_MS } from "@/lib/query-config";
-import { STALE_FOLLOW_UP_DELAYS_MS, wasServedStale } from "@/lib/served-stale";
-import { onAuthActorChanged, onTokenRefreshed } from "@/lib/api";
+import {
+  STALE_FOLLOW_UP_DELAYS_MS,
+  onAuthActorChanged,
+  onTokenRefreshed,
+  wasServedStale,
+} from "@/lib/api";
 import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
 import type { PersonalizationSettings } from "@/types/personalization";
 import type { Session } from "next-auth";
@@ -54,7 +58,7 @@ function QueryInvalidationBridge() {
 }
 
 /**
- * Ask again once the backend has replaced a stale answer (lib/served-stale.ts).
+ * Ask again once the backend has replaced a stale answer (wasServedStale in lib/api.ts).
  *
  * At most STALE_FOLLOW_UP_DELAYS_MS.length looks per query while its answers stay stale, only
  * for a query something is still watching, and only while the page is visible: a hidden tab
