@@ -555,9 +555,13 @@ class CacheManager:
         """
         from app.core.config import get_settings
 
-        self.invalidate_resource_cache("clusters", "projects", "regions")
+        # note: warnings too. Both feeds name an unreachable cluster, and they are cached now.
+        self.invalidate_resource_cache("clusters", "projects", "regions", "warnings")
         self.delete("vault_list", get_settings().vault_clusters_path.replace("/data/", "/metadata/"))
         self.invalidate_instance_cache()
+        # The availability fence first, so a stale-while-revalidate read already in flight cannot
+        # put the "offline" picture back after this clearance.
+        self.invalidate_availability_cache()
         self.delete_pattern("api_responses", "nodes:*")
         self.delete_pattern("api_responses", "regions:*")
         logger.info("Invalidated reachability caches for %s", ", ".join(cluster_ids))

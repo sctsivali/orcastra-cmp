@@ -7,12 +7,13 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List
 import logging
 import asyncio
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from pylxd.exceptions import LXDAPIException
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.fanout import NodeRead, collect, unattempted
 from app.models.schemas import FanoutReachability
 from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
@@ -37,6 +38,9 @@ from app.services.kernel_advisory_report import (
 )
 from pydantic import BaseModel, Field
 from app.core.lxd_path import safe_segment
+from app.core import swr
+from app.core.cache import get_cache_manager, get_resource_list_generation
+from app.core.swr import Built
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,10 @@ _executor = ThreadPoolExecutor(max_workers=16)
 
 # Wall clock the polled feed waits for host kernels per cluster; see build_kernel_report.
 KERNEL_FEED_WALL_SECONDS = 12.0
+# Matched to the dashboard's 60 s warnings poll. A body naming a cluster that could not be reached
+# is kept for less, so a recovery shows within the healer's cadence.
+WARNINGS_CACHE_TTL = 60
+WARNINGS_DEGRADED_TTL = 30
 
 
 class WarningInfo(BaseModel):
@@ -145,11 +153,19 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> NodeRea
 async def list_warnings(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
-    """List all warnings."""
-    try:
-        if host:
-            verify_cluster_access(host)
+    """List all warnings.
+
+    Cached per scope for WARNINGS_CACHE_TTL (DEGRADED when a cluster is down) and served for
+    SWR_MAX_STALE_SECONDS past it while one background read replaces it. It used to read every
+    cluster on every call, polled every 60 s by the dashboard.
+    """
+    if host:
+        verify_cluster_access(host)
+    cache = get_cache_manager()
+
+    async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch warnings from all nodes in parallel
@@ -165,9 +181,10 @@ async def list_warnings(
         # connection_manager.get_node_names() returns only nodes with a live client while
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
-        unreachable_nodes: List[str] = (
+        seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
+        unreachable_nodes: List[str] = list(seeded)
         fan = collect(
             nodes_to_query, results, noun="warnings", reasons_visible=not tenant_acl_active()
         )
@@ -182,14 +199,36 @@ async def list_warnings(
             if check_tenant_permission(warning.source_node, warning.project or "default", None, "view")
         ]
         
-        return WarningListResponse(
+        response = WarningListResponse(
             total=len(all_warnings),
             warnings=all_warnings,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
+            collected_at=datetime.now(timezone.utc),
         )
+        # Same rule as the storage lists: a cluster that could not be reached at all is named
+        # and the rest is remembered briefly; an LXD error or a partial read never is, and
+        # neither is a cluster this worker has not tried yet (fanout.unattempted).
+        cacheable = fan.cacheable_despite_outages and not unattempted(
+            seeded, lxd_service.connection_manager
+        )
+        ttl = WARNINGS_DEGRADED_TTL if unreachable_nodes else WARNINGS_CACHE_TTL
+        if not cacheable:
+            logger.info("Not caching warnings list: %s", fan.node_errors or "no node answered")
+        return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
+
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key=f"warnings:list:e1:host={host}",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "warnings"),
+            label="warnings list",
+        )
+        return served.as_model(WarningListResponse)
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler
         # below would wrap it into a 500 whose body reads "403: Access denied ...", which
@@ -268,6 +307,8 @@ async def delete_warning(
         response = client.api.warnings[safe_segment(warning_uuid)].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:
+            # Both warning feeds are cached now; the dismissed row must not come back on them.
+            get_cache_manager().invalidate_resource_cache("warnings")
             return {
                 "success": True,
                 "message": f"Warning {warning_uuid} deleted successfully"
@@ -289,9 +330,18 @@ async def delete_warning(
 )
 async def get_all_system_warnings(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
-    """Get all system warnings including certificate and node issues."""
-    try:
+    """Get all system warnings including certificate and node issues.
+
+    Cached per scope for WARNINGS_CACHE_TTL and served past it while one background read
+    replaces it. A miss reads every cluster's warnings, two Vault reads and a connection probe
+    per cluster and the kernel report, 2 to 10 s on dev, which is why it is no longer done on
+    every 60 s dashboard poll.
+    """
+    cache = get_cache_manager()
+
+    async def build() -> Built:
         # Get LXD warnings
         nodes_to_query = lxd_service.connection_manager.get_node_names()
         
@@ -317,6 +367,7 @@ async def get_all_system_warnings(
         # Get certificate and node warnings from cert_manager
         cert_warnings = []
         node_warnings = []
+        registry_checked = False
         
         try:
             from app.core.config import get_settings
@@ -327,7 +378,6 @@ async def get_all_system_warnings(
                 get_warning_severity,
                 WARNING_THRESHOLDS
             )
-            from datetime import datetime, timezone
             
             settings = get_settings()
             if settings.vault_enabled and settings.vault_token:
@@ -419,6 +469,7 @@ async def get_all_system_warnings(
                     *[loop.run_in_executor(_executor, _check_one, cid) for cid in cluster_ids],
                     return_exceptions=True,
                 )
+                registry_checked = True
 
         except Exception as e:
             logger.warning(f"Could not fetch certificate warnings: {e}")
@@ -454,7 +505,7 @@ async def get_all_system_warnings(
         info += sum(1 for w in node_warnings if w.get("severity") == "info")
         info += sum(1 for w in lxd_warnings if w.severity.lower() in ["info", "low"])
 
-        return {
+        body = {
             "total": len(lxd_warnings) + len(cert_warnings) + len(node_warnings) + len(kernel_rows),
             "critical": critical + kernel_critical,
             "warning": warning + kernel_warning,
@@ -469,8 +520,28 @@ async def get_all_system_warnings(
             "unreachable_nodes": fan.unreachable_nodes,
             "partial_nodes": fan.partial_nodes,
             "node_errors": fan.node_errors,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
         }
-        
+        # important: a feed nobody answered is not "no warnings". Only a read where a cluster
+        # answered or the registry sweep ran may be remembered; with neither, the next poll asks
+        # again rather than pinning a healthy-looking zero.
+        answered = bool(fan.answered) or registry_checked
+        if not answered:
+            logger.warning("Not caching system warnings: no cluster answered and no registry sweep ran")
+        return Built(value=body, body=body, fresh_for=WARNINGS_CACHE_TTL if answered else None)
+
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key="warnings:system:e1",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "warnings"),
+            label="system warnings",
+        )
+        return served.body
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting system warnings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
