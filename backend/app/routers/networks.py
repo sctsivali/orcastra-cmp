@@ -6,6 +6,7 @@ Provides endpoints for managing LXD networks.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict
 import logging
+from datetime import datetime, timezone
 import requests
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +22,6 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
-    get_scope_cache_key,
     project_is_visible,
 )
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
@@ -39,7 +39,6 @@ from app.core.tenant_visibility import (
     tenant_acl_active,
     tenant_may_see_project,
 )
-from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.core.blocking import (
     BlockingPoolFull,
@@ -65,6 +64,8 @@ from app.services.network_write_verification import (
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
 from app.core.database import get_db
+from app.core import swr
+from app.core.swr import Built
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -311,6 +312,9 @@ class NetworkListResponse(BaseModel):
             "may be incomplete. A short list is never presented as the whole truth."
         ),
     )
+    collected_at: Optional[datetime] = Field(
+        None, description="When this list was read. A cached answer keeps the time of its read."
+    )
 
 
 def _fetch_networks_for_node(
@@ -367,7 +371,6 @@ def _fetch_networks_for_node(
     summary="List all networks",
     description="Get a list of all networks from connected clusters.",
 )
-@single_flight("networks:list")
 async def list_networks(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     project: Optional[str] = Query(
@@ -383,20 +386,9 @@ async def list_networks(
     """List all networks."""
     if host:
         verify_cluster_access(host)
-    # Try cache first (60 second cache)
     cache = get_cache_manager()
-    # important: the project belongs in the key. get_scope_cache_key mixes in the cluster
-    # scope and the ACL digest but not the query, so without it a project-scoped read and a
-    # fleet-wide one collide on one entry for the whole TTL.
-    cache_key = get_scope_cache_key(f"networks:list:host={host}:project={project or '*'}")
-    cached_data = None if fresh else cache.get("api_responses", cache_key)
-    if cached_data is not None:
-        logger.debug(f"Returning cached networks for host={host}")
-        # Reconstruct Pydantic model from cached dict
-        return NetworkListResponse(**cached_data)
-    list_generation = get_resource_list_generation(cache, "networks")
-    
-    try:
+
+    async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch networks from all nodes in parallel
@@ -461,19 +453,30 @@ async def list_networks(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=sorted(unreachable_nodes),
             partial_nodes=sorted(partial_nodes),
+            collected_at=datetime.now(timezone.utc),
         )
         
         # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
-            if get_resource_list_generation(cache, "networks") == list_generation:
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-                logger.debug("Cached networks list for 180 seconds")
-            else:
-                logger.info("Not caching networks list: a dependent mutation completed during the read")
-        else:
+        if not answered:
             logger.warning("Not caching networks list: no node answered")
+        return Built(value=response, body=response.model_dump(), fresh_for=180 if answered else None)
 
-        return response
+    try:
+        # important: the project belongs in the key. get_scope_cache_key mixes in the cluster
+        # scope and the ACL digest but not the query, so without it a project-scoped read and a
+        # fleet-wide one collide on one entry for the whole TTL.
+        # e1: the body moved into the stale-while-revalidate envelope and gained collected_at.
+        served = await swr.serve(
+            cache=cache,
+            base_key=f"networks:list:e1:host={host}:project={project or '*'}",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "networks"),
+            label="networks list",
+        )
+        return served.as_model(NetworkListResponse)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing networks: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pylxd.exceptions import LXDAPIException
 
+from app.core.cache_envelope import is_envelope
 from app.services.lxd import fanout
 from app.services.lxd.exceptions import (
     LXDAuthorizationError,
@@ -111,7 +112,8 @@ class _CacheSpy:
         return None
 
     def set(self, namespace, key, value, ttl=None):
-        self.sets.append((namespace, key, ttl))
+        # The soft TTL: a stale-while-revalidate entry is kept longer than it is fresh.
+        self.sets.append((namespace, key, value.get("s", ttl) if is_envelope(value) else ttl))
 
 
 def _service(client) -> LXDService:

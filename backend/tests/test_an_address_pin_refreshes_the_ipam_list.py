@@ -20,6 +20,7 @@ from app.core.org_scope import org_scope_dependency
 from app.core.rbac import get_current_user
 from app.routers import ipam as ipam_module
 from app.services.lxd_service import get_lxd_service
+from app.core.cache_envelope import is_envelope
 
 HOST = "nuc1"
 
@@ -113,7 +114,8 @@ def _app(monkeypatch, *, instances_exc: Optional[Exception] = None, visible=None
             return None
 
         def set(self, namespace, key, value, ttl=None):
-            writes.append((key, ttl))
+            # The soft TTL: a stale-while-revalidate entry is kept longer than it is fresh.
+            writes.append((key, value.get("s", ttl) if is_envelope(value) else ttl))
 
         def instance_list_generation(self):
             return "g1"

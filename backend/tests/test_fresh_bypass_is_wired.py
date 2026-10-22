@@ -393,9 +393,19 @@ class DegradedFanOutTests(unittest.TestCase):
         unguarded = []
         for fn in found:
             sets = [c for c in self._calls(fn, "set", "cache") if _writes_response_cache(c)]
-            self.assertTrue(sets, f"{fn.name} no longer caches; update this test")
+            swr_writes = _swr_writes(fn)
+            self.assertTrue(sets or swr_writes, f"{fn.name} no longer caches; update this test")
             guarded = self._guarded_call_ids(fn, {"answered"})
             unguarded += [f"storage_pools.py:{c.lineno}" for c in sets if id(c) not in guarded]
+            unguarded += [
+                f"storage_pools.py:{c.lineno}"
+                for c in swr_writes
+                if not (
+                    _swr_write_is_conditional(c)
+                    and next(kw.value for kw in c.keywords if kw.arg == "fresh_for").test.id
+                    == "answered"
+                )
+            ]
         self.assertEqual(
             unguarded,
             [],
@@ -635,7 +645,11 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         The rule discovers rather than lists: a handler that takes `fresh` and reaches the
         whole fleet must be serialised, or be exempt for a stated reason.
         """
-        FLEET_CALLS = ("get_node_names(", "list_all_vms(", "list_all_images(", "read_fleet(")
+        FLEET_CALLS = (
+            "get_node_names(", "list_all_vms(", "list_all_images(", "read_fleet(",
+            # storage_pools.py: both resource endpoints read the fleet through this one reader.
+            "_read_all_pool_resources(",
+        )
         EXEMPT = {
             # Scoped to one node via its host parameter, and it returns is_online=False for
             # a disconnected one before doing any work. There is no fleet fan-out to collapse.

@@ -6,6 +6,7 @@ Provides endpoints for managing LXD storage pools.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict
 import logging
+from datetime import datetime, timezone
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,9 +18,8 @@ from app.services.lxd_service import (
 from app.services.lxd.fanout import NodeRead, collect, unattempted
 from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
 from app.models.schemas import FanoutReachability
-from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_tenant_acl
 from app.core.host_detail import pool_for_tier, pool_list_for_tier
 from app.core.task_scope import caller_tier
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
@@ -30,6 +30,8 @@ from app.core.lxd_path import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 from app.core.database import get_db
+from app.core import swr
+from app.core.swr import Built
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -78,6 +80,9 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+# Pool resource reads, one per cluster. Module level: the handlers used to build and abandon a
+# fresh pool on every call.
+_resources_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="pool_resources")
 # a pool write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py
 POOL_WRITE_WAIT_SECONDS = 120
 
@@ -143,13 +148,64 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[S
     return read
 
 
+def _fetch_node_pool_resources(lxd_service: LXDService, tenant_acl, node_name: str):
+    """Every visible pool's resources on one cluster. Runs in the thread pool.
+
+    Returns None when the node could not be reached, so the caller can tell an outage apart
+    from a node that simply has no pools.
+    """
+    result = {}
+    try:
+        client = lxd_service.get_client_with_reconnect(node_name)
+        if client is None:
+            logger.warning(f"Could not connect to {node_name}, skipping for resources")
+            return None
+        pools = client.storage_pools.all()
+        for pool in pools:
+            if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
+                continue
+            try:
+                resources = pool.resources.get()
+                result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
+            except Exception as pool_err:
+                logger.warning(f"Could not get resources for pool {pool.name} on {node_name}: {pool_err}")
+    except Exception as node_err:
+        logger.warning(f"Could not access node {node_name}: {node_err}")
+    return result
+
+
+async def _read_all_pool_resources(lxd_service: LXDService, tenant_acl) -> tuple[dict, int]:
+    """Resources for every pool the caller may see, and how many clusters answered.
+
+    note: shared by /resources-all and the legacy -resources path, which carried two copies.
+    `tenant_acl` is read by the caller on the loop: contextvars do not cross into the threads.
+    """
+    nodes = lxd_service.connection_manager.get_node_names()
+    if not nodes:
+        # important: get_node_names() lists only nodes holding a live client, so an empty fleet
+        # here is every cluster being down. Not an answer, never cached.
+        return {"resources": {}}, 0
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(_resources_executor, _fetch_node_pool_resources, lxd_service, tenant_acl, n)
+        for n in nodes
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_resources = {}
+    answered = 0
+    for r in results:
+        if isinstance(r, dict):
+            answered += 1
+            all_resources.update(r)
+    return {"resources": all_resources}, answered
+
+
 @router.get(
     "",
     response_model=StoragePoolListResponse,
     summary="List all storage pools",
     description="Get a list of all storage pools from connected clusters.",
 )
-@single_flight("storage_pools:list")
 async def list_storage_pools(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -158,16 +214,11 @@ async def list_storage_pools(
     """List all storage pools."""
     if host:
         verify_cluster_access(host)
-    # Try cache first (60 second cache)
+    # 180 s soft TTL (60 s when a cluster is down), then served for SWR_MAX_STALE_SECONDS while
+    # one background read replaces it.
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key(f"storage_pools:list:host={host}")
-    cached_data = None if fresh else cache.get("api_responses", cache_key)
-    if cached_data is not None:
-        logger.debug(f"Returning cached storage pools for host={host}")
-        return pool_list_for_tier(StoragePoolListResponse(**cached_data), caller_tier())
-    list_generation = get_resource_list_generation(cache, "storage_pools")
-    
-    try:
+
+    async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         loop = asyncio.get_event_loop()
@@ -217,21 +268,28 @@ async def list_storage_pools(
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
+            collected_at=datetime.now(timezone.utc),
         )
 
         # important: an outage must not be remembered as the answer, and neither may a
         # partial one: a cluster that failed its listing was cached as "no pools" for
         # 180 seconds. See instances.py.
-        if cacheable:
-            if get_resource_list_generation(cache, "storage_pools") == list_generation:
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
-                logger.debug("Cached storage pools list for %s seconds", ttl)
-            else:
-                logger.info("Not caching storage pools list: a dependent mutation completed during the read")
-        else:
+        if not cacheable:
             logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
+        return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
 
-        return pool_list_for_tier(response, caller_tier())
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key=f"storage_pools:list:e1:host={host}",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "storage_pools"),
+            label="storage pools list",
+        )
+        return pool_list_for_tier(served.as_model(StoragePoolListResponse), caller_tier())
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing storage pools: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -242,84 +300,36 @@ async def list_storage_pools(
     summary="Get all storage pool resources",
     description="Get resources (space, inodes) for all storage pools across all clusters.",
 )
-@single_flight("storage_pool_resources")
 async def get_all_storage_pool_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
     """Get resources for all storage pools on all nodes."""
-    try:
-        cache = get_cache_manager()
-        cache_key = get_scope_cache_key("storage_pool_resources:all")
-        cached = None if fresh else cache.get("api_responses", cache_key)
-        if cached is not None:
-            return cached
-        list_generation = get_resource_list_generation(cache, "storage_pool_resources")
+    cache = get_cache_manager()
 
-        nodes = lxd_service.connection_manager.get_node_names()
-        tenant_acl = get_tenant_acl()
-
-        if not nodes:
-            # important: not cached. get_node_names() lists only nodes holding a live
-            # client, so an empty fleet here is every cluster being down, and pinning that
-            # for 60s is the outage-as-answer bug.
-            return {"resources": {}}
-
-        def _fetch_node_resources(node_name: str):
-            """Fetch all pool resources for a single node (runs in thread).
-
-            Returns None when the node could not be reached, so the caller can tell an
-            outage apart from a node that simply has no pools.
-            """
-            result = {}
-            try:
-                client = lxd_service.get_client_with_reconnect(node_name)
-                if client is None:
-                    logger.warning(f"Could not connect to {node_name}, skipping for resources")
-                    return None
-                pools = client.storage_pools.all()
-                for pool in pools:
-                    if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
-                        continue
-                    try:
-                        resources = pool.resources.get()
-                        result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
-                    except Exception as pool_err:
-                        logger.warning(f"Could not get resources for pool {pool.name} on {node_name}: {pool_err}")
-            except Exception as node_err:
-                logger.warning(f"Could not access node {node_name}: {node_err}")
-            return result
-
-        loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
-        tasks = [loop.run_in_executor(executor, _fetch_node_resources, n) for n in nodes]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        executor.shutdown(wait=False)
-
-        all_resources = {}
-        answered = 0
-        for r in results:
-            if isinstance(r, dict):
-                answered += 1
-                all_resources.update(r)
-
-        response = {"resources": all_resources}
+    async def build() -> Built:
+        response, answered = await _read_all_pool_resources(lxd_service, get_tenant_acl())
         # important: an outage must not be remembered as the answer. See instances.py.
         # Counting answers, not entries: a reachable fleet with no pools is legitimately
         # empty, a fleet that is down is not.
-        if answered:
-            if (
-                get_resource_list_generation(cache, "storage_pool_resources")
-                == list_generation
-            ):
-                cache.set("api_responses", cache_key, response, ttl=60)
-            else:
-                logger.info("Not caching storage pool resources: capacity changed during the read")
-        else:
+        if not answered:
             logger.warning("Not caching storage pool resources: no node answered")
-        return response
+        return Built(value=response, body=response, fresh_for=60 if answered else None)
+
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key="storage_pool_resources:all:e1",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "storage_pool_resources"),
+            label="storage pool resources",
+        )
+        return served.body
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting all storage pool resources: {e}")
+        logger.error(f"Error getting storage pool resources: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -622,77 +632,34 @@ async def delete_storage_pool(
     summary="Get all storage pool resources",
     description="Get resource usage information for all storage pools across all clusters.",
 )
-@single_flight("storage_pool_resources:all_v2")
 async def get_all_storage_pool_resources_legacy_path(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
     """Get storage pool resources for all pools."""
-    try:
-        cache = get_cache_manager()
-        cache_key = get_scope_cache_key("storage_pool_resources:all_v2")
-        cached = None if fresh else cache.get("api_responses", cache_key)
-        if cached is not None:
-            return cached
-        list_generation = get_resource_list_generation(cache, "storage_pool_resources")
+    cache = get_cache_manager()
 
-        nodes = lxd_service.connection_manager.get_node_names()
-        tenant_acl = get_tenant_acl()
-
-        def _fetch_node_pool_resources(node_name: str):
-            """Fetch all pool resources for a single node (runs in thread).
-
-            Returns None when the node could not be reached. See the sibling handler.
-            """
-            result = {}
-            try:
-                client = lxd_service.get_client_with_reconnect(node_name)
-                if client is None:
-                    logger.warning(f"Could not connect to {node_name}, skipping")
-                    return None
-                pools = client.storage_pools.all()
-                for pool in pools:
-                    if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
-                        continue
-                    try:
-                        resources = pool.resources.get()
-                        result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
-                    except Exception as e:
-                        logger.warning(f"Could not get resources for pool {pool.name} on {node_name}: {e}")
-            except Exception as e:
-                logger.error(f"Error getting pools on {node_name}: {e}")
-            return result
-
-        if not nodes:
-            # important: not cached. See the sibling handler above.
-            return {"resources": {}}
-
-        loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
-        tasks = [loop.run_in_executor(executor, _fetch_node_pool_resources, n) for n in nodes]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        executor.shutdown(wait=False)
-
-        all_resources = {}
-        answered = 0
-        for r in results:
-            if isinstance(r, dict):
-                answered += 1
-                all_resources.update(r)
-
-        response = {"resources": all_resources}
+    async def build() -> Built:
+        response, answered = await _read_all_pool_resources(lxd_service, get_tenant_acl())
         # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
-            if (
-                get_resource_list_generation(cache, "storage_pool_resources")
-                == list_generation
-            ):
-                cache.set("api_responses", cache_key, response, ttl=60)
-            else:
-                logger.info("Not caching storage pool resources: capacity changed during the read")
-        else:
+        # Counting answers, not entries: a reachable fleet with no pools is legitimately
+        # empty, a fleet that is down is not.
+        if not answered:
             logger.warning("Not caching storage pool resources: no node answered")
-        return response
+        return Built(value=response, body=response, fresh_for=60 if answered else None)
+
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key="storage_pool_resources:all_v2:e1",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "storage_pool_resources"),
+            label="storage pool resources (legacy path)",
+        )
+        return served.body
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting storage pool resources: {e}")
         raise HTTPException(status_code=500, detail=str(e))

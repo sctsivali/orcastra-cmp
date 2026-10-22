@@ -234,7 +234,7 @@ def test_a_cached_pool_list_reaches_a_tenant_without_its_backing_path(monkeypatc
     }
 
     def read():
-        manager.set("api_responses", get_scope_cache_key("storage_pools:list:host=None"), body, ttl=60)
+        manager.set("api_responses", get_scope_cache_key("storage_pools:list:e1:host=None"), body, ttl=60)
         return client.get("/storage/pools")
 
     response = _as(tier, read)

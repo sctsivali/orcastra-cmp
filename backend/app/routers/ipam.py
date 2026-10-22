@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Any, Dict, Literal, Optional, List, Tuple
 from urllib.parse import unquote
 import logging
+from datetime import datetime, timezone
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,14 +31,14 @@ from app.services.lxd.proxy import socket_timeout_for
 from app.core.dependencies import require_tenant
 from app.core.org_scope import (
     org_scope_dependency,
-    get_scope_cache_key,
     verify_cluster_access,
     check_tenant_permission,
     project_is_visible,
 )
 from app.core.tenant_visibility import tenant_acl_active
-from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
+from app.core import swr
+from app.core.swr import Built
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,8 @@ AllocationKind = Literal["static", "dhcp", "gateway", "forward", "load_balancer"
 
 # the cache key carries a version: a body cached before the join fields existed must not be
 # served as "unknown" for the rest of its TTL after a deploy
-_CACHE_VERSION = "v2"
+# v3: the body moved into the stale-while-revalidate envelope and gained collected_at.
+_CACHE_VERSION = "v3"
 # a known-down cluster is a correct answer, remembered briefly so recovery shows within the
 # healer's cadence (same rule as storage_pools.py)
 DEGRADED_CACHE_TTL = 60
@@ -288,7 +290,6 @@ def _fetch_ipam_for_node(
     summary="List IPAM allocations",
     description="Get a list of all IP address allocations across networks.",
 )
-@single_flight("ipam:list")
 async def list_ipam_allocations(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     network: Optional[str] = Query(None, description="Filter by specific network"),
@@ -298,18 +299,11 @@ async def list_ipam_allocations(
     """List all IPAM allocations. Nodes are queried in parallel with caching."""
     if host:
         verify_cluster_access(host)
-    # check cache first (120s TTL)
+    # 120 s soft TTL (60 s when a cluster is down), then served for SWR_MAX_STALE_SECONDS while
+    # one background read replaces it.
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key(f"ipam:list:{_CACHE_VERSION}:host={host}:network={network}")
-    cached = None if fresh else cache.get("api_responses", cache_key)
-    if cached is not None:
-        logger.debug(f"Returning cached IPAM data for {cache_key}")
-        return IPAMListResponse(**cached)
 
-    try:
-        # important: a NIC pin or an instance lifecycle change bumps this while a fan-out is in
-        # flight; the read then holds the old allocation table and must not be written back.
-        generation = _generation(cache)
+    async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
 
         # query all nodes in parallel
@@ -356,18 +350,29 @@ async def list_ipam_allocations(
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
+            collected_at=datetime.now(timezone.utc),
         )
 
         # important: an outage must not be remembered as the answer, and neither may a partial
-        # one or a read that an invalidation overtook. See instances.py and storage_pools.py.
-        if cacheable:
-            if _generation(cache) != generation:
-                logger.info("Not caching IPAM list: an instance changed during the read")
-            else:
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
-        else:
+        # one. A read that an invalidation overtook (a NIC pin, an instance lifecycle change) is
+        # refused by swr.serve through the instance list generation. See instances.py and
+        # storage_pools.py.
+        if not cacheable:
             logger.warning("Not caching IPAM list: %s", fan.node_errors or "no node answered")
-        return response
+        return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
+
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key=f"ipam:list:{_CACHE_VERSION}:host={host}:network={network}",
+            fresh=fresh,
+            build=build,
+            generation=lambda: _generation(cache),
+            label="IPAM list",
+        )
+        return served.as_model(IPAMListResponse)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing IPAM: {e}")
         raise HTTPException(status_code=500, detail=str(e))

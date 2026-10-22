@@ -81,7 +81,7 @@ async def test_prewarm_reads_pool_resources_off_the_loop(memory_cache):
 
     from app.core.org_scope import get_scope_cache_key
 
-    cached = memory_cache.get("api_responses", get_scope_cache_key("storage_pool_resources:all"))
+    cached = memory_cache.get("api_responses", get_scope_cache_key("storage_pool_resources:all:e1"))
     assert cached == {"resources": {"c1-default": {"space": {"used": 1, "total": 2}, "inodes": {}}}}
 
 

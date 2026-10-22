@@ -177,6 +177,13 @@ class FanoutReachability(BaseModel):
             "unreachable:, forbidden:, error: or partial:. Empty for Tenant callers."
         ),
     )
+    collected_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "When this list was read off the clusters. A cached answer keeps the time of its "
+            "read. None means unknown."
+        ),
+    )
 
 
 class VMListResponse(BaseModel):

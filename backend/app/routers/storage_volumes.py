@@ -6,6 +6,7 @@ Provides endpoints for managing LXD storage volumes.
 from fastapi import APIRouter, HTTPException, Depends, Path, Query, Body
 from typing import Literal, Optional, List, Dict
 import logging
+from datetime import datetime, timezone
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,7 +31,6 @@ from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
-    get_scope_cache_key,
     project_is_visible,
 )
 from urllib.parse import unquote
@@ -45,13 +45,14 @@ from app.core.tenant_visibility import (
     parse_lxd_reference,
     tenant_acl_active,
 )
-from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
 from app.services.lxd.lazy_client import client_for
 from app.core.database import get_db
+from app.core import swr
+from app.core.swr import Built
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -220,7 +221,6 @@ def _fetch_volumes_for_node(
     summary="List all storage volumes",
     description="Get a list of all storage volumes from connected clusters.",
 )
-@single_flight("storage_volumes:list")
 async def list_storage_volumes(
     host: Optional[str] = Query(
         None,
@@ -234,18 +234,11 @@ async def list_storage_volumes(
     """List all storage volumes."""
     if host:
         verify_cluster_access(host)
-    # Try cache first (30 second cache)
+    # 180 s soft TTL (60 s when a cluster is down), then served for SWR_MAX_STALE_SECONDS while
+    # one background read replaces it.
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key(f"storage_volumes:list:host={host}:pool={pool}")
-    cached_data = None if fresh else cache.get("api_responses", cache_key)
-    if cached_data is not None:
-        logger.debug(f"Returning cached storage volumes for host={host}, pool={pool}")
-        # Reconstruct Pydantic model from cached dict
-        return StorageVolumeListResponse(**cached_data)
-    
-    list_generation = get_resource_list_generation(cache, "storage_volumes")
 
-    try:
+    async def build() -> Built:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch volumes from all nodes in parallel
@@ -301,23 +294,28 @@ async def list_storage_volumes(
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=fan.node_errors,
+            collected_at=datetime.now(timezone.utc),
         )
         
         # important: an outage must not be remembered as the answer, and neither may a
         # partial one: a cluster that failed its listing was cached as "no volumes" for
         # 180 seconds. See instances.py.
-        if cacheable:
-            if get_resource_list_generation(cache, "storage_volumes") == list_generation:
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
-                logger.debug("Cached storage volumes list for %s seconds", ttl)
-            else:
-                logger.info(
-                    "Not caching storage volumes list: a volume mutation completed during the read"
-                )
-        else:
+        if not cacheable:
             logger.warning("Not caching storage volumes list: %s", fan.node_errors or "no node answered")
+        return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable else None)
 
-        return response
+    try:
+        served = await swr.serve(
+            cache=cache,
+            base_key=f"storage_volumes:list:e1:host={host}:pool={pool}",
+            fresh=fresh,
+            build=build,
+            generation=lambda: get_resource_list_generation(cache, "storage_volumes"),
+            label="storage volumes list",
+        )
+        return served.as_model(StorageVolumeListResponse)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing storage volumes: {e}")
         raise HTTPException(status_code=500, detail=str(e))
