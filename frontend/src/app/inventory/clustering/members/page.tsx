@@ -137,7 +137,14 @@ function ClusterMembersContent() {
     );
   }, [clustersData, node]);
   
-  const { data: membersData, isLoading, refreshNow, dataUpdatedAt, error } = useClusterMembers(node);
+  const { data: membersData, isLoading, refreshNow, dataUpdatedAt, errorUpdatedAt, error } = useClusterMembers(node);
+  // important: React Query puts a query with no data back to `pending` (error cleared) on every
+  // fetch, so a retry of an unreachable cluster, by the refresh button or the poll, read as a
+  // first load: the page swapped to the full loader, the refresh control unmounted mid-click,
+  // and the description flipped to "Clustering is not enabled". A query that has answered
+  // once, either way, keeps its page; one that last failed keeps saying so while it retries.
+  const hasAnswered = dataUpdatedAt > 0 || errorUpdatedAt > 0;
+  const unreachable = !!error || (!membersData && errorUpdatedAt > 0);
   const members = React.useMemo(() => membersData?.members || [], [membersData]);
   const isClustered = membersData?.is_clustered || false;
   const nodeName = membersData?.node || "";
@@ -215,7 +222,7 @@ function ClusterMembersContent() {
   );
 
   // Full-page loading state
-  if (isLoading && node) {
+  if (isLoading && node && !hasAnswered) {
     return <LoadingLottiePage />;
   }
 
@@ -272,7 +279,7 @@ function ClusterMembersContent() {
             <div>
               <CardTitle>Member Overview</CardTitle>
               <CardDescription>
-                {error
+                {unreachable
                   ? "Cluster did not answer"
                   : isClustered
                     ? "Members in this cluster"
@@ -321,7 +328,7 @@ function ClusterMembersContent() {
                 description="Pick a cluster above to see its members."
               />
             )
-          ) : error ? (
+          ) : unreachable ? (
             <EmptyState
               icon={AlertTriangle}
               title="Could not reach this cluster"
