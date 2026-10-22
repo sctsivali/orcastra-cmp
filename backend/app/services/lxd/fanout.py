@@ -9,7 +9,10 @@ answer was cached for the full TTL. On a production MicroCloud that read as "no 
 pools", "no volumes", "no identities" while the cluster held dozens of each.
 
 The rule now: a cluster is either fully read, partially read (some rows lost, named), or not
-read at all (named in `unreachable_nodes` with a reason). Nothing degraded is cached.
+read at all (named in `unreachable_nodes` with a reason). A partial read or an LXD error answer
+is never cached. A fan-out where some clusters could not be reached at all, and every other
+cluster answered in full, may be cached briefly by the handlers that opt in
+(`cacheable_despite_outages`): the body names those clusters, so it is a true answer.
 
 important: reasons are shown in the console banner. They never carry a host name, an
 endpoint or the text of a transport error (both can name the host); LXD's own error text is
@@ -162,11 +165,29 @@ class Fanout(Generic[T]):
     partial_nodes: List[str] = field(default_factory=list)
     unreachable_nodes: List[str] = field(default_factory=list)
     node_errors: Dict[str, str] = field(default_factory=dict)
+    # Failure kind per cluster in unreachable_nodes, kept even when node_errors is withheld.
+    failure_kinds: Dict[str, str] = field(default_factory=dict)
 
     @property
     def cacheable(self) -> bool:
         """Only a fan-out where every queried cluster answered in full may be remembered."""
         return bool(self.answered) and not self.partial_nodes and not self.unreachable_nodes
+
+    @property
+    def cacheable_despite_outages(self) -> bool:
+        """Complete, or complete apart from clusters that could not be reached at all.
+
+        important: a transport failure (connect or read timeout, refused, TLS) leaves no rows to
+        misread, and the body names the cluster, so remembering it for a short degraded TTL is
+        remembering a true answer. Without this a single timing-out cluster made every read of
+        the storage volume list cost the full 25 s read budget. A 4xx/5xx from LXD or a partial
+        read is still never cached: those look like an answer while missing rows.
+        """
+        if not self.answered or self.partial_nodes:
+            return False
+        return all(
+            self.failure_kinds.get(node) == KIND_UNREACHABLE for node in self.unreachable_nodes
+        )
 
 
 def unattempted(seeded: Sequence[str], connection_manager: object) -> List[str]:
@@ -215,6 +236,7 @@ def collect(
         elif isinstance(result, BaseException):
             kind, reason = classify(result)
             fan.unreachable_nodes.append(node_name)
+            fan.failure_kinds[node_name] = kind
             fan.node_errors[node_name] = f"{kind}: {reason}"
             logger.warning(
                 "Could not list %s on %s (%s: %s)", noun, node_name, kind, reason,
@@ -222,6 +244,7 @@ def collect(
             )
         else:
             fan.unreachable_nodes.append(node_name)
+            fan.failure_kinds[node_name] = KIND_FAILED
             fan.node_errors[node_name] = f"{KIND_FAILED}: unexpected {type(result).__name__}"
             logger.error("Helper for %s on %s returned %r", noun, node_name, type(result))
     if not reasons_visible:

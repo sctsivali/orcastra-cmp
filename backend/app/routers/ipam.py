@@ -333,7 +333,9 @@ async def list_ipam_allocations(
             nodes_to_query, results, noun="IP allocations", reasons_visible=not tenant_acl_active()
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
-        cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
+        cacheable = fan.cacheable_despite_outages and not unattempted(
+            seeded, lxd_service.connection_manager
+        )
         ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 120
 
         all_allocations = [

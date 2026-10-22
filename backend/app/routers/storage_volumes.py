@@ -280,7 +280,9 @@ async def list_storage_volumes(
         # cluster this worker has never tried, registered seconds ago, must not be: the cache
         # is shared by every worker, and the one that did connect it would then serve
         # "unreachable" for the whole TTL. See fanout.unattempted.
-        cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
+        cacheable = fan.cacheable_despite_outages and not unattempted(
+            seeded, lxd_service.connection_manager
+        )
         ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
 
         # used_by is held to the caller's bound for every role; only a tenant loses the row
