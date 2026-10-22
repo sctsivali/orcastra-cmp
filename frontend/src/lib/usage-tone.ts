@@ -37,6 +37,15 @@ export function usagePercent(used: number, total: number): number {
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
 
+export type UsageLevel = "Normal" | "High" | "Critical";
+
+/** The ramp's band in words, so the state never rests on colour alone. */
+export function usageLevel(percent: number): UsageLevel {
+  if (percent >= USAGE_CRITICAL_PERCENT) return "Critical";
+  if (percent >= USAGE_ELEVATED_PERCENT) return "High";
+  return "Normal";
+}
+
 export function usageTone(percent: number): UsageTone {
   if (percent >= USAGE_CRITICAL_PERCENT) {
     return { text: "text-status-offline", fill: "bg-destructive" };

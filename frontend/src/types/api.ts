@@ -1854,6 +1854,12 @@ export interface HostFilesystem {
   percent: number;
 }
 
+/** Cumulative CPU seconds since boot, summed over every CPU of the machine. */
+export interface HostCpuTimes {
+  busy_seconds: number;
+  total_seconds: number;
+}
+
 /** The kernel's view of the machine the backend runs on: on an LXD virtual machine, the VM. */
 export interface HostInfo {
   cpu: CPUInfo;
@@ -1863,6 +1869,11 @@ export interface HostInfo {
   uptime_seconds: number;
   is_virtual_machine: boolean | null;
   platform_vendor: string | null;
+  /** Machine-wide counters, so two answers from different workers still give a true delta.
+   *  Absent from a backend older than this field. */
+  cpu_times?: HostCpuTimes | null;
+  /** How long a window `cpu.percent` covers: the gap since the answering worker last sampled. */
+  cpu_window_seconds?: number | null;
 }
 
 export interface CPUInfo {

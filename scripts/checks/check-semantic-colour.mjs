@@ -56,6 +56,9 @@ const CLEARED = [
   'components/member-resources/',
   // The task dock is new and starts clean: Badge tones and --status-* dots only.
   'components/task-panel/',
+  // Settings > Dashboard Host: its utilisation bars are the shared UsageBar ramp, not the
+  // green-to-red palette steps they started as.
+  'components/system-resources/',
 ];
 
 // Console and terminal chrome does not follow the theme: it paints its own fixed dark surface

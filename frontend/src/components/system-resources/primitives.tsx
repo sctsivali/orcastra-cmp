@@ -2,6 +2,9 @@
 
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { EMPTY_VALUE } from "@/components/ui/table-text";
+import { UsageBar } from "@/components/ui/usage-bar";
+import { usageLevel, usagePercent, usageTone } from "@/lib/usage-tone";
 
 export function formatUptime(seconds: number): string {
   const days = Math.floor(seconds / 86400);
@@ -14,20 +17,55 @@ export function formatUptime(seconds: number): string {
   return parts.length > 0 ? parts.join(" ") : "< 1m";
 }
 
-/** A percentage bar whose fill steps from calm to alarming as it fills. */
-export function UsageProgress({ value, className }: { value: number; className?: string }) {
-  const getColor = (val: number) => {
-    if (val < 50) return "bg-green-500";
-    if (val < 75) return "bg-yellow-500";
-    if (val < 90) return "bg-orange-500";
-    return "bg-red-500";
-  };
+/** "1 vCPU", "6 vCPUs". */
+export function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/** "80.5% · High", the level in words beside the number so the state never rests on colour. */
+export function StatusPercent({ percent }: { percent: number }) {
   return (
-    <div className={cn("relative h-3 w-full overflow-hidden rounded-full bg-secondary", className)}>
-      <div
-        className={cn("h-full transition-all duration-300", getColor(value))}
-        style={{ width: `${Math.min(Math.max(value, 0), 100)}%` }}
+    <span className="font-medium tabular-nums">
+      {percent.toFixed(1)}%{" "}
+      <span className={usageTone(percent).text}>· {usageLevel(percent)}</span>
+    </span>
+  );
+}
+
+/**
+ * One utilisation reading: label and status on top, the shared meter bar, then a caption that
+ * says what the number covers. A null percent draws an empty track rather than a green bar at
+ * zero, and says whether a reading is on its way (`measuring`) or was never reported.
+ */
+export function MeterRow({
+  label,
+  percent,
+  caption,
+  measuring = false,
+}: {
+  label: string;
+  percent: number | null;
+  caption?: ReactNode;
+  measuring?: boolean;
+}) {
+  const clamped = percent === null ? 0 : usagePercent(percent, 100);
+  const pending = measuring ? "Measuring…" : EMPTY_VALUE;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <span className="text-muted-foreground">{label}</span>
+        {percent === null ? (
+          <span className="text-muted-foreground">{pending}</span>
+        ) : (
+          <StatusPercent percent={percent} />
+        )}
+      </div>
+      <UsageBar
+        percent={clamped}
+        label={label}
+        valueText={percent === null ? (measuring ? "measuring" : "not reported") : `${percent.toFixed(1)}%, ${usageLevel(percent).toLowerCase()}`}
       />
+      {caption && <p className="text-xs text-muted-foreground">{caption}</p>}
     </div>
   );
 }
@@ -50,8 +88,22 @@ export function Tile({
     <div className={cn("text-center p-2 bg-muted/50 rounded-lg", className)}>
       {Icon && <Icon className="h-4 w-4 mx-auto mb-1 text-muted-foreground" aria-hidden="true" />}
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium">{value}</p>
+      <p className="text-sm font-medium tabular-nums">{value}</p>
       {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
     </div>
   );
+}
+
+/** One label and value pair inside a FactList. */
+export function Fact({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={cn("p-2 bg-muted/30 rounded", className)}>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-sm font-medium">{children}</dd>
+    </div>
+  );
+}
+
+export function FactList({ children, className }: { children: ReactNode; className?: string }) {
+  return <dl className={cn("grid grid-cols-1 sm:grid-cols-2 gap-2", className)}>{children}</dl>;
 }
