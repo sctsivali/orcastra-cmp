@@ -191,6 +191,15 @@ async def _build_and_store(
         wrap(built.body, stored_at=time.time(), build_started_at=started, fresh_for=built.fresh_for),
         ttl=built.fresh_for + SWR_MAX_STALE_SECONDS,
     )
+    # important: the check above and this write are two Redis calls, not one. An invalidation that
+    # advanced the generation and swept the key between them would otherwise leave this
+    # pre-mutation body in place for the whole stale window. Checking again after the write and
+    # dropping the key closes that gap; the worst case is one extra miss.
+    if generation is not None and generation() != before:
+        logger.info("Dropping %s: a mutation completed while it was being written", label)
+        delete = getattr(cache, "delete", None)
+        if delete is not None:
+            delete(NAMESPACE, key)
     return built
 
 

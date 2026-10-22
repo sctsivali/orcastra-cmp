@@ -413,3 +413,21 @@ async def test_shutdown_cancels_reads_in_flight(cache, clock):
     await asyncio.wait_for(gated.entered.wait(), SAFETY_TIMEOUT)
     await swr.shutdown()
     assert swr._refreshing == {}
+
+
+async def test_an_invalidation_landing_during_the_write_is_not_outlived(cache, clock):
+    generation = {"token": "a"}
+    real_set = cache.set
+
+    def set_then_invalidate(namespace, key, value, ttl=None, **kwargs):
+        real_set(namespace, key, value, ttl=ttl, **kwargs)
+        if namespace == swr.NAMESPACE and key == _key():
+            # The mutation lands between the pre-write check and the write completing.
+            generation["token"] = "b"
+            cache.delete(swr.NAMESPACE, _key())
+            real_set(swr.NAMESPACE, _key(), value, ttl=ttl)  # the racing write wins the sweep
+
+    cache.set = set_then_invalidate
+    served = await _serve(cache, _Builder(), generation=lambda: generation["token"])
+    assert served.state == swr.MISS
+    assert cache.get(swr.NAMESPACE, _key()) is None, "a body written across an invalidation must go"
