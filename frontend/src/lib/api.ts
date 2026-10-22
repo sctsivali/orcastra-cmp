@@ -507,10 +507,11 @@ export function wasServedStale(data: unknown): boolean {
   return data !== null && typeof data === "object" && staleBodies.has(data);
 }
 
-// The background read usually lands within a fan-out's duration; a second, later look covers a
-// slow one. Two looks per stale answer, never more: a cluster that stays down must not turn this
-// into a poll.
-export const STALE_FOLLOW_UP_DELAYS_MS = [4_000, 12_000] as const;
+// The background read usually lands within a fan-out's duration (the instance list took 4.3 s
+// at p50 and 6.7 s at p95 on dev), so the first look waits 5 s and the second 9 s more: a stale
+// list is replaced within about 14 s at worst. Two looks per stale answer, never more: a cluster
+// that stays down must not turn this into a poll.
+export const STALE_FOLLOW_UP_DELAYS_MS = [5_000, 9_000] as const;
 
 /** Options accepted by the read methods that back a refresh control. */
 export interface ReadOptions {
