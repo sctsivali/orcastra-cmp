@@ -52,24 +52,45 @@ export const migrationQueryKeys = {
   plan: (actorScope: string, planId: string) => ["migrations", actorScope, "plans", planId] as const,
 };
 
+// A move's instance changes cluster at cutover, after which the job waits in retention, still
+// "active", for hours. Reaching that phase is when the inventories change.
+const CUTOVER_DONE_PHASES = new Set<MigrationJobPhase>(["source_retained"]);
+// Per QueryClient (one per actor): the list and the open job dialog watch the same jobs, and
+// one transition must reconcile once.
+const reconciledTransitions = new WeakMap<object, Set<string>>();
+
 /**
- * Reconcile the inventories a move or copy changed once a job seen running is no longer active.
+ * Reconcile the inventories a move or copy changed when a job seen running reaches cutover or
+ * stops being active.
  *
  * Starting a job reconciles on the response, when nothing has moved yet; the backend clears its
- * caches when the job commits its verdict, and this is the browser's half, so the Overview and
+ * caches when the job commits each verdict, and this is the browser's half, so the Overview and
  * Instances pages do not keep the instance on its old cluster until their next poll.
  */
 function useReconcileFinishedMigrations(jobs: readonly MigrationJob[] | undefined): void {
   const queryClient = useQueryClient();
-  const running = useRef(new Set<string>());
+  const seen = useRef(new Map<string, MigrationJobPhase>());
   useEffect(() => {
     if (!jobs) return;
-    let finished = false;
-    for (const job of jobs) {
-      if (migrationIsActive(job)) running.current.add(job.job_id);
-      else if (running.current.delete(job.job_id)) finished = true;
+    let done = reconciledTransitions.get(queryClient);
+    if (!done) {
+      done = new Set();
+      reconciledTransitions.set(queryClient, done);
     }
-    if (finished) void reconcileMutationImpact(queryClient, "migration.job");
+    let changed = false;
+    for (const job of jobs) {
+      const previous = seen.current.get(job.job_id);
+      seen.current.set(job.job_id, job.phase);
+      if (previous === undefined || previous === job.phase) continue;
+      const crossed =
+        CUTOVER_DONE_PHASES.has(job.phase) || (ACTIVE_PHASES.has(previous) && !migrationIsActive(job));
+      const transition = `${job.job_id}:${job.phase}`;
+      if (crossed && !done.has(transition)) {
+        done.add(transition);
+        changed = true;
+      }
+    }
+    if (changed) void reconcileMutationImpact(queryClient, "migration.job");
   }, [jobs, queryClient]);
 }
 
