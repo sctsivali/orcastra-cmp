@@ -17,7 +17,7 @@ from app.models.migration_models import MigrationJob, MigrationResource
 from app.services.lxd.root_disk import root_pool
 
 from . import executor, repository
-from .completion import clear_views_now, target_completion_events
+from .completion import target_completion_events
 from .context import _assert_mutation_lease, _fenced_job_update, _resource_update
 from .contracts import MigrationLeaseLost, MigrationUnknown, TargetStartRefused, _blocking
 from .operation_wait import await_operation
@@ -365,9 +365,6 @@ async def finish_transfer(
         target_client, job.target_project, target_name, f"migration.target_uuid[{target_name}]"
     )
     target_uuid = ((target or {}).get("config") or {}).get("volatile.uuid")
-    completion_events = target_completion_events(
-        job, include_created_events=True, occurred_at=occurred_at
-    )
     try:
         async with async_session_maker() as db:
             await enter_source_retention(
@@ -386,11 +383,12 @@ async def finish_transfer(
                 retention_deadline=repository.utcnow() + timedelta(hours=job.retention_hours),
                 target_uuid=target_uuid if isinstance(target_uuid, str) else None,
                 safe_result={**(job.safe_result or {}), "verified": True},
-                outbox_events=completion_events,
+                outbox_events=target_completion_events(
+                    job, include_created_events=True, occurred_at=occurred_at
+                ),
             )
     except repository.RepositoryConflict as exc:
         raise MigrationLeaseLost(str(exc)) from exc
-    clear_views_now(completion_events)
 
 
 __all__ = ["finish_transfer"]

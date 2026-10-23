@@ -349,17 +349,19 @@ def test_a_cluster_answering_again_clears_its_images() -> None:
 # --- moves, copies and ambiguous verdicts -------------------------------------------------
 
 
-def test_a_finished_migration_clears_the_views_at_commit(monkeypatch) -> None:
-    from app.services.migrations import completion
-
-    cleared = []
-    monkeypatch.setattr(completion, "invalidate_migration_views", lambda: cleared.append(1))
-    completion.clear_views_now([{"channel": "audit"}])
-    assert cleared == []
-    completion.clear_views_now([{"channel": "audit"}, {"channel": "cache"}])
-    assert cleared == [1]
-    completion.clear_views_now(None)
-    assert cleared == [1]
+def test_a_migration_step_delivers_its_outbox_at_once() -> None:
+    """The cache clearance a move or copy commits is an outbox row; it used to wait for the 15 s
+    recovery sweep. Every path (activation, retention, project relocation, rollback) ends in
+    run_migration_job, which now drains right after the step."""
+    worker = Path(__file__).resolve().parents[1] / "app" / "services" / "migrations" / "worker.py"
+    fn = _function(ast.parse(worker.read_text(encoding="utf-8")), "run_migration_job")
+    body = list(fn.body)
+    step = next(i for i, stmt in enumerate(body) if isinstance(stmt, ast.Try))
+    after = body[step + 1:]
+    assert any(
+        isinstance(n, ast.Call) and getattr(n.func, "id", None) == "drain_migration_audits"
+        for stmt in after for n in ast.walk(stmt)
+    ), "run_migration_job must deliver the outbox after the step, outside its lease"
 
 
 async def test_an_unknown_create_verdict_clears_the_instance_lists(monkeypatch) -> None:

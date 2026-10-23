@@ -446,6 +446,14 @@ async def run_migration_job(job_id: str, *, allow_mutation: bool = False) -> Non
         _worker_fence.reset(fence_token)
         heartbeat.cancel()
         await asyncio.gather(heartbeat, return_exceptions=True)
+    # Deliver this step's outbox rows (audit, webhooks, the cache clearance) now rather than on
+    # the next recovery sweep, every 15 s: until then a moved instance stayed on its old cluster
+    # in every list. Rows are claimed with SKIP LOCKED leases, so the sweep running alongside is
+    # safe, and it stays the guarantee if this fails.
+    try:
+        await drain_migration_audits()
+    except Exception as exc:  # noqa: BLE001 - the sweep delivers these later
+        logger.warning("Could not deliver migration outbox for %s: %s", job_id, sanitize_error(exc))
 
 
 async def recover_migration_jobs() -> int:
