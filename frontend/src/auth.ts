@@ -10,6 +10,7 @@ import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
+import { forget, grantOnce, settleWithin, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -48,9 +49,6 @@ declare module "next-auth/jwt" {
     // Unix seconds. Earliest a failed refresh may be retried. Kept separate from expiresAt
     // so the cooldown never has to lie about when the access token actually expires.
     retryAfter?: number;
-    // Unix seconds. The same, for a refresh that failed on the request path. Only the request
-    // path waits for it; see refreshAccessToken.
-    requestRetryAfter?: number;
     // Unix seconds the groups were last read from an issued access token.
     groupsReadAt?: number;
   }
@@ -94,27 +92,20 @@ const authentikProvider = {
 // Prevents flooding the IdP with requests when it's unreachable.
 const TOKEN_REFRESH_COOLDOWN_SECONDS = 60;
 
-// important: the IdP is remote (AUTHENTIK_ISSUER resolves to a public host), so a refresh is
-// a real internet round trip: measured 1.27s warm and 2.05s when discovery is uncached. The
-// request path gets a budget just above the worst measurement, because a navigation that
-// waits longer than that has already failed as far as the operator is concerned. Background
-// refreshes, which nobody is watching, keep the generous budget.
-const IDP_TIMEOUT_REQUEST_MS = 3_000;
-const IDP_TIMEOUT_BACKGROUND_MS = 10_000;
+// important: only /api/auth/session (nodejs) refreshes; middleware runs its own NextAuth
+// instance that never does (middleware.ts). With an IdP that rotates refresh tokens, two writers
+// spend the same token and the second one is refused, which ends the session.
+// A caller waits REFRESH_WAIT_MS for the grant; the grant itself may run to GRANT_CAP_MS, and a
+// late answer is still recorded in lib/refresh-grants.ts for the next read. Aborting it instead
+// would discard a rotation the IdP has already committed. Measured 1.27 s warm, 2.05 s with
+// discovery uncached.
+const REFRESH_WAIT_MS = 10_000;
+const GRANT_CAP_MS = 60_000;
 
-// note: middleware compiles to the edge runtime, the /api/auth/session poll to nodejs. That
-// is the only reliable signal for "is a paint waiting on this refresh".
-const ON_REQUEST_PATH = process.env.NEXT_RUNTIME === "edge";
-const IDP_TIMEOUT_MS = ON_REQUEST_PATH ? IDP_TIMEOUT_REQUEST_MS : IDP_TIMEOUT_BACKGROUND_MS;
-
-// Refresh this many seconds BEFORE expiry. Deliberately asymmetric: Authentik access tokens
-// live ~5 min and SessionProvider polls /api/auth/session every 4 min (auth-provider.tsx), so
-// at every poll the token has ~60s left. A 120s background window guarantees the poll is what
-// spends the IdP round trip. The request path uses 0, so middleware refreshes only when the
-// token is genuinely expired, which now means only when the poll was missed (sleep, new tab).
-const REFRESH_SKEW_BACKGROUND_S = 120;
-const REFRESH_SKEW_REQUEST_S = 0;
-const REFRESH_SKEW_S = ON_REQUEST_PATH ? REFRESH_SKEW_REQUEST_S : REFRESH_SKEW_BACKGROUND_S;
+// Refresh this long before expiry. Authentik access tokens live ~5 min and SessionProvider polls
+// /api/auth/session every 4 min (auth-provider.tsx), so at every poll the token has ~60 s left
+// and the poll is what spends the IdP round trip, never a navigation.
+const REFRESH_SKEW_S = 120;
 
 // Cached OIDC token endpoint to avoid re-fetching discovery on every refresh
 let _cachedTokenEndpoint: string | null = null;
@@ -140,118 +131,73 @@ async function resolveTokenEndpoint(signal: AbortSignal): Promise<string> {
   }
 }
 
-// Token refresh function for handling expired tokens.
-// important: this never rejects. Every failure is folded into the returned JWT, which is what
-// lets the dedupe wrapper below share one promise without risking an unhandled rejection.
-async function refreshAccessToken(token: JWT): Promise<JWT> {
+// One refresh_token grant. important: never rejects; a failure is an outcome, so every caller
+// sharing the grant in lib/refresh-grants.ts sees the same answer.
+async function grantTokens(refreshToken: string): Promise<GrantOutcome> {
   const nowSeconds = Math.floor(Date.now() / 1000);
   try {
-    // One deadline shared by discovery and the grant, so the worst case is the budget rather
-    // than twice the budget.
-    const signal = AbortSignal.timeout(IDP_TIMEOUT_MS);
+    // One deadline shared by discovery and the grant.
+    const signal = AbortSignal.timeout(GRANT_CAP_MS);
     const tokenEndpoint = await resolveTokenEndpoint(signal);
-
     const response = await fetch(tokenEndpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: process.env.AUTHENTIK_CLIENT_ID || "",
         client_secret: process.env.AUTHENTIK_CLIENT_SECRET || "",
         grant_type: "refresh_token",
-        refresh_token: token.refreshToken || "",
+        refresh_token: refreshToken,
       }),
       signal,
     });
-
     const tokens = await response.json();
-
-    if (!response.ok) {
-      throw tokens;
-    }
+    if (!response.ok) throw new Error(typeof tokens?.error === "string" ? tokens.error : `HTTP ${response.status}`);
 
     // A role granted or removed in Authentik reaches the session here (issue #17). A token with
     // no readable claim keeps the groups it had: Authentik sends [] for "none", so a missing
     // claim is a broken mapping, and /me/access still answers for the backend's own reading.
     const groups = readGroupsClaim(tokens.access_token);
     if (!groups) console.warn("[AUTH] Refreshed access token carried no groups claim; keeping the session's groups");
-
     return {
-      ...token,
-      accessToken: tokens.access_token,
-      expiresAt: Math.floor(Date.now() / 1000) + tokens.expires_in,
-      refreshToken: tokens.refresh_token ?? token.refreshToken,
-      error: undefined,
-      retryAfter: undefined,
-      requestRetryAfter: undefined,
-      // important: stamped on every successful grant, claim or not. It is the floor under the
-      // notice's forced refresh, and a token without the claim must not lift it.
-      groupsReadAt: nowSeconds,
-      ...(groups ? { groups, roles: roleGroups(groups) } : {}),
+      ok: true,
+      fields: {
+        accessToken: tokens.access_token,
+        expiresAt: Math.floor(Date.now() / 1000) + tokens.expires_in,
+        refreshToken: tokens.refresh_token ?? refreshToken,
+        // important: stamped on every successful grant, claim or not. It is the floor under the
+        // notice's forced refresh, and a token without the claim must not lift it.
+        groupsReadAt: nowSeconds,
+        ...(groups ? { groups, roles: roleGroups(groups) } : {}),
+      },
     };
   } catch (error) {
-    // Compact log - avoid dumping the full stack on every request
-    const reason = error instanceof Error ? error.message : String(error);
-    console.warn(`[AUTH] Token refresh failed: ${reason}`);
+    console.warn(`[AUTH] Token refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+    return { ok: false };
+  }
+}
 
+function withFields(token: JWT, fields: RefreshedFields): JWT {
+  return { ...token, ...fields, error: undefined, retryAfter: undefined };
+}
+
+async function refresh(token: JWT): Promise<JWT | null> {
+  const { outcome } = await grantOnce(sessionSubject(token), token.refreshToken ?? "", () =>
+    grantTokens(token.refreshToken ?? "")
+  );
+  const settled = await settleWithin(outcome, REFRESH_WAIT_MS);
+  // Still at the IdP: answer with what the session has and let the grant land in the registry.
+  // An error here would raise the re-login banner for a refresh that is about to succeed.
+  if (!settled) return token;
+  if (!settled.ok && settled.forgotten) return null;
+  if (!settled.ok) {
     // Cooldown lives here, not in expiresAt, so expiresAt stays truthful.
-    const cooldownUntil = nowSeconds + TOKEN_REFRESH_COOLDOWN_SECONDS;
-    return {
-      ...token,
-      // important: the request path must not be able to mark the session errored. It is the
-      // high-concurrency path, and `error` raises a destructive re-login banner in
-      // auth-provider.tsx. A navigation that cannot reach the IdP should render the page with
-      // the token it already has: nothing on the server reads the access token, so a stale one
-      // changes nothing about what renders. Recovery runs through the 401 handler in lib/api.ts
-      // and the background poll, which both keep their ability to raise the banner.
-      // important: and its cooldown binds only the request path. A miss on the 3 s budget says
-      // the IdP was slow, not down. When it also held back the nodejs path, the 401 handler's
-      // session update got the expired token back and the banner stayed up for the whole
-      // cooldown (one IdP answer at 3006 ms, 2026-10-22).
-      ...(ON_REQUEST_PATH
-        ? { requestRetryAfter: cooldownUntil }
-        : { error: "RefreshAccessTokenError", retryAfter: cooldownUntil }),
-    };
+    return { ...token, error: "RefreshAccessTokenError", retryAfter: Math.floor(Date.now() / 1000) + TOKEN_REFRESH_COOLDOWN_SECONDS };
   }
+  return withFields(token, settled.fields);
 }
 
-// In-flight refresh dedupe.
-// note: per-runtime and per-process. Middleware (edge) and /api/auth/session (nodejs) are
-// separate module instances, so this bounds a burst at one grant per runtime, not one
-// globally. Losing the map only costs extra grants, it can never produce a wrong token.
-const _inFlightRefresh = new Map<string, { promise: Promise<JWT>; joined: number }>();
-
-function refreshKey(token: JWT): string {
-  // note: identity of the grant, not a secret to log. The suffix changes the moment the IdP
-  // rotates the refresh token, which is exactly when a new grant becomes legitimate.
-  return `${token.authentikId ?? token.sub ?? "?"}:${(token.refreshToken ?? "").slice(-24)}`;
-}
-
-function refreshAccessTokenDeduped(token: JWT): Promise<JWT> {
-  const key = refreshKey(token);
-  const inFlight = _inFlightRefresh.get(key);
-  if (inFlight) {
-    inFlight.joined += 1;
-    return inFlight.promise;
-  }
-
-  const startedAt = Date.now();
-  const promise = refreshAccessToken(token);
-  _inFlightRefresh.set(key, { promise, joined: 0 });
-
-  void promise.finally(() => {
-    const entry = _inFlightRefresh.get(key);
-    _inFlightRefresh.delete(key);
-    // Deliberate and permanent: the only way to prove from outside that a burst of concurrent
-    // requests produced exactly one IdP grant. Logs no token material.
-    console.info(
-      `[AUTH] refresh grant runtime=${process.env.NEXT_RUNTIME ?? "nodejs"} ` +
-        `shared=${(entry?.joined ?? 0) + 1} ms=${Date.now() - startedAt}`
-    );
-  });
-
-  return promise;
+function sessionSubject(token: JWT): string {
+  return token.authentikId ?? token.sub ?? "";
 }
 
 type JwtParams = Parameters<NonNullable<NonNullable<NextAuthConfig["callbacks"]>["jwt"]>>[0];
@@ -260,14 +206,7 @@ type JwtParams = Parameters<NonNullable<NonNullable<NextAuthConfig["callbacks"]>
 // held-down button cannot spend the rotating refresh token in a loop.
 const ROLE_RECHECK_FLOOR_S = 20;
 
-// A failed refresh is not retried until its cooldown passes. The request path also waits out its
-// own failures; the background path waits only for a background failure.
-function coolingDown(token: JWT, nowSeconds: number): boolean {
-  const until = Math.max(token.retryAfter ?? 0, ON_REQUEST_PATH ? (token.requestRetryAfter ?? 0) : 0);
-  return nowSeconds < until;
-}
-
-async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT> {
+async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT | null> {
   // Initial sign in
   if (account && user) {
     // Use EMAIL as the persistent user identifier.
@@ -290,7 +229,18 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
     };
   }
 
+  // A cookie whose refresh token was already spent (an older copy, another tab, a grant that
+  // finished after its caller stopped waiting) takes the newest tokens of its chain.
+  if (token.refreshToken) {
+    const upgrade = await upgradeSpent(sessionSubject(token), token.refreshToken);
+    if (upgrade) {
+      console.info(`[AUTH] rotation replay served hops=${upgrade.hops}`);
+      token = withFields(token, upgrade.fields);
+    }
+  }
+
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const coolingDown = nowSeconds < (token.retryAfter ?? 0);
 
   // important: the client's update() payload is only a signal here. Nothing in it is copied into
   // the token; the groups come from the IdP's answer to the refresh grant.
@@ -298,23 +248,16 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
     trigger === "update" &&
     (session as { refreshRoles?: unknown } | null | undefined)?.refreshRoles === true &&
     nowSeconds - (token.groupsReadAt ?? 0) >= ROLE_RECHECK_FLOOR_S &&
-    !coolingDown(token, nowSeconds);
-  if (recheckRoles) {
-    return await refreshAccessTokenDeduped(token);
-  }
+    !coolingDown;
+  if (recheckRoles) return refresh(token);
 
-  // Still comfortably valid. On the background path the skew makes this the branch that hands
-  // the IdP round trip to the session poll instead of to a navigation.
-  if (token.expiresAt && nowSeconds < token.expiresAt - REFRESH_SKEW_S) {
-    return token;
-  }
+  // Still comfortably valid: the session poll spends the round trip before it is needed.
+  if (token.expiresAt && nowSeconds < token.expiresAt - REFRESH_SKEW_S) return token;
 
   // A previous refresh failed. Wait out the cooldown rather than hammering the IdP.
-  if (coolingDown(token, nowSeconds)) {
-    return token;
-  }
+  if (coolingDown) return token;
 
-  return await refreshAccessTokenDeduped(token);
+  return refresh(token);
 }
 
 // Only root-level public files may bypass the page authentication callback.
@@ -438,11 +381,19 @@ export const authConfig: NextAuthConfig = {
   // Trust the Authentik HTTPS certificate
   // In production, ensure proper SSL configuration
   trustHost: true,
+
+  events: {
+    // A cookie from before the sign-out must not be healed into the signed-out chain, and a grant
+    // still in flight for it must not write the session back.
+    async signOut(message) {
+      const token = "token" in message ? message.token : null;
+      if (token?.refreshToken) await forget(sessionSubject(token), token.refreshToken);
+    },
+  },
 };
 
-// Export NextAuth handlers and helpers.
-// note: the eager form on purpose. The lazy form, NextAuth((request) => config), makes auth()
-// return a promise of the middleware rather than the middleware, and the only reason to reach
-// for it was to branch on the prefetch header, which middleware never receives (see
-// middleware.ts).
-export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
+// The route handlers: the one place that refreshes. Middleware and the layout's session read
+// build their own non-refreshing instances from authConfig.
+// note: the eager form on purpose. The lazy form, NextAuth((request) => config), returns promises
+// of the handlers, and nothing here needs the request to build the config.
+export const { handlers } = NextAuth(authConfig);

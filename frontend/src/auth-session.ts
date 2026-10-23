@@ -14,10 +14,9 @@
  * token that is not comfortably valid yields no session, and the browser falls back to fetching
  * one exactly as it did before.
  *
- * important: the cookie read is the one the browser sent. Middleware may have refreshed an
- * expired token on this same request, but next-auth sets that cookie on a plain Response, which
- * Next does not merge into this render's cookies. Such a token fails the validity margin, so
- * the fallback covers it.
+ * important: the cookie read is the one the browser sent. Middleware never refreshes
+ * (middleware.ts), so an expired token stays expired for this render, fails the validity margin,
+ * and the browser's session read is what refreshes it.
  */
 import NextAuth from "next-auth";
 import { authConfig } from "@/auth";

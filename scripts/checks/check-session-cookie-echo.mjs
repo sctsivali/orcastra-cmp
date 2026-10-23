@@ -16,6 +16,7 @@ const root = resolve(process.argv[2] ?? join(dirname(fileURLToPath(import.meta.u
 const frontendRequire = createRequire(join(root, "frontend/package.json"));
 const ts = frontendRequire("typescript");
 const jwt = await import(pathToFileURL(frontendRequire.resolve("next-auth/jwt")).href);
+const core = await import(pathToFileURL(createRequire(frontendRequire.resolve("next-auth/jwt")).resolve("@auth/core")).href);
 
 function load(relativePath, dependencies = {}) {
   const output = ts.transpileModule(readFileSync(join(root, relativePath), "utf8"), {
@@ -29,7 +30,7 @@ function load(relativePath, dependencies = {}) {
   return module.exports;
 }
 
-const { dropUnchangedSessionCookie, sameSession } = load("frontend/src/lib/session-cookie-echo.ts", {
+const { dropUnchangedSessionCookie, sameSession, withoutSessionEcho } = load("frontend/src/lib/session-cookie-echo.ts", {
   "next-auth/jwt": jwt,
 });
 
@@ -54,8 +55,8 @@ const sessionSetCookies = (response) => response.headers.getSetCookie().filter((
 // The comparison ignores what every encode stamps and nothing else.
 assert.equal(sameSession({ ...session, iat: 1, exp: 2, jti: "a" }, { ...session, iat: 3, exp: 4, jti: "b" }), true);
 assert.equal(sameSession(session, { ...session, refreshToken: "rt-2" }), false);
-assert.equal(sameSession(session, { ...session, requestRetryAfter: 5 }), false);
-assert.equal(sameSession(session, { ...session, requestRetryAfter: undefined }), true);
+assert.equal(sameSession(session, { ...session, retryAfter: 5 }), false);
+assert.equal(sameSession(session, { ...session, retryAfter: undefined }), true);
 assert.equal(sameSession(session, { ...session, groups: ["role_tenant"] }), false);
 
 const incoming = await cookieOf(session);
@@ -79,7 +80,7 @@ const incoming = await cookieOf(session);
 // 2. A refresh, a new request-path cooldown, or a role change does go out.
 for (const changed of [
   { ...session, accessToken: "at-2", refreshToken: "rt-2", expiresAt: 2_000_000_300 },
-  { ...session, requestRetryAfter: 1_900_000_060 },
+  { ...session, error: "RefreshAccessTokenError", retryAfter: 1_900_000_060 },
   { ...session, groups: ["role_tenant"], roles: ["role_tenant"] },
 ]) {
   const out = await dropUnchangedSessionCookie(requestWith(incoming), middlewareResponse([await setCookieOf(changed)]), SECRET);
@@ -125,9 +126,33 @@ for (const [label, request, secret] of [
   assert.deepEqual(out.headers.getSetCookie(), [], "the secure session cookie is not echoed either");
 }
 
-// 7. Middleware is wired through the helper, with NextAuth's own secret lookup.
+// 7. NextAuth's own session route re-sets an unchanged session on a read; through the wrapper it
+//    does not, and a changed session still goes out.
+{
+  process.env.AUTH_SECRET = SECRET;
+  const route = (jwtCallback) => (request) => core.Auth(request, {
+    providers: [], secret: SECRET, trustHost: true, basePath: "/api/auth",
+    session: { strategy: "jwt" }, callbacks: { jwt: jwtCallback },
+  });
+  const read = () => requestWith(incoming);
+  const sessionRead = (r) => new Request("http://qa.invalid/api/auth/session", { headers: r.headers });
+  const raw = await route(({ token }) => token)(sessionRead(read()));
+  assert.equal(sessionSetCookies(raw).length, 1, "precondition: NextAuth echoes the session on a read");
+  const wrapped = await withoutSessionEcho(route(({ token }) => token))(sessionRead(read()));
+  assert.equal(wrapped.status, 200);
+  assert.deepEqual(sessionSetCookies(wrapped), [], "the session route echoed an unchanged session");
+  const rotated = await withoutSessionEcho(route(({ token }) => ({ ...token, refreshToken: "rt-2" })))(sessionRead(read()));
+  assert.equal(sessionSetCookies(rotated).length, 1, "a rotated session must be written");
+}
+
+// 8. Middleware builds its own non-refreshing instance and goes through the helper; the session
+//    route goes through the wrapper for both methods.
 const middleware = readFileSync(join(root, "frontend/src/middleware.ts"), "utf8");
-assert.match(middleware, /dropUnchangedSessionCookie\(request, response, process\.env\.AUTH_SECRET \?\? process\.env\.NEXTAUTH_SECRET\)/);
-assert.doesNotMatch(middleware, /export default auth\(/, "the auth() middleware must be wrapped, not exported bare");
+assert.match(middleware, /NextAuth\(\{ \.\.\.authConfig, callbacks: \{ \.\.\.authConfig\.callbacks, jwt: \(\{ token \}\) => token \} \}\)/);
+assert.match(middleware, /dropUnchangedSessionCookie\(request, response, sessionSecret\(\)\)/);
+assert.doesNotMatch(middleware, /import \{[^}]*\bauth\b[^}]*\} from "@\/auth"/, "middleware must not use the refreshing instance");
+const routeSource = readFileSync(join(root, "frontend/src/app/api/auth/[...nextauth]/route.ts"), "utf8");
+assert.match(routeSource, /export const GET = withoutSessionEcho\(handlers\.GET\);/);
+assert.match(routeSource, /export const POST = withoutSessionEcho\(handlers\.POST\);/);
 
 console.log("session cookie echo: ok");

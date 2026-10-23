@@ -1,12 +1,11 @@
 import { getToken, type JWT } from "next-auth/jwt";
 
-// important: NextAuth's middleware re-encodes the session and appends its Set-Cookie to every
-// response after our handler has run (next-auth/lib/index.js, "Preserve cookies from the session
-// response"). When middleware did not refresh, that cookie is the request's own session again.
-// A navigation that lands after /api/auth/session refreshed then puts the older session back:
-// a refresh token the IdP has just rotated, or a cooldown the background path has just set
-// (security review of the refresh cooldown split, 2026-10-23). So a session cookie only leaves
-// middleware when the session in it changed.
+// important: NextAuth re-encodes the session and sets it on every response that read it: every
+// middleware response (appended after our handler runs, next-auth/lib/index.js, "Preserve
+// cookies from the session response") and every /api/auth/session answer. A response that lands
+// after another one rotated the session puts the older session back, with a refresh token the
+// IdP has already revoked (Authentik rotates on every grant by default) or without a cooldown the
+// background path has just set. So a session cookie only leaves when the session in it changed.
 
 const SESSION_COOKIES = ["__Secure-authjs.session-token", "authjs.session-token"];
 // Stamped by every encode, so they differ even when nothing in the session did.
@@ -64,4 +63,16 @@ export async function dropUnchangedSessionCookie(
     if (!sessionCookieBase(cookieName(cookie))) headers.append("set-cookie", cookie);
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+/** NextAuth's own secret lookup (next-auth/lib/env.js). */
+export function sessionSecret(): string | undefined {
+  return process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
+}
+
+/** A route handler whose responses carry the session cookie only when the session changed. */
+export function withoutSessionEcho<R extends Request>(
+  handler: (request: R) => Promise<Response>,
+): (request: R) => Promise<Response> {
+  return async (request) => dropUnchangedSessionCookie(request, await handler(request), sessionSecret());
 }

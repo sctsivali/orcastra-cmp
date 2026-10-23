@@ -331,8 +331,8 @@ jobs:
       - name: Sign-in return path
         run: node scripts/checks/check-auth-callback.mjs .
 
-      - name: Token refresh cooldown
-        run: node scripts/checks/check-token-refresh-cooldown.mjs .
+      - name: Token rotation
+        run: node scripts/checks/check-token-rotation.mjs .
 
       - name: Session cookie echo
         run: node scripts/checks/check-session-cookie-echo.mjs .

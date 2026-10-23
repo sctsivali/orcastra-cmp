@@ -1,8 +1,15 @@
-import { auth } from "@/auth";
+import NextAuth from "next-auth";
+import { authConfig } from "@/auth";
 import { inspectRequestTarget } from "@/lib/request-security";
-import { dropUnchangedSessionCookie } from "@/lib/session-cookie-echo";
+import { dropUnchangedSessionCookie, sessionSecret } from "@/lib/session-cookie-echo";
 import { NextResponse, type NextRequest } from "next/server";
 import { isSettingsTab } from "@/app/settings/settings-tabs";
+
+// important: middleware reads the session and never refreshes it. /api/auth/session is the only
+// writer (auth.ts): with an IdP that rotates refresh tokens, a second writer spends the same token
+// and is refused. An expired access token here only means the page renders and the client's
+// session read refreshes it; the role gate below reads the cookie's groups until then.
+const { auth } = NextAuth({ ...authConfig, callbacks: { ...authConfig.callbacks, jwt: ({ token }) => token } });
 
 // note: middleware cannot tell a router prefetch from a real navigation. Next strips every
 // FLIGHT_HEADER (RSC, Next-Router-Prefetch, Next-Router-State-Tree, ...) from the request
@@ -40,7 +47,7 @@ const authMiddleware = auth((request) => {
 export default async function middleware(request: NextRequest, context: Parameters<typeof authMiddleware>[1]) {
   const response = await authMiddleware(request, context);
   if (!response) return response;
-  return dropUnchangedSessionCookie(request, response, process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET);
+  return dropUnchangedSessionCookie(request, response, sessionSecret());
 }
 
 export const config = {
