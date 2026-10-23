@@ -311,8 +311,10 @@ function InstancesContent() {
     return sortedInstances.slice(startIndex, startIndex + pageSize);
   }, [sortedInstances, currentPage, pageSize]);
 
-  // Full-page loading state
-  if (isLoading) {
+  // Full-page loading state, only while there is nothing to show. A create the operator just made
+  // keeps its placeholder row through a slow first read: the loader used to replace the whole table,
+  // so the new instance vanished for as long as that read took (seen at 4 to 10 s on a cache miss).
+  if (isLoading && visiblePendingCreates.length === 0) {
     return <LoadingLottiePage />;
   }
 
