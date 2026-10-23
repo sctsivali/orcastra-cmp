@@ -137,6 +137,15 @@ def _clear_family(family: str) -> None:
     _CLEARERS[family](get_cache_manager())
 
 
+def _describe(host: str, frame: Mapping[str, Any]) -> str:
+    requestor = frame.get("requestor")
+    if isinstance(requestor, Mapping):
+        who = f"{requestor.get('protocol') or '?'}:{str(requestor.get('username') or '')[:12] or '?'}"
+    else:
+        who = "no requestor"
+    return f"{frame.get('action')} {frame.get('project') or '-'}/{frame.get('name') or frame.get('instance') or '-'} on {host} by {who}"
+
+
 def is_dashboard_request(requestor: Any, dashboard: FrozenSet[str]) -> bool:
     """True only for a TLS requestor that is one of this dashboard's own identities.
 
@@ -242,6 +251,8 @@ class CacheClearance:
         self._inflight: Set[asyncio.Future] = set()
         self._running: Set[str] = set()
         self._again: Set[str] = set()
+        self._triggers: Dict[str, str] = {}
+        self._noted: Dict[str, int] = {}
         self._registry_task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
@@ -269,7 +280,13 @@ class CacheClearance:
     def note(self, host: str, frame: Mapping[str, Any], dashboard: FrozenSet[str] = frozenset()) -> None:
         """Mark the families one hub frame changes. Never raises; never waits."""
         try:
-            for family in families_for(frame, dashboard):
+            families = families_for(frame, dashboard)
+            if families:
+                trigger = _describe(host, frame)
+                for family in families:
+                    self._triggers[family] = trigger
+                    self._noted[family] = self._noted.get(family, 0) + 1
+            for family in families:
                 self._coalescer.note(family)
         except Exception:  # noqa: BLE001 - a frame that cannot be noted falls back to the TTL
             logger.warning("Cache clearance could not note a frame from %s", host, exc_info=True)
@@ -316,8 +333,13 @@ class CacheClearance:
             self._submit(family)
 
     def _run_clear(self, family: str) -> None:
+        # note: one line per clear, and clears are coalesced (at most every 10 s or 30 s per
+        # family), so this says what keeps a list cold without flooding the log.
+        trigger = self._triggers.pop(family, "marked dirty")
+        noted = self._noted.pop(family, 0)
         try:
             self._clearer(family)
+            logger.info("Cache clearance cleared %s (%d event(s); last %s)", family, noted, trigger)
         except Exception:  # noqa: BLE001 - the TTL still bounds the stale window
             logger.warning("Cache clearance of %s failed", family, exc_info=True)
 
