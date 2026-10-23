@@ -1180,6 +1180,7 @@ async def delete_cluster(
         # delete hang (users were double-clicking a button that never responded).
         VAULT_DELETE_TIMEOUT = 20.0
         DB_DELETE_TIMEOUT = 10.0
+        KEY_GRANT_CLEANUP_TIMEOUT = 20.0
 
         logger.info(f"Starting deletion of cluster {cluster_id}")
         
@@ -1318,7 +1319,25 @@ async def delete_cluster(
             logger.info(f"Deleted node metadata for {cluster_id}")
         except Exception as e:
             logger.warning(f"Failed to delete node metadata for {cluster_id}: {e}")
-        
+
+        # Step 8: Drop the id from API key grants. Left behind, a grant names an id no cluster
+        # holds: it authorises nothing, but the key reports it as held, its integration polls it,
+        # and the same id registered later by someone else would come back inside the old grant.
+        keys_changed: Optional[int] = None
+        try:
+            from app.services.key_grant_hygiene import strip_cluster_from_key_grants
+
+            keys_changed = await asyncio.wait_for(
+                strip_cluster_from_key_grants(cluster_id), timeout=KEY_GRANT_CLEANUP_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "API key grant cleanup for %s outlived %ss; scripts/repair_key_grant_cluster_ids.py "
+                "finishes it", cluster_id, KEY_GRANT_CLEANUP_TIMEOUT,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to drop {cluster_id} from API key grants: {e}")
+
         logger.info(f"Successfully completed deletion of cluster {cluster_id}")
         
         # Log activity: cluster deletion success
@@ -1327,7 +1346,11 @@ async def delete_cluster(
             target_type="cluster",
             target_id=cluster_id,
             result="success",
-            details={"deletion_type": "full", "subpaths_deleted": ["metadata", "secrets", "certs", "pending_certs"]}
+            details={
+                "deletion_type": "full",
+                "subpaths_deleted": ["metadata", "secrets", "certs", "pending_certs"],
+                "api_key_grants_changed": keys_changed,
+            },
         )
         
         return ClusterDeleteResponse(

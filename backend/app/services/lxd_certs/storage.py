@@ -13,6 +13,11 @@ from .types import LXDCertManagerError
 
 logger = logging.getLogger(__name__)
 
+# Cluster ids Vault has answered 404 for, so a grant naming an id no cluster holds (an old
+# spelling, a deregistered cluster) is reported once per process rather than on every poll.
+_absent_cluster_ids: set = set()
+_absent_lock = threading.Lock()
+
 
 @dataclass
 class RegistryRead:
@@ -221,6 +226,8 @@ class VaultStorageMixin:
                 "common_name": cert_data.get("common_name", "")
             }
             
+            with _absent_lock:
+                _absent_cluster_ids.discard(cluster_id)
             return {
                 "cluster_id": cluster_id,
                 "metadata": metadata,
@@ -228,7 +235,19 @@ class VaultStorageMixin:
                 "certificate": cert_info
             }
         except VaultClientError as e:
-            logger.error(f"Failed to get cluster info for {cluster_id}: {e}")
+            if e.status_code == 404:
+                # note: not a Vault fault, a name with no registration. ERROR on every poll buried
+                # real Vault failures under ~50 lines an hour from one integration's stale grant.
+                with _absent_lock:
+                    first = cluster_id not in _absent_cluster_ids
+                    _absent_cluster_ids.add(cluster_id)
+                if first:
+                    logger.warning(
+                        "No cluster is registered under %s (Vault has no metadata for it); "
+                        "further lookups of it are not logged", cluster_id,
+                    )
+            else:
+                logger.error(f"Failed to get cluster info for {cluster_id}: {e}")
             raise LXDCertManagerError(f"Failed to retrieve cluster info: {str(e)}")
     
     def read_registry(self, use_cache: bool = True, *, on_loop: Optional[bool] = None) -> "RegistryRead":

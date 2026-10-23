@@ -2317,6 +2317,8 @@ async def create_api_key(
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
 
+    await _refuse_new_grants_to_unregistered_clusters(p.cluster_id for p in request.cluster_permissions)
+
     # After the scope guard on purpose: this reaches the clusters, so it must never run for a
     # cluster the caller was just told they may not touch.
     await _assert_granted_projects_exist(lxd_service, request.cluster_permissions)
@@ -2823,10 +2825,21 @@ async def update_api_key_permissions(
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
 
+    vault_client = get_vault_integrations_client()
+    try:
+        stored, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
+    except Exception:  # noqa: BLE001 - the write below reads it again and answers for a missing key
+        stored = {}
+    await _refuse_new_grants_to_unregistered_clusters(
+        (p.cluster_id for p in permissions),
+        frozenset(
+            grant.get("cluster_id") for grant in (stored or {}).get("cluster_permissions", [])
+            if isinstance(grant, dict)
+        ),
+    )
+
     await _assert_granted_projects_exist(lxd_service, permissions)
 
-    vault_client = get_vault_integrations_client()
-    
     try:
         # note: read and written under the key's lock, like revoke and the capability edit, so a
         # revoke landing in between is not written back over
@@ -3334,6 +3347,94 @@ async def delete_user_mapping(
 # These use API key auth (headers or body), NOT JWT auth
 # ============================================
 
+async def _unregistered_cluster_ids(cluster_ids: Any) -> FrozenSet[str]:
+    """The ids in a key's grant that no cluster is registered under any more.
+
+    note: empty when the registry cannot be read, so an outage changes nothing a caller sees. A
+    grant can name such an id because grants are stored as typed (a cluster registered again
+    under a new id leaves the old one behind); the entry stays in what the key reports, since
+    the published v1 contract says /validate and /whoami describe what the key holds.
+    """
+    registered = await cluster_registry.registered_cluster_ids()
+    if registered is None:
+        return frozenset()
+    return frozenset(c for c in cluster_ids if c and c not in registered)
+
+
+async def _refuse_new_grants_to_unregistered_clusters(
+    requested: Any, already_held: FrozenSet[str] = frozenset()
+) -> None:
+    """A grant write may add only ids a cluster is registered under; ids it already holds stay.
+
+    important: hygiene, not the authorization boundary (the caller's allowed set is checked
+    first). A grant naming an id no cluster holds authorises nothing, but it is reported as held
+    and polled forever. Ids already stored stay editable so a key is never frozen until repaired
+    (backend/scripts/repair_key_grant_cluster_ids.py). An unreadable registry refuses nothing.
+    """
+    new_ids = {c for c in requested if c} - set(already_held)
+    if not new_ids:
+        return
+    registered = await cluster_registry.registered_cluster_ids(fresh=True)
+    if registered is None:
+        logger.warning("Cluster registry unreadable; a grant to %s was not checked against it", sorted(new_ids))
+        return
+    missing = sorted(new_ids - registered)
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "cluster_not_registered",
+                "message": f"No cluster is registered under: {', '.join(missing)}",
+            },
+        )
+
+
+async def _refuse_a_cluster_not_registered(cluster_id: str) -> None:
+    """404 `cluster_not_registered` for an id the key's grant names but no cluster holds.
+
+    note: called after the key's own grant check, so it tells a caller nothing about an id its
+    grant does not already name. Non-retryable on purpose: the 503 "Could not connect" it
+    replaces read as an outage, and a polling integration retried such ids every few minutes.
+    When the registry cannot be read nothing is refused here and the call proceeds as before.
+    """
+    if cluster_id in await _unregistered_cluster_ids([cluster_id]):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "cluster_not_registered",
+                "message": f"Cluster '{cluster_id}' is not registered with this control plane",
+            },
+        )
+
+
+def _cluster_display_names_sync(cert_manager: Any, cluster_ids: List[str]) -> Dict[str, str]:
+    """Display names from the Vault registry; runs on a worker thread, never on the loop."""
+    names: Dict[str, str] = {}
+    for cluster_id in cluster_ids:
+        try:
+            meta = cert_manager.get_cluster_info(cluster_id).get("metadata", {})
+            names[cluster_id] = meta.get("display_name") or meta.get("name") or cluster_id
+        except Exception:  # noqa: BLE001 - a name is decoration; the id stands in
+            names[cluster_id] = cluster_id
+    return names
+
+
+def _cluster_infos_sync(cert_manager: Any, cluster_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    infos: Dict[str, Dict[str, Any]] = {}
+    for cluster_id in cluster_ids:
+        try:
+            infos[cluster_id] = cert_manager.get_cluster_info(cluster_id)
+        except Exception as e:  # noqa: BLE001 - one cluster's record must not hide the others
+            logger.warning(f"Could not get region info for {cluster_id}: {e}")
+    return infos
+
+
+def _reported_grant(grant: Dict[str, Any], unregistered: FrozenSet[str]) -> Dict[str, Any]:
+    if grant.get("cluster_id") in unregistered:
+        return {**grant, "registered": False}
+    return grant
+
+
 @external_router.post(
     "/validate",
     response_model=APIKeyValidateResponse,
@@ -3369,13 +3470,13 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         
         # Valid!
         raw_permissions = metadata.get("cluster_permissions", [])
-        
+        grant_ids = [perm.get("cluster_id") for perm in raw_permissions if perm.get("cluster_id")]
+        unregistered = await _unregistered_cluster_ids(grant_ids)
+
         # Enrich cluster permissions with cluster names from Vault
         enriched_permissions = []
         settings = get_settings()
-        
-        # Build cluster name lookup
-        cluster_names = {}
+        cluster_names: Dict[str, str] = {}
         if settings.vault_enabled and settings.vault_token:
             try:
                 from app.services.lxd_cert_manager import LXDCertificateManager
@@ -3384,23 +3485,14 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
                     vault_client=vault,
                     clusters_path=settings.vault_clusters_path
                 )
-                
-                for perm in raw_permissions:
-                    cluster_id = perm.get("cluster_id")
-                    if cluster_id and cluster_id not in cluster_names:
-                        try:
-                            cluster_info = cert_manager.get_cluster_info(cluster_id)
-                            meta = cluster_info.get("metadata", {})
-                            cluster_names[cluster_id] = meta.get("display_name") or meta.get("name") or cluster_id
-                        except Exception:
-                            cluster_names[cluster_id] = cluster_id
+                lookups = [c for c in dict.fromkeys(grant_ids) if c not in unregistered]
+                cluster_names = await asyncio.to_thread(_cluster_display_names_sync, cert_manager, lookups)
             except Exception as e:
                 logger.warning(f"Could not enrich cluster names: {e}")
-        
-        # Build enriched permissions with cluster names
+
         for perm in raw_permissions:
             cluster_id = perm.get("cluster_id")
-            enriched_perm = dict(perm)
+            enriched_perm = _reported_grant(dict(perm), unregistered)
             enriched_perm["cluster_name"] = cluster_names.get(cluster_id, cluster_id)
             enriched_permissions.append(ClusterPermission(**enriched_perm))
         
@@ -4154,6 +4246,11 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
     `/validate` carries: it grants nothing and reports only what the presented key already holds.
     """
     granted = granted_capabilities(api_key)
+    grants = [
+        grant for grant in api_key.get("cluster_permissions", [])
+        if isinstance(grant, dict) and "cluster_id" in grant
+    ]
+    unregistered = await _unregistered_cluster_ids(grant["cluster_id"] for grant in grants)
     return APIKeyValidateResponse(
         valid=True,
         app_name=api_key.get("app_name"),
@@ -4162,9 +4259,8 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
         expires_at=api_key.get("expires_at"),
         expires_in_days=days_remaining(api_key.get("expires_at")),
         cluster_permissions=[
-            ClusterPermission(**grant)
-            for grant in api_key.get("cluster_permissions", [])
-            if isinstance(grant, dict) and "cluster_id" in grant
+            ClusterPermission(**_reported_grant(grant, unregistered))
+            for grant in grants
         ],
         server=ServerIdentity(**build_identity.full()),
         features=_integration_features(),
@@ -4453,6 +4549,8 @@ async def get_integration_regions(
             permission["cluster_id"] for permission in api_key.get("cluster_permissions", [])
         }
         regions: Dict[str, Dict[str, Any]] = {}
+        # A grant can name an id no cluster is registered under; it has no location to report.
+        allowed_clusters = allowed_clusters - await _unregistered_cluster_ids(allowed_clusters)
 
         if settings.vault_enabled and settings.vault_token:
             from app.services.lxd_cert_manager import LXDCertificateManager
@@ -4462,9 +4560,9 @@ async def get_integration_regions(
                 clusters_path=settings.vault_clusters_path
             )
 
-            for cluster_id in allowed_clusters:
+            infos = await asyncio.to_thread(_cluster_infos_sync, cert_manager, sorted(allowed_clusters))
+            for cluster_id, cluster_info in infos.items():
                 try:
-                    cluster_info = cert_manager.get_cluster_info(cluster_id)
                     location_data = _public_location_data(
                         cluster_info.get("metadata", {}).get("location", {})
                     )
@@ -4650,6 +4748,7 @@ async def raw_proxy(
         # note: shared with the image and ISO upload routers. An empty grant raised ValueError
         # here and surfaced as a 500; it is a 403 now. See app/core/api_key_permissions.py.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
+        await _refuse_a_cluster_not_registered(request.cluster_id)
 
         write_target = _raw_proxy_fenced_write_target(request)
         if write_target is not None:
@@ -5052,6 +5151,7 @@ async def proxy_operation(
         # while the raw proxy beside it worked. tests/test_cluster_scope_ratchet.py now covers
         # both.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
+        await _refuse_a_cluster_not_registered(request.cluster_id)
         # important: create_instance sends params to LXD as the body and create_storage_pool its
         # definition, and LXD reads their field names without regard to case, so every guard below
         # reads params held to one spelling (core/api_key_body.py). MCP tools arrive here too.

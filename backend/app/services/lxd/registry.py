@@ -13,7 +13,7 @@ import asyncio
 from typing import FrozenSet, Optional
 
 
-async def registered_cluster_ids() -> Optional[FrozenSet[str]]:
+async def registered_cluster_ids(fresh: bool = False) -> Optional[FrozenSet[str]]:
     """Every registered cluster id, or None when the registry cannot be read and nothing is known.
 
     Reads the Vault registry through the certificate manager (one cached LIST, served from the
@@ -29,7 +29,8 @@ async def registered_cluster_ids() -> Optional[FrozenSet[str]]:
     manager = get_lxd_service().cert_manager
     if manager is None:
         return None
-    read = await asyncio.to_thread(manager.read_registry, True)
+    # fresh: a grant write checks the registry as it is now, not as the cached LIST last saw it.
+    read = await asyncio.to_thread(manager.read_registry, not fresh)
     if read.source is None:
         return None
     return frozenset(read.cluster_ids)
