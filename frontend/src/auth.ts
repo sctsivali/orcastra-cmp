@@ -440,7 +440,7 @@ export const authConfig: NextAuthConfig = {
       const token = "token" in message ? message.token : null;
       if (!token?.refreshToken) return;
       const subject = sessionSubject(token);
-      const head = (await upgradeSpent(subject, token.refreshToken))?.fields.refreshToken ?? token.refreshToken;
+      const head = (await upgradeSpent(subject, token.refreshToken, { log: false }))?.fields.refreshToken ?? token.refreshToken;
       const chain = await forget(subject, token.refreshToken);
       if (!(await revokeAtIdp(head))) {
         holdTombstones(chain, UNREVOKED_TOMBSTONE_MS);

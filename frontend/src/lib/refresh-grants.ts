@@ -65,26 +65,25 @@ export async function grantKey(value: string): Promise<string> {
 
 function sweep(now: number): void {
   for (const [key, until] of tombstones) if (until <= now) tombstones.delete(key);
-  const perSubject = new Map<string, number>();
-  for (const [key, entry] of entries) {
-    if (entry.keepUntil <= now) {
-      entries.delete(key);
-      continue;
-    }
-    if (entry.state !== "pending") perSubject.set(entry.sub, (perSubject.get(entry.sub) ?? 0) + 1);
-  }
-  // Oldest first: one subject cannot hold more than its share, and the whole map stays bounded.
+  for (const [key, entry] of entries) if (entry.keepUntil <= now) entries.delete(key);
+  // Oldest first; losing a kept rotation costs a refused grant, never a wrong token.
   let evicted = 0;
   for (const [key, entry] of entries) {
+    if (entries.size <= MAX_ENTRIES) break;
     if (entry.state === "pending") continue;
-    const own = perSubject.get(entry.sub) ?? 0;
-    if (own > MAX_PER_SUBJECT || entries.size > MAX_ENTRIES) {
-      entries.delete(key);
-      perSubject.set(entry.sub, own - 1);
-      evicted += 1;
-    }
+    entries.delete(key);
+    evicted += 1;
   }
   if (evicted) console.warn(`[AUTH] grant registry evicted ${evicted} entries (bounds reached)`);
+}
+
+// important: a subject at its limit is refused rather than having its oldest entries evicted.
+// Eviction would reopen a remembered failure, so cycling through old cookies could keep the IdP
+// refusing spent tokens.
+function atSubjectLimit(sub: string, now: number): boolean {
+  let held = 0;
+  for (const entry of entries.values()) if (entry.sub === sub && entry.keepUntil > now) held += 1;
+  return held >= MAX_PER_SUBJECT;
 }
 
 /** The newest kept rotation reachable from this key, within MAX_HOPS. */
@@ -107,12 +106,16 @@ function logReplay(found: { hops: number; at: number }, who: string, now: number
 }
 
 /** The newest tokens of a chain this refresh token was spent in moments ago, if any. */
-export async function upgradeSpent(sub: string, refreshToken: string): Promise<{ fields: RefreshedFields } | null> {
+export async function upgradeSpent(
+  sub: string,
+  refreshToken: string,
+  { log = true }: { log?: boolean } = {},
+): Promise<{ fields: RefreshedFields } | null> {
   const [key, who] = await Promise.all([grantKey(refreshToken), grantKey(LOG_SALT + sub)]);
   const now = Date.now();
   const found = walk(key, sub, now);
   if (!found) return null;
-  logReplay(found, who, now);
+  if (log) logReplay(found, who, now);
   return { fields: found.fields };
 }
 
@@ -144,6 +147,11 @@ export async function grantOnce(
       logReplay(head, who, now);
       return { outcome: Promise.resolve({ ok: true, fields: head.fields }) };
     }
+  }
+
+  if (atSubjectLimit(sub, now)) {
+    console.warn(`[AUTH] grant refused: subject=${who.slice(0, 8)} holds ${MAX_PER_SUBJECT} registry entries`);
+    return { outcome: Promise.resolve({ ok: false }) };
   }
 
   const entry: Entry = { sub, outcome: Promise.resolve({ ok: false }), state: "pending", keepUntil: Infinity, joined: 0 };

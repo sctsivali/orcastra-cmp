@@ -401,17 +401,34 @@ try {
     assert.equal(held.granted, 0);
   }
 
-  // Bounds: one user cannot hold more than its share, and the whole registry stays bounded. An
-  // evicted rotation costs a refused grant, never a wrong token.
+  // Bounds: a user at the limit is refused without asking the IdP; nothing of theirs is evicted, so
+  // cycling through old cookies cannot reopen a remembered failure.
   {
     resetIdp();
     const { jwt } = world();
     idp.valid = new Set(Array.from({ length: 20 }, (_, i) => `own-${i}`));
-    for (let i = 0; i < 20; i++) await jwt({ token: expired({ refreshToken: `own-${i}` }) });
-    assert.equal((await jwt({ token: expired({ refreshToken: "own-0" }) })).error, "RefreshAccessTokenError", "per-user cap");
-    assert.equal((await grantsDuring(() => jwt({ token: expired({ refreshToken: "own-19" }) }))).granted, 0);
-    assert.ok(logs.some((l) => /grant registry evicted/.test(l)));
+    const first = await grantsDuring(async () => {
+      const out = [];
+      for (let i = 0; i < 20; i++) out.push(await jwt({ token: expired({ refreshToken: `own-${i}` }) }));
+      return out;
+    });
+    assert.equal(first.granted, 16, "the IdP was asked past the per-user limit");
+    assert.ok(first.out.slice(16).every((t) => t.error === "RefreshAccessTokenError"));
+    assert.ok(logs.some((l) => /grant refused: subject=[\w-]{8} holds 16/.test(l)));
+    assert.equal((await grantsDuring(() => jwt({ token: expired({ refreshToken: "own-0" }) }))).granted, 0, "a kept rotation was evicted");
 
+    resetIdp();
+    const failing = world();
+    idp.valid = new Set();
+    const cycle = async () => {
+      for (let i = 0; i < 20; i++) await failing.jwt({ token: expired({ refreshToken: `spent-${i}` }) });
+    };
+    const rounds = await grantsDuring(async () => { await cycle(); await cycle(); });
+    assert.equal(rounds.granted, 16, "old cookies cycled past the failure cache");
+  }
+
+  // The whole registry stays bounded across users.
+  {
     resetIdp();
     const many = world();
     idp.valid = new Set(Array.from({ length: 4101 }, (_, i) => `seed-${i}`));
