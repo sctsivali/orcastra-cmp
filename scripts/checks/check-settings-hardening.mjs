@@ -40,12 +40,13 @@ const middleware = load("frontend/src/middleware.ts", {
   "@/lib/request-security": load("frontend/src/lib/request-security.ts"),
   "next/server": { NextResponse: Response },
   "@/app/settings/settings-tabs": tabs,
+  "@/lib/session-cookie-echo": { dropUnchangedSessionCookie: async (_request, response) => response },
 }).default;
 for (const path of ["/settings", ...tabs.SETTINGS_TABS.map((tab) => `/settings/${tab}`)]) {
-  assert.equal(middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) }), undefined);
+  assert.equal(await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) }), undefined);
 }
 for (const path of ["/settings/not-a-tab", "/settings/integrations/unknown"]) {
-  assert.equal(middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) }).status, 404);
+  assert.equal((await middleware({ method: "GET", nextUrl: new URL(`https://qa.invalid${path}`) })).status, 404);
 }
 
 const empty = { organization_id: 17, updated_at: null };

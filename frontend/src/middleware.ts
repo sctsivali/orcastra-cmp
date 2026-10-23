@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { inspectRequestTarget } from "@/lib/request-security";
-import { NextResponse } from "next/server";
+import { dropUnchangedSessionCookie } from "@/lib/session-cookie-echo";
+import { NextResponse, type NextRequest } from "next/server";
 import { isSettingsTab } from "@/app/settings/settings-tabs";
 
 // note: middleware cannot tell a router prefetch from a real navigation. Next strips every
@@ -8,7 +9,7 @@ import { isSettingsTab } from "@/app/settings/settings-tabs";
 // before invoking middleware, deliberately: see server/web/adapter.js, "Headers should only
 // be stripped for middleware". Verified on 15.5.18 by dumping the header names seen here.
 // Anything that needs to treat a prefetch differently has to live outside this chain.
-export default auth((request) => {
+const authMiddleware = auth((request) => {
   const decision = inspectRequestTarget(
     request.method,
     request.nextUrl.pathname,
@@ -33,6 +34,14 @@ export default auth((request) => {
 
   return undefined;
 });
+
+// NextAuth appends the session cookie after the handler above returns, so it can only be held
+// back out here (see lib/session-cookie-echo.ts).
+export default async function middleware(request: NextRequest, context: Parameters<typeof authMiddleware>[1]) {
+  const response = await authMiddleware(request, context);
+  if (!response) return response;
+  return dropUnchangedSessionCookie(request, response, process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET);
+}
 
 export const config = {
   // Match all pages; exclude only explicit public endpoints and asset locations.

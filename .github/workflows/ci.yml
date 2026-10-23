@@ -334,6 +334,9 @@ jobs:
       - name: Token refresh cooldown
         run: node scripts/checks/check-token-refresh-cooldown.mjs .
 
+      - name: Session cookie echo
+        run: node scripts/checks/check-session-cookie-echo.mjs .
+
       - name: Access gate
         run: node scripts/checks/check-access-gate.mjs .
 
