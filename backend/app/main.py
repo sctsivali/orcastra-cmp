@@ -678,6 +678,13 @@ async def lifespan(app: FastAPI):
         await swr.shutdown()
     except Exception:
         pass
+
+    # Cancel waiters that clear caches when an accepted LXD operation settles
+    try:
+        from app.services import settle_invalidation
+        await settle_invalidation.shutdown()
+    except Exception:
+        pass
     
     # Stop session tracker cleanup
     try:

@@ -39,6 +39,19 @@ def addressed_operation_id(path: ProxyPath) -> Optional[str]:
     return None
 
 
+def lxd_operation_id(body: Any) -> Optional[str]:
+    """The operation id of an async (202) LXD body: `operation` is `/1.0/operations/{id}`."""
+    if not isinstance(body, dict):
+        return None
+    path = body.get("operation")
+    if isinstance(path, str) and path.strip("/"):
+        return path.rstrip("/").split("/")[-1].split("?")[0] or None
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("id"), str):
+        return metadata["id"] or None
+    return None
+
+
 class OwnerUnknown(Exception):
     """LXD answered the ownership read with something other than the operation or a 404."""
 

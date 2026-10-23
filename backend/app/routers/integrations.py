@@ -12,6 +12,7 @@ import logging
 import threading
 import time
 from contextlib import nullcontext
+from functools import partial
 from datetime import datetime, timedelta
 from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, FrozenSet, NamedTuple, Tuple, Type, TypeVar, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request, Response
@@ -54,10 +55,12 @@ from app.services.lxd.limited_write_reach import (
 )
 from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
+from app.services.settle_invalidation import invalidate_when_settled
 from app.services.lxd.raw_proxy_operations import (
     LXD_OPERATION_NOT_FOUND,
     OwnerUnknown,
     addressed_operation_id,
+    lxd_operation_id,
     operation_is_visible,
 )
 from app.services.lxd.proxy_operations import (
@@ -69,7 +72,7 @@ from app.services.lxd.proxy_operations import (
     PROXY_WAIT_OPERATIONS,
     classify_proxy_error,
     execute_proxy_operation,
-    SNAPSHOT_MUTATIONS,
+    LIST_MUTATIONS,
     fetch_operation_status,
     instance_detail,
     instance_summary,
@@ -4819,6 +4822,8 @@ async def raw_proxy(
                 data = response.json()
             except Exception:
                 data = {"raw": response.text if hasattr(response, 'text') else str(response)}
+            # read before redaction below, which may drop the operation's metadata
+            accepted_operation_id = lxd_operation_id(data) if status_code == 202 else None
             # important: an exec or console operation carries the secrets that open its websocket,
             # and a read key may list every operation in its projects. A write's answer is the
             # operation it started, which for a migration source holds its secrets too. An exec's
@@ -4846,10 +4851,20 @@ async def raw_proxy(
             # why this clears broadly: an unnecessary cache miss costs one refetch, whereas a
             # missed invalidation hides an external system's change for the whole TTL.
             if method not in ("GET", "HEAD", "OPTIONS") and 200 <= status_code < 300:
-                get_cache_manager().invalidate_resource_cache(
-                    "instances", "vms", "networks", "storage_volumes", "storage_pools",
-                    "profiles", "projects", "monitoring",
-                )
+                get_cache_manager().invalidate_after_external_write()
+                # important: a 202 has not happened yet. A dashboard read in the meantime still
+                # sees the instance an OrcaHub delete is removing and caches it, so clear again
+                # when LXD reports the operation settled.
+                # note: not for a call inside a guest (exec, files, console). Its operation
+                # lives as long as the session and changes no list, and it would hold a waiter.
+                if status_code == 202 and not guest_access_capability_for(request.path):
+                    invalidate_when_settled(
+                        lambda: client,
+                        accepted_operation_id,
+                        project,
+                        get_cache_manager().invalidate_after_external_write,
+                        label=f"raw_proxy[{method} {request.cluster_id}]",
+                    )
 
             return RawProxyResponse(
                 status_code=status_code,
@@ -4866,6 +4881,8 @@ async def raw_proxy(
             # A write keeps tripping it: its outcome is unknown, so callers should back off.
             if method not in ("GET", "HEAD", "OPTIONS"):
                 health.record_failure(request.cluster_id, str(timeout_error))
+                # the write may still land on its worker thread; clear the lists when it ends
+                timeout_error.when_finished(get_cache_manager().invalidate_after_external_write)
             _audit_raw_proxy(api_key, request, method, project, "failure", error="timeout")
             logger.warning(
                 f"Raw proxy timeout: {method} {request.path} on {request.cluster_id}/{project} "
@@ -5303,12 +5320,25 @@ async def proxy_operation(
                     max_in_flight=_operation_in_flight,
                 )
                 health.clear(request.cluster_id)
-            if operation in SNAPSHOT_MUTATIONS:
-                # The upstream product mutates snapshots through this proxy rather than through
-                # the dashboard's own routes, and the fleet listing is cached for 30s. Without
-                # this an operator watches a snapshot OrcaHub just took stay invisible, or one it
-                # just deleted stay listed, for the length of the TTL.
-                get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+            if operation in LIST_MUTATIONS:
+                # The upstream product writes through this proxy rather than through the
+                # dashboard's own routes. Without this an operator watched an instance OrcaHub had
+                # just deleted stay listed, or one it created stay missing, for a whole TTL.
+                get_cache_manager().invalidate_after_external_write()
+                pending_operation = (
+                    result_data.get("operation_id") if isinstance(result_data, dict) else None
+                )
+                if pending_operation:
+                    # accepted but not finished (wait=false or a long operation): clear again
+                    # once LXD settles it
+                    invalidate_when_settled(
+                        # runs on the waiter's threads, never on the loop
+                        partial(lxd_service.connection_manager.get_client, request.cluster_id),
+                        str(pending_operation),
+                        request.project,
+                        get_cache_manager().invalidate_after_external_write,
+                        label=f"proxy_operation[{operation} {request.cluster_id}]",
+                    )
         except BlockingTimeout as timeout_error:
             # important: exec lands HERE, not in the generic handler below, so its audit record
             # and its "still running" message have to be written on this path too. They were only
@@ -5355,9 +5385,11 @@ async def proxy_operation(
                 f"Proxy operation timeout: {operation} on {request.cluster_id} "
                 f"after {PROXY_OP_TIMEOUT}s"
             )
-            # This path mutates cluster state on behalf of an external system, where nobody is
-            # watching a UI to notice a stale list. Drop the cached reads it just invalidated.
-            get_cache_manager().invalidate_resource_cache("instances", "vms", "monitoring")
+            # A write that ran out of time may still have changed the cluster, on behalf of an
+            # external system nobody is watching. Drop the cached reads it may have invalidated.
+            if operation in LIST_MUTATIONS:
+                get_cache_manager().invalidate_after_external_write()
+                timeout_error.when_finished(get_cache_manager().invalidate_after_external_write)
             if long_running:
                 return ProxyResponse(
                     success=False,
@@ -5480,6 +5512,10 @@ async def proxy_operation(
     except Exception as e:
         logger.error(f"Error in proxy operation: {e}", exc_info=True)
         error_code = classify_proxy_error(e)
+        if request.operation in LIST_MUTATIONS:
+            # Whether the cluster changed before this failed is unknown, and a list that hides
+            # a change is the worse mistake: clear it.
+            get_cache_manager().invalidate_after_external_write()
         if request.operation in GUEST_ACCESS_OPERATIONS:
             # important: a call that outlived the budget still reached the guest. Auditing only
             # the ones that answered in time would leave the longest-running, which are the ones
@@ -6922,9 +6958,12 @@ async def sync_policies_from_external(
 
     await db.commit()
 
-    # This path mutates cluster state on behalf of an external system, where nobody is
-    # watching a UI to notice a stale list. Drop the cached reads it just invalidated.
-    get_cache_manager().invalidate_resource_cache("instances", "projects", "monitoring")
+    # This path changes what tenants may see on behalf of an external system, where nobody is
+    # watching a UI to notice a stale list. invalidate_instance_cache advances the generation the
+    # instance lists fence on, so a read already in flight cannot write the old scope back.
+    sync_cache = get_cache_manager()
+    sync_cache.invalidate_instance_cache()
+    sync_cache.invalidate_resource_cache("projects")
     return {
         "message": f"Synced {synced_count} policies",
         "synced": synced_count,

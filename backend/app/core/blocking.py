@@ -34,12 +34,36 @@ T = TypeVar("T")
 
 
 class BlockingTimeout(Exception):
-    """A bounded blocking call exceeded its wall-clock budget."""
+    """A bounded blocking call exceeded its wall-clock budget.
 
-    def __init__(self, label: str, timeout: float) -> None:
+    The caller stops waiting; the call does not stop. `pending` is the still-running call, so a
+    write route can act when it really finishes (when_finished), such as clearing the list
+    caches that a write landing after the 504 would otherwise leave stale for a whole TTL.
+    """
+
+    def __init__(
+        self,
+        label: str,
+        timeout: float,
+        pending: Optional["asyncio.Future[Any]"] = None,
+    ) -> None:
         self.label = label
         self.timeout = timeout
+        self.pending = pending
         super().__init__(f"{label} timed out after {timeout}s")
+
+    def when_finished(self, callback: Callable[[], None]) -> None:
+        """Run `callback` on the loop once the abandoned call ends, or now if that is unknown."""
+        def _run(_future: "asyncio.Future[Any]") -> None:
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 - a follow-up must never surface in the loop
+                logger.warning("follow-up after %s failed", self.label, exc_info=True)
+
+        if self.pending is None or self.pending.done():
+            _run(self.pending)  # type: ignore[arg-type]
+        else:
+            self.pending.add_done_callback(_run)
 
 
 class BlockingPoolFull(Exception):
@@ -210,7 +234,7 @@ async def run_blocking(
             timeout,
             in_flight(executor),
         )
-        raise BlockingTimeout(label, timeout) from None
+        raise BlockingTimeout(label, timeout, pending=future) from None
     except Exception:
         logger.debug(
             "blocking call %s failed after %.2fs", label, time.monotonic() - started

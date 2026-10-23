@@ -610,6 +610,18 @@ class CacheManager:
             "Cleared instance, VM, monitoring, storage volume, IPAM, project usage, fleet snapshot and capacity caches"
         )
 
+    def invalidate_after_external_write(self) -> None:
+        """Clear every list an external system's write through the proxy can have changed.
+
+        important: the proxy cannot tell what an opaque write touched, so this clears broadly; an
+        unnecessary miss costs one fan-out, a missed one hides the change for a whole TTL. It goes
+        through invalidate_instance_cache because that advances the instance list generation the
+        /instances and /vms reads fence on. invalidate_resource_cache("instances") advances a
+        different token, so a read already in flight could write the old list back.
+        """
+        self.invalidate_instance_cache()
+        self.invalidate_resource_cache("projects", "images")
+
     def invalidate_capacity_cache(self, *, require_shared: bool = False):
         """Drop cached capacity/allocation projections after resource-changing writes.
 

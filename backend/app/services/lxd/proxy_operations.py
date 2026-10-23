@@ -59,7 +59,7 @@ __all__ = [
     "PROXY_WAIT_OPERATIONS",
     "assert_required_params",
     "execute_proxy_operation",
-    "SNAPSHOT_MUTATIONS",
+    "LIST_MUTATIONS",
     "OperationNotVisible",
     "fetch_operation_status",
     # Re-exported so the router keeps one import site for the whole proxy vocabulary.
@@ -442,11 +442,14 @@ def assert_required_params(operation: str, params: Dict[str, Any]) -> None:
         _required(params, field, what)
 
 
-# Operations that change what the fleet snapshot listing would return. Named here, beside the rest
-# of the operation vocabulary, and acted on by the router: this module runs on a worker and the
-# cache invalidation belongs on the loop with every other one.
-SNAPSHOT_MUTATIONS = frozenset(
-    {"create_snapshot", "restore_snapshot", "delete_snapshot", "delete_instance"}
+# Operations that change what a dashboard list would return: every write and admin operation
+# except the ones that only reach inside a guest. Named here, beside the rest of the vocabulary,
+# and acted on by the router: this module runs on a worker and the cache invalidation belongs on
+# the loop with every other one. Derived, so a new write cannot be added without it.
+LIST_MUTATIONS: FrozenSet[str] = frozenset(
+    operation
+    for operation, level in PROXY_OPERATION_LEVELS.items()
+    if level != "read" and operation not in GUEST_ACCESS_OPERATIONS
 )
 
 
