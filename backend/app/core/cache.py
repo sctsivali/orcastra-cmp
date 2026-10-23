@@ -59,6 +59,11 @@ AVAILABILITY_GENERATION_KIND = "availability"
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
 # Not under the `instances:` pattern on purpose: it must survive the clearance it records.
 INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
+# Not only the project lists: a project created with its own features gets a default profile (and
+# may get its own images and volumes), and deleting one takes those with it. The profile list
+# caches for 180 s, so it showed the new project's profile missing, or a deleted project's profile
+# still there, for that long.
+PROJECT_CACHE_KINDS = ("projects", "project_usage", "profiles", "networks", "images", "storage_volumes")
 # Not under the `snapshots_fleet:` pattern so an invalidation can clear list entries while leaving
 # the token that tells already-running fleet reads their answer is stale.
 SNAPSHOT_FLEET_GENERATION_KEY = "snapshot_fleet_generation"
@@ -633,21 +638,8 @@ class CacheManager:
         self.invalidate_resource_cache("projects", "images")
 
     def invalidate_project_caches(self) -> None:
-        """Fence and clear every cached projection a project write changes.
-
-        Not only the project lists: a project created with its own features gets a default
-        profile (and may get its own images and volumes), and deleting one takes those with it.
-        The profile list caches for 180 s, so it showed the new project's profile missing, or a
-        deleted project's profile still there, for that long.
-        """
-        self.invalidate_resource_cache(
-            "projects",
-            "project_usage",
-            "profiles",
-            "networks",
-            "images",
-            "storage_volumes",
-        )
+        """Fence and clear every cached projection a project write changes (PROJECT_CACHE_KINDS)."""
+        self.invalidate_resource_cache(*PROJECT_CACHE_KINDS)
 
     def invalidate_capacity_cache(self, *, require_shared: bool = False):
         """Drop cached capacity/allocation projections after resource-changing writes.

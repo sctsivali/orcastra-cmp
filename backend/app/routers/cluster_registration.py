@@ -1323,17 +1323,29 @@ async def delete_cluster(
         # Step 8: Drop the id from API key grants. Left behind, a grant names an id no cluster
         # holds: it authorises nothing, but the key reports it as held, its integration polls it,
         # and the same id registered later by someone else would come back inside the old grant.
+        # important: shielded and never cancelled. A key rewrite cut off between its Vault write
+        # and its lock release could land after a concurrent revoke and bring the key back; on a
+        # slow Vault the route stops waiting and the cleanup carries on.
         keys_changed: Optional[int] = None
         try:
             from app.services.key_grant_hygiene import strip_cluster_from_key_grants
+            from app.services.lxd import registry as cluster_registry
+            from app.services.project_deletion import spawn
 
-            keys_changed = await asyncio.wait_for(
-                strip_cluster_from_key_grants(cluster_id), timeout=KEY_GRANT_CLEANUP_TIMEOUT
-            )
+            still_registered = await cluster_registry.registered_cluster_ids(fresh=True)
+            if still_registered is not None and cluster_id not in still_registered:
+                cleanup = spawn(strip_cluster_from_key_grants(cluster_id))
+                keys_changed = await asyncio.wait_for(
+                    asyncio.shield(cleanup), timeout=KEY_GRANT_CLEANUP_TIMEOUT
+                )
+            else:
+                # The registry still lists it (a Vault delete above failed) or cannot say: every
+                # grant naming it is still right. The repair script covers it once it is gone.
+                logger.warning("Not touching API key grants for %s: the registry does not confirm it is gone", cluster_id)
         except asyncio.TimeoutError:
             logger.warning(
-                "API key grant cleanup for %s outlived %ss; scripts/repair_key_grant_cluster_ids.py "
-                "finishes it", cluster_id, KEY_GRANT_CLEANUP_TIMEOUT,
+                "API key grant cleanup for %s is still running after %ss; it finishes in the background",
+                cluster_id, KEY_GRANT_CLEANUP_TIMEOUT,
             )
         except Exception as e:
             logger.warning(f"Failed to drop {cluster_id} from API key grants: {e}")

@@ -1,10 +1,13 @@
 """The LXD calls behind a project delete, run on the project executor (projects.py).
 
-important: a delete answers inside the browser's 45 s request window (lib/api.ts fetchAPI):
-5 s for the cluster lock, at most 3 + 15 s for the DELETE and 10 s for an operation if LXD
-answers 202, then 3 + 5 s for the exact readback that settles a timed-out one. LXD took well over
-the pooled client's 8 s just after a project's last instance went (measured live, 2026-10-23),
-and with that budget the route answered 400 with the transport text, cluster address included.
+important: the budgets aim at the browser's 45 s request window (lib/api.ts fetchAPI): 5 s for
+the cluster lock, 3 + 15 s for the DELETE, 10 s for an operation if LXD answers 202, then 3 + 5 s
+for the exact readback that settles a timed-out one. Getting a client can add its own validation
+read, and a reconnect more, so a slow cluster can still outlast the window; the browser then reads
+its own 504 as an unknown outcome and follows the project list, the same as for the route's 503.
+LXD took well over the pooled client's 8 s just after a project's last instance went (measured
+live, 2026-10-23), and with that budget the route answered 400 with the transport text, cluster
+address included.
 """
 
 import logging

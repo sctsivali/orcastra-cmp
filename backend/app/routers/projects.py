@@ -62,7 +62,7 @@ from app.core.org_scope import (
 )
 from app.services import project_deletion, project_grants
 from app.core.registry_guard import require_known_registry
-from app.core.cache import get_cache_manager, get_resource_list_generation
+from app.core.cache import PROJECT_CACHE_KINDS, get_cache_manager, get_resource_list_generation
 from app.core import swr
 from app.core.swr import Built
 from app.services.activity_logger import get_activity_logger
@@ -205,21 +205,8 @@ def _format_storage(bytes_value: int) -> str:
 
 
 def _invalidate_project_caches() -> None:
-    """Fence and clear every cached projection a project write changes.
-
-    Not only the project lists: a project created with its own features gets a default profile
-    (and may get its own images and volumes), and deleting one takes those with it. The profile
-    list caches for 180 s, so it showed the new project's profile missing, or a deleted
-    project's profile still there, for that long.
-    """
-    get_cache_manager().invalidate_resource_cache(
-        PROJECT_LIST_CACHE_KIND,
-        PROJECT_USAGE_CACHE_KIND,
-        "profiles",
-        "networks",
-        "images",
-        "storage_volumes",
-    )
+    """Fence and clear every cached projection a project write changes (core/cache.py)."""
+    get_cache_manager().invalidate_resource_cache(*PROJECT_CACHE_KINDS)
 
 
 
@@ -950,6 +937,9 @@ async def delete_project(
             project_deletion.delete_project_and_forget(db, lxd_service, host, project_name)
         )
         if request_cancelled:
+            # The delete landed after the requester left: what it owes still goes out.
+            if _deleted_here(outcome):
+                project_deletion.spawn(_announce_project_deleted(host, project_name, False))
             raise asyncio.CancelledError
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
@@ -1008,12 +998,24 @@ async def delete_project(
         logger.error(f"Error deleting project {project_name} on {host}: {type(e).__name__}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete project") from e
 
-    await _announce_project_deleted(host, project_name, False)
+    if _deleted_here(outcome):
+        await _announce_project_deleted(host, project_name, False)
+    else:
+        _invalidate_project_caches()
     verb = "was already deleted from" if outcome.already_gone else "deleted successfully from"
     return {
         "success": True,
         "message": f"Project '{project_name}' {verb} cluster '{host}'" + outcome.revoke_note,
     }
+
+
+def _deleted_here(outcome: "project_deletion.ProjectDeleted") -> bool:
+    """A delete this service carried out, as opposed to a name that was never there.
+
+    note: no event or audit success for a project that did not exist: announcing one would let a
+    caller send a false `project.deleted` to every subscriber for any name it likes.
+    """
+    return not outcome.already_gone or outcome.settled_pending
 
 
 async def _announce_project_deleted(host: str, project_name: str, settled_later: bool) -> None:

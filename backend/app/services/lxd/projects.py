@@ -762,6 +762,11 @@ class ProjectManager:
                 label=f"project.probe[{host}]",
                 executor=_projects_executor,
                 max_in_flight=_PROJECT_LIST_WORKERS,
+                # important: one probe thread per cluster. A cluster that drips its answer holds
+                # the thread past the wall; uncapped, a few slow probes took every project thread
+                # and every organization's project reads with them.
+                concurrency_key=f"{host}:probe",
+                max_in_flight_per_key=1,
             )
         except (BlockingTimeout, BlockingPoolFull, LXDConnectionError) as exc:
             raise LXDOperationUnknownError("delete", name) from exc

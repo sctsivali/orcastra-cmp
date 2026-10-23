@@ -20,12 +20,17 @@ from pydantic import BaseModel, Field, SecretStr, StringConstraints, ValidationE
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
-from app.services.lxd.exceptions import LXDOperationError
 from app.services.lxd.proxy_path_params import assert_path_params
 from app.services import project_deletion
-from pylxd.exceptions import LXDAPIException
-from requests import exceptions as requests_exceptions
-from urllib3 import exceptions as urllib3_exceptions
+from app.services.integration_cluster_checks import (
+    cluster_display_names_sync as _cluster_display_names_sync,
+    cluster_infos_sync as _cluster_infos_sync,
+    proxy_error_text as _proxy_error_text,
+    refuse_a_cluster_not_registered as _refuse_a_cluster_not_registered,
+    refuse_new_grants_to_unregistered_clusters as _refuse_new_grants_to_unregistered_clusters,
+    reported_grant as _reported_grant,
+    unregistered_cluster_ids as _unregistered_cluster_ids,
+)
 from app.services.lxd import health
 from app.services.lxd import registry as cluster_registry
 from app.services.lxd import status as lxd_status
@@ -2370,7 +2375,8 @@ async def create_api_key(
             "is_active": True,
             "is_revoked": False,
             "last_used_at": None,
-            "cluster_permissions": [p.model_dump() for p in request.cluster_permissions],
+            # `registered` is what /validate reports about a grant, never part of one.
+            "cluster_permissions": [p.model_dump(exclude={"registered"}) for p in request.cluster_permissions],
         }
         
         # Save to Vault (include raw secret for callback authentication)
@@ -2849,7 +2855,7 @@ async def update_api_key_permissions(
             )
 
             # Update permissions
-            metadata["cluster_permissions"] = [p.model_dump() for p in permissions]
+            metadata["cluster_permissions"] = [p.model_dump(exclude={"registered"}) for p in permissions]
 
             # Save updated metadata
             vault_client.vault_kv_put(
@@ -3346,94 +3352,6 @@ async def delete_user_mapping(
 # External API Endpoints (for Orcahub/External Apps)
 # These use API key auth (headers or body), NOT JWT auth
 # ============================================
-
-async def _unregistered_cluster_ids(cluster_ids: Any) -> FrozenSet[str]:
-    """The ids in a key's grant that no cluster is registered under any more.
-
-    note: empty when the registry cannot be read, so an outage changes nothing a caller sees. A
-    grant can name such an id because grants are stored as typed (a cluster registered again
-    under a new id leaves the old one behind); the entry stays in what the key reports, since
-    the published v1 contract says /validate and /whoami describe what the key holds.
-    """
-    registered = await cluster_registry.registered_cluster_ids()
-    if registered is None:
-        return frozenset()
-    return frozenset(c for c in cluster_ids if c and c not in registered)
-
-
-async def _refuse_new_grants_to_unregistered_clusters(
-    requested: Any, already_held: FrozenSet[str] = frozenset()
-) -> None:
-    """A grant write may add only ids a cluster is registered under; ids it already holds stay.
-
-    important: hygiene, not the authorization boundary (the caller's allowed set is checked
-    first). A grant naming an id no cluster holds authorises nothing, but it is reported as held
-    and polled forever. Ids already stored stay editable so a key is never frozen until repaired
-    (backend/scripts/repair_key_grant_cluster_ids.py). An unreadable registry refuses nothing.
-    """
-    new_ids = {c for c in requested if c} - set(already_held)
-    if not new_ids:
-        return
-    registered = await cluster_registry.registered_cluster_ids(fresh=True)
-    if registered is None:
-        logger.warning("Cluster registry unreadable; a grant to %s was not checked against it", sorted(new_ids))
-        return
-    missing = sorted(new_ids - registered)
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "cluster_not_registered",
-                "message": f"No cluster is registered under: {', '.join(missing)}",
-            },
-        )
-
-
-async def _refuse_a_cluster_not_registered(cluster_id: str) -> None:
-    """404 `cluster_not_registered` for an id the key's grant names but no cluster holds.
-
-    note: called after the key's own grant check, so it tells a caller nothing about an id its
-    grant does not already name. Non-retryable on purpose: the 503 "Could not connect" it
-    replaces read as an outage, and a polling integration retried such ids every few minutes.
-    When the registry cannot be read nothing is refused here and the call proceeds as before.
-    """
-    if cluster_id in await _unregistered_cluster_ids([cluster_id]):
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "cluster_not_registered",
-                "message": f"Cluster '{cluster_id}' is not registered with this control plane",
-            },
-        )
-
-
-def _cluster_display_names_sync(cert_manager: Any, cluster_ids: List[str]) -> Dict[str, str]:
-    """Display names from the Vault registry; runs on a worker thread, never on the loop."""
-    names: Dict[str, str] = {}
-    for cluster_id in cluster_ids:
-        try:
-            meta = cert_manager.get_cluster_info(cluster_id).get("metadata", {})
-            names[cluster_id] = meta.get("display_name") or meta.get("name") or cluster_id
-        except Exception:  # noqa: BLE001 - a name is decoration; the id stands in
-            names[cluster_id] = cluster_id
-    return names
-
-
-def _cluster_infos_sync(cert_manager: Any, cluster_ids: List[str]) -> Dict[str, Dict[str, Any]]:
-    infos: Dict[str, Dict[str, Any]] = {}
-    for cluster_id in cluster_ids:
-        try:
-            infos[cluster_id] = cert_manager.get_cluster_info(cluster_id)
-        except Exception as e:  # noqa: BLE001 - one cluster's record must not hide the others
-            logger.warning(f"Could not get region info for {cluster_id}: {e}")
-    return infos
-
-
-def _reported_grant(grant: Dict[str, Any], unregistered: FrozenSet[str]) -> Dict[str, Any]:
-    if grant.get("cluster_id") in unregistered:
-        return {**grant, "registered": False}
-    return grant
-
 
 @external_router.post(
     "/validate",
@@ -5636,13 +5554,16 @@ async def proxy_operation(
         # notification problem cannot turn a completed create into a failed one.
         from app.services.webhooks.emitter import emit_for_proxy_operation
 
-        await emit_for_proxy_operation(
-            operation,
-            cluster_id=request.cluster_id,
-            project=request.project,
-            params=request.params,
-            result=result_data,
-        )
+        # note: delete_project announces from inside its own shielded task, and only for a project
+        # that really went, so a delete of a name that was never there sends no event.
+        if operation != "delete_project":
+            await emit_for_proxy_operation(
+                operation,
+                cluster_id=request.cluster_id,
+                project=request.project,
+                params=request.params,
+                result=result_data,
+            )
 
         return ProxyResponse(
             success=True,
@@ -5706,46 +5627,28 @@ async def proxy_operation(
         )
 
 
-def _proxy_error_text(error: Exception, error_code: str, operation: str, cluster_id: str) -> str:
-    """The caller-facing sentence for a failed proxy operation.
-
-    important: never the text of a transport exception. A requests or urllib3 error names the
-    LXD host's address and port (`HTTPSConnectionPool(host='10.x.x.x', port=8443)`), which is
-    infrastructure an integration has no business learning. The daemon's own refusal (an
-    LXDAPIException, or the service layer's errors built from one) is safe and useful.
-    """
-    if isinstance(error, (requests_exceptions.RequestException, urllib3_exceptions.HTTPError)):
-        if error_code == "timeout":
-            return f"{operation} did not get an answer from {cluster_id} in time"
-        return f"Could not reach {cluster_id} for {operation}"
-    if isinstance(error, (LXDAPIException, LXDOperationError, HTTPException)):
-        return str(error)
-    return f"{operation} failed on {cluster_id}"
-
-
 async def _delete_project_for_proxy(lxd_service: LXDService, request: "ProxyRequest") -> Dict[str, Any]:
-    """delete_project through the shared deletion service, in a session of its own."""
+    """delete_project through the shared deletion service; the caller only waits on it.
+
+    important: shielded (services/project_deletion.delete_for_integration). A disconnecting
+    integration or a shutdown cancels this await, never the delete and its rule revoke.
+    """
     params = request.params or {}
     assert_required_params("delete_project", params)
     assert_path_params("delete_project", params)
     name = str(params["name"])
     host = request.cluster_id
-    from app.core.database import async_session_maker
-
-    async with async_session_maker() as db:
-        try:
-            outcome = await project_deletion.delete_project_and_forget(db, lxd_service, host, name)
-        except project_deletion.ProjectDeleteUnknown as unknown:
-            project_deletion.follow_unknown_delete(
-                lxd_service, unknown, partial(_announce_proxy_project_deleted, host, request.project, name)
-            )
-            raise
-    get_cache_manager().invalidate_project_caches()
+    task = project_deletion.spawn(
+        project_deletion.delete_for_integration(
+            lxd_service, host, name, partial(_announce_proxy_project_deleted, host, request.project, name)
+        )
+    )
+    outcome = await asyncio.shield(task)
     return {"deleted": True, "name": name, "already_deleted": outcome.already_gone}
 
 
 async def _announce_proxy_project_deleted(host: str, project: Optional[str], name: str) -> None:
-    """What a proxy delete that settled after its answer still owes: caches and the event."""
+    """What a proxy delete owes once the project is gone: the caches and the event."""
     from app.services.webhooks.emitter import emit_for_proxy_operation
 
     get_cache_manager().invalidate_after_external_write()

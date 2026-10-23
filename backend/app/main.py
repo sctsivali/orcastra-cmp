@@ -656,6 +656,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     
+    # Cancel follow-ups of project deletes whose outcome was not known when they answered.
+    # Before the database closes: they hold sessions of their own.
+    try:
+        from app.services import project_deletion
+        await project_deletion.shutdown()
+    except Exception:
+        pass
+
     # Close database connection
     try:
         from app.core.database import close_db
@@ -683,13 +691,6 @@ async def lifespan(app: FastAPI):
     try:
         from app.services import settle_invalidation
         await settle_invalidation.shutdown()
-    except Exception:
-        pass
-
-    # Cancel follow-ups of project deletes whose outcome was not known when they answered
-    try:
-        from app.services import project_deletion
-        await project_deletion.shutdown()
     except Exception:
         pass
     

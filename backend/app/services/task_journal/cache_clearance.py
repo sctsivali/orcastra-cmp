@@ -240,6 +240,8 @@ class CacheClearance:
         self._consumers: Dict[str, asyncio.Task] = {}
         self._hub_state: Dict[str, str] = {}
         self._inflight: Set[asyncio.Future] = set()
+        self._running: Set[str] = set()
+        self._again: Set[str] = set()
         self._registry_task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
@@ -292,12 +294,26 @@ class CacheClearance:
         return self._coalescer.pending()
 
     def _submit(self, family: str) -> None:
+        # note: at most one clear per family queued or running. With Redis down each clear blocks
+        # the thread for its socket timeouts, and an unbounded queue of them would only grow; a
+        # note while one runs asks for exactly one more after it, which covers what it missed.
+        if family in self._running:
+            self._again.add(family)
+            return
+        self._running.add(family)
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(
             self._executor, partial(contextvars.copy_context().run, self._run_clear, family)
         )
         self._inflight.add(future)
-        future.add_done_callback(self._inflight.discard)
+        future.add_done_callback(partial(self._cleared, family))
+
+    def _cleared(self, family: str, future: asyncio.Future) -> None:
+        self._inflight.discard(future)
+        self._running.discard(family)
+        if family in self._again and not self._coalescer.closed:
+            self._again.discard(family)
+            self._submit(family)
 
     def _run_clear(self, family: str) -> None:
         try:

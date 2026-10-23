@@ -247,3 +247,24 @@ def test_the_cluster_delete_route_strips_key_grants() -> None:
 
     assert "strip_cluster_from_key_grants(" in inspect.getsource(cluster_registration.delete_cluster)
 
+
+
+def test_deregistration_strips_grants_only_once_the_registry_confirms_the_id_is_gone() -> None:
+    import inspect
+
+    from app.routers import cluster_registration
+
+    source = inspect.getsource(cluster_registration.delete_cluster)
+    check = source.index("registered_cluster_ids(fresh=True)")
+    strip = source.index("strip_cluster_from_key_grants(cluster_id)")
+    assert check < strip
+    assert "asyncio.shield(cleanup)" in source, "a timeout must stop the wait, never the key rewrite"
+
+
+def test_what_validate_reports_is_never_written_back_into_a_grant() -> None:
+    import inspect
+
+    for route in (integrations.create_api_key, integrations.update_api_key_permissions):
+        assert 'model_dump(exclude={"registered"})' in inspect.getsource(route), route.__name__
+    grant = integrations.ClusterPermissionRequest(cluster_id="nuc2", permissions=["read"], registered=False)
+    assert "registered" not in grant.model_dump(exclude={"registered"})

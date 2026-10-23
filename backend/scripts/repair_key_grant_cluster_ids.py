@@ -42,8 +42,9 @@ def _registered_ids() -> List[str]:
     from app.services.lxd_service import get_lxd_service
 
     read = get_lxd_service().cert_manager.read_registry(False)
-    if read.source is None:
-        raise SystemExit("the cluster registry could not be read; refusing to judge any grant")
+    # A last-known copy is fine for a picker, not for deciding what to delete.
+    if read.source != "vault":
+        raise SystemExit(f"the cluster registry was not read from Vault ({read.source}); refusing to judge any grant")
     return sorted(read.cluster_ids)
 
 

@@ -192,7 +192,10 @@ class JournalFollower:
         for task in (self._registry_task, self._sweep_task):
             await _cancel(task)
         self._registry_task = self._sweep_task = None
-        await cache_clearance.stop(self._clearance)
+        try:
+            await cache_clearance.stop(self._clearance)
+        except Exception:  # noqa: BLE001 - stepping down must still stop the writer and the lock
+            logger.warning("Cache clearance did not stop cleanly", exc_info=True)
         self._clearance = None
         for host in list(self._queues):
             await self._unfollow(host, record_state=False)

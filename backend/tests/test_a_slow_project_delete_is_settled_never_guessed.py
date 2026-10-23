@@ -180,15 +180,45 @@ def test_an_unknown_outcome_is_503_project_write_unknown_with_no_address(monkeyp
     assert session.deleted == [], "no rule is revoked while the outcome is unknown"
 
 
-def test_a_retry_that_meets_404_still_revokes_and_answers_200(monkeypatch) -> None:
+def test_a_404_with_nothing_pending_revokes_nothing_and_announces_nothing(monkeypatch) -> None:
+    """Anyone with a cluster-wide delete could otherwise strip every organization's staged rules."""
+    from app.services.webhooks import emitter
+
+    events: List[Any] = []
+
+    async def record(**kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(project_deletion, "_pending", {})
     session = GrantSession(rules=[Rule(7, HOST, "web")])
     client = projects_client(_Service(LXDProjectNotFoundError("web")), monkeypatch, session, user=partner())
+    monkeypatch.setattr(emitter, "emit_resource_event", record)
 
     r = client.delete(f"/projects/{HOST}/web")
 
     assert r.status_code == 200, r.text
     assert "already deleted" in r.json()["message"]
-    assert any(isinstance(d, Rule) for d in session.deleted)
+    assert session.deleted == [], "a rule another organization staged for the name stays"
+    assert events == [], "no project.deleted for a project this call did not delete"
+
+
+def test_a_404_that_lands_a_pending_follow_up_revokes_its_captured_rules(monkeypatch) -> None:
+    pending = project_deletion._FollowUp(rule_ids={41})
+    monkeypatch.setattr(project_deletion, "_pending", {(HOST, "web"): pending})
+    revoked: List[Any] = []
+
+    async def forget(_db, **kwargs):
+        revoked.append(kwargs)
+        return ""
+
+    monkeypatch.setattr(project_grants, "forget_deleted_project", forget)
+    client = projects_client(_Service(LXDProjectNotFoundError("web")), monkeypatch, GrantSession(), user=partner())
+
+    r = client.delete(f"/projects/{HOST}/web")
+
+    assert r.status_code == 200, r.text
+    assert revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({41})}]
+    assert project_deletion._pending == {}
 
 
 def test_a_transport_failure_never_reaches_the_body(monkeypatch) -> None:
@@ -254,7 +284,7 @@ async def _run_follow(monkeypatch, probe: _Probe) -> tuple[List[Any], List[str]]
     monkeypatch.setattr(project_grants, "forget_deleted_project", forget)
     unknown = project_deletion.ProjectDeleteUnknown(HOST, "web", frozenset({11, 12}))
     assert project_deletion.follow_unknown_delete(probe, unknown, finish, session_maker=_sessions)
-    await asyncio.gather(*list(project_deletion._follow_ups))
+    await asyncio.gather(*list(project_deletion._background))
     return revoked, finished
 
 
@@ -299,10 +329,47 @@ def test_the_captured_rule_filter_is_part_of_the_revoke_query() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_follow_ups_are_bounded_per_worker(monkeypatch) -> None:
-    monkeypatch.setattr(project_deletion, "_follow_ups", {object() for _ in range(project_deletion.MAX_FOLLOW_UPS)})
-    unknown = project_deletion.ProjectDeleteUnknown(HOST, "web", frozenset())
-    assert project_deletion.follow_unknown_delete(_Probe([]), unknown, lambda: None) is False
+async def test_the_follow_ups_are_bounded_and_one_per_project(monkeypatch) -> None:
+    started: List[Any] = []
+    monkeypatch.setattr(project_deletion, "_pending", {})
+    monkeypatch.setattr(project_deletion, "spawn", lambda coro: (coro.close(), started.append(1), _Done())[2])
+
+    def unknown(host: str, name: str, ids):
+        return project_deletion.ProjectDeleteUnknown(host, name, frozenset(ids))
+
+    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "a", {1}), lambda: None)
+    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "a", {2}), lambda: None)
+    assert len(started) == 1, "a repeat joins the running follow-up"
+    assert project_deletion._pending[(HOST, "a")].rule_ids == {1, 2}
+    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "b", {3}), lambda: None)
+    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "c", {4}), lambda: None) is False, (
+        "one cluster cannot take every slot"
+    )
+    assert project_deletion.follow_unknown_delete(_Probe([]), unknown("other", "c", {4}), lambda: None)
+
+
+class _Done:
+    def add_done_callback(self, _callback) -> None:
+        return None
+
+    def cancel(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_cluster_the_breaker_gave_up_on_is_not_probed(monkeypatch) -> None:
+    from app.services.lxd import health
+
+    probes: List[str] = []
+
+    class _Counting:
+        async def project_exists(self, host, name):
+            probes.append(host)
+            return False
+
+    monkeypatch.setattr(health, "is_tripped", lambda host: host == HOST)
+    assert await project_deletion._exists(_Counting(), HOST, "web") is None
+    assert probes == []
 
 
 # ── the proxy door ────────────────────────────────────────────────────────────────────────
@@ -326,17 +393,24 @@ async def test_the_proxy_deletes_through_the_shared_delete_and_follows_an_unknow
 
     calls: List[Any] = []
     followed: List[Any] = []
+    announced: List[str] = []
 
     async def shared(db, service, host, name):
         calls.append((host, name))
         if name == "slow":
             raise project_deletion.ProjectDeleteUnknown(host, name, frozenset({3}))
+        if name == "never-there":
+            return project_deletion.ProjectDeleted(already_gone=True, revoke_note="")
         return project_deletion.ProjectDeleted(already_gone=False, revoke_note="")
+
+    async def announce(host, project, name):
+        announced.append(name)
 
     monkeypatch.setattr(project_deletion, "delete_project_and_forget", shared)
     monkeypatch.setattr(project_deletion, "follow_unknown_delete", lambda s, u, f, **_k: followed.append(u))
     monkeypatch.setattr(database, "async_session_maker", _sessions)
     monkeypatch.setattr(integrations, "get_cache_manager", lambda: NoCache())
+    monkeypatch.setattr(integrations, "_announce_proxy_project_deleted", announce)
 
     def request(name: str):
         return integrations.ProxyRequest(
@@ -345,13 +419,59 @@ async def test_the_proxy_deletes_through_the_shared_delete_and_follows_an_unknow
 
     done = await integrations._delete_project_for_proxy(object(), request("web"))
     assert done == {"deleted": True, "name": "web", "already_deleted": False}
+    gone = await integrations._delete_project_for_proxy(object(), request("never-there"))
+    assert gone["already_deleted"] is True
     with pytest.raises(project_deletion.ProjectDeleteUnknown):
         await integrations._delete_project_for_proxy(object(), request("slow"))
-    assert calls == [(HOST, "web"), (HOST, "slow")]
+    assert calls == [(HOST, "web"), (HOST, "never-there"), (HOST, "slow")]
     assert [u.rule_ids for u in followed] == [frozenset({3})]
+    assert announced == ["web"], "only a project this call deleted is announced"
     with pytest.raises(Exception):
         await integrations._delete_project_for_proxy(object(), request(".."))
-    assert calls == [(HOST, "web"), (HOST, "slow")], "a bad name never reaches the delete"
+    assert len(calls) == 3, "a bad name never reaches the delete"
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_caller_that_leaves_does_not_cut_the_delete_short(monkeypatch) -> None:
+    from app.core import database
+    from app.routers import integrations
+
+    release = asyncio.Event()
+    finished: List[str] = []
+
+    async def slow_delete(db, service, host, name):
+        await release.wait()
+        finished.append(name)
+        return project_deletion.ProjectDeleted(already_gone=False, revoke_note="")
+
+    async def announce(host, project, name):
+        finished.append(f"announced {name}")
+
+    monkeypatch.setattr(project_deletion, "delete_project_and_forget", slow_delete)
+    monkeypatch.setattr(database, "async_session_maker", _sessions)
+    monkeypatch.setattr(integrations, "_announce_proxy_project_deleted", announce)
+    request = integrations.ProxyRequest(cluster_id=HOST, operation="delete_project", project="default", params={"name": "web"})
+
+    caller = asyncio.ensure_future(integrations._delete_project_for_proxy(object(), request))
+    await asyncio.sleep(0)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    release.set()
+    await asyncio.gather(*list(project_deletion._background))
+    assert finished == ["web", "announced web"]
+
+
+def test_a_dashboard_delete_whose_requester_left_still_announces(monkeypatch) -> None:
+    import inspect
+
+    from app.routers import projects
+
+    source = inspect.getsource(projects.delete_project)
+    cancelled = source.index("if request_cancelled:")
+    assert source.index("project_deletion.spawn(_announce_project_deleted", cancelled) < source.index(
+        "raise asyncio.CancelledError", cancelled
+    )
 
 
 def test_a_dot_name_is_the_callers_400_and_never_reaches_lxd() -> None:

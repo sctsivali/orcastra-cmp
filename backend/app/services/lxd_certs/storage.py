@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 # spelling, a deregistered cluster) is reported once per process rather than on every poll.
 _absent_cluster_ids: set = set()
 _absent_lock = threading.Lock()
+# Bounded: the ids come from stored grants and request paths, not only from the registry.
+_ABSENT_MEMO_LIMIT = 1024
 
 
 @dataclass
@@ -240,7 +242,8 @@ class VaultStorageMixin:
                 # real Vault failures under ~50 lines an hour from one integration's stale grant.
                 with _absent_lock:
                     first = cluster_id not in _absent_cluster_ids
-                    _absent_cluster_ids.add(cluster_id)
+                    if len(_absent_cluster_ids) < _ABSENT_MEMO_LIMIT:
+                        _absent_cluster_ids.add(cluster_id)
                 if first:
                     logger.warning(
                         "No cluster is registered under %s (Vault has no metadata for it); "

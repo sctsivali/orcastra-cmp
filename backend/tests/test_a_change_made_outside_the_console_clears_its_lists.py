@@ -416,3 +416,29 @@ async def test_the_leader_subscribes_every_cluster_and_lets_go_on_step_down(monk
 
     assert sorted(hub.unsubscribed) == expected, "step-down lets go of every subscription"
     assert follower._clearance is None
+
+
+async def test_a_family_has_at_most_one_clear_queued_and_a_note_during_it_runs_one_more():
+    """With Redis down each clear holds the thread for its socket timeouts; a queue must not grow."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    release = threading.Event()
+    calls = []
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="slow_clear")
+
+    def slow(family):
+        calls.append(family)
+        release.wait(5)
+
+    subject = CacheClearance(FakeHub(), identities=NoIdentities(), clearer=slow, executor=executor,
+                             clock=FakeTimers().clock, call_later=FakeTimers().call_later)
+    for _ in range(5):
+        subject._submit("images")
+    assert len(subject._inflight) == 1, "one clear running, none queued behind it"
+    release.set()
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if not subject._inflight and len(calls) == 2:
+            break
+    assert calls == ["images", "images"], "the notes during the clear add exactly one more"
+    executor.shutdown(wait=True)
