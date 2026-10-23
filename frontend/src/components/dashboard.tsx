@@ -24,7 +24,7 @@ import { collectedAtMs } from "@/lib/utils";
 
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, refreshNow: refreshInstances, dataUpdatedAt, isError: vmsFailed, error: vmsError } = useInstances();
-  const { data: projectsData, isLoading: projectsLoading, error: projectsError, dataUpdatedAt: projectsUpdatedAt, refreshNow: refreshProjects } = useAllProjects();
+  const { data: projectsData, isLoading: projectsLoading, error: projectsError, dataUpdatedAt: projectsUpdatedAt } = useAllProjects();
   const { data: clustersData, isLoading: clustersLoading } = useClusters();
   const queryClient = useQueryClient();
   const { isPartner } = usePermissions();
@@ -37,20 +37,20 @@ export function Dashboard() {
   // note: no success toast. The refresh control reports its own outcome inline
   // (spinner, tick, "Updated just now"), and a toast here would evict whatever
   // the operator was actually reading, since TOAST_LIMIT is 1.
-  // important: the two lists this page is built from are read past the backend cache, like the
-  // Refresh on the Instances page. A plain refetch answered from that cache, so after a change
-  // made elsewhere (OrcaHub, the LXD CLI) the button reported "Updated" over the old rows.
+  // important: the fleet read goes past the backend cache, like the Refresh on the Instances page.
+  // A plain refetch answered from that cache, so after a change made elsewhere (OrcaHub, the LXD
+  // CLI) the button reported "Updated" over the old rows. Only that one is forced: each forced
+  // read spends the per-operator budget the delete and create reconciles also draw on.
   const handleOverviewRefresh = React.useCallback(async () => {
     await Promise.all([
       refreshInstances(),
-      // the projects section reports its own read error; the button reports the fleet read
-      refreshProjects().catch(() => undefined),
+      queryClient.refetchQueries({ queryKey: queryKeys.allProjectsFor(scopeKey), type: "active" }),
       queryClient.refetchQueries({ queryKey: queryKeys.clustersFor(scopeKey, false), type: "active" }),
       queryClient.refetchQueries({ queryKey: queryKeys.nodesFor(scopeKey), type: "active" }),
       queryClient.refetchQueries({ queryKey: ["warnings", scopeKey], type: "active" }),
       queryClient.refetchQueries({ queryKey: ["systemWarnings", scopeKey], type: "active" }),
     ]);
-  }, [queryClient, refreshInstances, refreshProjects, scopeKey]);
+  }, [queryClient, refreshInstances, scopeKey]);
 
   const isPrimaryLoading = vmsLoading || projectsLoading || clustersLoading;
   // important: never hard-block the dashboard forever on a slow/stuck query.
