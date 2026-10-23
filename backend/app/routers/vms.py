@@ -5,6 +5,7 @@ Provides endpoints for listing, creating, and managing VMs across LXD nodes.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional
+import sys
 import asyncio
 import hashlib
 import json
@@ -49,7 +50,7 @@ from app.core.org_scope import (
     verify_tenant_permission,
 )
 from app.core.config import get_settings
-from app.core.cache import get_cache_manager
+from app.core.cache import clear_instance_lists_after_failure, get_cache_manager
 from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
@@ -690,6 +691,7 @@ async def start_vm(
             force=request.force,
             project=project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM start success
         activity_logger.log_activity(
@@ -744,9 +746,8 @@ async def start_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.post(
@@ -786,6 +787,7 @@ async def stop_vm(
             timeout=request.timeout,
             project=project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM stop success
         activity_logger.log_activity(
@@ -856,9 +858,8 @@ async def stop_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.post(
@@ -898,6 +899,7 @@ async def restart_vm(
             timeout=request.timeout,
             project=project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM restart success
         activity_logger.log_activity(
@@ -969,9 +971,8 @@ async def restart_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.delete(
@@ -1004,6 +1005,7 @@ async def delete_vm(
             force=force,
             project=project,
         )
+        get_cache_manager().invalidate_instance_cache()
 
         # Clean up the instance's tag rows so the tag store doesn't drift from the
         # deleted instance. Best-effort, because the instance is already gone.
@@ -1070,9 +1072,8 @@ async def delete_vm(
         )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.get(

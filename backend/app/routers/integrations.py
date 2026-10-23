@@ -4866,6 +4866,7 @@ async def raw_proxy(
                         project,
                         get_cache_manager().invalidate_after_external_write,
                         label=f"raw_proxy[{method} {request.cluster_id}]",
+                        bucket=f"key:{api_key.get('id')}",
                     )
 
             return RawProxyResponse(
@@ -5340,6 +5341,7 @@ async def proxy_operation(
                         request.project,
                         get_cache_manager().invalidate_after_external_write,
                         label=f"proxy_operation[{operation} {request.cluster_id}]",
+                        bucket=f"key:{api_key.get('id')}",
                     )
         except BlockingTimeout as timeout_error:
             # important: exec lands HERE, not in the generic handler below, so its audit record

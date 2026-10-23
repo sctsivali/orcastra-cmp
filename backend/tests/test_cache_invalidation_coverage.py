@@ -123,6 +123,9 @@ def _invalidates(fn: ast.AST) -> bool:
             continue
         if isinstance(node.func, ast.Attribute) and node.func.attr in INVALIDATORS:
             return True
+        # the lifecycle routes clear through core.cache's outcome helper, called by name
+        if isinstance(node.func, ast.Name) and node.func.id == "clear_instance_lists_after_failure":
+            return True
         if _is_cache_delete(node):
             return True
     return False

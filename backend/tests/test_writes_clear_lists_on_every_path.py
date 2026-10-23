@@ -167,6 +167,7 @@ def settle(monkeypatch):
     monkeypatch.setattr(settle_invalidation, "MIN_POLL_SECONDS", 0)
     yield settle_invalidation
     settle_invalidation._waiters.clear()
+    settle_invalidation._by_bucket.clear()
 
 
 async def _drain(module) -> None:
@@ -276,17 +277,21 @@ def test_instance_actions_clear_the_lists_on_every_outcome(module: str, handlers
         finals = [
             stmt for node in ast.walk(fn) if isinstance(node, ast.Try) for stmt in node.finalbody
         ]
-        assert any(_calls(stmt, "invalidate_instance_cache") for stmt in finals), (
-            f"{module} {name} must clear the instance lists in a finally block"
-        )
+        assert any(
+            isinstance(n, ast.Call) and getattr(n.func, "id", None) == "clear_instance_lists_after_failure"
+            for stmt in finals for n in ast.walk(stmt)
+        ), f"{module} {name} must clear the instance lists in a finally block"
 
 
 async def test_a_delete_that_finds_the_instance_gone_clears_the_list(monkeypatch) -> None:
     from app.routers import vms
     from app.services.lxd.exceptions import LXDOperationError
 
+    from app.core import cache as cache_module
+
     cache = _RecordingCache()
-    monkeypatch.setattr(vms, "get_cache_manager", lambda: cache)
+    monkeypatch.setattr(cache_module, "get_cache_manager", lambda: cache)
+    monkeypatch.setattr(cache_module, "_last_uncertain_clear", 0.0)
     monkeypatch.setattr(vms, "verify_project_access", lambda host, project: project or "default")
 
     class _Gone:
@@ -418,3 +423,52 @@ async def test_an_undisturbed_prewarm_still_writes() -> None:
         cache, "vms:list:x", fetch, ttl=180, generation=lambda: cache.token
     )
     assert cache.writes == ["vms:list:x"]
+
+
+def test_failures_clear_at_most_once_per_interval_and_a_fence_refusal_never(monkeypatch) -> None:
+    from app.core import cache as cache_module
+
+    cache = _RecordingCache()
+    monkeypatch.setattr(cache_module, "get_cache_manager", lambda: cache)
+    monkeypatch.setattr(cache_module, "_last_uncertain_clear", 0.0)
+    clears = lambda: sum(1 for name, _ in cache.calls if name == "invalidate_instance_cache")
+
+    cache_module.clear_instance_lists_after_failure(None)
+    assert clears() == 0, "success clears in the route itself, right after LXD answers"
+
+    cache_module.clear_instance_lists_after_failure(HTTPException(status_code=409, detail="fenced"))
+    assert clears() == 0, "the migration fence refused before the cluster was asked"
+
+    for _ in range(50):  # a caller repeating a cheap failing call
+        cache_module.clear_instance_lists_after_failure(HTTPException(status_code=404, detail="gone"))
+    assert clears() == 1, "failures are throttled to one clearance per interval"
+
+    monkeypatch.setattr(cache_module, "_last_uncertain_clear", 0.0)
+    cache_module.clear_instance_lists_after_failure(RuntimeError("lost connection"))
+    assert clears() == 2
+
+
+def test_a_successful_action_clears_right_after_lxd_answers() -> None:
+    """Before the route's own follow-up work (tags, webhooks), so an event-triggered read that
+    lands meanwhile does not get the pre-delete list."""
+    for module, name, call in (
+        ("vms.py", "delete_vm", "delete_vm"),
+        ("instances.py", "delete_instance", "delete_vm"),
+        ("vms.py", "start_vm", "start_vm"),
+        ("instances.py", "stop_instance", "stop_vm"),
+    ):
+        source = ast.get_source_segment(
+            (ROUTERS / module).read_text(encoding="utf-8"),
+            _function(ast.parse((ROUTERS / module).read_text(encoding="utf-8")), name),
+        )
+        lxd_call = source.index(f"lxd_service.{call}(")
+        clear = source.index("get_cache_manager().invalidate_instance_cache()")
+        follow_up = min(
+            (
+                source.index(marker, lxd_call)
+                for marker in ("tag_service.", "activity_logger.log_activity", "emit_resource_event")
+                if marker in source[lxd_call:]
+            ),
+            default=len(source),
+        )
+        assert lxd_call < clear < follow_up, f"{module} {name} clears after its follow-up work"

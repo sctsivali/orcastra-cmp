@@ -965,3 +965,31 @@ def get_cache_manager() -> CacheManager:
         redis_url = getattr(settings, 'redis_url', None)
         _global_cache = CacheManager(redis_url=redis_url)
     return _global_cache
+
+
+# Failures clear the instance lists too, but at most this often per worker.
+UNCERTAIN_CLEAR_INTERVAL_SECONDS = 5.0
+_last_uncertain_clear = 0.0
+
+
+def clear_instance_lists_after_failure(error: Optional[BaseException]) -> None:
+    """Clear the instance lists after an instance lifecycle call that did not succeed.
+
+    Success clears in the route, right after LXD answers. A failure may still have changed the
+    instance (a timeout, a lost connection mid-delete) or found that it is already gone (a 404
+    for a listed row), so it clears as well, at most once per
+    UNCERTAIN_CLEAR_INTERVAL_SECONDS per worker. `error` is None on success: nothing to do.
+
+    important: throttled because anyone allowed to call can make a call fail cheaply. One
+    clearance per failure let a caller keep every scope's list rebuilding from the clusters,
+    outside the forced-refresh budget. A refusal raised before the cluster was asked (the
+    migration fence's 409) clears nothing.
+    """
+    global _last_uncertain_clear
+    if error is None or getattr(error, "status_code", None) == 409:
+        return
+    now = time.monotonic()
+    if now - _last_uncertain_clear < UNCERTAIN_CLEAR_INTERVAL_SECONDS:
+        return
+    _last_uncertain_clear = now
+    get_cache_manager().invalidate_instance_cache()

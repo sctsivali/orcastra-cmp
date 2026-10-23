@@ -18,21 +18,25 @@ import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Any, Callable, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 from app.services.lxd.snapshots import wait_for_operation
 
 logger = logging.getLogger(__name__)
 
 MAX_WAITERS = 32
+# note: per owner (one API key, or the dashboard's own routes), so one integration starting
+# long operations cannot take every slot from the others
+MAX_WAITERS_PER_BUCKET = 8
 SETTLE_DEADLINE_SECONDS = 600
 # note: one LXD wait call per slice, on this module's own threads, so a long operation never
 # holds a thread for minutes and never queues behind (or in front of) request work.
-WAIT_SLICE_SECONDS = 20
+WAIT_SLICE_SECONDS = 10
 MIN_POLL_SECONDS = 1.0
 
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="settle_")
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="settle_")
 _waiters: Set[asyncio.Task] = set()
+_by_bucket: Dict[str, Set[asyncio.Task]] = {}
 
 
 def invalidate_when_settled(
@@ -42,6 +46,7 @@ def invalidate_when_settled(
     invalidate: Callable[[], None],
     *,
     label: str,
+    bucket: str = "dashboard",
 ) -> bool:
     """Run `invalidate` once the operation settles. Returns False when no waiter was started.
 
@@ -50,7 +55,8 @@ def invalidate_when_settled(
     """
     if not operation_id:
         return False
-    if len(_waiters) >= MAX_WAITERS:
+    owned = _by_bucket.setdefault(bucket, set())
+    if len(_waiters) >= MAX_WAITERS or len(owned) >= MAX_WAITERS_PER_BUCKET:
         logger.warning("settle waiter limit reached; %s relies on its cache TTL", label)
         return False
     try:
@@ -59,7 +65,15 @@ def invalidate_when_settled(
         return False
     task = loop.create_task(_settle(get_client, operation_id, project, invalidate, label))
     _waiters.add(task)
-    task.add_done_callback(_waiters.discard)
+    owned.add(task)
+
+    def _forget(done: asyncio.Task) -> None:
+        _waiters.discard(done)
+        owned.discard(done)
+        if not owned:
+            _by_bucket.pop(bucket, None)
+
+    task.add_done_callback(_forget)
     return True
 
 
@@ -126,3 +140,4 @@ async def shutdown() -> None:
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
     _waiters.clear()
+    _by_bucket.clear()

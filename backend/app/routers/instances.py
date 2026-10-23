@@ -6,6 +6,7 @@ Provides endpoints for managing LXD instances (containers and VMs).
 from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from typing import Literal, Optional
 from urllib.parse import urlparse
+import sys
 import asyncio
 import hashlib
 import json
@@ -65,7 +66,7 @@ from app.core.org_scope import (
 )
 from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.cache import get_cache_manager
+from app.core.cache import clear_instance_lists_after_failure, get_cache_manager
 from app.core.lxd_errors import lxd_http_error
 from app.services.activity_logger import get_activity_logger
 from app.services.instance_operation_audit import drain_instance_operation_audits
@@ -1042,6 +1043,7 @@ async def start_instance(
                 force=False,
                 project=project,
             )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance start success
         activity_logger.log_activity(
@@ -1100,9 +1102,8 @@ async def start_instance(
         
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.post(
@@ -1139,6 +1140,7 @@ async def stop_instance(
                 timeout=request.timeout,
                 project=project,
             )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance stop success
         activity_logger.log_activity(
@@ -1197,9 +1199,8 @@ async def stop_instance(
         
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.post(
@@ -1236,6 +1237,7 @@ async def restart_instance(
                 timeout=request.timeout,
                 project=project,
             )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance restart success
         activity_logger.log_activity(
@@ -1294,9 +1296,8 @@ async def restart_instance(
         
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.delete(
@@ -1330,6 +1331,7 @@ async def delete_instance(
             deleted_project = await lxd_service.delete_vm(
                 instance_name, host, force=force, project=project
             )
+        get_cache_manager().invalidate_instance_cache()
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
         # until now, so the catalogue was a promise with no sender behind it.
@@ -1417,9 +1419,8 @@ async def delete_instance(
 
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # every outcome, not only success: a call that failed or timed out may still have
-        # changed the instance, and a 404 means a listed instance is already gone
-        get_cache_manager().invalidate_instance_cache()
+        # a failure may still have changed the instance, or found it gone; throttled
+        clear_instance_lists_after_failure(sys.exc_info()[1])
 
 
 @router.get(
