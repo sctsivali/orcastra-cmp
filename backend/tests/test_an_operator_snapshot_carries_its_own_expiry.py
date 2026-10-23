@@ -169,6 +169,14 @@ def test_a_pending_create_is_audited_invalidated_and_not_announced(monkeypatch):
         lambda **kwargs: emitted.append(kwargs),
     )
     monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
+    settle_waiters = []
+    monkeypatch.setattr(
+        instance_snapshots,
+        "invalidate_when_settled",
+        lambda get_client, operation_id, project, invalidate, *, label: settle_waiters.append(
+            (operation_id, project, invalidate)
+        ),
+    )
 
     node = FakeInstanceNode()
     node.operation_status = "Running"
@@ -185,6 +193,12 @@ def test_a_pending_create_is_audited_invalidated_and_not_announced(monkeypatch):
     assert creates[0]["details"]["status"] == "pending"
     assert emitted == [], "snapshot.created must assert existence, not mere acceptance"
     assert invalidated == ["snapshots_fleet", "storage_pool_resources"]
+    # the copy is still running: the same lists are cleared again once LXD settles it
+    assert len(settle_waiters) == 1
+    operation_id, project, invalidate = settle_waiters[0]
+    assert operation_id and project == PROJECT
+    invalidate()
+    assert invalidated[2:] == ["snapshots_fleet", "storage_pool_resources"]
 
 
 def test_a_completed_create_is_audited_and_announced(monkeypatch):

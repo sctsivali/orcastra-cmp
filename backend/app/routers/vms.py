@@ -690,7 +690,6 @@ async def start_vm(
             force=request.force,
             project=project,
         )
-        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM start success
         activity_logger.log_activity(
@@ -744,6 +743,10 @@ async def start_vm(
             error_message=str(e)
         )
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.post(
@@ -783,7 +786,6 @@ async def stop_vm(
             timeout=request.timeout,
             project=project,
         )
-        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM stop success
         activity_logger.log_activity(
@@ -853,6 +855,10 @@ async def stop_vm(
             error_message=str(e)
         )
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.post(
@@ -892,7 +898,6 @@ async def restart_vm(
             timeout=request.timeout,
             project=project,
         )
-        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM restart success
         activity_logger.log_activity(
@@ -963,6 +968,10 @@ async def restart_vm(
             error_message=str(e)
         )
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.delete(
@@ -995,7 +1004,6 @@ async def delete_vm(
             force=force,
             project=project,
         )
-        get_cache_manager().invalidate_instance_cache()
 
         # Clean up the instance's tag rows so the tag store doesn't drift from the
         # deleted instance. Best-effort, because the instance is already gone.
@@ -1061,6 +1069,10 @@ async def delete_vm(
             error_message=str(e)
         )
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.get(

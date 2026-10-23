@@ -1042,7 +1042,6 @@ async def start_instance(
                 force=False,
                 project=project,
             )
-        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance start success
         activity_logger.log_activity(
@@ -1100,6 +1099,10 @@ async def start_instance(
         )
         
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.post(
@@ -1136,7 +1139,6 @@ async def stop_instance(
                 timeout=request.timeout,
                 project=project,
             )
-        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance stop success
         activity_logger.log_activity(
@@ -1194,6 +1196,10 @@ async def stop_instance(
         )
         
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.post(
@@ -1230,7 +1236,6 @@ async def restart_instance(
                 timeout=request.timeout,
                 project=project,
             )
-        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance restart success
         activity_logger.log_activity(
@@ -1288,6 +1293,10 @@ async def restart_instance(
         )
         
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.delete(
@@ -1321,7 +1330,6 @@ async def delete_instance(
             deleted_project = await lxd_service.delete_vm(
                 instance_name, host, force=force, project=project
             )
-        get_cache_manager().invalidate_instance_cache()
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
         # until now, so the catalogue was a promise with no sender behind it.
@@ -1408,6 +1416,10 @@ async def delete_instance(
         )
 
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # every outcome, not only success: a call that failed or timed out may still have
+        # changed the instance, and a 404 means a listed instance is already gone
+        get_cache_manager().invalidate_instance_cache()
 
 
 @router.get(

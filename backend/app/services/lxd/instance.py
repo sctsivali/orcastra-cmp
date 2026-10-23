@@ -453,7 +453,7 @@ async def _mark_create_unknown(
     result: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Release the lease for reconciliation; unknown is not a terminal audit verdict."""
-    return await _set_create_job(
+    marked = await _set_create_job(
         row.job_id,
         worker_id=getattr(row, "locked_by", None),
         phase="unknown",
@@ -465,6 +465,13 @@ async def _mark_create_unknown(
         locked_at=None,
         finished_at=None,
     )
+    # The instance may exist or not; either way a list cached before this is no longer known to
+    # be true, and the browser reconciles an unknown verdict with one read.
+    try:
+        get_cache_manager().invalidate_instance_cache()
+    except Exception as exc:  # noqa: BLE001 - cache failure cannot change the verdict
+        logger.warning("Could not invalidate caches after unknown create job %s: %s", row.job_id, exc)
+    return marked
 
 
 async def _finish_create_job(

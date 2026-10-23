@@ -656,7 +656,11 @@ async def delete_image(
                 executor=_executor,
                 max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
             )
-        except BlockingTimeout:
+        except BlockingTimeout as timeout_error:
+            # the delete goes on in its worker thread; clear the list when it actually ends
+            timeout_error.when_finished(
+                lambda: get_cache_manager().invalidate_resource_cache("images")
+            )
             raise HTTPException(
                 status_code=504,
                 detail=(

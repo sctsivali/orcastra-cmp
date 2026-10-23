@@ -1138,10 +1138,14 @@ async def _set_job(
         values.get("status") in {"success", "partial"}
         or (values.get("status") == "failure" and values.get("result") is not None)
     )
+    # An ambiguous action (the daemon may or may not have applied it) leaves the cached
+    # inventory unproven, the same as a readback would replace it.
+    ambiguous_action = values.get("status") == "unknown" and values.get("result") is not None
     if transitioned and (
         values.get("stopped_by_job") is True
         or values.get("verified_spec") is not None
         or terminal_with_readback
+        or ambiguous_action
     ):
         try:
             get_cache_manager().invalidate_instance_cache()

@@ -51,6 +51,7 @@ from app.services.lxd.availability import require_client
 from app.services.lxd.lazy_client import client_for
 from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT, proxy_executor
 from app.services.lxd_service import LXDService, get_lxd_service
+from app.services.settle_invalidation import invalidate_when_settled
 from app.models.schemas import (
     SnapshotActionResponse,
     SnapshotCreateResponse,
@@ -567,6 +568,11 @@ async def create_snapshot(
     _invalidate_snapshot_views()
     if not completed:
         response.status_code = 202
+        # a `dir` pool can copy for minutes: clear again when LXD settles the write
+        invalidate_when_settled(
+            lambda: client, operation_id, body.project, _invalidate_snapshot_views,
+            label=f"snapshot create {body.host}/{instance_name}",
+        )
     return SnapshotCreateResponse(
         success=True,
         instance_name=instance_name,
@@ -707,6 +713,11 @@ async def delete_snapshot(
     # the row is still there when the page refreshes, which reads as a control that did
     # nothing. Cleared only on the success path: a refused operation changed no listing.
     _invalidate_snapshot_views()
+    if not outcome.get("settled"):
+        invalidate_when_settled(
+            lambda: client, operation_id, project, _invalidate_snapshot_views,
+            label=f"snapshot delete {host}/{instance_name}",
+        )
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,
@@ -872,6 +883,12 @@ async def restore_snapshot(
     # the row is still there when the page refreshes, which reads as a control that did
     # nothing. Cleared only on the success path: a refused operation changed no listing.
     get_cache_manager().invalidate_instance_cache()
+    if not outcome.get("settled"):
+        invalidate_when_settled(
+            lambda: client, operation_id, body.project,
+            get_cache_manager().invalidate_instance_cache,
+            label=f"snapshot restore {body.host}/{instance_name}",
+        )
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,

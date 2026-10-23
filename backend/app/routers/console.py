@@ -29,6 +29,7 @@ import websockets
 from websockets import State as WebSocketState
 from websockets.exceptions import ConnectionClosed
 
+from app.core.cache import get_cache_manager
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.ws_auth import ws_user
 from app.services.ws_session_guard import instance_session_check, reauthorize_while_open
@@ -921,6 +922,9 @@ async def attach_iso(
     if not success:
         return ActionResponse(success=False, error=message)
     
+    # the ISO volume's used_by and the instance's devices both changed; the ISO page reads the
+    # former before letting an operator delete the image
+    get_cache_manager().invalidate_instance_cache()
     return ActionResponse(success=True, message=message)
 
 
@@ -961,6 +965,7 @@ async def eject_iso(
     if not success:
         return ActionResponse(success=False, error=message)
     
+    get_cache_manager().invalidate_instance_cache()
     return ActionResponse(success=True, message=message)
 
 
