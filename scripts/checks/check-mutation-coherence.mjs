@@ -1135,6 +1135,26 @@ if (!breakGlassPanel.includes('reconcileMutationImpact(queryClient, "break-glass
   failures.push("break-glass-panel must reconcile break-glass.write after grant revocation");
 }
 
+// important: an invalidated query refetches on its next mount only when refetchOnMount is not
+// false. The QueryClient default was false, so every list a mutation invalidated while it was
+// off screen came back with its pre-write body (a deleted instance, a new project missing from
+// the Overview). Opting a query out needs a stated reason here.
+const REFETCH_ON_MOUNT_FALSE_ALLOWED = {
+  "frontend/src/lib/query-config.ts": "ON_DEMAND_CONFIG is enabled: false; its callers fetch by hand",
+};
+const providersSource = readFileSync(join(root, "frontend/src/components/providers.tsx"), "utf8");
+if (!/refetchOnMount: true,/.test(providersSource)) {
+  failures.push("frontend/src/components/providers.tsx: the QueryClient default must be refetchOnMount: true");
+}
+for (const absolutePath of sourceFiles(join(root, "frontend/src"))) {
+  const path = relative(root, absolutePath);
+  const text = readFileSync(absolutePath, "utf8");
+  if (!/refetchOnMount:\s*false/.test(text)) continue;
+  if (!REFETCH_ON_MOUNT_FALSE_ALLOWED[path]) {
+    failures.push(`${path}: refetchOnMount: false keeps an invalidated list stale until a reload`);
+  }
+}
+
 if (failures.length > 0) {
   console.error("Mutation coherence contract failed:");
   failures.forEach((failure) => console.error(`  ${failure}`));

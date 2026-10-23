@@ -486,10 +486,9 @@ export function useNodeNames() {
     queryKey: queryKeys.nodeNamesFor(scopeKey),
     queryFn: ({ signal }) => nodeAPI.names({ signal }),
     enabled: isAuthenticated,
-    // note: this was staleTime: Infinity with refetchOnMount: false. Membership does change,
-    // and registering a cluster then opening a create form showed a stale list until a hard
-    // reload, because the register mutation invalidates queryKeys.nodes and not this key.
-    // Three minutes plus the invalidation below is the fix.
+    // note: membership changes when a cluster is registered or removed. Those writes
+    // invalidate this key while no picker is mounted, so the next picker to mount refetches
+    // it (refetchOnMount, the QueryClient default); the three minutes bound everything else.
     staleTime: 1000 * 60 * 3,
     gcTime: 1000 * 60 * 60 * 24, // keep in cache for 24 hours
     refetchOnWindowFocus: false,

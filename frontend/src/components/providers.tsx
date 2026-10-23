@@ -99,7 +99,12 @@ function makeQueryClient() {
         gcTime: 5 * 60 * 1000, // 5 minutes (formerly cacheTime in v4)
         // Disable aggressive refetching
         refetchOnWindowFocus: false, // Don't refetch when switching tabs
-        refetchOnMount: false, // Don't refetch on component mount if data is fresh
+        // important: true refetches on mount only when the data is stale or was invalidated.
+        // false never refetches on mount, even after a mutation invalidated the query, so a
+        // list opened on another page kept showing what the write had just changed until a
+        // reload (a deleted instance, a new project on the Overview, a removed cluster in
+        // every picker).
+        refetchOnMount: true,
         refetchOnReconnect: true, // Still refetch on reconnect
         // Smart retry: skip 401/403/429 (won't resolve by retrying)
         retry: (failureCount, error) => {
