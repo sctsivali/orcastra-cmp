@@ -409,6 +409,13 @@ const RAW_FETCH_WRITE_ALLOWLIST = [
     markers: ["application/x-www-form-urlencoded", "response.ok"],
   },
   {
+    id: "oidc-refresh-token-revocation",
+    path: "frontend/src/auth.ts",
+    method: "POST",
+    endpointMarker: "revocationEndpoint",
+    markers: ["application/x-www-form-urlencoded", "response.ok"],
+  },
+  {
     id: "multipart-guest-file-push",
     path: "frontend/src/lib/file-transfer-api.ts",
     method: "POST",

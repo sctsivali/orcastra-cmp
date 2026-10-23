@@ -10,7 +10,7 @@ import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
-import { forget, grantOnce, settleWithin, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
+import { forget, grantKey, grantOnce, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -95,23 +95,25 @@ const TOKEN_REFRESH_COOLDOWN_SECONDS = 60;
 // important: only /api/auth/session (nodejs) refreshes; middleware runs its own NextAuth
 // instance that never does (middleware.ts). With an IdP that rotates refresh tokens, two writers
 // spend the same token and the second one is refused, which ends the session.
-// A caller waits REFRESH_WAIT_MS for the grant; the grant itself may run to GRANT_CAP_MS, and a
-// late answer is still recorded in lib/refresh-grants.ts for the next read. Aborting it instead
-// would discard a rotation the IdP has already committed. Measured 1.27 s warm, 2.05 s with
-// discovery uncached.
-const REFRESH_WAIT_MS = 10_000;
-const GRANT_CAP_MS = 60_000;
+// important: a session read waits for its grant to finish, up to GRANT_CAP_MS. Giving up earlier
+// would discard a rotation the IdP may already have committed; the new refresh token exists only
+// in that answer. Measured 1.27 s warm, 2.05 s with discovery uncached.
+const GRANT_CAP_MS = 20_000;
 
 // Refresh this long before expiry. Authentik access tokens live ~5 min and SessionProvider polls
 // /api/auth/session every 4 min (auth-provider.tsx), so at every poll the token has ~60 s left
 // and the poll is what spends the IdP round trip, never a navigation.
 const REFRESH_SKEW_S = 120;
 
-// Cached OIDC token endpoint to avoid re-fetching discovery on every refresh
-let _cachedTokenEndpoint: string | null = null;
+// Cached OIDC discovery to avoid re-fetching it on every refresh
+interface Discovery {
+  token_endpoint: string;
+  revocation_endpoint?: string;
+}
+let _cachedDiscovery: Discovery | null = null;
 
-async function resolveTokenEndpoint(signal: AbortSignal): Promise<string> {
-  if (_cachedTokenEndpoint) return _cachedTokenEndpoint;
+async function resolveDiscovery(signal: AbortSignal): Promise<Discovery> {
+  if (_cachedDiscovery) return _cachedDiscovery;
 
   const issuer = process.env.AUTHENTIK_ISSUER;
   if (!issuer) throw new Error("AUTHENTIK_ISSUER not configured");
@@ -119,14 +121,14 @@ async function resolveTokenEndpoint(signal: AbortSignal): Promise<string> {
   try {
     const response = await fetch(`${issuer}.well-known/openid-configuration`, { signal });
     if (!response.ok) throw new Error(`discovery HTTP ${response.status}`);
-    const discovery: { token_endpoint?: string } = await response.json();
+    const discovery: Partial<Discovery> = await response.json();
     if (!discovery.token_endpoint) throw new Error("discovery returned no token_endpoint");
-    _cachedTokenEndpoint = discovery.token_endpoint;
-    return _cachedTokenEndpoint;
+    _cachedDiscovery = { token_endpoint: discovery.token_endpoint, revocation_endpoint: discovery.revocation_endpoint };
+    return _cachedDiscovery;
   } catch (error) {
-    // important: only a discovery failure invalidates the cached endpoint. Clearing it on a
-    // failed grant made the next refresh pay a second round trip, 2.05s instead of 1.27s.
-    _cachedTokenEndpoint = null;
+    // important: only a discovery failure invalidates the cache. Clearing it on a failed grant
+    // made the next refresh pay a second round trip, 2.05s instead of 1.27s.
+    _cachedDiscovery = null;
     throw error;
   }
 }
@@ -138,7 +140,7 @@ async function grantTokens(refreshToken: string): Promise<GrantOutcome> {
   try {
     // One deadline shared by discovery and the grant.
     const signal = AbortSignal.timeout(GRANT_CAP_MS);
-    const tokenEndpoint = await resolveTokenEndpoint(signal);
+    const { token_endpoint: tokenEndpoint } = await resolveDiscovery(signal);
     const response = await fetch(tokenEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -180,20 +182,49 @@ function withFields(token: JWT, fields: RefreshedFields): JWT {
   return { ...token, ...fields, error: undefined, retryAfter: undefined };
 }
 
+function failed(token: JWT): JWT {
+  // Cooldown lives here, not in expiresAt, so expiresAt stays truthful.
+  return { ...token, error: "RefreshAccessTokenError", retryAfter: Math.floor(Date.now() / 1000) + TOKEN_REFRESH_COOLDOWN_SECONDS };
+}
+
 async function refresh(token: JWT): Promise<JWT | null> {
-  const { outcome } = await grantOnce(sessionSubject(token), token.refreshToken ?? "", () =>
-    grantTokens(token.refreshToken ?? "")
-  );
-  const settled = await settleWithin(outcome, REFRESH_WAIT_MS);
-  // Still at the IdP: answer with what the session has and let the grant land in the registry.
-  // An error here would raise the re-login banner for a refresh that is about to succeed.
-  if (!settled) return token;
+  const refreshToken = token.refreshToken;
+  if (!refreshToken) return failed(token);
+  const { outcome } = await grantOnce(sessionSubject(token), refreshToken, async () => {
+    const result = await grantTokens(refreshToken);
+    // A grant whose token carried no groups claim keeps this session's groups, and so does every
+    // reader the registry hands the result to.
+    return result.ok && !result.fields.groups
+      ? { ok: true, fields: { ...result.fields, groups: token.groups, roles: token.roles } }
+      : result;
+  });
+  const settled = await outcome;
   if (!settled.ok && settled.forgotten) return null;
-  if (!settled.ok) {
-    // Cooldown lives here, not in expiresAt, so expiresAt stays truthful.
-    return { ...token, error: "RefreshAccessTokenError", retryAfter: Math.floor(Date.now() / 1000) + TOKEN_REFRESH_COOLDOWN_SECONDS };
-  }
+  if (!settled.ok) return failed(token);
   return withFields(token, settled.fields);
+}
+
+// RFC 7009: a signed-out refresh token is revoked at the IdP, so no copy of the cookie can use it.
+async function revokeAtIdp(refreshToken: string): Promise<void> {
+  try {
+    const signal = AbortSignal.timeout(5_000);
+    const { revocation_endpoint: revocationEndpoint } = await resolveDiscovery(signal);
+    if (!revocationEndpoint) return;
+    const response = await fetch(revocationEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: process.env.AUTHENTIK_CLIENT_ID || "",
+        client_secret: process.env.AUTHENTIK_CLIENT_SECRET || "",
+        token: refreshToken,
+        token_type_hint: "refresh_token",
+      }),
+      signal,
+    });
+    if (!response.ok) console.warn(`[AUTH] refresh token revocation answered ${response.status}`);
+  } catch (error) {
+    console.warn(`[AUTH] refresh token revocation failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function sessionSubject(token: JWT): string {
@@ -229,12 +260,14 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
     };
   }
 
-  // A cookie whose refresh token was already spent (an older copy, another tab, a grant that
-  // finished after its caller stopped waiting) takes the newest tokens of its chain.
+  // A cookie whose refresh token was spent moments ago (a read that was already in flight when
+  // the rotation landed, another tab) takes the newest tokens of its chain. Logged at warn: outside
+  // that race it means a second copy of the session.
   if (token.refreshToken) {
     const upgrade = await upgradeSpent(sessionSubject(token), token.refreshToken);
     if (upgrade) {
-      console.info(`[AUTH] rotation replay served hops=${upgrade.hops}`);
+      const who = (await grantKey(sessionSubject(token))).slice(0, 8);
+      console.warn(`[AUTH] rotation replay served hops=${upgrade.hops} age_ms=${upgrade.ageMs} subject=${who}`);
       token = withFields(token, upgrade.fields);
     }
   }
@@ -387,7 +420,11 @@ export const authConfig: NextAuthConfig = {
     // still in flight for it must not write the session back.
     async signOut(message) {
       const token = "token" in message ? message.token : null;
-      if (token?.refreshToken) await forget(sessionSubject(token), token.refreshToken);
+      if (!token?.refreshToken) return;
+      const subject = sessionSubject(token);
+      const head = (await upgradeSpent(subject, token.refreshToken))?.fields.refreshToken ?? token.refreshToken;
+      await forget(subject, token.refreshToken);
+      await revokeAtIdp(head);
     },
   },
 };

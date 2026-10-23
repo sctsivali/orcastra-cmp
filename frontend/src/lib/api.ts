@@ -279,9 +279,9 @@ function clearAuthFailureState() {
   if (wasAnnounced) _onAuthRecovered?.();
 }
 
-// note: just above REFRESH_WAIT_MS in auth.ts, the longest a session read waits on the IdP. The
+// note: just above GRANT_CAP_MS in auth.ts, the longest a session read waits on the IdP. The
 // loop ends as soon as the refresh settles, so only a slow IdP waits this long.
-const SESSION_REFRESH_WAIT_MS = 11_000;
+const SESSION_REFRESH_WAIT_MS = 21_000;
 
 function waitForSessionRefresh(signal?: AbortSignal | null): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -652,7 +652,7 @@ async function _fetchAPIInternal<T>(
           !_isRetry &&
           fetchOptions.retryAfterAuthRefresh !== false
         ) {
-          // Wait for the session refresh to complete (up to 11 s), but do not keep a query
+          // Wait for the session refresh to complete (up to 21 s), but do not keep a query
           // alive after its key, actor, or component has been retired.
           await waitForSessionRefresh(options.signal);
 
