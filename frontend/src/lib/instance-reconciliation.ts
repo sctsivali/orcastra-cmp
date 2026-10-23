@@ -175,7 +175,11 @@ const PENDING_DELETE_SETTLED_MS = 2 * 60_000;
 // An instance-deleted event can arrive before the server has cleared the cached list (the
 // route clears after LXD answers; another operator, OrcaHub or the CLI may be the writer), so
 // reads that start within this window after the event are still treated as predating it.
-const DELETED_EVENT_GRACE_MS = 5_000;
+// note: it covers the backend's 10 s instance-list clearance window. The backend clears the
+// instance lists from the event stream at most once per 10 s (services/task_journal/
+// cache_clearance.py), so after a delete made outside the console a row can stay in the server's
+// cache that long; the extra 2 s is for the clear itself and the read that follows it.
+const DELETED_EVENT_GRACE_MS = 12_000;
 const pendingDeletes = new WeakMap<QueryClient, Map<string, PendingDelete>>();
 let nextDeleteToken = 0;
 
