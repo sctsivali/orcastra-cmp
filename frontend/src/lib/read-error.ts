@@ -1,6 +1,6 @@
 import { APIError } from "@/types/api";
 
-export type ReadErrorKind = "rate-limited" | "timeout" | "unreachable" | "forbidden" | "failed";
+export type ReadErrorKind = "rate-limited" | "timeout" | "unreachable" | "unauthenticated" | "forbidden" | "failed";
 
 export interface ReadError {
   kind: ReadErrorKind;
@@ -85,7 +85,12 @@ export function describeReadError(error: unknown): ReadError {
     if (error.status === 0) {
       return { kind: "unreachable", reason: "the console cannot reach the API" };
     }
-    if (error.status === 401 || error.status === 403) {
+    // note: a 401 only reaches a page after lib/api.ts tried to renew the session, so it is the
+    // session, not a permission. It shows next to the re-login banner and must say the same thing.
+    if (error.status === 401) {
+      return { kind: "unauthenticated", reason: "your session is no longer valid; sign in again to continue" };
+    }
+    if (error.status === 403) {
       return { kind: "forbidden", reason: "you are not allowed to read this" };
     }
     if (error.status >= 500) {

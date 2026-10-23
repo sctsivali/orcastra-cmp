@@ -183,4 +183,15 @@ for (const file of [
   assert.ok(source.includes("retry: retryUnlessUnavailable"), `${file} must pass retryUnlessUnavailable`);
 }
 
+// A 401 that reaches a page is a session the console could not renew, not a permission. It sits
+// next to the re-login banner, so it must not read as "you are not allowed" (2026-10-23).
+assert.deepEqual(describeReadError(new TestAPIError("Unauthorized", 401, "Not authenticated")), {
+  kind: "unauthenticated",
+  reason: "your session is no longer valid; sign in again to continue",
+});
+assert.deepEqual(describeReadError(new TestAPIError("Forbidden", 403, "Not allowed")), {
+  kind: "forbidden",
+  reason: "you are not allowed to read this",
+});
+
 console.log("read errors: authority, identity-provider and Vault answers are told apart");
