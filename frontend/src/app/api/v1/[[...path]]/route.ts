@@ -64,12 +64,13 @@ const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 // covering the body would kill both. The user-facing timeout stays owned by fetchWithTimeout
 // in lib/api.ts; this is only a backstop so a wedged backend cannot pin a socket forever.
 const UPSTREAM_HEADERS_TIMEOUT_MS = 100_000;
-// important: a write may legitimately hold its response until the cluster has finished. An
+// important: a delete may legitimately hold its response until the cluster has finished. An
 // instance delete waits up to 300 s for LXD (backend services/lxd/instance.py) and the client
 // gives it 300 s (lib/api.ts vmAPI.delete). A 100 s backstop turned a slow delete into a 502:
-// the row came back on screen while LXD went on deleting it. 300 s is also undici's own
-// default headers timeout, so nothing longer would take effect.
-const UPSTREAM_WRITE_HEADERS_TIMEOUT_MS = 300_000;
+// the row came back on screen while LXD went on deleting it. DELETE only: it carries no body,
+// so the longer window cannot be held open by a client trickling one (this route is reachable
+// before authentication). 300 s is also undici's own default headers timeout.
+const UPSTREAM_DELETE_HEADERS_TIMEOUT_MS = 300_000;
 
 const HOP_BY_HOP_HEADERS = [
   "connection",
@@ -212,9 +213,7 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
   const headersDeadline = new AbortController();
   const deadlineTimer = setTimeout(
     () => headersDeadline.abort(new Error("upstream headers timeout")),
-    req.method === "GET" || req.method === "HEAD"
-      ? UPSTREAM_HEADERS_TIMEOUT_MS
-      : UPSTREAM_WRITE_HEADERS_TIMEOUT_MS
+    req.method === "DELETE" ? UPSTREAM_DELETE_HEADERS_TIMEOUT_MS : UPSTREAM_HEADERS_TIMEOUT_MS
   );
 
   try {
