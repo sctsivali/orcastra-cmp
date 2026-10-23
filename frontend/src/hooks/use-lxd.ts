@@ -612,13 +612,63 @@ export function useCreateProject() {
   });
 }
 
+/**
+ * A project delete the cluster may still finish: the backend says so with 503
+ * `project_write_unknown`, and a 502 or 504 means no answer arrived at all.
+ */
+export function isProjectDeleteUnknown(error: unknown): boolean {
+  if (!(error instanceof APIError)) return false;
+  if (error.status === 502 || error.status === 504) return true;
+  const detail = error.detail;
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    (detail as { code?: unknown }).code === "project_write_unknown"
+  );
+}
+
+const UNKNOWN_PROJECT_DELETE_FOLLOW_MS = 2 * 60_000;
+const UNKNOWN_PROJECT_DELETE_POLL_MS = 10_000;
+
+/**
+ * Read the cluster's projects until the one being deleted is gone or the backend's own follow-up
+ * window ends, then reconcile once more. The reads are unforced: the backend clears its project
+ * caches when the delete settles, so they cost no forced-refresh budget.
+ */
+async function followUnknownProjectDelete(
+  queryClient: QueryClient,
+  actorScope: string,
+  host: string,
+  projectName: string,
+): Promise<void> {
+  const deadline = Date.now() + UNKNOWN_PROJECT_DELETE_FOLLOW_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, UNKNOWN_PROJECT_DELETE_POLL_MS));
+    if (!isAuthActorSynchronized(actorScope)) return;
+    try {
+      const listing = await projectAPI.list(host);
+      if (listing.reachable === false) continue;
+      if (!listing.projects.some((project) => project.name === projectName)) break;
+    } catch {
+      continue;
+    }
+  }
+  if (isAuthActorSynchronized(actorScope)) await reconcile(queryClient, "project.write");
+}
+
 export function useDeleteProject() {
   const queryClient = useQueryClient();
-  
+  const { scopeKey } = useActorQueryScope();
+
   return useMutation({
-    mutationFn: ({ host, projectName }: { host: string; projectName: string }) => 
+    mutationFn: ({ host, projectName }: { host: string; projectName: string }) =>
       projectAPI.delete(host, projectName),
     onSuccess: () => reconcile(queryClient, "project.write"),
+    onError: (error, { host, projectName }) => {
+      if (!isProjectDeleteUnknown(error)) return;
+      void reconcile(queryClient, "project.write");
+      void followUnknownProjectDelete(queryClient, scopeKey, host, projectName).catch(() => undefined);
+    },
   });
 }
 

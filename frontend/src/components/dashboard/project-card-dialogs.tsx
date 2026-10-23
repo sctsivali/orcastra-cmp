@@ -28,7 +28,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue } from "@/components/ui/select";
-import { useDeleteProject, useUpdateProject } from "@/hooks/use-lxd";
+import { isProjectDeleteUnknown, useDeleteProject, useUpdateProject } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
 import {
   editableLxdLimit,
@@ -73,10 +73,18 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
         variant: "success" });
       onOpenChange(false);
     } catch (error) {
-      toast({
-        title: "Failed to delete project",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive" });
+      if (isProjectDeleteUnknown(error)) {
+        // The cluster may still finish: the card leaves the grid when it does.
+        toast({
+          title: "Still deleting",
+          description: `${project.name} is taking longer than usual on ${project.host}. It leaves the list when the delete finishes.` });
+        onOpenChange(false);
+      } else {
+        toast({
+          title: "Failed to delete project",
+          description: error instanceof Error ? error.message : "Unknown error",
+          variant: "destructive" });
+      }
     } finally {
       setIsDeleting(false);
     }
