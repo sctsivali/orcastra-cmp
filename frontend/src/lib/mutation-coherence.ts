@@ -85,12 +85,12 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "instance.create": {
     completion: "terminal-operation",
-    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "profiles", "networks", "storagePools", "storageVolumes"],
+    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "profiles", "profileDetails", "networks", "networkDetails", "storagePools", "storagePoolDetails", "storageVolumes", "storageVolumeDetails"],
     apiCalls: ["api.instances.create"],
   },
   "instance.create-legacy": {
     completion: "response",
-    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "profiles", "networks", "storagePools", "storageVolumes"],
+    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "profiles", "profileDetails", "networks", "networkDetails", "storagePools", "storagePoolDetails", "storageVolumes", "storageVolumeDetails"],
     apiCalls: ["vmAPI.create"],
   },
   "instance.specification": {
@@ -113,7 +113,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "instance.delete": {
     completion: "response",
-    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "snapshots", "profiles", "networks", "storagePools", "storageVolumes"],
+    queryFamilies: ["instances", "instanceDetails", "instanceMetrics", "monitoring", "ipam", "projectUsage", "resourceTags", "tagStats", "nodes", "nodeResources", "regions", "snapshots", "profiles", "profileDetails", "networks", "networkDetails", "storagePools", "storagePoolDetails", "storageVolumes", "storageVolumeDetails"],
     apiCalls: ["api.vms.delete", "vmAPI.delete"],
   },
   "instance.tags": {
@@ -128,7 +128,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "instance.media": {
     completion: "response",
-    queryFamilies: ["instances", "instanceDetails", "storageVolumes"],
+    queryFamilies: ["instances", "instanceDetails", "storageVolumes", "storageVolumeDetails"],
     apiCalls: ["consoleAPI.attachISO", "consoleAPI.ejectISO"],
   },
   "instance.boot-order": {

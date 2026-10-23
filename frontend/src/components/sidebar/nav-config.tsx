@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import type { QueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { readInstanceList } from "@/lib/instance-reconciliation";
 import { queryKeys, readStoragePools } from "@/hooks/use-lxd";
 import type { NavGroup, NavItem, PermissionFlags, RoleGate } from "./types";
 
@@ -151,14 +152,20 @@ export function buildPrefetchMap(
   actorScope: string,
   canViewNodeInventory: boolean,
 ): Record<string, () => void> {
+  // the same read useInstances makes, pending deletes included, so a hover cannot warm the
+  // cache with a row that is being deleted
+  const readFleet = ({ signal }: { signal: AbortSignal }) =>
+    readInstanceList(queryClient, actorScope, () =>
+      api.instances.list(undefined, undefined, undefined, undefined, undefined, { signal }),
+    );
   return {
     "/inventory": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: readFleet, staleTime: 30_000 });
       queryClient.prefetchQuery({ queryKey: queryKeys.allProjectsFor(actorScope), queryFn: () => api.projects.listAll(), staleTime: 180_000 });
       queryClient.prefetchQuery({ queryKey: queryKeys.clustersFor(actorScope, false), queryFn: () => api.clusters.list(false), staleTime: 120_000 });
     },
     "/inventory/instances": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: readFleet, staleTime: 30_000 });
     },
     "/inventory/monitoring": () => {
       queryClient.prefetchQuery({

@@ -104,15 +104,8 @@ function InstancesContent() {
   // cannot be the pre-create list. A blanket 12s wait used to sit here, which left
   // the same instance rendered twice, once "Creating…" and once with its real
   // status, for as long as the real row beat the stream event.
-  const isResolved = (p: {
-    host: string;
-    name: string;
-    project?: string;
-    createdAt: number;
-    jobId?: string;
-    jobStatus?: string;
-  }) =>
-    (!p.jobId || p.jobStatus === "success") &&
+  type Placeholder = (typeof pendingCreates)[number];
+  const hasRealRow = (p: Placeholder) =>
     dataUpdatedAt > p.createdAt &&
     instances.some(
       (i: any) =>
@@ -122,14 +115,22 @@ function InstancesContent() {
         // so matching on host and name alone resolves a placeholder against someone else's row.
         (i.project || "default") === (p.project || "default"),
     );
+  const isResolved = (p: Placeholder) =>
+    (!p.jobId || p.jobStatus === "success") && hasRealRow(p);
+  // A failed verdict keeps its placeholder on screen next to whatever the create left behind,
+  // because the placeholder is where the error is shown.
+  const reportsFailure = (p: Placeholder) =>
+    p.status === "Error" || ["failure", "partial", "unknown"].includes(p.jobStatus ?? "");
   useEffect(() => {
     for (const p of pendingCreates) {
       if (isResolved(p)) resolvePendingCreate(scopeKey, p.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instances, pendingCreates, dataUpdatedAt, scopeKey]);
-  // Hide placeholders that already resolved to a real row (avoids a duplicate).
-  const visiblePendingCreates = pendingCreates.filter((p) => !isResolved(p));
+  // Hide a placeholder as soon as its real row is listed. The entry itself stays until the
+  // durable job's verdict, but showing both read as two instances for the seconds between
+  // LXD creating it and the job confirming it.
+  const visiblePendingCreates = pendingCreates.filter((p) => reportsFailure(p) || !hasRealRow(p));
 
   // important: isStalePending compares against Date.now() and is only read during a render,
   // and nothing here renders on a clock. useInstances runs with realtime, which sets

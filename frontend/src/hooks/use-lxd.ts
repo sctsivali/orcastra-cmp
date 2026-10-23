@@ -29,8 +29,10 @@ import {
   api,
   fetchAPI,
   isAuthActorSynchronized,
+  carryStaleMark,
   type ReadOptions,
 } from "@/lib/api";
+import { keyFor, removePendingCreate } from "@/lib/pending-creates";
 import {
   VMCreateRequest,
   InstanceCreateRequest,
@@ -59,8 +61,10 @@ import {
 } from "@/lib/mutation-coherence";
 import {
   optimisticallyRemoveExactInstance,
+  readInstanceList,
   reconcileInstanceFleet,
   restoreExactInstanceRollback,
+  settleInstanceDelete,
 } from "@/lib/instance-reconciliation";
 
 // Query Keys
@@ -291,48 +295,6 @@ export function useRestartVM() {
     }) => vmAPI.restart(name, request),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
-    },
-  });
-}
-
-export function useDeleteVM() {
-  const queryClient = useQueryClient();
-  const { scopeKey } = useActorQueryScope();
-  
-  return useMutation({
-    mutationFn: ({
-      name,
-      host,
-      force,
-      project,
-    }: {
-      name: string;
-      host: string;
-      force?: boolean;
-      project?: string;
-    }) => vmAPI.delete(name, host, force, project),
-    onMutate: (variables) => optimisticallyRemoveExactInstance(queryClient, {
-      actorScope: scopeKey,
-      name: variables.name,
-      host: variables.host,
-      project: normalizeProject(variables.project),
-    }).then((rollback) => ({ rollback })),
-    onError: (_error, _variables, context) => {
-      if (!isAuthActorSynchronized(scopeKey)) return;
-      restoreExactInstanceRollback(queryClient, context?.rollback);
-      void reconcileInstanceFleet(queryClient, scopeKey, { fresh: true }).catch(
-        () => undefined,
-      );
-    },
-    onSuccess: async (_data, variables) => {
-      removeInstanceDetails(
-        queryClient,
-        scopeKey,
-        variables.name,
-        variables.host,
-        variables.project,
-      );
-      await reconcile(queryClient, "instance.delete");
     },
   });
 }
@@ -1071,11 +1033,13 @@ export async function readStoragePools(host: string | undefined, read: ReadOptio
       .then((value) => ({ ok: true as const, value }))
       .catch(() => ({ ok: false as const, value: null })),
   ]);
-  return {
+  const merged = {
     ...poolsData,
     capacityFailed: !resourcesData.ok,
     resources: (resourcesData.value as Record<string, unknown>)?.resources || {},
   };
+  // either half answered from a stale cache entry: keep the follow-up that replaces it
+  return carryStaleMark(resourcesData.value, carryStaleMark(poolsData, merged));
 }
 
 export function useStoragePools(
@@ -1498,13 +1462,16 @@ export function useInstances(
   },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const queryClient = useQueryClient();
   return useRefreshableQuery({
     queryKey: queryKeys.instancesFor(scopeKey, host, opts?.project),
     queryFn: (read) =>
-      api.instances.list(host, undefined, undefined, undefined, undefined, {
-        ...read,
-        project: opts?.project,
-      }),
+      readInstanceList(queryClient, scopeKey, () =>
+        api.instances.list(host, undefined, undefined, undefined, undefined, {
+          ...read,
+          project: opts?.project,
+        }),
+      ),
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && (opts?.enabled ?? true),
@@ -1748,19 +1715,30 @@ export function useRestartInstance() {
   });
 }
 
+/**
+ * Delete one exact instance. Used by the Instances table and the Overview project cards.
+ *
+ * The row leaves the lists at once and a pending-delete entry keeps it out while the DELETE
+ * runs (the backend holds it open until LXD has finished), so a lifecycle event or a poll
+ * that read the instance before then cannot put it back. On success the entry settles and
+ * one fleet read replaces every list; the backend cleared its caches before answering, so an
+ * unforced read is already current and does not spend the forced-refresh budget.
+ */
 export function useDeleteInstance() {
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
-  
+  const identityOf = (variables: { name: string; host: string; project?: string }) => ({
+    actorScope: scopeKey,
+    name: variables.name,
+    host: variables.host,
+    project: normalizeProject(variables.project),
+  });
+
   return useMutation({
     mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
       api.vms.delete(name, host, force, project),
-    onMutate: (variables) => optimisticallyRemoveExactInstance(queryClient, {
-      actorScope: scopeKey,
-      name: variables.name,
-      host: variables.host,
-      project: normalizeProject(variables.project),
-    }).then((rollback) => ({ rollback })),
+    onMutate: (variables) =>
+      optimisticallyRemoveExactInstance(queryClient, identityOf(variables)).then((rollback) => ({ rollback })),
     onError: (_error, _variables, context) => {
       if (!isAuthActorSynchronized(scopeKey)) return;
       restoreExactInstanceRollback(queryClient, context?.rollback);
@@ -1769,6 +1747,9 @@ export function useDeleteInstance() {
       );
     },
     onSuccess: async (_data, variables) => {
+      settleInstanceDelete(queryClient, identityOf(variables));
+      // a failed create's placeholder for this instance has nothing left to report
+      removePendingCreate(scopeKey, keyFor(variables.host, normalizeProject(variables.project), variables.name));
       removeInstanceDetails(
         queryClient,
         scopeKey,
@@ -1777,6 +1758,10 @@ export function useDeleteInstance() {
         variables.project,
       );
       await reconcile(queryClient, "instance.delete");
+      if (!isAuthActorSynchronized(scopeKey)) return;
+      void reconcileInstanceFleet(queryClient, scopeKey, { fresh: false }).catch(
+        () => undefined,
+      );
     },
   });
 }

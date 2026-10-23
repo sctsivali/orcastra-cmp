@@ -524,6 +524,12 @@ export function wasServedStale(data: unknown): boolean {
   return data !== null && typeof data === "object" && staleBodies.has(data);
 }
 
+/** Keep the stale mark when a query function reshapes a body it read, so it still converges. */
+export function carryStaleMark<T>(from: unknown, to: T): T {
+  if (wasServedStale(from) && to !== null && typeof to === "object") staleBodies.add(to);
+  return to;
+}
+
 // The background read usually lands within a fan-out's duration (the instance list took 4.3 s
 // at p50 and 6.7 s at p95 on dev), so the first look waits 5 s and the second 9 s more: a stale
 // list is replaced within about 14 s at worst. Two looks per stale answer, never more: a cluster

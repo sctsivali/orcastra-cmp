@@ -34,7 +34,7 @@ import {
   useStartVM,
   useStopVM,
   useRestartVM,
-  useDeleteVM,
+  useDeleteInstance,
   useUpdateInstanceTags } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/hooks/use-toast";
@@ -55,7 +55,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   const startVM = useStartVM();
   const stopVM = useStopVM();
   const restartVM = useRestartVM();
-  const deleteVM = useDeleteVM();
+  const deleteInstance = useDeleteInstance();
   const updateInstanceTags = useUpdateInstanceTags();
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [showMonitoring, setShowMonitoring] = React.useState(false);
@@ -197,7 +197,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
     }
     setIsDeleting(true);
     try {
-      await deleteVM.mutateAsync({
+      await deleteInstance.mutateAsync({
         name: vm.name,
         host: vm.host,
         force: true,

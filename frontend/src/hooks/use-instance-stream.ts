@@ -14,6 +14,7 @@ import {
 } from "@/lib/instance-freshness";
 import {
   createExactInstanceReadFence,
+  isHiddenByPendingDelete,
   reconcileInstanceFleet,
   removeExactInstance,
   retainInstanceReconcileRateLimit,
@@ -113,12 +114,15 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
     ): Promise<boolean> => {
       const identity = { actorScope: scopeKey, host, project, name };
       const lease = readFence.start(identity);
+      const readStartedAt = Date.now();
       try {
         const vm = await api.instances.get(name, host, project, {
           signal: lease.signal,
         });
         if (!active || !readFence.isCurrent(lease)) return false;
-        if (!upsertExactInstance(queryClient, identity, vm)) {
+        // a delete owns this row: nothing to patch and no address to wait for
+        if (isHiddenByPendingDelete(queryClient, identity, readStartedAt)) return true;
+        if (!upsertExactInstance(queryClient, identity, vm, readStartedAt)) {
           scheduleReconcile(true);
           return false;
         }
@@ -146,7 +150,10 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
     const dropPending = (host: string, name: string, project: string) => {
       const entry = findPending(host, name, project);
       if (!entry) return;
-      if (entry.jobId && entry.jobStatus !== "success") {
+      // A create still in flight keeps its placeholder until the job decides. Once the job has
+      // a verdict, success or not, the instance being deleted leaves nothing to show for it; a
+      // failed placeholder kept here survived in session storage, reloads included.
+      if (entry.jobId && (!entry.jobStatus || ["pending", "running"].includes(entry.jobStatus))) {
         updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
       } else {
         removePendingCreate(scopeKey, entry.id);
