@@ -8,6 +8,7 @@ import {
   useStopInstance,
   useRestartInstance,
   useDeleteInstance,
+  isDeleteOutcomeUnknown,
 } from "@/hooks/use-lxd";
 import type { VMInfo } from "@/types/api";
 import type { ConfirmActionState } from "./instance-action-dialogs";
@@ -227,11 +228,16 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
       }
     } catch (err) {
       if (activeActorScopeRef.current === requestActorScope) {
-        toast({
-          title: "Failed to delete instance",
-          description: err instanceof Error ? err.message : String(err),
-          variant: "destructive",
-        });
+        toast(isDeleteOutcomeUnknown(err)
+          ? {
+              title: "Still deleting",
+              description: `"${target.name}" is taking longer than usual on the cluster. It leaves the list when the delete finishes.`,
+            }
+          : {
+              title: "Failed to delete instance",
+              description: err instanceof Error ? err.message : String(err),
+              variant: "destructive",
+            });
       }
     } finally {
       actionsInFlightRef.current.delete(requestKey);

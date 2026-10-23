@@ -65,6 +65,8 @@ import {
   reconcileInstanceFleet,
   restoreExactInstanceRollback,
   settleInstanceDelete,
+  type InstanceDeleteRollback,
+  type InstanceIdentity,
 } from "@/lib/instance-reconciliation";
 
 // Query Keys
@@ -1716,6 +1718,45 @@ export function useRestartInstance() {
 }
 
 /**
+ * A delete whose answer never arrived (a gateway or client timeout) may still be running on the
+ * cluster: the backend waits up to 300 s for LXD, a force stop first can make it longer.
+ */
+export function isDeleteOutcomeUnknown(error: unknown): boolean {
+  return error instanceof APIError && (error.status === 502 || error.status === 504);
+}
+
+const UNKNOWN_DELETE_FOLLOW_MS = 10 * 60_000;
+const UNKNOWN_DELETE_POLL_MS = 15_000;
+
+/**
+ * Keep the row hidden while a delete of unknown outcome may still be running, and settle it from
+ * the exact instance read: gone means deleted, still there at the deadline means it was not.
+ */
+async function followUnknownDelete(
+  queryClient: QueryClient,
+  identity: InstanceIdentity,
+  rollback: InstanceDeleteRollback | undefined,
+): Promise<void> {
+  const deadline = Date.now() + UNKNOWN_DELETE_FOLLOW_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, UNKNOWN_DELETE_POLL_MS));
+    if (!isAuthActorSynchronized(identity.actorScope)) return;
+    try {
+      await api.instances.get(identity.name, identity.host, identity.project);
+    } catch (error) {
+      if (!(error instanceof APIError && error.status === 404)) continue;
+      settleInstanceDelete(queryClient, identity);
+      removeInstanceDetails(queryClient, identity.actorScope, identity.name, identity.host, identity.project);
+      await reconcile(queryClient, "instance.delete");
+      return;
+    }
+  }
+  if (!isAuthActorSynchronized(identity.actorScope)) return;
+  restoreExactInstanceRollback(queryClient, rollback);
+  void reconcileInstanceFleet(queryClient, identity.actorScope, { fresh: true }).catch(() => undefined);
+}
+
+/**
  * Delete one exact instance. Used by the Instances table and the Overview project cards.
  *
  * The row leaves the lists at once and a pending-delete entry keeps it out while the DELETE
@@ -1739,8 +1780,14 @@ export function useDeleteInstance() {
       api.vms.delete(name, host, force, project),
     onMutate: (variables) =>
       optimisticallyRemoveExactInstance(queryClient, identityOf(variables)).then((rollback) => ({ rollback })),
-    onError: (_error, _variables, context) => {
+    onError: (error, variables, context) => {
       if (!isAuthActorSynchronized(scopeKey)) return;
+      if (isDeleteOutcomeUnknown(error)) {
+        void followUnknownDelete(queryClient, identityOf(variables), context?.rollback).catch(
+          () => undefined,
+        );
+        return;
+      }
       restoreExactInstanceRollback(queryClient, context?.rollback);
       void reconcileInstanceFleet(queryClient, scopeKey, { fresh: true }).catch(
         () => undefined,

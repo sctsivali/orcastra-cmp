@@ -35,6 +35,7 @@ import {
   useStopVM,
   useRestartVM,
   useDeleteInstance,
+  isDeleteOutcomeUnknown,
   useUpdateInstanceTags } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/hooks/use-toast";
@@ -209,10 +210,14 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         variant: "success" });
     } catch (error) {
       if (activeActorScopeRef.current !== requestActorScope) return;
-      toast({
-        title: "Failed to delete VM",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive" });
+      toast(isDeleteOutcomeUnknown(error)
+        ? {
+            title: "Still deleting",
+            description: `${vm.name} is taking longer than usual on the cluster. It leaves the list when the delete finishes.` }
+        : {
+            title: "Failed to delete VM",
+            description: error instanceof Error ? error.message : "Unknown error",
+            variant: "destructive" });
     } finally {
       if (activeActorScopeRef.current === requestActorScope) {
         setIsDeleting(false);
