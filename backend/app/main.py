@@ -685,6 +685,13 @@ async def lifespan(app: FastAPI):
         await settle_invalidation.shutdown()
     except Exception:
         pass
+
+    # Cancel follow-ups of project deletes whose outcome was not known when they answered
+    try:
+        from app.services import project_deletion
+        await project_deletion.shutdown()
+    except Exception:
+        pass
     
     # Stop session tracker cleanup
     try:

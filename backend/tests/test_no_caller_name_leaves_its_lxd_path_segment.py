@@ -42,6 +42,8 @@ KEY_REACHABLE = sorted(
         APP / "services" / "lxd" / "guest_exec.py",
         APP / "services" / "lxd" / "guest_files.py",
         APP / "services" / "lxd" / "guest_output.py",
+        # The proxy's delete_project goes through services/project_deletion.py to these calls.
+        APP / "services" / "lxd" / "project_delete.py",
         *(APP / "services" / "desktop").glob("*.py"),
         *(APP / "mcp").glob("*.py"),
     }
@@ -94,6 +96,10 @@ SERVICE_CALLS = {
     "cert_manager", "cert_manager.get_cluster_info", "cert_manager.read_registry", "check_node_status",
     "connection_manager", "connection_manager.get_client", "connection_manager.get_project_client",
     "ensure_connection", "get_node_names", "instance_manager.fetch_node_instances",
+    # note: take a project name as well as the cluster id. The proxy validates it with
+    # lxd_segment (assert_path_params) and services/lxd/project_delete.py, scanned above,
+    # puts it in the path only through safe_segment.
+    "delete_project", "project_exists",
 }
 # note: the encoders themselves, which the rules above describe rather than obey.
 ENCODER_MODULES = {APP / "core" / "lxd_segment.py", APP / "core" / "lxd_path.py"}

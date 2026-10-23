@@ -719,6 +719,9 @@ def execute_proxy_operation(
         return {"name": name, "created": True}
 
     if operation == "delete_project":
+        # note: the /proxy route sends delete_project to services/project_deletion (cluster lock,
+        # migration fence, grant revoke, bounded outcome). This branch is the parameter contract
+        # and the backstop for any other caller of the dispatcher.
         name = _required(params, "name", "Project name")
         client.projects.get(lxd_segment(name, what="Project name")).delete()
         return {"deleted": True, "name": name}

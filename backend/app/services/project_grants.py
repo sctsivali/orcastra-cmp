@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Collection, FrozenSet, Optional
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -129,8 +130,26 @@ async def grant_project_to_creator(
         rule_created=rule_created,
     )
 
+async def rule_ids_naming(db: AsyncSession, *, cluster_id: str, project_name: str) -> FrozenSet[int]:
+    """The ids of every rule naming (cluster, project), read under the caller's cluster lock."""
+    rows = await db.execute(
+        select(TenantPolicyRule.id).where(
+            and_(
+                TenantPolicyRule.cluster_id == cluster_id,
+                TenantPolicyRule.project_name == project_name,
+            )
+        )
+    )
+    return frozenset(rows.scalars().all())
+
+
 async def revoke_project_grants(
-    db: AsyncSession, *, cluster_id: str, project_name: str, commit: bool = True
+    db: AsyncSession,
+    *,
+    cluster_id: str,
+    project_name: str,
+    commit: bool = True,
+    only_rule_ids: Optional[Collection[int]] = None,
 ) -> RevokeOutcome:
     """Remove every rule naming (cluster, project), whichever organization wrote it.
 
@@ -138,16 +157,18 @@ async def revoke_project_grants(
     project it deleted would otherwise put organization B's future project of the same name
     inside A's bound. A managed policy left with no rules and no assignments is dropped; an
     OrcaHub-owned policy keeps its row, OrcaHub upserts it by `external_id`.
+
+    `only_rule_ids` limits the removal to rules captured earlier, for a delete settled after
+    its request ended: a same-name project created in between brings rules of its own.
     """
+    conditions = [
+        TenantPolicyRule.cluster_id == cluster_id,
+        TenantPolicyRule.project_name == project_name,
+    ]
+    if only_rule_ids is not None:
+        conditions.append(TenantPolicyRule.id.in_(sorted(only_rule_ids) or [-1]))
     rules = (
-        await db.execute(
-            select(TenantPolicyRule).where(
-                and_(
-                    TenantPolicyRule.cluster_id == cluster_id,
-                    TenantPolicyRule.project_name == project_name,
-                )
-            )
-        )
+        await db.execute(select(TenantPolicyRule).where(and_(*conditions)))
     ).scalars().all()
     touched = {rule.policy_id for rule in rules}
     for rule in rules:
@@ -224,10 +245,18 @@ async def record_created_project(
     return ""
 
 
-async def forget_deleted_project(db: AsyncSession, *, cluster_id: str, project_name: str) -> str:
+async def forget_deleted_project(
+    db: AsyncSession,
+    *,
+    cluster_id: str,
+    project_name: str,
+    only_rule_ids: Optional[Collection[int]] = None,
+) -> str:
     """Forget every rule that named the deleted project; a failure is reported, never a 500."""
     try:
-        outcome = await revoke_project_grants(db, cluster_id=cluster_id, project_name=project_name)
+        outcome = await revoke_project_grants(
+            db, cluster_id=cluster_id, project_name=project_name, only_rule_ids=only_rule_ids
+        )
     except Exception as e:  # noqa: BLE001 - the project is gone; say what was left behind
         logger.error(f"Could not remove the access rules naming {project_name} on {cluster_id}: {e}")
         activity_logger.log_activity(

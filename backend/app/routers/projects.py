@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import logging
 from datetime import datetime, timezone
 import asyncio
+from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import re
@@ -43,7 +44,7 @@ from app.services.instance_security_policy import (
     validate_target_project_isolation,
     validate_project_update,
 )
-from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.shared_cluster_audit import ClusterConfigurationBusy, serialize_cluster_configuration
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.api_key_capabilities import is_valid_project_name
@@ -59,7 +60,7 @@ from app.core.org_scope import (
     verify_cluster_access,
     visible_projects_for,
 )
-from app.services import project_grants
+from app.services import project_deletion, project_grants
 from app.core.registry_guard import require_known_registry
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from app.core import swr
@@ -909,9 +910,10 @@ async def update_project(
     summary="Delete a project",
     description="Delete a project from a specific cluster.",
     responses={
-        200: {"description": "Project deleted successfully"},
-        400: {"model": ErrorResponse, "description": "Invalid request"},
-        503: {"model": ErrorResponse, "description": "LXD connection error"},
+        200: {"description": "Project deleted, or it was already gone"},
+        400: {"model": ErrorResponse, "description": "The cluster refused the delete"},
+        409: {"model": ErrorResponse, "description": "A migration or another configuration change holds it"},
+        503: {"model": ErrorResponse, "description": "Cluster unreachable, or the outcome is not known yet"},
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
@@ -923,94 +925,116 @@ async def delete_project(
     _rbac: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a project from a specific LXD host."""
+    """Delete a project from a specific LXD host.
+
+    important: no branch answers with the text of a transport exception. It names the cluster's
+    address (`HTTPSConnectionPool(host='10.x.x.x', ...)`), and a 4xx body reaches the browser
+    untouched.
+    """
     verify_cluster_access(host)
     _refuse_a_project_outside_the_bound(host, project_name)
-    try:
-        async with serialize_cluster_configuration(db, host):
-            try:
-                await assert_project_not_migration_fenced(
-                    cluster_id=host,
-                    project=project_name,
-                    db=db,
-                )
-            except MigrationFenceConflict as exc:
-                raise HTTPException(status_code=409, detail=exc.detail) from exc
 
-            async def delete_and_revoke_grants() -> str:
-                await lxd_service.delete_project(host, project_name)
-                return await project_grants.forget_deleted_project(
-                    db,
-                    cluster_id=host,
-                    project_name=project_name,
-                )
-
-            revoke_note, request_cancelled = await _finish_critical_write(
-                delete_and_revoke_grants()
-            )
-            if request_cancelled:
-                raise asyncio.CancelledError
-
-        # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
-        # until now, so the catalogue was a promise with no sender behind it.
-        from app.services.webhooks.emitter import emit_resource_event
-
-        await emit_resource_event(
-            event_type="orcastra.project.deleted.v1",
-            cluster_id=host,
-            resource_type="project",
-            resource_name=project_name,
-        )
-
-        
-        # Clear same-name quota data as well, so a later recreate cannot inherit it.
-        _invalidate_project_caches()
-        logger.debug(f"Invalidated project cache after deleting '{project_name}' from {host}")
-        
-        # Log activity for audit trail
+    def failed(error_code: str, message: str) -> None:
         activity_logger.log_activity(
             action="project.delete",
             target_type="project",
             target_id=project_name,
             target_host=host,
-            result="success",
+            result="failure",
+            error_code=error_code,
+            error_message=message,
         )
-        
-        schedule_orcahub_event("project.deleted", host, project_name, project_name, resource_type="PROJECT")
-        return {
-            "success": True,
-            "message": (
-                f"Project '{project_name}' deleted successfully from cluster '{host}'"
-                + revoke_note
-            )
-        }
 
+    try:
+        outcome, request_cancelled = await _finish_critical_write(
+            project_deletion.delete_project_and_forget(db, lxd_service, host, project_name)
+        )
+        if request_cancelled:
+            raise asyncio.CancelledError
+    except MigrationFenceConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except ClusterConfigurationBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "cluster_busy",
+                "message": f"Another configuration change on {host} is still running. Try again in a moment.",
+            },
+        ) from exc
+    except project_deletion.ProjectDeleteUnknown as unknown:
+        logger.warning("Project delete outcome is unknown for %s on %s", project_name, host)
+        # LXD may finish after this answer: lists must not keep serving the project until a TTL.
+        _invalidate_project_caches()
+        activity_logger.log_activity(
+            action="project.delete",
+            target_type="project",
+            target_id=project_name,
+            target_host=host,
+            result="unknown",
+            error_code="LXDOperationUnknownError",
+            error_message=str(unknown),
+        )
+        project_deletion.follow_unknown_delete(
+            lxd_service, unknown, partial(_announce_project_deleted, host, project_name, True)
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "project_write_unknown",
+                "message": (
+                    f"Deleting project '{project_name}' on {host} is taking longer than expected "
+                    "and may still finish. Refresh before retrying."
+                ),
+            },
+        ) from unknown
+    except LXDLocalUnavailableError as e:
+        failed("LXDLocalUnavailableError", str(e))
+        raise HTTPException(
+            status_code=503,
+            detail=f"Project operations on {host} are busy. Try again in a moment.",
+        ) from e
+    except LXDConnectionError as e:
+        logger.warning("LXD connection error deleting %s on %s", project_name, host)
+        failed("LXDConnectionError", f"Could not reach {host}")
+        raise HTTPException(status_code=503, detail=f"Could not reach {host} to delete the project") from e
+    except LXDOperationError as e:
+        # The daemon's own refusal, such as a project that still holds instances.
+        logger.error(f"LXD operation error: {e}")
+        failed("LXDOperationError", str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
-    except LXDConnectionError as e:
-        logger.warning(f"LXD connection error: {e}")
-        activity_logger.log_activity(
-            action="project.delete",
-            target_type="project",
-            target_id=project_name,
-            target_host=host,
-            result="failure",
-            error_code="LXDConnectionError",
-            error_message=str(e),
-        )
-        raise HTTPException(status_code=503, detail=str(e))
-    except LXDOperationError as e:
-        logger.error(f"LXD operation error: {e}")
-        activity_logger.log_activity(
-            action="project.delete",
-            target_type="project",
-            target_id=project_name,
-            target_host=host,
-            result="failure",
-            error_code="LXDOperationError",
-            error_message=str(e),
-        )
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error deleting project: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error deleting project {project_name} on {host}: {type(e).__name__}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete project") from e
+
+    await _announce_project_deleted(host, project_name, False)
+    verb = "was already deleted from" if outcome.already_gone else "deleted successfully from"
+    return {
+        "success": True,
+        "message": f"Project '{project_name}' {verb} cluster '{host}'" + outcome.revoke_note,
+    }
+
+
+async def _announce_project_deleted(host: str, project_name: str, settled_later: bool) -> None:
+    """Everything a delete owes once the project is gone: events, caches, audit, OrcaHub."""
+    # Announce the lifecycle change to any subscribed add-on.
+    from app.services.webhooks.emitter import emit_resource_event
+
+    await emit_resource_event(
+        event_type="orcastra.project.deleted.v1",
+        cluster_id=host,
+        resource_type="project",
+        resource_name=project_name,
+    )
+    # Clear same-name quota data as well, so a later recreate cannot inherit it.
+    _invalidate_project_caches()
+    activity_logger.log_activity(
+        action="project.delete",
+        target_type="project",
+        target_id=project_name,
+        target_host=host,
+        result="success",
+        details={"settled_after_answer": True} if settled_later else None,
+    )
+    schedule_orcahub_event("project.deleted", host, project_name, project_name, resource_type="PROJECT")

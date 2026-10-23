@@ -20,7 +20,8 @@ from app.core.blocking import (
 from app.core.lxd_path import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 
-from . import health
+from . import health, project_delete
+from .project_delete import definitive_lxd_refusal as _definitive_lxd_refusal
 from .exceptions import (
     LXDConnectionError,
     LXDLocalUnavailableError,
@@ -41,6 +42,10 @@ _PROJECT_WRITE_WAIT_SECONDS = 60
 _PROJECT_WRITE_WALL_SECONDS = 240.0
 _PROJECT_WRITE_MAX_IN_FLIGHT_PER_CLUSTER = 1
 _PROJECT_READ_TIMEOUT = (5, 25)
+# note: above project_delete's own socket budgets, so they end the worker first; the wall
+# fires only on a stuck reconnect.
+_PROJECT_DELETE_WALL_SECONDS = 30.0
+_PROJECT_PROBE_WALL_SECONDS = 10.0
 _projects_executor = ThreadPoolExecutor(
     max_workers=_PROJECT_LIST_WORKERS, thread_name_prefix="lxd_projects_"
 )
@@ -143,19 +148,6 @@ def _update_readback_matches(
     return True
 
 
-def _definitive_lxd_refusal(exc: LXDAPIException, phase: str) -> bool:
-    """Whether LXD supplied a terminal verdict rather than a transport/wait ambiguity."""
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
-    if phase == "submitting" and isinstance(status_code, int) and 400 <= status_code < 500:
-        return True
-    try:
-        metadata = response.json().get("metadata")
-    except Exception:
-        return False
-    return isinstance(metadata, dict) and metadata.get("status") in {"Failure", "Cancelled"}
-
-
 async def _drain_project_worker(host: str) -> None:
     """Keep the ownership lock held until a timed-out/cancelled worker really exits."""
     while in_flight_for_key(_projects_executor, host):
@@ -171,12 +163,13 @@ async def _run_project_blocking(
     *args: Any,
     host: str,
     label: str,
+    timeout: float = _PROJECT_WRITE_WALL_SECONDS,
 ) -> Any:
     try:
         return await run_blocking(
             function,
             *args,
-            timeout=_PROJECT_WRITE_WALL_SECONDS,
+            timeout=timeout,
             label=f"project.{label}[{host}]",
             executor=_projects_executor,
             max_in_flight=_PROJECT_LIST_WORKERS,
@@ -518,7 +511,8 @@ class ProjectManager:
             logger.error(f"Error creating project '{name}' on {host}: {e}")
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("create", name) from e
-            raise LXDOperationError(f"Failed to create project: {str(e)}")
+            # note: not str(e): before submit this is client or certificate plumbing, not LXD.
+            raise LXDOperationError("Failed to create project") from e
     
     @audit_operation(
         "lxd.project.update", "project",
@@ -720,32 +714,55 @@ class ProjectManager:
             logger.error(f"Error updating project '{project_name}' on {host}: {e}")
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("update", project_name) from e
-            raise LXDOperationError(f"Failed to update project: {str(e)}")
+            # note: not str(e): before submit this is client or certificate plumbing, not LXD.
+            raise LXDOperationError("Failed to update project") from e
     
     @audit_operation("lxd.project.delete", "project", target_id_param="name")
     async def delete_project(self, host: str, name: str) -> None:
-        """Delete a project from a specific LXD host."""
+        """Delete a project off the event loop; a delete LXD may still be doing is never guessed.
+
+        important: a timeout or a dropped connection after the DELETE was sent says nothing about
+        the outcome. The exact read decides: absent is deleted, present is
+        LXDOperationUnknownError, and the caller must not revoke anything on it.
+        """
         try:
-            client = self._get_client_with_reconnect(host)
-            if client is None:
-                raise LXDConnectionError(f"Could not connect to {host}")
-            
-            # get the project first
-            project = client.projects.get(safe_segment(name))
-            
-            # delete the project
-            project.delete()
-            
-            logger.info(f"Deleted project '{name}' from {host}")
-            
-        except LXDConnectionError:
-            raise
-        except NotFound:
-            logger.error(f"Project '{name}' not found on {host}")
-            raise LXDOperationError(f"Project '{name}' not found")
-        except LXDAPIException as e:
-            logger.error(f"LXD API error deleting project '{name}' from {host}: {e}")
-            raise LXDOperationError(f"Failed to delete project: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error deleting project '{name}' from {host}: {e}")
-            raise LXDOperationError(f"Failed to delete project: {str(e)}")
+            await _run_project_blocking(
+                project_delete.delete_project_sync,
+                self._get_client_with_reconnect,
+                host,
+                name,
+                host=host,
+                label="delete",
+                timeout=_PROJECT_DELETE_WALL_SECONDS,
+            )
+            return
+        except BlockingPoolFull as exc:
+            raise LXDLocalUnavailableError(
+                f"Project delete for {host} is temporarily unavailable"
+            ) from exc
+        except (BlockingTimeout, LXDOperationUnknownError) as exc:
+            logger.warning(
+                "Project delete outcome requires exact reconciliation for %s on %s (%s)",
+                name,
+                host,
+                type(exc).__name__,
+            )
+        if await self.project_exists(host, name):
+            raise LXDOperationUnknownError("delete", name)
+
+    async def project_exists(self, host: str, name: str) -> bool:
+        """Exact, short read of one project; anything but a clear answer is unknown."""
+        try:
+            return await run_blocking(
+                project_delete.project_exists_sync,
+                self._get_client_with_reconnect,
+                host,
+                name,
+                timeout=_PROJECT_PROBE_WALL_SECONDS,
+                label=f"project.probe[{host}]",
+                executor=_projects_executor,
+                max_in_flight=_PROJECT_LIST_WORKERS,
+            )
+        except (BlockingTimeout, BlockingPoolFull, LXDConnectionError) as exc:
+            raise LXDOperationUnknownError("delete", name) from exc
+

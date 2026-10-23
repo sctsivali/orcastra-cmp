@@ -15,6 +15,7 @@ import pytest
 from app.core.blocking import BlockingTimeout
 from app.routers import lxd_server, network_acls, networks, profiles, projects
 from app.routers import storage_pools, storage_volumes
+from app.services import project_deletion
 
 
 WRITE_HANDLERS = (
@@ -35,7 +36,9 @@ WRITE_HANDLERS = (
     profiles.delete_profile,
     projects.create_project,
     projects.update_project,
-    projects.delete_project,
+    # The delete route and the integration proxy share this one; the route passes it the request
+    # db (test below).
+    project_deletion.delete_project_and_forget,
     lxd_server.update_server_config,
 )
 
@@ -72,6 +75,15 @@ def test_every_migration_sensitive_write_uses_the_request_db_and_cluster_seriali
         assert len(db_keywords) == 1
         assert isinstance(db_keywords[0].value, ast.Name)
         assert db_keywords[0].value.id == "db"
+
+
+def test_the_project_delete_route_hands_its_request_db_to_the_shared_delete() -> None:
+    assert "db" in inspect.signature(projects.delete_project).parameters
+    delegations = [
+        call for name, call in _call_names(projects.delete_project) if name == "delete_project_and_forget"
+    ]
+    assert len(delegations) == 1
+    assert isinstance(delegations[0].args[0], ast.Name) and delegations[0].args[0].id == "db"
 
 
 @pytest.mark.asyncio
@@ -115,7 +127,7 @@ async def test_project_delete_blocks_concurrent_migration_admission_until_daemon
     db = object()
 
     @asynccontextmanager
-    async def configuration_lock(observed_db: Any, host: str):
+    async def configuration_lock(observed_db: Any, host: str, *, wait_seconds: Any = None):
         assert observed_db is db
         assert host == "cluster-a"
         async with cluster_lock:
@@ -145,11 +157,16 @@ async def test_project_delete_blocks_concurrent_migration_admission_until_daemon
 
     from app.services.webhooks import emitter
 
-    monkeypatch.setattr(projects, "serialize_cluster_configuration", configuration_lock)
-    monkeypatch.setattr(projects, "assert_project_not_migration_fenced", fence)
+    async def no_rules(*_args: Any, **_kwargs: Any) -> frozenset:
+        assert cluster_lock.locked()
+        return frozenset()
+
+    monkeypatch.setattr(project_deletion, "serialize_cluster_configuration", configuration_lock)
+    monkeypatch.setattr(project_deletion, "assert_project_not_migration_fenced", fence)
     monkeypatch.setattr(projects, "verify_cluster_access", lambda _host: None)
     monkeypatch.setattr(projects, "_refuse_a_project_outside_the_bound", lambda *_args: None)
-    monkeypatch.setattr(projects.project_grants, "forget_deleted_project", forget)
+    monkeypatch.setattr(project_deletion.project_grants, "forget_deleted_project", forget)
+    monkeypatch.setattr(project_deletion.project_grants, "rule_ids_naming", no_rules)
     monkeypatch.setattr(projects, "_invalidate_project_caches", lambda: None)
     monkeypatch.setattr(projects.activity_logger, "log_activity", lambda **_kwargs: None)
     monkeypatch.setattr(projects, "schedule_orcahub_event", lambda *_args, **_kwargs: None)

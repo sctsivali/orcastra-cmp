@@ -681,6 +681,10 @@ class LXDService:
     async def delete_project(self, host: str, name: str) -> None:
         """Delete a project from a specific LXD host."""
         return await self.project_manager.delete_project(host, name)
+
+    async def project_exists(self, host: str, name: str) -> bool:
+        """Exact read of one project; raises LXDOperationUnknownError when it cannot tell."""
+        return await self.project_manager.project_exists(host, name)
     
     # Metrics operations
     def _get_instance_metrics_blocking(

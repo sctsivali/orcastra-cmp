@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncIterator, Mapping, Optional
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
@@ -155,10 +156,27 @@ def _cluster_log_token(cluster_id: str) -> str:
     return hashlib.sha256(cluster_id.encode()).hexdigest()[:12]
 
 
+class ClusterConfigurationBusy(Exception):
+    """Another configuration write held the cluster longer than the caller may wait."""
+
+    def __init__(self, cluster_id: str) -> None:
+        self.cluster_id = cluster_id
+        super().__init__(f"Another configuration change on {cluster_id} is still running")
+
+
+def _lock_wait_ran_out(exc: DBAPIError) -> bool:
+    # 55P03 lock_not_available: lock_timeout fired while waiting for the advisory lock.
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "55P03" or (
+        "lock timeout" in str(exc).lower()
+    )
+
+
 @asynccontextmanager
 async def serialize_cluster_configuration(
     db: AsyncSession,
     cluster_id: str,
+    *,
+    wait_seconds: Optional[float] = None,
 ) -> AsyncIterator[None]:
     """Serialize ownership changes with ownership-sensitive daemon writes.
 
@@ -171,16 +189,48 @@ async def serialize_cluster_configuration(
     """
 
     if _dialect_name(db) == "postgresql":
-        await db.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_key)"),
-            {"lock_key": _advisory_key(cluster_id)},
-        )
+        if wait_seconds is None:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": _advisory_key(cluster_id)},
+            )
+        else:
+            # note: lock_timeout bounds this one wait and is put back at once, so the writes the
+            # caller makes under the lock keep the session's own setting.
+            previous = (await db.execute(text("SELECT current_setting('lock_timeout')"))).scalar()
+            await db.execute(
+                text("SELECT set_config('lock_timeout', :value, true)"),
+                {"value": f"{int(wait_seconds * 1000)}ms"},
+            )
+            try:
+                await db.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                    {"lock_key": _advisory_key(cluster_id)},
+                )
+            except DBAPIError as exc:
+                if not _lock_wait_ran_out(exc):
+                    raise
+                await db.rollback()
+                raise ClusterConfigurationBusy(cluster_id) from exc
+            await db.execute(
+                text("SELECT set_config('lock_timeout', :value, true)"), {"value": previous or "0"}
+            )
         yield
         return
 
     lock = _sqlite_lock(cluster_id)
-    async with lock:
+    if wait_seconds is None:
+        async with lock:
+            yield
+        return
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=wait_seconds)
+    except asyncio.TimeoutError as exc:
+        raise ClusterConfigurationBusy(cluster_id) from exc
+    try:
         yield
+    finally:
+        lock.release()
 
 
 @asynccontextmanager

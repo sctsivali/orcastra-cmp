@@ -20,6 +20,12 @@ from pydantic import BaseModel, Field, SecretStr, StringConstraints, ValidationE
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
+from app.services.lxd.exceptions import LXDOperationError
+from app.services.lxd.proxy_path_params import assert_path_params
+from app.services import project_deletion
+from pylxd.exceptions import LXDAPIException
+from requests import exceptions as requests_exceptions
+from urllib3 import exceptions as urllib3_exceptions
 from app.services.lxd import health
 from app.services.lxd import registry as cluster_registry
 from app.services.lxd import status as lxd_status
@@ -70,6 +76,7 @@ from app.services.lxd.proxy_operations import (
     operation_timeout,
     PROXY_OPERATION_LEVELS,
     PROXY_WAIT_OPERATIONS,
+    assert_required_params,
     classify_proxy_error,
     execute_proxy_operation,
     LIST_MUTATIONS,
@@ -210,6 +217,7 @@ from app.services.add_on_credential_edits import (
     refuse_secret_rotation,
 )
 from app.services.shared_cluster_audit import (
+    ClusterConfigurationBusy,
     SharedClusterGuardError,
     assert_cluster_safe_to_share,
     serialize_cluster_share,
@@ -4957,6 +4965,11 @@ def _still_running_message(operation: str, cluster_id: str) -> str:
     and no asynchronous form, so telling an exec caller to resend with `"wait": false` would send
     it to a flag that operation does not read.
     """
+    if operation == "delete_project":
+        return (
+            f"delete_project did not finish within its budget and may still complete on {cluster_id}. "
+            "Do not retry yet: call list_projects to see whether the project is gone."
+        )
     if operation in GUEST_ACCESS_OPERATIONS:
         return (
             f"{operation} exceeded the {EXEC_TIMEOUT:g}s exec budget and may still be running "
@@ -5297,6 +5310,12 @@ async def proxy_operation(
                 # desktop pool's four workers for up to ten seconds doing nothing. Bounded per
                 # worker inside serve_wait; a full share is the BlockingPoolFull answer below.
                 result_data = await serve_wait(_desktop_wait)
+            elif operation == "delete_project":
+                # important: the dashboard route's delete, not a bare pylxd call: off the loop with
+                # its own budget, under the cluster lock and the migration fence, and the access
+                # rules naming the project go with it. Without that a same-name project another
+                # organization creates later inherits the old bound.
+                result_data = await _delete_project_for_proxy(lxd_service, request)
             else:
                 result_data = await run_blocking(
                     execute_proxy_operation,
@@ -5406,6 +5425,26 @@ async def proxy_operation(
         except BlockingPoolFull as pool_error:
             return ProxyResponse(
                 success=False, error_code="overloaded", error=str(pool_error)
+            )
+        except project_deletion.ProjectDeleteUnknown:
+            get_cache_manager().invalidate_after_external_write()
+            get_cache_manager().invalidate_project_caches()
+            return ProxyResponse(
+                success=False,
+                error_code="timeout",
+                error=_still_running_message(operation, request.cluster_id),
+            )
+        except MigrationFenceConflict:
+            return ProxyResponse(
+                success=False,
+                error_code="conflict",
+                error=f"A migration holds this project on {request.cluster_id}; delete it once the migration ends.",
+            )
+        except ClusterConfigurationBusy:
+            return ProxyResponse(
+                success=False,
+                error_code="conflict",
+                error=f"Another configuration change on {request.cluster_id} is still running. Retry shortly.",
             )
         
         # Log the operation for audit
@@ -5563,8 +5602,57 @@ async def proxy_operation(
         return ProxyResponse(
             success=False,
             error_code=error_code,
-            error=str(e),
+            error=_proxy_error_text(e, error_code, request.operation, request.cluster_id),
         )
+
+
+def _proxy_error_text(error: Exception, error_code: str, operation: str, cluster_id: str) -> str:
+    """The caller-facing sentence for a failed proxy operation.
+
+    important: never the text of a transport exception. A requests or urllib3 error names the
+    LXD host's address and port (`HTTPSConnectionPool(host='10.x.x.x', port=8443)`), which is
+    infrastructure an integration has no business learning. The daemon's own refusal (an
+    LXDAPIException, or the service layer's errors built from one) is safe and useful.
+    """
+    if isinstance(error, (requests_exceptions.RequestException, urllib3_exceptions.HTTPError)):
+        if error_code == "timeout":
+            return f"{operation} did not get an answer from {cluster_id} in time"
+        return f"Could not reach {cluster_id} for {operation}"
+    if isinstance(error, (LXDAPIException, LXDOperationError, HTTPException)):
+        return str(error)
+    return f"{operation} failed on {cluster_id}"
+
+
+async def _delete_project_for_proxy(lxd_service: LXDService, request: "ProxyRequest") -> Dict[str, Any]:
+    """delete_project through the shared deletion service, in a session of its own."""
+    params = request.params or {}
+    assert_required_params("delete_project", params)
+    assert_path_params("delete_project", params)
+    name = str(params["name"])
+    host = request.cluster_id
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        try:
+            outcome = await project_deletion.delete_project_and_forget(db, lxd_service, host, name)
+        except project_deletion.ProjectDeleteUnknown as unknown:
+            project_deletion.follow_unknown_delete(
+                lxd_service, unknown, partial(_announce_proxy_project_deleted, host, request.project, name)
+            )
+            raise
+    get_cache_manager().invalidate_project_caches()
+    return {"deleted": True, "name": name, "already_deleted": outcome.already_gone}
+
+
+async def _announce_proxy_project_deleted(host: str, project: Optional[str], name: str) -> None:
+    """What a proxy delete that settled after its answer still owes: caches and the event."""
+    from app.services.webhooks.emitter import emit_for_proxy_operation
+
+    get_cache_manager().invalidate_after_external_write()
+    get_cache_manager().invalidate_project_caches()
+    await emit_for_proxy_operation(
+        "delete_project", cluster_id=host, project=project, params={"name": name}, result={"deleted": True}
+    )
 
 
 # ============================================

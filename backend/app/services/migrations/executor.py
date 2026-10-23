@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.core.lxd_path import safe_segment
-from app.services.lxd import mobility
+from app.services.lxd import mobility, project_delete
 from app.services.lxd import snapshots as snapshot_service
 
 from . import project_policy
@@ -251,8 +251,12 @@ def submit_create_project(
 
 
 def delete_project(client: Any, *, project: str) -> None:
-    """Delete an empty project. LXD answers synchronously and refuses a non-empty one."""
-    client.api.projects[safe_segment(project)].delete()
+    """Delete an empty project. LXD answers synchronously and refuses a non-empty one.
+
+    note: the project delete budget, not the pooled client's 8 s read: LXD can take longer just
+    after the project's last resource went. Callers read the project back afterwards.
+    """
+    client.api.projects[safe_segment(project)].delete(timeout=project_delete.DELETE_TIMEOUT)
 
 
 def projects_equivalent(source: dict[str, Any], target: dict[str, Any]) -> bool:
