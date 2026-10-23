@@ -504,29 +504,59 @@ export async function reconcileInstanceFleet(
   options: FleetReconcileOptions,
 ): Promise<VMListResponse> {
   const epoch = advanceFleetWriteEpoch(queryClient, actorScope);
+  const published = ["instances", actorScope, "*", "*"] as const;
+  // important: every read cancelled here is asked again unless this reconcile publishes for its
+  // key. A cancelled read reverts its query, and a query that had no data yet (the Instances page
+  // a moment after navigating to it) reverts to empty and idle: when this reconcile then gave up
+  // to a newer writer, the page sat on its full-page loader until something else fetched.
+  const cancelled = new Map<string, QueryKey>();
+  const cancelLists = async () => {
+    for (const query of queryClient.getQueryCache().findAll({
+      queryKey: ["instances", actorScope],
+      fetchStatus: "fetching",
+    })) cancelled.set(query.queryHash, query.queryKey);
+    await queryClient.cancelQueries({ queryKey: ["instances", actorScope] });
+  };
+  const askAgain = (except?: QueryKey) => {
+    const skip = except ? queryClient.getQueryCache().find({ queryKey: except, exact: true })?.queryHash : undefined;
+    for (const [hash, key] of cancelled) if (hash !== skip) rereadLater(queryClient, key, hash);
+  };
   // The fleet read runs outside React Query. Cancel canonical reads before it starts and again
   // before publication so a query that began on either side of the network request cannot commit
   // an older snapshot after this authoritative reconciliation.
-  await queryClient.cancelQueries({ queryKey: ["instances", actorScope] });
+  await cancelLists();
   const startedAt = readClock();
-  const data = withoutPendingDeletes(queryClient, actorScope, await api.instances.list(
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    { fresh: options.fresh, signal: options.signal },
-  ), startedAt);
+  let data: VMListResponse;
+  try {
+    data = withoutPendingDeletes(queryClient, actorScope, await api.instances.list(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { fresh: options.fresh, signal: options.signal },
+    ), startedAt);
+  } catch (error) {
+    askAgain();
+    throw error;
+  }
   if (
     options.signal?.aborted ||
     !isCurrentFleetWriteEpoch(queryClient, actorScope, epoch)
-  ) return data;
-  await queryClient.cancelQueries({ queryKey: ["instances", actorScope] });
+  ) {
+    askAgain();
+    return data;
+  }
+  await cancelLists();
   if (
     options.signal?.aborted ||
     !isCurrentFleetWriteEpoch(queryClient, actorScope, epoch)
-  ) return data;
-  queryClient.setQueryData(["instances", actorScope, "*", "*"], data);
+  ) {
+    askAgain();
+    return data;
+  }
+  queryClient.setQueryData(published, data);
+  askAgain(published);
   await queryClient.invalidateQueries({
     predicate: (query) => {
       const [kind, actor, host, project] = query.queryKey;

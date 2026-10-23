@@ -486,6 +486,45 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   unsubscribe();
 }
 
+// A fleet reconcile cancels list reads before and after its own read. When it then publishes
+// nothing (aborted, failed, or a newer writer moved first), the reads it cancelled must be asked
+// again: a list that had no data yet reverted to empty and idle, and the Instances page sat on
+// its full-page loader until something else fetched.
+{
+  const idleClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
+  const { QueryObserver } = requireFromFrontend("@tanstack/react-query");
+  const pageKey = ["instances", actorA, "*", "*"];
+  let reads = 0;
+  const observer = new QueryObserver(idleClient, {
+    queryKey: pageKey,
+    queryFn: () => {
+      reads += 1;
+      if (reads === 1) return new Promise(() => undefined); // the first read never answers
+      return Promise.resolve(response([row("cluster-a", "p1", "asked-again", "Running")]));
+    },
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
+  assert.equal(reads, 1);
+  assert.equal(idleClient.getQueryData(pageKey), undefined, "no data yet: the page's first read");
+  const abandon = new AbortController();
+  listImplementation = async () => {
+    abandon.abort();
+    return response([row("cluster-a", "p1", "never-published", "Running")]);
+  };
+  await reconcileInstanceFleet(idleClient, actorA, { fresh: true, signal: abandon.signal });
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, CANCELLED_READ_RETRY_MS + 100));
+  assert.equal(reads, 2, "a list read the reconcile cancelled and did not replace must be asked again");
+  assert.deepEqual(
+    idleClient.getQueryData(pageKey).vms.map((vm) => vm.name),
+    ["asked-again"],
+    "the page must not stay without data after an abandoned fleet reconcile",
+  );
+  unsubscribe();
+}
+
 const lastGood = response([aP2]);
 client.setQueryData(fleetAKey, lastGood);
 listImplementation = async () => {
