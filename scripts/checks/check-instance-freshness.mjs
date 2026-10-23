@@ -48,7 +48,9 @@ requireText(streamPath, stream, [
   "if (!active || !readFence.isCurrent(lease)) return false",
   "readFence.tombstone(identity)",
   "readFence.tombstoneName(scopeKey, host, name)",
-  "const readStartedAt = Date.now()",
+  "const readStartedAt = readClock()",
+  "noteInstanceDeletedEvent(queryClient, identity)",
+  "noteInstanceCreatedEvent(queryClient, { actorScope: scopeKey, host, project, name })",
   "if (isHiddenByPendingDelete(queryClient, identity, readStartedAt)) return true",
   "upsertExactInstance(queryClient, identity, vm, readStartedAt)",
   "removeExactInstance(queryClient, identity)",
@@ -201,8 +203,12 @@ new Function("require", "module", "exports", reconciliationOutput)(
 const {
   createExactInstanceReadFence,
   isExactInstance,
+  CANCELLED_READ_RETRY_MS,
   isHiddenByPendingDelete,
+  noteInstanceCreatedEvent,
+  noteInstanceDeletedEvent,
   optimisticallyRemoveExactInstance,
+  readClock,
   readInstanceList,
   removeExactInstance,
   reconcileInstanceFleet,
@@ -263,11 +269,11 @@ const identity = {
 const updated = row("cluster-a", "p1", "shared-name", "Stopped");
 assert.equal(isExactInstance(updated, identity), true);
 assert.equal(
-  upsertExactInstance(client, identity, row("cluster-a", "p2", "shared-name", "Error"), Date.now()),
+  upsertExactInstance(client, identity, row("cluster-a", "p2", "shared-name", "Error"), readClock()),
   false,
   "a response from another project must be rejected",
 );
-assert.equal(upsertExactInstance(client, identity, updated, Date.now()), true);
+assert.equal(upsertExactInstance(client, identity, updated, readClock()), true);
 assert.equal(client.getQueryData(p1Key).vms[0].status, "Stopped");
 assert.equal(client.getQueryData(p2Key).vms[0].status, "Frozen");
 assert.equal(client.getQueryData(fleetBKey).vms[0].status, "Stopped");
@@ -334,7 +340,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   assert.deepEqual(tombClient.getQueryData(fleetKey).vms.map((vm) => vm.name), ["keeper"]);
 
   // while the DELETE runs: a lifecycle read, a poll and a fleet read all still see the row
-  const runningRead = Date.now();
+  const runningRead = readClock();
   assert.equal(isHiddenByPendingDelete(tombClient, doomedId, runningRead), true);
   assert.equal(
     upsertExactInstance(tombClient, doomedId, doomed, runningRead),
@@ -358,7 +364,7 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   );
 
   // the DELETE answered: a read that began earlier is still pre-delete, a later one is truth
-  const beforeSettle = Date.now() - 1;
+  const beforeSettle = readClock() - 1;
   settleInstanceDelete(tombClient, doomedId);
   assert.equal(isHiddenByPendingDelete(tombClient, doomedId, beforeSettle), true);
   await new Promise((resolveTurn) => setTimeout(resolveTurn, 2));
@@ -375,11 +381,59 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   const failedRollback = await optimisticallyRemoveExactInstance(tombClient, failedId);
   restoreExactInstanceRollback(tombClient, failedRollback);
   assert.equal(
-    isHiddenByPendingDelete(tombClient, failedId, Date.now()),
+    isHiddenByPendingDelete(tombClient, failedId, readClock()),
     false,
     "a failed delete must not keep hiding the row it restored",
   );
   void tombRollback;
+}
+
+// An instance-deleted event can land before the writer's server cleared the cached list, so
+// reads that start in the moments after it stay filtered; a create event ends that.
+{
+  const eventClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const goneId = { actorScope: actorA, host: "cluster-a", project: "p1", name: "gone-elsewhere" };
+  const gone = row("cluster-a", "p1", "gone-elsewhere", "Running");
+  noteInstanceDeletedEvent(eventClient, goneId);
+  assert.equal(
+    isHiddenByPendingDelete(eventClient, goneId, readClock() + 1),
+    true,
+    "a cached list read right after another writer's delete event must not restore the row",
+  );
+  const cachedAfterEvent = await readInstanceList(eventClient, actorA, async () => response([gone]));
+  assert.deepEqual(cachedAfterEvent.vms, []);
+  noteInstanceCreatedEvent(eventClient, goneId);
+  assert.equal(isHiddenByPendingDelete(eventClient, goneId, readClock()), false, "a same-name create shows");
+
+  // a failed second delete of the same identity does not clear the first delete's entry
+  const ownerId = { actorScope: actorA, host: "cluster-a", project: "p1", name: "owned" };
+  eventClient.setQueryData(["instances", actorA, "*", "*"], response([row("cluster-a", "p1", "owned", "Running")]));
+  await optimisticallyRemoveExactInstance(eventClient, ownerId);
+  const second = await optimisticallyRemoveExactInstance(eventClient, ownerId);
+  const firstToken = second.token - 1;
+  restoreExactInstanceRollback(eventClient, { identity: ownerId, entries: [], token: firstToken });
+  assert.equal(
+    isHiddenByPendingDelete(eventClient, ownerId, readClock()),
+    true,
+    "only the delete that owns the entry may clear it",
+  );
+
+  // an event that changes nothing cancels no read in flight
+  const quietClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const same = row("cluster-a", "p1", "steady", "Running");
+  quietClient.setQueryData(["instances", actorA, "*", "*"], response([same]));
+  let quietSignal;
+  const quietRead = quietClient.fetchQuery({
+    queryKey: ["instances", actorA, "cluster-a", "p1"],
+    queryFn: ({ signal }) => new Promise((resolveRead) => {
+      quietSignal = signal;
+      setTimeout(() => resolveRead(response([same])), 20);
+    }),
+  });
+  await Promise.resolve();
+  upsertExactInstance(quietClient, { actorScope: actorA, host: "cluster-a", project: "p1", name: "steady" }, { ...same }, readClock());
+  await quietRead;
+  assert.equal(quietSignal.aborted, false, "an unchanged row must not cancel list reads");
 }
 
 // A lifecycle event cancels in-flight list reads so they cannot undo its patch. It must ask the
@@ -391,27 +445,39 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   const { QueryObserver } = requireFromFrontend("@tanstack/react-query");
   const watchedKey = ["instances", actorA, "*", "*"];
   let reads = 0;
-  let releaseFirst;
+  let releaseHung;
   const observer = new QueryObserver(reissueClient, {
     queryKey: watchedKey,
     queryFn: () => {
       reads += 1;
-      if (reads === 1) return new Promise((resolveRead) => { releaseFirst = resolveRead; });
-      return Promise.resolve(response([row("cluster-a", "p1", "after-event", "Running")]));
+      if (reads === 2) return new Promise((resolveRead) => { releaseHung = resolveRead; });
+      return Promise.resolve(response([row("cluster-a", "p1", reads === 1 ? "first" : "after-event", "Running")]));
     },
   });
   const unsubscribe = observer.subscribe(() => undefined);
-  await new Promise((resolveTurn) => setImmediate(resolveTurn));
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
   assert.equal(reads, 1);
+  // the refetch a delete's reconcile asks for, still in flight when an event lands
+  void observer.refetch();
+  await new Promise((resolveTurn) => setImmediate(resolveTurn));
+  assert.equal(reads, 2);
   upsertExactInstance(reissueClient, {
     actorScope: actorA,
     host: "cluster-b",
     project: "p9",
     name: "unrelated",
-  }, row("cluster-b", "p9", "unrelated", "Running"), Date.now());
-  releaseFirst?.(response([row("cluster-a", "p1", "before-event", "Running")]));
+  }, row("cluster-b", "p9", "unrelated", "Running"), readClock());
+  releaseHung?.(response([row("cluster-a", "p1", "before-event", "Running")]));
   await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
-  assert.equal(reads, 2, "the cancelled active list read must be asked again");
+  assert.equal(reads, 2, "the repeat waits for the burst to pass");
+  upsertExactInstance(reissueClient, {
+    actorScope: actorA,
+    host: "cluster-b",
+    project: "p9",
+    name: "unrelated-2",
+  }, row("cluster-b", "p9", "unrelated-2", "Running"), readClock());
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, CANCELLED_READ_RETRY_MS + 100));
+  assert.equal(reads, 3, "the cancelled active list read must be asked again, once");
   assert.deepEqual(
     reissueClient.getQueryData(watchedKey).vms.map((vm) => vm.name),
     ["after-event"],
@@ -501,7 +567,7 @@ upsertExactInstance(client, {
   host: "cluster-a",
   project: "p1",
   name: "event-row",
-}, eventRow, Date.now());
+}, eventRow, readClock());
 resolveBeforePatch(response([row("cluster-a", "p1", "pre-event", "Stopped")]));
 await beforePatch;
 assert.equal(
@@ -526,7 +592,7 @@ upsertExactInstance(client, {
   host: "cluster-a",
   project: "p1",
   name: "socket-row",
-}, socketRow, Date.now());
+}, socketRow, readClock());
 resolveOrdinaryRead(response([row("cluster-a", "p1", "pre-socket", "Stopped")]));
 await ordinaryRead;
 assert.equal(ordinaryReadSignal.aborted, true, "the older ordinary list transport must be aborted");

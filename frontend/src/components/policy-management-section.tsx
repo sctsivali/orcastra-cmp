@@ -39,6 +39,7 @@ import {
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { queryKeys, useClusters } from "@/hooks/use-lxd";
+import { readInstanceList } from "@/lib/instance-reconciliation";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -142,10 +143,12 @@ function RuleEditor({
     staleTime: 60_000, // cache for 60s to avoid refetch on re-expand
   });
 
-  // fetch instances for this cluster
+  // fetch instances for this cluster (through the pending-delete filter: this key is the
+  // per-host instance list other pages read too)
+  const instanceQueryClient = useQueryClient();
   const { data: instancesData, isLoading: instancesLoading } = useQuery({
     queryKey: queryKeys.instancesFor(scopeKey, hostId),
-    queryFn: () => instanceAPI.list(hostId),
+    queryFn: () => readInstanceList(instanceQueryClient, scopeKey, () => instanceAPI.list(hostId)),
     enabled: isAuthenticated && !!hostId,
     staleTime: 60_000,
   });

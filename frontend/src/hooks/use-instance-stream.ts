@@ -14,6 +14,9 @@ import {
 import {
   createExactInstanceReadFence,
   isHiddenByPendingDelete,
+  noteInstanceCreatedEvent,
+  noteInstanceDeletedEvent,
+  readClock,
   reconcileInstanceFleet,
   removeExactInstance,
   retainInstanceReconcileRateLimit,
@@ -112,7 +115,7 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
     ): Promise<boolean> => {
       const identity = { actorScope: scopeKey, host, project, name };
       const lease = readFence.start(identity);
-      const readStartedAt = Date.now();
+      const readStartedAt = readClock();
       try {
         const vm = await api.instances.get(name, host, project, {
           signal: lease.signal,
@@ -246,6 +249,9 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
         }
         const identity = { actorScope: scopeKey, host, project, name };
         readFence.tombstone(identity);
+        // a list read made in the next moments can still come from a cache the writer has not
+        // cleared yet (another tab, another operator, OrcaHub): it must not bring the row back
+        noteInstanceDeletedEvent(queryClient, identity);
         removeExactInstance(queryClient, identity);
         dropPending(host, name, project);
         return;
@@ -260,6 +266,9 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
         if (entry) updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });
         scheduleReconcile(true);
         return;
+      }
+      if (message.action === "instance-created") {
+        noteInstanceCreatedEvent(queryClient, { actorScope: scopeKey, host, project, name });
       }
       const entry = findPending(host, name, project);
       if (entry) updatePendingCreate(scopeKey, entry.id, { lastSignalAt: Date.now() });

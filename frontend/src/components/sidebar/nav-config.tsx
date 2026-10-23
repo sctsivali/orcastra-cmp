@@ -214,7 +214,7 @@ export function buildPrefetchMap(
           staleTime: 30_000,
         });
       }
-      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: readFleet, staleTime: 30_000 });
     },
   };
 }

@@ -128,6 +128,8 @@ interface InstanceDeleteRollbackEntry {
 export interface InstanceDeleteRollback {
   identity: InstanceIdentity;
   entries: InstanceDeleteRollbackEntry[];
+  /** The pending-delete entry this delete owns. */
+  token: number;
 }
 
 const projectOf = (project?: string | null) => project || "default";
@@ -157,7 +159,9 @@ function isCurrentFleetWriteEpoch(
 
 interface PendingDelete {
   identity: InstanceIdentity;
-  /** When the DELETE answered 200; undefined while it is still running. */
+  /** Which delete owns the entry, so a failed second delete cannot clear the first one's. */
+  token: number;
+  /** Reads that started before this may not show the row; undefined while the delete runs. */
   settledAt?: number;
   expiresAt: number;
 }
@@ -168,7 +172,16 @@ interface PendingDelete {
 // follow-up, a hover prefetch) can still carry the row and must not put it back.
 const PENDING_DELETE_RUNNING_MS = 10 * 60_000;
 const PENDING_DELETE_SETTLED_MS = 2 * 60_000;
+// An instance-deleted event can arrive before the server has cleared the cached list (the
+// route clears after LXD answers; another operator, OrcaHub or the CLI may be the writer), so
+// reads that start within this window after the event are still treated as predating it.
+const DELETED_EVENT_GRACE_MS = 5_000;
 const pendingDeletes = new WeakMap<QueryClient, Map<string, PendingDelete>>();
+let nextDeleteToken = 0;
+
+/** Monotonic milliseconds for read ordering; a wall-clock step must not hide a re-create. */
+export const readClock = (): number =>
+  typeof performance !== "undefined" ? performance.now() : Date.now();
 
 const identityKey = (identity: InstanceIdentity) => JSON.stringify([
   identity.actorScope,
@@ -189,34 +202,65 @@ function pendingDeletesFor(queryClient: QueryClient, now: number): Map<string, P
   return entries;
 }
 
-export function markInstanceDeleting(queryClient: QueryClient, identity: InstanceIdentity): void {
-  const now = Date.now();
+/** Start hiding the row for the delete that returns this token. */
+export function markInstanceDeleting(queryClient: QueryClient, identity: InstanceIdentity): number {
+  const now = readClock();
+  nextDeleteToken += 1;
   pendingDeletesFor(queryClient, now).set(identityKey(identity), {
     identity,
+    token: nextDeleteToken,
     expiresAt: now + PENDING_DELETE_RUNNING_MS,
   });
+  return nextDeleteToken;
 }
 
-export function settleInstanceDelete(queryClient: QueryClient, identity: InstanceIdentity): void {
-  const now = Date.now();
-  pendingDeletesFor(queryClient, now).set(identityKey(identity), {
+function settleAt(queryClient: QueryClient, identity: InstanceIdentity, settledAt: number): void {
+  const entries = pendingDeletesFor(queryClient, readClock());
+  const key = identityKey(identity);
+  const current = entries.get(key);
+  const latest = Math.max(settledAt, current?.settledAt ?? 0);
+  entries.set(key, {
     identity,
-    settledAt: now,
-    expiresAt: now + PENDING_DELETE_SETTLED_MS,
+    token: current?.token ?? ++nextDeleteToken,
+    settledAt: latest,
+    expiresAt: latest + PENDING_DELETE_SETTLED_MS,
   });
 }
 
-export function clearInstanceDelete(queryClient: QueryClient, identity: InstanceIdentity): void {
+/** The DELETE answered: only reads that started before now are still pre-delete. */
+export function settleInstanceDelete(queryClient: QueryClient, identity: InstanceIdentity): void {
+  settleAt(queryClient, identity, readClock());
+}
+
+/** LXD reported the instance deleted, possibly before the server cleared its cached lists. */
+export function noteInstanceDeletedEvent(queryClient: QueryClient, identity: InstanceIdentity): void {
+  settleAt(queryClient, identity, readClock() + DELETED_EVENT_GRACE_MS);
+}
+
+/** The instance exists again (a same-name create): nothing may hide it any more. */
+export function noteInstanceCreatedEvent(queryClient: QueryClient, identity: InstanceIdentity): void {
   pendingDeletes.get(queryClient)?.delete(identityKey(identity));
 }
 
-/** True when a read that started at `readStartedAt` may not show this exact row. */
+/** A failed delete stops hiding the row, unless another delete or an event owns it by now. */
+export function clearInstanceDelete(
+  queryClient: QueryClient,
+  identity: InstanceIdentity,
+  token: number,
+): void {
+  const entries = pendingDeletes.get(queryClient);
+  const key = identityKey(identity);
+  const current = entries?.get(key);
+  if (current && current.token === token && current.settledAt === undefined) entries!.delete(key);
+}
+
+/** True when a read that started at `readStartedAt` (readClock) may not show this exact row. */
 export function isHiddenByPendingDelete(
   queryClient: QueryClient,
   identity: InstanceIdentity,
   readStartedAt: number,
 ): boolean {
-  const entry = pendingDeletesFor(queryClient, Date.now()).get(identityKey(identity));
+  const entry = pendingDeletesFor(queryClient, readClock()).get(identityKey(identity));
   if (!entry) return false;
   return entry.settledAt === undefined || readStartedAt < entry.settledAt;
 }
@@ -228,7 +272,7 @@ export function withoutPendingDeletes(
   data: VMListResponse,
   readStartedAt: number,
 ): VMListResponse {
-  const entries = pendingDeletesFor(queryClient, Date.now());
+  const entries = pendingDeletesFor(queryClient, readClock());
   if (entries.size === 0 || !Array.isArray(data?.vms)) return data;
   const vms = data.vms.filter((vm) => !isHiddenByPendingDelete(queryClient, {
     actorScope,
@@ -250,7 +294,7 @@ export async function readInstanceList(
   actorScope: string,
   read: () => Promise<VMListResponse>,
 ): Promise<VMListResponse> {
-  const startedAt = Date.now();
+  const startedAt = readClock();
   return withoutPendingDeletes(queryClient, actorScope, await read(), startedAt);
 }
 
@@ -272,11 +316,46 @@ export function instanceListHolds(queryKey: QueryKey, identity: InstanceIdentity
   );
 }
 
+// A list read cancelled by an event patch is asked again after this pause, once per key however
+// many events arrive in it: a burst then costs one read instead of one per event, and the
+// server has had time to clear the cache the event's write made stale.
+export const CANCELLED_READ_RETRY_MS = 1_000;
+const scheduledRereads = new WeakMap<QueryClient, Map<string, ReturnType<typeof setTimeout>>>();
+
+function rereadLater(queryClient: QueryClient, queryKey: QueryKey, queryHash: string): void {
+  let timers = scheduledRereads.get(queryClient);
+  if (!timers) {
+    timers = new Map();
+    scheduledRereads.set(queryClient, timers);
+  }
+  clearTimeout(timers.get(queryHash));
+  timers.set(queryHash, setTimeout(() => {
+    timers!.delete(queryHash);
+    void queryClient
+      .refetchQueries({ queryKey, exact: true, type: "active" })
+      .catch(() => undefined);
+  }, CANCELLED_READ_RETRY_MS));
+}
+
 function patchLists(
   queryClient: QueryClient,
   identity: InstanceIdentity,
   update: (data: VMListResponse) => VMListResponse,
 ): void {
+  const queries = queryClient.getQueryCache().findAll({
+    queryKey: ["instances", identity.actorScope],
+  });
+  const patches: Array<[QueryKey, VMListResponse]> = [];
+  for (const query of queries) {
+    if (!instanceListHolds(query.queryKey, identity)) continue;
+    const data = queryClient.getQueryData<VMListResponse>(query.queryKey);
+    if (!data?.vms) continue;
+    const next = update(data);
+    if (next !== data) patches.push([query.queryKey, next]);
+  }
+  // An event that changes nothing (the IP retry's repeat reads, a duplicate frame) touches no
+  // read in flight.
+  if (patches.length === 0) return;
   // Query cancellation is synchronous even though cancelQueries returns a promise. Cancel before
   // writing the event patch so React Query cannot later commit a list response that started before
   // this lifecycle event and restore its pre-cancel snapshot over the patch.
@@ -288,24 +367,13 @@ function patchLists(
     queryKey: ["instances", identity.actorScope],
   });
   advanceFleetWriteEpoch(queryClient, identity.actorScope);
-  const queries = queryClient.getQueryCache().findAll({
-    queryKey: ["instances", identity.actorScope],
-  });
-  for (const query of queries) {
-    if (!instanceListHolds(query.queryKey, identity)) continue;
-    queryClient.setQueryData<VMListResponse | undefined>(query.queryKey, (data) =>
-      data?.vms ? update(data) : data,
-    );
+  for (const [queryKey, next] of patches) {
+    queryClient.setQueryData<VMListResponse>(queryKey, next);
   }
-  // important: ask the cancelled reads again. One of them can be the refetch a mutation
-  // asked for (a delete's reconcile), and a lifecycle event for any other instance used to
-  // cancel it for good, leaving the pre-delete list on screen until the next safety read.
-  // The repeat starts after this event, so it cannot carry anything older than the patch.
-  for (const query of cancelled) {
-    void queryClient
-      .refetchQueries({ queryKey: query.queryKey, exact: true, type: "active" })
-      .catch(() => undefined);
-  }
+  // important: ask the cancelled reads again. One of them can be the refetch a mutation asked
+  // for (a delete's reconcile), and a lifecycle event for any other instance used to cancel it
+  // for good, leaving the pre-delete list on screen until the next safety read.
+  for (const query of cancelled) rereadLater(queryClient, query.queryKey, query.queryHash);
 }
 
 function actorListQueries(queryClient: QueryClient, actorScope: string) {
@@ -324,7 +392,7 @@ export async function optimisticallyRemoveExactInstance(
   queryClient: QueryClient,
   identity: InstanceIdentity,
 ): Promise<InstanceDeleteRollback> {
-  markInstanceDeleting(queryClient, identity);
+  const token = markInstanceDeleting(queryClient, identity);
   await Promise.all([
     queryClient.cancelQueries({ queryKey: ["instances", identity.actorScope] }),
     queryClient.cancelQueries({ queryKey: ["vms", identity.actorScope] }),
@@ -345,7 +413,7 @@ export async function optimisticallyRemoveExactInstance(
     });
   }
 
-  return { identity, entries };
+  return { identity, entries, token };
 }
 
 /** Merge only the failed delete's row into the latest cache state. */
@@ -354,7 +422,7 @@ export function restoreExactInstanceRollback(
   rollback: InstanceDeleteRollback | undefined,
 ): void {
   if (!rollback) return;
-  clearInstanceDelete(queryClient, rollback.identity);
+  clearInstanceDelete(queryClient, rollback.identity, rollback.token);
   advanceFleetWriteEpoch(queryClient, rollback.identity.actorScope);
   for (const entry of rollback.entries) {
     queryClient.setQueryData<VMListResponse | undefined>(entry.queryKey, (current) => {
@@ -385,6 +453,7 @@ export function upsertExactInstance(
   if (isHiddenByPendingDelete(queryClient, identity, readStartedAt)) return true;
   patchLists(queryClient, identity, (data) => {
     const index = data.vms.findIndex((row) => isExactInstance(row, identity));
+    if (index >= 0 && JSON.stringify(data.vms[index]) === JSON.stringify(vm)) return data;
     const vms = index < 0
       ? [vm, ...data.vms]
       : data.vms.map((row, rowIndex) => (rowIndex === index ? vm : row));
@@ -435,7 +504,7 @@ export async function reconcileInstanceFleet(
   // before publication so a query that began on either side of the network request cannot commit
   // an older snapshot after this authoritative reconciliation.
   await queryClient.cancelQueries({ queryKey: ["instances", actorScope] });
-  const startedAt = Date.now();
+  const startedAt = readClock();
   const data = withoutPendingDeletes(queryClient, actorScope, await api.instances.list(
     undefined,
     undefined,
