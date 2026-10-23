@@ -3311,6 +3311,8 @@ async def delete_user_mapping(
     try:
         path = f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/users/{user_id}"
         vault_client.vault_delete(path)
+        # the mapping rides along in the cached key list, as it does for add_user_mapping
+        get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         
         return {"success": True, "message": f"User mapping {user_id} deleted"}
         

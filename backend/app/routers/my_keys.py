@@ -972,6 +972,11 @@ async def cleanup_orphaned_groups(
                 logger.error(error_msg)
         
         logger.info(f"Cleanup summary: Deleted {deleted_count} orphaned Orcastra groups, {len(valid_groups)} valid Orcastra groups retained")
+        if deleted_count:
+            # the same families the group and identity routes clear when they remove one
+            cache = get_cache_manager()
+            cache.delete_pattern("api_responses", "groups:*")
+            cache.delete_pattern("api_responses", "identities:*")
         
         result = {
             "success": True,

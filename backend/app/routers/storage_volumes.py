@@ -215,6 +215,14 @@ def _fetch_volumes_for_node(
     return read
 
 
+def _invalidate_volume_lists() -> None:
+    """A volume write changes the volume list and the pool rows that count and list it."""
+    cache = get_cache_manager()
+    # one family per call: some cache stand-ins accept a single kind
+    for kind in ("storage_volumes", "storage_pools", "storage_pool_resources"):
+        cache.invalidate_resource_cache(kind)
+
+
 @router.get(
     "",
     response_model=StorageVolumeListResponse,
@@ -441,7 +449,7 @@ async def create_storage_volume(
         
         schedule_orcahub_event("volume.created", host, getattr(volume, "project", None), request.name, resource_type="VOLUME")
         # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_resource_cache("storage_volumes")
+        _invalidate_volume_lists()
         return {
             "success": True,
             "message": f"Storage volume {request.name} created successfully",
@@ -537,7 +545,7 @@ async def update_storage_volume(
             node.put(json=body, params=params)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_resource_cache("storage_volumes")
+        _invalidate_volume_lists()
         return {
             "success": True,
             "message": f"Storage volume {volume_name} updated successfully"
@@ -678,7 +686,7 @@ async def delete_storage_volume(
             resource_type="VOLUME",
         )
         # Readers hold a cached list; without this the change is invisible until the TTL.
-        get_cache_manager().invalidate_resource_cache("storage_volumes")
+        _invalidate_volume_lists()
         return {
             "success": True,
             "message": f"Storage volume {volume_name} deleted successfully"

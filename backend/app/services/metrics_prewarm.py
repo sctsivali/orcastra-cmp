@@ -7,7 +7,7 @@ and provides `_lxd_service`.
 
 import asyncio
 import logging
-from typing import List
+from typing import Any, Callable, List
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,11 @@ class CachePrewarm:
             # build theirs. Without get_scope_cache_key() they lacked the
             # ":scope=all" suffix, so nothing ever read them and every request
             # after a TTL expiry still paid the full cold cost.
-            from app.core.cache import REGIONS_OVERVIEW_CACHE_KEY
+            from app.core.cache import (
+                CAPACITY_GENERATION_KIND,
+                REGIONS_OVERVIEW_CACHE_KEY,
+                get_resource_list_generation,
+            )
             from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
@@ -52,6 +56,7 @@ class CachePrewarm:
                 get_scope_cache_key("vms:list:host=None:status=None:o=0:l=0"),
                 self._fetch_vms,
                 ttl=180,
+                generation=cache.instance_list_generation,
             )
 
             # Pre-warm regions cache (slowest endpoint, 15-45s cold)
@@ -60,6 +65,10 @@ class CachePrewarm:
                 get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY),
                 self._fetch_regions,
                 ttl=120,
+                generation=lambda: (
+                    get_resource_list_generation(cache, CAPACITY_GENERATION_KIND),
+                    get_resource_list_generation(cache, "regions"),
+                ),
             )
 
             # Storage pool resources are warmed through their own handler.
@@ -79,13 +88,24 @@ class CachePrewarm:
         except Exception as e:
             logger.warning(f"Failed to pre-warm caches: {e}")
     
-    async def _prewarm_single_cache(self, cache, cache_key: str, fetch_func, ttl: int):
+    async def _prewarm_single_cache(
+        self,
+        cache,
+        cache_key: str,
+        fetch_func,
+        ttl: int,
+        generation: Callable[[], Any],
+    ):
         """Pre-warm a single cache entry if expired.
 
         important: a fetcher returns None to mean "nobody answered, do not remember this".
         The endpoints refuse to cache a fan-out no cluster answered, and this loop writes
         the same keys, so without that refusal here the collector reinstated the outage
         30s later through a side door and the endpoint's own guard accomplished nothing.
+
+        important: behind the endpoint's own generation fence. A key is most likely missing
+        right after a mutation cleared it, which is exactly when this read runs; one that began
+        before an invalidation would otherwise write the pre-mutation list back for its TTL.
         """
         try:
             cached = cache.get("api_responses", cache_key)
@@ -96,9 +116,14 @@ class CachePrewarm:
             logger.info(f"Pre-warming cache: {cache_key}")
             start = asyncio.get_event_loop().time()
 
+            before = generation()
             data = await fetch_func()
-            if data:
+            if data and generation() != before:
+                logger.info(f"Not warming {cache_key}: an invalidation landed during the read")
+            elif data:
                 cache.set("api_responses", cache_key, data, ttl=ttl)
+                if generation() != before:
+                    cache.delete("api_responses", cache_key)
                 elapsed = asyncio.get_event_loop().time() - start
                 logger.info(f"Cache warmed in {elapsed:.2f}s: {cache_key}")
             else:

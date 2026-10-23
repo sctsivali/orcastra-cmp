@@ -165,7 +165,8 @@ def test_update_keeps_the_loop_responsive_and_all_daemon_work_in_bounded_workers
     loop_thread, result = asyncio.run(scenario())
     assert result["success"] is True
     assert state.events == ["lock", "cluster-fence", "client", "owner", "project-fence",
-                            "project-fence", "get", "acl", "put", "wait", "get", "invalidate", "unlock"]
+                            "project-fence", "get", "acl", "put", "wait", "get", "invalidate",
+                            "invalidate", "unlock"]
     assert len(admitted) == 2
     for admission in admitted:
         assert admission["timeout"] == 90
@@ -178,7 +179,7 @@ def test_update_keeps_the_loop_responsive_and_all_daemon_work_in_bounded_workers
     assert all(call["params"] == {"project": "default"} for call in state.calls if call["name"] in {"get", "put"})
     assert state.puts[0]["timeout"] == (5, 60)
     assert state.waits == [{"timeout": 5, "project": "default"}]
-    assert state.invalidations == ["networks"]
+    assert set(state.invalidations) == {"networks", "ipam"}
 
 
 @pytest.mark.parametrize("fence", ["cluster", "project"])
@@ -278,7 +279,7 @@ def test_timeout_does_not_release_the_lock_until_the_admitted_worker_finishes(mo
     error = asyncio.run(scenario())
     assert error.status_code == 504
     assert "may be partially applied" in error.detail
-    assert state.waits and state.invalidations == ["networks"]
+    assert state.waits and set(state.invalidations) == {"networks", "ipam"}
     assert state.events[-1] == "unlock"
     assert not state.lock
 
@@ -322,6 +323,6 @@ def test_cancellation_drains_the_worker_before_releasing_migration_admission(mon
                 await task
 
     asyncio.run(scenario())
-    assert state.waits and state.invalidations == ["networks"]
+    assert state.waits and set(state.invalidations) == {"networks", "ipam"}
     assert state.events[-1] == "unlock"
     assert not state.lock

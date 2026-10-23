@@ -204,10 +204,20 @@ def _format_storage(bytes_value: int) -> str:
 
 
 def _invalidate_project_caches() -> None:
-    """Fence and clear every cached project projection affected by a project write."""
+    """Fence and clear every cached projection a project write changes.
+
+    Not only the project lists: a project created with its own features gets a default profile
+    (and may get its own images and volumes), and deleting one takes those with it. The profile
+    list caches for 180 s, so it showed the new project's profile missing, or a deleted
+    project's profile still there, for that long.
+    """
     get_cache_manager().invalidate_resource_cache(
         PROJECT_LIST_CACHE_KIND,
         PROJECT_USAGE_CACHE_KIND,
+        "profiles",
+        "networks",
+        "images",
+        "storage_volumes",
     )
 
 

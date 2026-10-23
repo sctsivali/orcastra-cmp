@@ -30,6 +30,7 @@ from .contracts import (
 )
 from .plan_contracts import _preflight_payload, _target_pool
 from .security import canonical_json_hash
+from .completion import clear_views_now
 
 async def _authoritative_clients(
     job: MigrationJob, *, current_authority: Any = None
@@ -137,6 +138,7 @@ async def _fenced_job_update(
         # a job that finished cleanly.
         values.setdefault("error_code", None)
         values.setdefault("error_message", None)
+    outbox_events = values.get("outbox_events")
     async with async_session_maker() as db:
         transitioned = await repository.set_job(
             db,
@@ -158,6 +160,7 @@ async def _fenced_job_update(
         )
     if not transitioned:
         raise MigrationLeaseLost("Migration lease ownership was lost.")
+    clear_views_now(outbox_events)
     return True
 
 

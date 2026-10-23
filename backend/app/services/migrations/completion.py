@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+import logging
+from typing import Any, Optional
 
 from app.core.cache import get_cache_manager
 from app.models.migration_models import MigrationAuditOutbox, MigrationJob
 from app.services.orcahub_webhook import emit_orcahub_event_durable
 from app.services.webhooks.emitter import emit_resource_event
+
+logger = logging.getLogger(__name__)
 
 
 def _event_id(job_id: str, channel: str, event_type: str) -> str:
@@ -188,15 +191,33 @@ def _required_text(payload: dict[str, Any], key: str) -> str:
     return value
 
 
+def invalidate_migration_views() -> None:
+    """Clear what a finished move or copy changed: inventories, project usage, tag placement."""
+    cache = get_cache_manager()
+    cache.invalidate_instance_cache()
+    cache.invalidate_resource_cache("projects", "project_usage")
+    cache.invalidate_tag_cache()
+
+
+def clear_views_now(outbox_events: Optional[list[dict[str, Any]]]) -> None:
+    """Clear the caches as soon as a terminal job commits, not when the outbox is next drained.
+
+    The outbox row stays the durable guarantee; draining it runs every 15 s, which left the moved
+    instance on its old cluster in every list for that long.
+    """
+    if not any(event.get("channel") == "cache" for event in outbox_events or []):
+        return
+    try:
+        invalidate_migration_views()
+    except Exception as exc:  # noqa: BLE001 - the outbox delivers the same clearance later
+        logger.warning("Could not clear migration views at commit: %s", exc)
+
+
 async def deliver_completion_event(row: MigrationAuditOutbox) -> bool:
     """Deliver a supported non-audit outbox row, returning whether it was handled."""
     payload = row.payload or {}
     if row.channel == "cache" and row.event_type == "migration.cache.invalidate":
-        cache = get_cache_manager()
-        cache.invalidate_instance_cache()
-        # Moves change project usage, tag placement, and tenant visibility as well.
-        cache.invalidate_resource_cache("projects", "project_usage")
-        cache.invalidate_tag_cache()
+        invalidate_migration_views()
         return True
 
     cluster_id = _required_text(payload, "cluster_id")

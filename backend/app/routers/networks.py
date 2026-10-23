@@ -102,6 +102,18 @@ NETWORK_MAX_IN_FLIGHT = 10
 NETWORK_MAX_IN_FLIGHT_PER_CLUSTER = 1
 
 
+def _invalidate_network_lists() -> None:
+    """A network write changes the networks list and the gateway rows IPAM shows for it.
+
+    IPAM caches for 120 s and used to be left alone, so a network created or deleted here kept
+    its old gateway row on the IPAM page until the TTL ran out.
+    """
+    cache = get_cache_manager()
+    # one family per call: some cache stand-ins accept a single kind
+    cache.invalidate_resource_cache("networks")
+    cache.invalidate_resource_cache("ipam")
+
+
 async def _run_network_blocking(
     function,
     *args,
@@ -737,8 +749,11 @@ async def create_network(
                     host=host,
                     label=f"create_network[{host}/{request.name}]",
                 )
-        except BlockingTimeout:
+        except BlockingTimeout as timeout_error:
             logger.error(f"create_network timed out on {host} for {request.name}")
+            if submission_started:
+                # the create goes on in its worker thread; clear the lists when it actually ends
+                timeout_error.when_finished(_invalidate_network_lists)
             if not submission_started:
                 raise HTTPException(
                     status_code=504,
@@ -774,7 +789,7 @@ async def create_network(
         # Invalidate the (180s) networks list cache so the new network shows
         # immediately instead of after the TTL. Scope-aware keys look like
         # "networks:list:host=...:scope=...", so clear by prefix.
-        get_cache_manager().invalidate_resource_cache("networks")
+        _invalidate_network_lists()
 
         return {
             "success": True,
@@ -897,7 +912,7 @@ async def update_network(
         require_network_update_readback(
             observed, network_name, current["type"], owner, validated_config, description,
         )
-        get_cache_manager().invalidate_resource_cache("networks")
+        _invalidate_network_lists()
 
     submission_started = False
     try:
@@ -926,7 +941,9 @@ async def update_network(
             "success": True,
             "message": f"Network {network_name} updated successfully"
         }
-    except BlockingTimeout:
+    except BlockingTimeout as timeout_error:
+        if submission_started:
+            timeout_error.when_finished(_invalidate_network_lists)
         detail = (
             "Network update timed out and may be partially applied; re-check its state before retrying"
             if submission_started else "Network target resolution timed out; no update was submitted"
@@ -995,7 +1012,7 @@ async def delete_network(
                 timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
 
-        get_cache_manager().invalidate_resource_cache("networks")
+        _invalidate_network_lists()
 
         # Log activity: network deletion success
         activity_logger.log_activity(

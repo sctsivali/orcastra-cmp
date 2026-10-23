@@ -15,7 +15,10 @@ def test_cluster_delete_uses_broad_invalidators_and_keeps_targeted_cleanup() -> 
 
     assert "cache.invalidate_cluster_cache(cluster_id)" in source
     assert "cache.invalidate_instance_cache()" in source
-    assert 'cache.invalidate_resource_cache("clusters", "projects", "regions")' in source
+    assert (
+        'cache.invalidate_resource_cache("clusters", "projects", "regions", "images", "warnings")'
+        in source
+    )
 
     # These pre-v2 exact keys matched neither pagination/project dimensions nor every scope.
     for obsolete in (

@@ -1283,7 +1283,8 @@ async def delete_cluster(
                 # the instance-list generation token that prevents an in-flight fleet read
                 # from writing the deleted cluster back after this request completes.
                 cache.invalidate_instance_cache()
-                cache.invalidate_resource_cache("clusters", "projects", "regions")
+                # images and warnings too: both list rows per cluster, for 180 s and 60 s
+                cache.invalidate_resource_cache("clusters", "projects", "regions", "images", "warnings")
                 
                 # Also invalidate the Vault list cache to remove from list immediately
                 list_path = cert_manager.clusters_path.replace("/data/", "/metadata/")

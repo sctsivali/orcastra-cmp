@@ -36,6 +36,9 @@ EXEMPT = {
     # on HTTP acceptance would let an older in-flight list repopulate stale state before create
     # settles; the worker owns the generation-safe invalidation instead of this router handler.
     "create_instance",
+    # POST because the request names clusters and options in a body; it reads the inventory
+    # an integration may see (capability inventory.read) and writes nothing.
+    "sync_data",
 }
 
 import ast
@@ -54,9 +57,15 @@ INVALIDATORS = {
     "invalidate_node_cache",
     "invalidate_all_node_caches",
     "invalidate_availability_cache",
+    "invalidate_after_external_write",
+    "invalidate_capacity_cache",
+    "invalidate_tag_cache",
     "delete_pattern",
-    "delete",
 }
+# note: `delete` counts only in the cache's own shape, delete("<namespace>", key). As a bare name
+# it also matched pylxd's instance.delete() and SQLAlchemy deletes, so a handler that removed a
+# resource and cleared nothing passed this check.
+CACHE_NAMESPACES = {"api_responses", "vault_list", "lxd_resources", "tags"}
 
 
 def _caches_a_list(tree: ast.AST) -> bool:
@@ -98,13 +107,23 @@ def _mutating_handlers(tree: ast.AST):
             yield node
 
 
+def _is_cache_delete(node: ast.Call) -> bool:
+    return (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr == "delete"
+        and bool(node.args)
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value in CACHE_NAMESPACES
+    )
+
+
 def _invalidates(fn: ast.AST) -> bool:
     for node in ast.walk(fn):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in INVALIDATORS
-        ):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and node.func.attr in INVALIDATORS:
+            return True
+        if _is_cache_delete(node):
             return True
     return False
 

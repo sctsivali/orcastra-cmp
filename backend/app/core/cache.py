@@ -556,7 +556,8 @@ class CacheManager:
         from app.core.config import get_settings
 
         # note: warnings too. Both feeds name an unreachable cluster, and they are cached now.
-        self.invalidate_resource_cache("clusters", "projects", "regions", "warnings")
+        # Images as well: a cluster that answers again brings its image store back into the list.
+        self.invalidate_resource_cache("clusters", "projects", "regions", "warnings", "images")
         self.delete("vault_list", get_settings().vault_clusters_path.replace("/data/", "/metadata/"))
         self.invalidate_instance_cache()
         # The availability fence first, so a stale-while-revalidate read already in flight cannot
