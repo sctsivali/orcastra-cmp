@@ -25,6 +25,7 @@ import {
   wasServedStale,
 } from "@/lib/api";
 import { registerExternalMutationQueryClient } from "@/lib/mutation-coherence";
+import { PendingCreateFollower } from "@/components/pending-create-follower";
 import type { PersonalizationSettings } from "@/types/personalization";
 import { unmaskSession, type HydratedSession } from "@/lib/hydrated-session";
 
@@ -189,6 +190,7 @@ export function Providers({
     <AuthProvider session={session}>
       <QueryClientProvider client={queryClient}>
         <QueryInvalidationBridge />
+        <PendingCreateFollower />
         <ChunkReloadReset />
         <StorageCleanupProvider>
           <PersonalizationProvider initialSettings={initialPersonalization}>

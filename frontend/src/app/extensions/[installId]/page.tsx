@@ -25,6 +25,7 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { useToast } from "@/hooks/use-toast";
 import { extensionsAPI } from "@/lib/extensions-api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { Role } from "@/types/rbac";
 import type { ExtensionInstallResponse, WebhookSecretResponse } from "@/types/api";
 
@@ -88,8 +89,9 @@ function InstallDetail() {
     queryFn: () => extensionsAPI.listDeliveries(installId, { limit: 1 }),
   });
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["extensions", "install", installId] });
+  // The whole extensions family, not only this install: the overview lists the same install's
+  // status and the catalogue counts installs, and both stayed as they were until a reload.
+  const invalidate = () => reconcileMutationImpact(queryClient, "extension.write");
 
   const saveSettings = useMutation({
     mutationFn: (values: Record<string, unknown>) =>
@@ -128,7 +130,7 @@ function InstallDetail() {
     mutationFn: () => extensionsAPI.uninstall(installId),
     onSuccess: () => {
       setConfirmUninstall(false);
-      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
+      void reconcileMutationImpact(queryClient, "extension.write");
       router.push("/extensions");
     },
     onError: (error: Error) => {

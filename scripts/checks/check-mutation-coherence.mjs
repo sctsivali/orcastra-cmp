@@ -447,10 +447,6 @@ const CUSTOM_RECONCILIATION_SITES = {
     impact: "extension.write",
     markers: ["onSuccess: invalidate"],
   },
-  "frontend/src/app/extensions/[installId]/page.tsx:extensionsAPI.uninstall": {
-    impact: "extension.write",
-    markers: ['queryKey: ["extensions", "installs"]'],
-  },
   "frontend/src/app/my-keys/page.tsx:api.myKeys.create": {
     impact: "key.write",
     markers: ['queryKey: ["my-keys"]'],
@@ -458,40 +454,6 @@ const CUSTOM_RECONCILIATION_SITES = {
   "frontend/src/app/my-keys/page.tsx:api.myKeys.delete": {
     impact: "key.write",
     markers: ['queryKey: ["my-keys"]'],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.install": {
-    impact: "extension.write",
-    markers: ['queryKey: ["extensions", "installs"]'],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.create": {
-    impact: "extension.write",
-    markers: ['queryKey: ["extensions", "catalogue"]'],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.setStatus": {
-    impact: "extension.write",
-    markers: ['queryKey: ["extensions", "catalogue"]'],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.withdraw": {
-    impact: "extension.write",
-    markers: ['queryKey: ["extensions", "catalogue"]'],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.suspend": {
-    impact: "extension.write",
-    markers: [
-      'queryKey: ["extensions", "installs"]',
-      'queryKey: ["extensions", "install", variables.id]',
-    ],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.resume": {
-    impact: "extension.write",
-    markers: [
-      'queryKey: ["extensions", "installs"]',
-      'queryKey: ["extensions", "install", variables.id]',
-    ],
-  },
-  "frontend/src/components/extensions/extensions-overview.tsx:extensionsAPI.uninstall": {
-    impact: "extension.write",
-    markers: ['queryKey: ["extensions", "installs"]'],
   },
   "frontend/src/components/extensions/webhook-panel.tsx:extensionsAPI.redeliver": {
     impact: "extension.write",

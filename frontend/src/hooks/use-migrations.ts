@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useRef } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { migrationsAPI } from "@/lib/migrations-api";
@@ -51,9 +52,30 @@ export const migrationQueryKeys = {
   plan: (actorScope: string, planId: string) => ["migrations", actorScope, "plans", planId] as const,
 };
 
+/**
+ * Reconcile the inventories a move or copy changed once a job seen running is no longer active.
+ *
+ * Starting a job reconciles on the response, when nothing has moved yet; the backend clears its
+ * caches when the job commits its verdict, and this is the browser's half, so the Overview and
+ * Instances pages do not keep the instance on its old cluster until their next poll.
+ */
+function useReconcileFinishedMigrations(jobs: readonly MigrationJob[] | undefined): void {
+  const queryClient = useQueryClient();
+  const running = useRef(new Set<string>());
+  useEffect(() => {
+    if (!jobs) return;
+    let finished = false;
+    for (const job of jobs) {
+      if (migrationIsActive(job)) running.current.add(job.job_id);
+      else if (running.current.delete(job.job_id)) finished = true;
+    }
+    if (finished) void reconcileMutationImpact(queryClient, "migration.job");
+  }, [jobs, queryClient]);
+}
+
 export function useMigrationJobs(enabled = true) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey: migrationQueryKeys.jobs(scopeKey),
     queryFn: ({ pageParam, signal }) =>
       migrationsAPI.listJobs({ limit: 100, offset: pageParam }, signal),
@@ -75,6 +97,10 @@ export function useMigrationJobs(enabled = true) {
     retry: retryRead,
     refetchOnWindowFocus: false,
   });
+  useReconcileFinishedMigrations(
+    useMemo(() => query.data?.pages.flatMap((page) => page.items), [query.data]),
+  );
+  return query;
 }
 
 export function useMigrationPlans(enabled = true) {
@@ -98,7 +124,7 @@ export function useMigrationPlans(enabled = true) {
 
 export function useMigrationJob(jobId: string | null, enabled = true) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
-  return useQuery({
+  const query = useQuery({
     queryKey: migrationQueryKeys.job(scopeKey, jobId ?? ""),
     queryFn: ({ signal }) => migrationsAPI.getJob(jobId ?? "", signal),
     enabled: enabled && isAuthenticated && !!jobId,
@@ -109,6 +135,8 @@ export function useMigrationJob(jobId: string | null, enabled = true) {
     retry: retryRead,
     refetchOnWindowFocus: false,
   });
+  useReconcileFinishedMigrations(useMemo(() => (query.data ? [query.data] : undefined), [query.data]));
+  return query;
 }
 
 export function useMigrationPlan(planId: string | null, enabled = true) {

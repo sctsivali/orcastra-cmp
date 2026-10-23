@@ -27,6 +27,7 @@ import { PublishAddonDialog } from "@/components/extensions/publish-addon-dialog
 import { InstallConsentDialog } from "@/components/extensions/install-consent-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { extensionsAPI } from "@/lib/extensions-api";
+import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { isVaultUnavailable } from "@/lib/read-error";
 import type {
   ExtensionDetail,
@@ -129,7 +130,8 @@ function ExtensionsOverviewContent() {
     onSuccess: (result) => {
       setPreview(null);
       setIssued(result);
-      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
+      // the whole family: the catalogue, this list and each install's own page share status
+      void reconcileMutationImpact(queryClient, "extension.write");
     },
     onError: (error: Error) => setInstallError(error.message),
   });
@@ -147,7 +149,7 @@ function ExtensionsOverviewContent() {
     onSuccess: () => {
       setPublishOpen(false);
       setPublishError(null);
-      queryClient.invalidateQueries({ queryKey: ["extensions", "catalogue"] });
+      void reconcileMutationImpact(queryClient, "extension.write");
     },
     // The server's own words. A paraphrase here would hide which field it actually refused.
     onError: (error: Error) => setPublishError(error.message),
@@ -156,14 +158,14 @@ function ExtensionsOverviewContent() {
   const setStatus = useMutation({
     mutationFn: ({ slug, status }: { slug: string; status: ExtensionDetail["status"] }) =>
       extensionsAPI.setStatus(slug, status),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["extensions", "catalogue"] }),
+    onSuccess: () => reconcileMutationImpact(queryClient, "extension.write"),
     onError: (error: Error) =>
       toast({ title: "Could not change status", description: error.message, variant: "destructive" }),
   });
 
   const withdraw = useMutation({
     mutationFn: (slug: string) => extensionsAPI.withdraw(slug),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["extensions", "catalogue"] }),
+    onSuccess: () => reconcileMutationImpact(queryClient, "extension.write"),
     // A withdraw is refused while an installation still holds it, and that refusal explains why.
     onError: (error: Error) =>
       toast({ title: "Could not withdraw", description: error.message, variant: "destructive" }),
@@ -174,10 +176,7 @@ function ExtensionsOverviewContent() {
       action === "suspend"
         ? extensionsAPI.suspend(id, "Suspended from the installations list")
         : extensionsAPI.resume(id),
-    onSuccess: (_result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
-      queryClient.invalidateQueries({ queryKey: ["extensions", "install", variables.id] });
-    },
+    onSuccess: () => reconcileMutationImpact(queryClient, "extension.write"),
     onError: (error: Error) =>
       toast({ title: "Could not change the installation", description: error.message, variant: "destructive" }),
   });
@@ -187,7 +186,7 @@ function ExtensionsOverviewContent() {
     onSuccess: () => {
       setPendingUninstall(null);
       setUninstallError(null);
-      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
+      void reconcileMutationImpact(queryClient, "extension.write");
     },
     onError: (error: Error) => setUninstallError(error.message),
   });

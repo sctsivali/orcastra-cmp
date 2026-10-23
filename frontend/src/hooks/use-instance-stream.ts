@@ -5,7 +5,6 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { usePendingCreateJobs } from "@/hooks/use-pending-create-jobs";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import {
@@ -55,8 +54,7 @@ export function useInstanceStream(authorizedHosts: string[]): PendingCreate[] {
   const getSnapshot = useCallback(() => getPendingSnapshot(scopeKey), [scopeKey]);
   const pending = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const queryClient = useQueryClient();
-
-  usePendingCreateJobs(pending, scopeKey, queryClient);
+  // the durable create jobs themselves are followed app-wide (components/pending-create-follower)
 
   // Authorized clusters come from VMListResponse.nodes, including clusters with zero rows.
   // Pending hosts remain connected until their durable create verdict is known.

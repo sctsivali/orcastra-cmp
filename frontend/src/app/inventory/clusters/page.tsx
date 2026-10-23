@@ -167,7 +167,8 @@ function ClustersContent() {
         toast({
           title: "Authentication Successful",
           description: `Cluster ${clusterId} is online. Refreshing instance data...` });
-        // refetch is handled by the mutation's onSuccess (includes delay for LXD stabilization)
+        // the mutation's onSuccess reconciles cluster.auth-check, which covers every list a
+        // newly trusted cluster adds to (instances, projects, images, pickers)
       } else {
         toast({
           title: "Not Authenticated",
@@ -227,8 +228,8 @@ function ClustersContent() {
       if (result?.manual_trust_commands?.length || result?.trust_cleanup_complete === false) {
         setLeftoverTrust({ clusterId, commands: result.manual_trust_commands ?? [] });
       }
-      // useDeleteCluster.onSuccess invalidates ["clusters"] with refetchType:'all',
-      // which refetches this page's active query - no full-page reload needed.
+      // useDeleteCluster.onSuccess reconciles cluster.delete: this page's active queries
+      // refetch now, and every other list it touched refetches when its page next mounts.
     } catch (error: any) {
       toast({
         title: "Delete Failed",

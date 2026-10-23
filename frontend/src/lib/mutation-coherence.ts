@@ -47,7 +47,7 @@ const QUERY_FAMILY_KEYS = {
   integrations: [["integrations"]],
   extensions: [["extensions"]],
   myKeys: [["my-keys"]],
-  organizations: [["organizations"], ["organization-preferences"]],
+  organizations: [["organizations"], ["organization-preferences"], ["integration-organizations"]],
   personalization: [["user-preferences"], ["organization-preferences"]],
   tenantAccess: [["tenant-access-policies"], ["tenant-access-assignments"]],
   userGroups: [["user-groups"]],
@@ -186,12 +186,12 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "storage.volume": {
     completion: "response",
-    queryFamilies: ["storageVolumes", "storageVolumeDetails", "storagePoolDetails", "nodes", "nodeResources", "regions", "instances"],
+    queryFamilies: ["storageVolumes", "storageVolumeDetails", "storagePools", "storagePoolDetails", "nodes", "nodeResources", "regions", "instances"],
     apiCalls: ["api.storageVolumes.create", "api.storageVolumes.update", "api.storageVolumes.delete"],
   },
   "iso.upload": {
     completion: "terminal-operation",
-    queryFamilies: ["storageVolumes", "storagePoolDetails", "nodes", "nodeResources", "regions"],
+    queryFamilies: ["storageVolumes", "storagePools", "storagePoolDetails", "nodes", "nodeResources", "regions"],
     apiCalls: ["api.isoUploads.finalize"],
   },
   "network.write": {
@@ -229,7 +229,8 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "cluster.auth-check": {
     completion: "response",
-    queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources"],
+    // a check that turns a pending cluster trusted makes everything on it readable at once
+    queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources", "instances", "instanceDetails", "monitoring", "ipam", "projects", "images", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "networkDetails", "networkAcls", "profiles", "profileDetails", "snapshots", "certificates", "regions", "warnings"],
     apiCalls: ["api.clusters.checkAuth"],
   },
   "cluster.delete": {
