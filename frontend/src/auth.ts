@@ -10,7 +10,7 @@ import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
-import { forget, grantKey, grantOnce, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
+import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -199,17 +199,25 @@ async function refresh(token: JWT): Promise<JWT | null> {
       : result;
   });
   const settled = await outcome;
-  if (!settled.ok && settled.forgotten) return null;
+  if (!settled.ok && settled.forgotten) {
+    // A rotation that landed after the sign-out: nobody will hold this token, so it goes too.
+    if (settled.orphanedRefreshToken) void revokeAtIdp(settled.orphanedRefreshToken);
+    return null;
+  }
   if (!settled.ok) return failed(token);
   return withFields(token, settled.fields);
 }
 
 // RFC 7009: a signed-out refresh token is revoked at the IdP, so no copy of the cookie can use it.
-async function revokeAtIdp(refreshToken: string): Promise<void> {
+// note: a 200 does not prove the token existed (RFC 7009 answers 200 for unknown tokens).
+async function revokeAtIdp(refreshToken: string): Promise<boolean> {
   try {
     const signal = AbortSignal.timeout(5_000);
     const { revocation_endpoint: revocationEndpoint } = await resolveDiscovery(signal);
-    if (!revocationEndpoint) return;
+    if (!revocationEndpoint) {
+      console.warn("[AUTH] the IdP advertises no revocation_endpoint; a signed-out refresh token stays valid there");
+      return false;
+    }
     const response = await fetch(revocationEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -222,9 +230,24 @@ async function revokeAtIdp(refreshToken: string): Promise<void> {
       signal,
     });
     if (!response.ok) console.warn(`[AUTH] refresh token revocation answered ${response.status}`);
+    return response.ok;
   } catch (error) {
     console.warn(`[AUTH] refresh token revocation failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
   }
+}
+
+// When the IdP could not revoke at sign-out, this process refuses the chain for a day and keeps
+// trying; a sign-out never fails because of it.
+const UNREVOKED_TOMBSTONE_MS = 24 * 60 * 60_000;
+const REVOKE_RETRY_MS = [30_000, 5 * 60_000];
+
+function retryRevocation(refreshToken: string, attempt = 0): void {
+  if (attempt >= REVOKE_RETRY_MS.length) return;
+  const timer = setTimeout(async () => {
+    if (!(await revokeAtIdp(refreshToken))) retryRevocation(refreshToken, attempt + 1);
+  }, REVOKE_RETRY_MS[attempt]);
+  (timer as { unref?: () => void }).unref?.();
 }
 
 function sessionSubject(token: JWT): string {
@@ -261,15 +284,10 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
   }
 
   // A cookie whose refresh token was spent moments ago (a read that was already in flight when
-  // the rotation landed, another tab) takes the newest tokens of its chain. Logged at warn: outside
-  // that race it means a second copy of the session.
+  // the rotation landed, another tab) takes the newest tokens of its chain; the registry logs it.
   if (token.refreshToken) {
     const upgrade = await upgradeSpent(sessionSubject(token), token.refreshToken);
-    if (upgrade) {
-      const who = (await grantKey(sessionSubject(token))).slice(0, 8);
-      console.warn(`[AUTH] rotation replay served hops=${upgrade.hops} age_ms=${upgrade.ageMs} subject=${who}`);
-      token = withFields(token, upgrade.fields);
-    }
+    if (upgrade) token = withFields(token, upgrade.fields);
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -423,8 +441,11 @@ export const authConfig: NextAuthConfig = {
       if (!token?.refreshToken) return;
       const subject = sessionSubject(token);
       const head = (await upgradeSpent(subject, token.refreshToken))?.fields.refreshToken ?? token.refreshToken;
-      await forget(subject, token.refreshToken);
-      await revokeAtIdp(head);
+      const chain = await forget(subject, token.refreshToken);
+      if (!(await revokeAtIdp(head))) {
+        holdTombstones(chain, UNREVOKED_TOMBSTONE_MS);
+        retryRevocation(head);
+      }
     },
   },
 };

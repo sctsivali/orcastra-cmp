@@ -22,7 +22,7 @@ import NextAuth from "next-auth";
 import { authConfig } from "@/auth";
 import { maskToken, type HydratedSession } from "@/lib/hydrated-session";
 
-// Covers server render to client mount plus one background refresh (10 s budget, auth.ts), so a
+// Covers server render to client mount plus one background refresh (up to 20 s, auth.ts), so a
 // request sent with the hydrated bearer cannot reach the backend expired before the refresh lands.
 const HYDRATE_MIN_VALIDITY_S = 60;
 

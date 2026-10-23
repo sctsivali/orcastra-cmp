@@ -8,9 +8,8 @@
 //
 // important: the window after a rotation is short on purpose (KEEP_MS, MAX_HOPS). Healing an
 // older cookie into the newest tokens also means the IdP never sees a reuse, which is how rotation
-// detects a copied session. The window only has to cover readers that were already in flight when
-// the rotation landed; session reads wait for the grant itself (auth.ts), so nothing depends on
-// healing a cookie minutes later.
+// detects a copied session. Session reads wait for their grant (auth.ts), so the window only has
+// to cover requests already in flight when the rotation landed. Every replay is logged.
 //
 // note: per process. The dashboard runs one frontend process and only the nodejs runtime grants
 // (middleware has its own non-refreshing NextAuth instance). More replicas need a shared store.
@@ -26,18 +25,22 @@ export interface RefreshedFields {
 
 export type GrantOutcome =
   | { ok: true; fields: RefreshedFields }
-  | { ok: false; forgotten?: boolean };
+  | { ok: false; forgotten?: boolean; orphanedRefreshToken?: string };
 
 interface Entry {
   sub: string;
   outcome: Promise<GrantOutcome>;
-  settled?: { fields: RefreshedFields; nextKey: string; at: number };
+  state: "pending" | "kept" | "failed";
+  kept?: { fields: RefreshedFields; nextKey: string; at: number };
   keepUntil: number;
   joined: number;
 }
 
-const KEEP_MS = 60_000;
+const KEEP_MS = 15_000;
 const MAX_HOPS = 2;
+// A failed grant is answered from here for as long as the session's own cooldown, so an older
+// cookie without that cooldown cannot make the IdP refuse the same token again and again.
+const FAILED_MS = 60_000;
 // Longer than an access token plus the refresh skew, so a cookie from before a sign-out cannot
 // refresh through the dashboard before it would have expired anyway.
 const TOMBSTONE_MS = 10 * 60_000;
@@ -46,6 +49,12 @@ const MAX_PER_SUBJECT = 16;
 
 const entries = new Map<string, Entry>();
 const tombstones = new Map<string, number>();
+// Pseudonymous subjects in logs: stable within one process, not reversible from a user list.
+const LOG_SALT = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16)).join("");
+
+function tombstoned(key: string, now: number): boolean {
+  return (tombstones.get(key) ?? 0) > now;
+}
 
 export async function grantKey(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -62,12 +71,12 @@ function sweep(now: number): void {
       entries.delete(key);
       continue;
     }
-    if (entry.settled) perSubject.set(entry.sub, (perSubject.get(entry.sub) ?? 0) + 1);
+    if (entry.state !== "pending") perSubject.set(entry.sub, (perSubject.get(entry.sub) ?? 0) + 1);
   }
   // Oldest first: one subject cannot hold more than its share, and the whole map stays bounded.
   let evicted = 0;
   for (const [key, entry] of entries) {
-    if (!entry.settled) continue;
+    if (entry.state === "pending") continue;
     const own = perSubject.get(entry.sub) ?? 0;
     if (own > MAX_PER_SUBJECT || entries.size > MAX_ENTRIES) {
       entries.delete(key);
@@ -75,7 +84,7 @@ function sweep(now: number): void {
       evicted += 1;
     }
   }
-  if (evicted) console.warn(`[AUTH] grant registry evicted ${evicted} kept rotations (bounds reached)`);
+  if (evicted) console.warn(`[AUTH] grant registry evicted ${evicted} entries (bounds reached)`);
 }
 
 /** The newest kept rotation reachable from this key, within MAX_HOPS. */
@@ -84,27 +93,31 @@ function walk(key: string, sub: string, now: number): { fields: RefreshedFields;
   let hops = 0;
   while (hops < MAX_HOPS) {
     const entry = entries.get(key);
-    if (!entry?.settled || entry.sub !== sub || entry.keepUntil <= now || tombstones.has(key)) break;
+    if (!entry?.kept || entry.sub !== sub || entry.keepUntil <= now || tombstoned(key, now)) break;
     hops += 1;
-    found = { fields: entry.settled.fields, hops, at: entry.settled.at };
-    key = entry.settled.nextKey;
+    found = { fields: entry.kept.fields, hops, at: entry.kept.at };
+    key = entry.kept.nextKey;
   }
   return found;
 }
 
+function logReplay(found: { hops: number; at: number }, who: string, now: number): void {
+  // Outside a burst of reads that were already in flight, this means a second copy of the session.
+  console.warn(`[AUTH] rotation replay served hops=${found.hops} age_ms=${now - found.at} subject=${who.slice(0, 8)}`);
+}
+
 /** The newest tokens of a chain this refresh token was spent in moments ago, if any. */
-export async function upgradeSpent(
-  sub: string,
-  refreshToken: string,
-): Promise<{ fields: RefreshedFields; hops: number; ageMs: number } | null> {
-  const key = await grantKey(refreshToken);
+export async function upgradeSpent(sub: string, refreshToken: string): Promise<{ fields: RefreshedFields } | null> {
+  const [key, who] = await Promise.all([grantKey(refreshToken), grantKey(LOG_SALT + sub)]);
   const now = Date.now();
   const found = walk(key, sub, now);
-  return found ? { fields: found.fields, hops: found.hops, ageMs: now - found.at } : null;
+  if (!found) return null;
+  logReplay(found, who, now);
+  return { fields: found.fields };
 }
 
 /**
- * Start a grant for this refresh token, join the one already running, or take the result of one
+ * Start a grant for this refresh token, join the one already running, or take the outcome of one
  * that settled moments ago. `outcome` settles when the IdP answers or the grant's cap runs out.
  * note: wrapped in an object on purpose; awaiting a promise of a promise would wait for the grant.
  * important: everything after the one await is synchronous, so a grant that settles meanwhile is
@@ -115,22 +128,25 @@ export async function grantOnce(
   refreshToken: string,
   grant: () => Promise<GrantOutcome>,
 ): Promise<{ outcome: Promise<GrantOutcome> }> {
-  const key = await grantKey(refreshToken);
+  const [key, who] = await Promise.all([grantKey(refreshToken), grantKey(LOG_SALT + sub)]);
   const now = Date.now();
   // A signed-out chain is not presented to the IdP again: it would only be refused.
-  if (tombstones.has(key)) return { outcome: Promise.resolve({ ok: false, forgotten: true }) };
+  if (tombstoned(key, now)) return { outcome: Promise.resolve({ ok: false, forgotten: true }) };
   const existing = entries.get(key);
   if (existing && existing.keepUntil > now) {
-    if (existing.sub !== sub) return { outcome: Promise.resolve({ ok: false }) };
-    if (!existing.settled) {
+    if (existing.sub !== sub || existing.state === "failed") return { outcome: Promise.resolve({ ok: false }) };
+    if (existing.state === "pending") {
       existing.joined += 1;
       return { outcome: existing.outcome };
     }
     const head = walk(key, sub, now);
-    if (head) return { outcome: Promise.resolve({ ok: true, fields: head.fields }) };
+    if (head) {
+      logReplay(head, who, now);
+      return { outcome: Promise.resolve({ ok: true, fields: head.fields }) };
+    }
   }
 
-  const entry: Entry = { sub, outcome: Promise.resolve({ ok: false }), keepUntil: Infinity, joined: 0 };
+  const entry: Entry = { sub, outcome: Promise.resolve({ ok: false }), state: "pending", keepUntil: Infinity, joined: 0 };
   entry.outcome = grant().then(async (outcome): Promise<GrantOutcome> => {
     // Deliberate and permanent: proves from outside that a burst made exactly one grant, and
     // which runtime made it. Logs no token material.
@@ -138,15 +154,25 @@ export async function grantOnce(
       `[AUTH] refresh grant runtime=${process.env.NEXT_RUNTIME ?? "nodejs"} ` +
         `shared=${entry.joined + 1} ms=${Date.now() - now} ok=${outcome.ok}`,
     );
-    if (tombstones.has(key)) {
-      entries.delete(key);
-      return { ok: false, forgotten: true };
-    }
     // Keep only a real rotation: an IdP that hands back the same refresh token would otherwise
     // link the key to itself.
-    if (outcome.ok && outcome.fields.refreshToken && outcome.fields.refreshToken !== refreshToken) {
-      entry.settled = { fields: outcome.fields, nextKey: await grantKey(outcome.fields.refreshToken), at: Date.now() };
-      entry.keepUntil = Date.now() + KEEP_MS;
+    const rotated = outcome.ok && outcome.fields.refreshToken && outcome.fields.refreshToken !== refreshToken;
+    // important: hash before looking at the tombstone, and decide in one synchronous step, so a
+    // sign-out cannot land between the check and the link.
+    const nextKey = rotated && outcome.ok ? await grantKey(outcome.fields.refreshToken) : null;
+    const settledAt = Date.now();
+    if (tombstoned(key, settledAt)) {
+      entries.delete(key);
+      if (nextKey) tombstones.set(nextKey, tombstones.get(key) ?? settledAt + TOMBSTONE_MS);
+      return { ok: false, forgotten: true, orphanedRefreshToken: outcome.ok ? outcome.fields.refreshToken : undefined };
+    }
+    if (outcome.ok && nextKey) {
+      entry.state = "kept";
+      entry.kept = { fields: outcome.fields, nextKey, at: settledAt };
+      entry.keepUntil = settledAt + KEEP_MS;
+    } else if (!outcome.ok) {
+      entry.state = "failed";
+      entry.keepUntil = settledAt + FAILED_MS;
     } else {
       entries.delete(key);
     }
@@ -163,26 +189,30 @@ export async function grantOnce(
 /**
  * Sign-out: drop every link that leads into this refresh token's chain, so a cookie from before
  * the sign-out is not healed into it, and make a grant still in flight for it settle as forgotten.
+ * Returns the chain's keys, so a sign-out whose revocation failed can hold them longer.
  */
-export async function forget(sub: string, refreshToken: string): Promise<void> {
+export async function forget(sub: string, refreshToken: string): Promise<string[]> {
   const chain = new Set<string>();
   let key: string | undefined = await grantKey(refreshToken);
   while (key && !chain.has(key) && chain.size < MAX_ENTRIES) {
     chain.add(key);
-    key = entries.get(key)?.settled?.nextKey;
+    key = entries.get(key)?.kept?.nextKey;
   }
   for (let grew = true; grew; ) {
     grew = false;
     for (const [k, entry] of entries) {
-      if (entry.sub === sub && entry.settled && chain.has(entry.settled.nextKey) && !chain.has(k)) {
+      if (entry.sub === sub && entry.kept && chain.has(entry.kept.nextKey) && !chain.has(k)) {
         chain.add(k);
         grew = true;
       }
     }
   }
-  const until = Date.now() + TOMBSTONE_MS;
-  for (const k of chain) {
-    if (entries.get(k)?.settled) entries.delete(k);
-    tombstones.set(k, until);
-  }
+  holdTombstones([...chain], TOMBSTONE_MS);
+  for (const k of chain) if (entries.get(k)?.state !== "pending") entries.delete(k);
+  return [...chain];
+}
+
+export function holdTombstones(keys: string[], ms: number): void {
+  const until = Date.now() + ms;
+  for (const k of keys) tombstones.set(k, Math.max(tombstones.get(k) ?? 0, until));
 }

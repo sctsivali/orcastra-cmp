@@ -50,15 +50,31 @@ let idp;
 function resetIdp(mode = "up") {
   idp = {
     mode, latencyMs: 0, omitGroups: false, valid: new Set(["rt-0"]), revoked: new Set(), n: 0,
-    grants: 0, suspicious: 0, presented: [], revokedBySignOut: [],
+    grants: 0, suspicious: 0, presented: [], revokedBySignOut: [], revokeCalls: 0, revokeStatus: 200,
+    advertiseRevocation: true,
   };
 }
+
+// Lets a test hold one SHA-256 computation open, to land a sign-out exactly inside it.
+const realDigest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
+let digestGate = null;
+globalThis.crypto.subtle.digest = async (algorithm, data) => {
+  if (digestGate && new TextDecoder().decode(data) === digestGate.value) {
+    digestGate.reached();
+    await digestGate.release;
+  }
+  return realDigest(algorithm, data);
+};
 globalThis.fetch = async (url, init = {}) => {
   if (String(url).endsWith("openid-configuration")) {
-    return new Response(JSON.stringify({ token_endpoint: TOKEN_ENDPOINT, revocation_endpoint: REVOKE_ENDPOINT }), { status: 200 });
+    return new Response(JSON.stringify({
+      token_endpoint: TOKEN_ENDPOINT, ...(idp.advertiseRevocation ? { revocation_endpoint: REVOKE_ENDPOINT } : {}),
+    }), { status: 200 });
   }
   const form = new URLSearchParams(String(init.body));
   if (String(url) === REVOKE_ENDPOINT) {
+    idp.revokeCalls += 1;
+    if (idp.revokeStatus !== 200) return new Response(null, { status: idp.revokeStatus });
     idp.revokedBySignOut.push(form.get("token"));
     idp.valid.delete(form.get("token"));
     return new Response(null, { status: 200 });
@@ -134,8 +150,8 @@ try {
     assert.equal(idp.suspicious, 0);
   }
 
-  // A read that was in flight with the older cookie when the rotation landed is healed, across
-  // two rotations inside the window, and the replay is logged.
+  // A read that was in flight with the older cookie when the rotation landed is healed, and the
+  // replay is logged without token material.
   {
     resetIdp();
     const { jwt } = world();
@@ -145,16 +161,20 @@ try {
     const healed = await grantsDuring(() => jwt({ token: { ...c0 } }));
     assert.equal(healed.granted, 0, "a spent refresh token is not presented again");
     assert.equal(healed.out.accessToken, c1.accessToken);
-    offsetMs += 25_000; // past the role recheck floor, inside the window
-    const c2 = await jwt({ token: { ...c1 }, trigger: "update", session: { refreshRoles: true } });
-    assert.equal(c2.refreshToken, "rt-2", "a role recheck forces a grant with the current token");
-    const twoHops = await grantsDuring(() => jwt({ token: { ...c0 } }));
-    assert.equal(twoHops.granted, 0);
-    assert.equal(twoHops.out.refreshToken, "rt-2", "the chain resolves to the newest rotation");
-    assert.ok(logs.some((l) => /rotation replay served hops=2 age_ms=\d+ subject=[\w-]{8}$/.test(l)));
-    assert.ok(!logs.some((l) => /rt-\d|at-\d/.test(l)), "no token material in the log");
+    assert.ok(logs.some((l) => /rotation replay served hops=1 age_ms=\d+ subject=[\w-]{8}$/.test(l)));
+    assert.ok(!logs.some((l) => /rt-\d|at-\d|example\.invalid/.test(l)), "no token material or subject in the log");
     assert.equal(idp.suspicious, 0);
-    offsetMs = 0;
+  }
+
+  // The chain is followed for two hops and no further.
+  {
+    resetIdp();
+    const { registry } = world();
+    const fields = (rt) => ({ accessToken: `at-${rt}`, refreshToken: rt, expiresAt: nowS() + 300, groupsReadAt: nowS() });
+    for (const [from, to] of [["rt-a", "rt-b"], ["rt-b", "rt-c"], ["rt-c", "rt-d"]]) {
+      await (await registry.grantOnce(SUB, from, async () => ({ ok: true, fields: fields(to) }))).outcome;
+    }
+    assert.equal((await registry.upgradeSpent(SUB, "rt-a")).fields.refreshToken, "rt-c", "more than two hops were followed");
   }
 
   // The settled-entry race: a grant settled between a reader's lookup and its own grant is taken,
@@ -167,6 +187,7 @@ try {
     const { outcome } = await registry.grantOnce(SUB, "rt-0", async () => { called += 1; return { ok: false }; });
     const settled = await outcome;
     assert.equal(called, 0, "a settled grant was repeated");
+    assert.ok(logs.at(-1).includes("rotation replay served"), "a replay through the grant path is logged too");
     assert.equal(settled.ok && settled.fields.refreshToken, "rt-1");
     assert.equal((await grantsDuring(() => jwt({ token: expired() }))).granted, 0, "the link survived");
   }
@@ -228,7 +249,7 @@ try {
     const { jwt } = world();
     const c0 = expired();
     await jwt({ token: { ...c0 } });
-    offsetMs += 61_000;
+    offsetMs += 16_000;
     const stale = await jwt({ token: { ...c0, expiresAt: nowS() - 5 } });
     assert.equal(stale.error, "RefreshAccessTokenError");
     assert.equal(idp.suspicious, 1, "past the window the reuse is the IdP's to see");
@@ -276,6 +297,10 @@ try {
     await lagging.config.events.signOut({ token: expired() });
     assert.deepEqual(idp.revokedBySignOut, ["rt-1"], "a lagging cookie's sign-out revokes the newest token");
 
+    offsetMs += 3 * 60_000;
+    assert.equal(await jwt({ token: { ...c0 } }), null, "the sign-out still holds after three minutes");
+    offsetMs = 0;
+
     resetIdp();
     idp.latencyMs = 5_000;
     const fresh = world();
@@ -284,6 +309,47 @@ try {
     await fresh.config.events.signOut({ token: expired() });
     assert.equal(await pending, null, "a grant that lands after the sign-out does not write a session");
     assert.equal(idp.suspicious, 0);
+
+    // A sign-out that lands while the grant is hashing its new token: the new token is not
+    // linked, and it is revoked at the IdP because nobody will hold it.
+    resetIdp();
+    const racing = world();
+    let reached;
+    digestGate = { value: "rt-1", release: null, reached: null };
+    digestGate.release = new Promise((r) => { digestGate.open = r; });
+    const atDigest = new Promise((r) => { reached = r; });
+    digestGate.reached = reached;
+    const inFlight = racing.jwt({ token: expired() });
+    await atDigest;
+    await racing.config.events.signOut({ token: expired() });
+    digestGate.open();
+    digestGate = null;
+    assert.equal(await inFlight, null, "a sign-out inside the settle step was undone");
+    await sleepReal(20);
+    assert.ok(idp.revokedBySignOut.includes("rt-1"), "the orphaned rotation was not revoked");
+    assert.equal((await grantsDuring(() => racing.jwt({ token: expired({ refreshToken: "rt-1" }) }))).granted, 0);
+
+    // The IdP refuses the revocation: the chain is held for a day and the revocation retried.
+    resetIdp();
+    idp.revokeStatus = 503;
+    const refused = world();
+    const r1 = await refused.jwt({ token: expired() });
+    await refused.config.events.signOut({ token: r1 });
+    assert.ok(logs.some((l) => /revocation answered 503/.test(l)));
+    offsetMs += 11 * 60_000;
+    assert.equal(await refused.jwt({ token: expired() }), null, "an unrevoked chain was released after ten minutes");
+    offsetMs = 0;
+    idp.revokeStatus = 200;
+    await sleepReal(450); // the first retry, scaled from 30 s
+    assert.ok(idp.revokedBySignOut.includes("rt-1"), "the revocation was not retried");
+
+    // An IdP without a revocation endpoint is reported, not silently skipped.
+    resetIdp();
+    idp.advertiseRevocation = false;
+    const silent = world();
+    const s1 = await silent.jwt({ token: expired() });
+    await silent.config.events.signOut({ token: s1 });
+    assert.ok(logs.some((l) => /advertises no revocation_endpoint/.test(l)));
   }
 
   // An IdP that cannot be reached: error and cooldown, then recovery once it answers.
@@ -293,6 +359,9 @@ try {
     const down = await jwt({ token: expired() });
     assert.equal(down.error, "RefreshAccessTokenError");
     assert.equal((await grantsDuring(() => jwt({ token: { ...down } }))).granted, 0);
+    const copy = await grantsDuring(() => jwt({ token: expired() }));
+    assert.equal(copy.granted, 0, "an older copy without the cooldown made the IdP refuse the token again");
+    assert.equal(copy.out.error, "RefreshAccessTokenError");
     idp.mode = "up";
     offsetMs += 61_000;
     const back = await jwt({ token: { ...down } });
@@ -314,16 +383,13 @@ try {
   // older cookie does not get its old groups back.
   {
     resetIdp();
+    idp.omitGroups = true;
     const { jwt } = world();
     const c0 = expired();
-    const c1 = await jwt({ token: { ...c0 } });
-    idp.omitGroups = true;
-    offsetMs += 25_000;
-    const c2 = await jwt({ token: { ...c1, groups: ["role_tenant"], roles: ["role_tenant"] }, trigger: "update", session: { refreshRoles: true } });
-    assert.deepEqual(c2.groups, ["role_tenant"]);
+    const c1 = await jwt({ token: { ...c0, groups: ["role_tenant"], roles: ["role_tenant"] } });
+    assert.deepEqual(c1.groups, ["role_tenant"]);
     const healed = await jwt({ token: { ...c0 } });
     assert.deepEqual(healed.groups, ["role_tenant"], "a healed cookie kept its stale groups");
-    offsetMs = 0;
   }
 
   // The role recheck floor holds, measured against the newest grant.
@@ -385,4 +451,4 @@ try {
   globalThis.setTimeout = realSetTimeout;
 }
 
-console.log("token rotation: one writer, no refresh token presented twice, short replay window, sign-out revokes");
+console.log("token rotation: one writer, no refresh token presented twice, 15 s replay window, failures cached, sign-out revokes");
