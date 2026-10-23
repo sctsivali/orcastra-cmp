@@ -31,7 +31,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 from app.services.lxd import health, registry
 from app.services.lxd.events_hub import get_events_hub
-from app.services.task_journal import repository, seed
+from app.services.task_journal import cache_clearance, repository, seed
 from app.services.task_journal.follower_frames import upstream_row
 from app.services.task_journal.follower_writer import DashboardIdentities, JournalWriter
 from app.services.task_journal.repository_types import FOLLOWER_LOCK
@@ -125,6 +125,7 @@ class JournalFollower:
         self._state_locks: Dict[str, asyncio.Lock] = {}
         self._registry_task: Optional[asyncio.Task] = None
         self._sweep_task: Optional[asyncio.Task] = None
+        self._clearance: Optional[cache_clearance.CacheClearance] = None
         self.elections = 0
 
     # ── election ──────────────────────────────────────────────────────────────────────────
@@ -165,6 +166,8 @@ class JournalFollower:
         self.state = STATE_LEADER
         self.elections += 1
         logger.info("Task journal follower elected on %s", WORKER_ID)
+        # Before any database call, so a stalled database never delays a cache clearance.
+        self._clearance = cache_clearance.start_for_leader(self._hub, self._excluded)
         async with self._session_maker() as db:
             await repository.reset_cluster_states(db)
             await db.commit()
@@ -189,6 +192,8 @@ class JournalFollower:
         for task in (self._registry_task, self._sweep_task):
             await _cancel(task)
         self._registry_task = self._sweep_task = None
+        await cache_clearance.stop(self._clearance)
+        self._clearance = None
         for host in list(self._queues):
             await self._unfollow(host, record_state=False)
         await self._writer.stop()

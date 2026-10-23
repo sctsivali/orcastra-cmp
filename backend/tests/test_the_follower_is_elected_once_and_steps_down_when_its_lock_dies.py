@@ -17,6 +17,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@127.0.0.1:
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.services.lxd import registry  # noqa: E402
+from app.services.task_journal import cache_clearance  # noqa: E402
 from app.services.task_journal import follower as follower_module  # noqa: E402
 from app.services.task_journal.follower import (  # noqa: E402
     HEARTBEAT_S,
@@ -38,6 +39,14 @@ from tests._journal_fakes import FakeSessionMaker  # noqa: E402
 
 # Distinct from HEARTBEAT_S (15.0) so the scripted sleep can tell the two waits apart.
 RETRY_S = 7
+
+
+@pytest.fixture(autouse=True)
+def no_cache_clearance(monkeypatch):
+    """The leader's cache clearance holds subscriptions of its own on the same hub; these tests
+    count the follower's. tests/test_a_change_made_outside_the_console_clears_its_lists.py
+    covers the clearance and its wiring."""
+    monkeypatch.setattr(cache_clearance, "clearance_enabled", lambda: False)
 
 
 @pytest.fixture

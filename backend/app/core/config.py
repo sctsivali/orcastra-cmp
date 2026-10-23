@@ -404,11 +404,20 @@ class Settings(BaseSettings):
     )
     # important: a cluster registered read-only for inspection (a partner's production cluster in a
     # development deployment) must not have its operations copied into this database, and must
-    # never become a cancel target. Names here are never subscribed, seeded or listed.
+    # never become a cancel target. Names here are never subscribed, seeded or listed, by the
+    # journal or by the cache clearance below.
     task_journal_exclude_clusters: str = Field(
         default="",
         alias="TASK_JOURNAL_EXCLUDE_CLUSTERS",
         description="Comma-separated cluster ids the task journal never follows."
+    )
+    # A change made on the cluster itself (the lxc CLI, the LXD UI) passes no route, so without
+    # this the console's cached lists keep the old state for their TTL. Runs on the elected
+    # follower only, so it needs task_journal_enabled as well.
+    task_journal_cache_clearance: bool = Field(
+        default=True,
+        alias="TASK_JOURNAL_CACHE_CLEARANCE",
+        description="Clear cached lists when a cluster's event stream reports a change made outside the console."
     )
 
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────

@@ -567,6 +567,23 @@ class CacheManager:
         self.delete_pattern("api_responses", "regions:*")
         logger.info("Invalidated reachability caches for %s", ", ".join(cluster_ids))
 
+    def invalidate_instance_lists(self) -> None:
+        """Fence, then clear, the /instances and /vms lists alone.
+
+        The first part of invalidate_instance_cache, for a caller that knows only the lists moved
+        (an instance started or stopped outside the console) and must not rebuild every `used_by`
+        projection as often.
+        """
+        # Advance first. A list that began before this mutation must see a different token even
+        # if it finishes in the small interval while the dependent key families are being swept.
+        try:
+            self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
+        except Exception as e:  # noqa: BLE001 - the clearance below is still authoritative
+            logger.debug(f"Could not record the instance list cache generation: {e}")
+
+        self.delete_pattern("api_responses", "instances:*")
+        self.delete_pattern("api_responses", "vms:*")
+
     def invalidate_instance_cache(self):
         """Invalidate cached responses an instance lifecycle change makes stale.
 
@@ -579,15 +596,7 @@ class CacheManager:
         its snapshots with it on the cluster, and that listing gained a cache without gaining a
         second reason to be cleared.
         """
-        # Advance first. A list that began before this mutation must see a different token even
-        # if it finishes in the small interval while the dependent key families are being swept.
-        try:
-            self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
-        except Exception as e:  # noqa: BLE001 - the clearance below is still authoritative
-            logger.debug(f"Could not record the instance list cache generation: {e}")
-
-        self.delete_pattern("api_responses", "instances:*")
-        self.delete_pattern("api_responses", "vms:*")
+        self.invalidate_instance_lists()
         # Instance lifecycle also changes every LXD `used_by` projection. Clear those list
         # families through the generation-aware helper so a read that started before this
         # mutation cannot put the old references back after the clearance.
@@ -622,6 +631,23 @@ class CacheManager:
         """
         self.invalidate_instance_cache()
         self.invalidate_resource_cache("projects", "images")
+
+    def invalidate_project_caches(self) -> None:
+        """Fence and clear every cached projection a project write changes.
+
+        Not only the project lists: a project created with its own features gets a default
+        profile (and may get its own images and volumes), and deleting one takes those with it.
+        The profile list caches for 180 s, so it showed the new project's profile missing, or a
+        deleted project's profile still there, for that long.
+        """
+        self.invalidate_resource_cache(
+            "projects",
+            "project_usage",
+            "profiles",
+            "networks",
+            "images",
+            "storage_volumes",
+        )
 
     def invalidate_capacity_cache(self, *, require_shared: bool = False):
         """Drop cached capacity/allocation projections after resource-changing writes.
