@@ -398,6 +398,12 @@ async function fetchJSONWithTimeout(
  */
 const _inflightGets = new Map<string, Promise<unknown>>();
 
+// important: advanced when any write settles, and part of the de-duplication key. A read
+// asked for after a write (a delete's refetch, the fleet read that follows it) used to join a
+// GET that had started before the write and receive the pre-write body, which put a deleted
+// row straight back on screen.
+let _writeEpoch = 0;
+
 export interface FetchAPIOptions {
   /**
    * Issue this request even if an identical GET is already in flight.
@@ -427,7 +433,7 @@ export async function fetchAPI<T>(
   const transportIsCallerScoped = options.signal !== undefined;
   const authGeneration = _authGeneration;
   const requestActorGeneration = _authActorGeneration;
-  const inflightKey = `${authGeneration}:${endpoint}`;
+  const inflightKey = `${authGeneration}:${_writeEpoch}:${endpoint}`;
 
   // Deduplicate concurrent GET requests only inside one installed auth context. Without the
   // generation, B can join A's still-pending promise for the same endpoint after an account
@@ -471,6 +477,13 @@ export async function fetchAPI<T>(
       .catch(() => {});
   }
 
+  if (method !== "GET" && method !== "HEAD") {
+    // The epoch moves before the caller's continuation runs, so its onSuccess refetch is
+    // already keyed past every read that predates the write.
+    return request.finally(() => {
+      _writeEpoch += 1;
+    });
+  }
   return request;
 }
 

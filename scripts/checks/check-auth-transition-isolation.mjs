@@ -133,6 +133,24 @@ assert.deepEqual(await Promise.all([firstSameActorRead, secondSameActorRead]), [
   { shared: true },
 ]);
 
+// A read asked for after a write must not join a GET that started before the write: that
+// handed a delete's own refetch the pre-delete list.
+const preWriteRead = deferred();
+let writeEpochReads = 0;
+fetchImplementation = (call) => {
+  if (call.options.method === "DELETE") return Promise.resolve(response(200, { deleted: true }));
+  writeEpochReads += 1;
+  return writeEpochReads === 1 ? preWriteRead.promise : Promise.resolve(response(200, { after: true }));
+};
+const beforeWriteEpoch = calls.length;
+const stalePoll = api.fetchAPI("/write-epoch");
+await api.fetchAPI("/write-epoch/item", { method: "DELETE" });
+const postWriteRead = api.fetchAPI("/write-epoch");
+assert.equal(calls.length, beforeWriteEpoch + 3, "a post-write GET joined a GET from before the write");
+assert.deepEqual(await postWriteRead, { after: true });
+preWriteRead.resolve(response(200, { before: true }));
+assert.deepEqual(await stalePoll, { before: true });
+
 // A pending A mutation that gets a 401 after a direct A -> B refresh must not replay its body
 // with B's bearer. One network call is the invariant.
 api.setAccessToken("test-token-a2", "actor-a");
@@ -537,10 +555,11 @@ const structuralChecks = [
     "a stale sign-out confirmation can clear a newer actor's bearer",
   ],
   [
-    /const inflightKey = `\$\{authGeneration\}:\$\{endpoint\}`/.test(apiSource) &&
+    // the write epoch keeps a post-write read from joining a GET that predates the write
+    /const inflightKey = `\$\{authGeneration\}:\$\{_writeEpoch\}:\$\{endpoint\}`/.test(apiSource) &&
       /_inflightGets\.get\(inflightKey\)/.test(apiSource) &&
       /_inflightGets\.set\(inflightKey, request\)/.test(apiSource),
-    "GET in-flight dedupe is not scoped by non-secret auth generation",
+    "GET in-flight dedupe is not scoped by non-secret auth generation and write epoch",
   ],
   [
     /_authActorGeneration !== requestActorGeneration/.test(apiSource) &&
