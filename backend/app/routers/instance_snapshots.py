@@ -375,6 +375,18 @@ def _raise_create_outcome_unknown(
     raise HTTPException(status_code=502, detail=_SNAPSHOT_OUTCOME_UNKNOWN)
 
 
+def _create_refused(exc: BaseException) -> bool:
+    """LXD answered the POST itself and said no: a 4xx, or its restricted-project sentence.
+
+    note: LXD sends that sentence as a 500 (measured on nuc2, 2026-10-24), from a check it runs
+    before any operation exists, so the status alone cannot tell it from a failure mid-way. Every
+    other 5xx stays an unknown outcome.
+    """
+    if not isinstance(exc, LXDAPIException):
+        return False
+    return definitive_lxd_refusal(exc, "submitting") or _RESTRICTED_SNAPSHOTS in str(exc).lower()
+
+
 def _raise_create_refused(
     instance_name: str,
     host: str,
@@ -535,9 +547,7 @@ async def create_snapshot(
             except snapshots_service.SnapshotNameError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
             except Exception as exc:  # noqa: BLE001
-                if create_started and isinstance(exc, LXDAPIException) and definitive_lxd_refusal(
-                    exc, "submitting"
-                ):
+                if create_started and _create_refused(exc):
                     _raise_create_refused(instance_name, body.host, body.project, snapshot_name, exc)
                 if create_started:
                     _raise_create_outcome_unknown(

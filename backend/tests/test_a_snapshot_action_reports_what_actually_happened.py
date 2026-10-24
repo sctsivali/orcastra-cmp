@@ -373,8 +373,9 @@ def test_a_restricted_project_refusing_a_snapshot_is_a_409_not_an_unknown_outcom
 
     monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
     node = FakeInstanceNode()
+    # LXD sends this refusal as a 500 (measured on nuc2): the sentence, not the status, is the verdict.
     node.create_error = _lxd_refusal(
-        400, f'Project "{PROJECT}" doesn\'t allow for snapshot creation'
+        500, f'Project "{PROJECT}" doesn\'t allow for snapshot creation'
     )
 
     response = _create(node)
