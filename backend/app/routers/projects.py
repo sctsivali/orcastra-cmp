@@ -8,7 +8,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import logging
 from datetime import datetime, timezone
 import asyncio
-from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import re
@@ -933,13 +932,14 @@ async def delete_project(
         )
 
     try:
+        # note: the deletion service revokes and announces before it returns, so a requester that
+        # left mid-delete costs nothing it owed.
         outcome, request_cancelled = await _finish_critical_write(
-            project_deletion.delete_project_and_forget(db, lxd_service, host, project_name)
+            project_deletion.delete_project_and_forget(
+                db, lxd_service, host, project_name, origin="route", requester=_rbac.user_id
+            )
         )
         if request_cancelled:
-            # The delete landed after the requester left: what it owes still goes out.
-            if _deleted_here(outcome):
-                project_deletion.spawn(_announce_project_deleted(host, project_name, False))
             raise asyncio.CancelledError
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
@@ -963,9 +963,6 @@ async def delete_project(
             result="unknown",
             error_code="LXDOperationUnknownError",
             error_message=str(unknown),
-        )
-        project_deletion.follow_unknown_delete(
-            lxd_service, unknown, partial(_announce_project_deleted, host, project_name, True)
         )
         raise HTTPException(
             status_code=503,
@@ -998,9 +995,7 @@ async def delete_project(
         logger.error(f"Error deleting project {project_name} on {host}: {type(e).__name__}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete project") from e
 
-    if _deleted_here(outcome):
-        await _announce_project_deleted(host, project_name, False)
-    else:
+    if outcome.already_gone and not outcome.settled_pending:
         _invalidate_project_caches()
     verb = "was already deleted from" if outcome.already_gone else "deleted successfully from"
     return {
@@ -1009,34 +1004,3 @@ async def delete_project(
     }
 
 
-def _deleted_here(outcome: "project_deletion.ProjectDeleted") -> bool:
-    """A delete this service carried out, as opposed to a name that was never there.
-
-    note: no event or audit success for a project that did not exist: announcing one would let a
-    caller send a false `project.deleted` to every subscriber for any name it likes.
-    """
-    return not outcome.already_gone or outcome.settled_pending
-
-
-async def _announce_project_deleted(host: str, project_name: str, settled_later: bool) -> None:
-    """Everything a delete owes once the project is gone: events, caches, audit, OrcaHub."""
-    # Announce the lifecycle change to any subscribed add-on.
-    from app.services.webhooks.emitter import emit_resource_event
-
-    await emit_resource_event(
-        event_type="orcastra.project.deleted.v1",
-        cluster_id=host,
-        resource_type="project",
-        resource_name=project_name,
-    )
-    # Clear same-name quota data as well, so a later recreate cannot inherit it.
-    _invalidate_project_caches()
-    activity_logger.log_activity(
-        action="project.delete",
-        target_type="project",
-        target_id=project_name,
-        target_host=host,
-        result="success",
-        details={"settled_after_answer": True} if settled_later else None,
-    )
-    schedule_orcahub_event("project.deleted", host, project_name, project_name, resource_type="PROJECT")

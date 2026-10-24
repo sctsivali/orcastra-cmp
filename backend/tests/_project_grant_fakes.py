@@ -36,8 +36,12 @@ class Policy:
 
 
 class Rule:
+    # Ids well above the policy ids the tests pick, which the fake matches statement ints against.
+    _ids = 9000
+
     def __init__(self, policy_id: int, cluster_id: str, project_name: str, instance_name: str = "*"):
-        self.id = None
+        Rule._ids += 1
+        self.id = Rule._ids
         self.policy_id = policy_id
         self.cluster_id = cluster_id
         self.project_name = project_name
@@ -84,6 +88,10 @@ class GrantSession:
                 if (not ints or r.policy_id in ints)
                 and all(s in (r.cluster_id, r.project_name, r.instance_name) for s in strings)
             ]
+            # `select(TenantPolicyRule.id)` (rule_ids_naming) reads ids, as Postgres answers it.
+            columns = list(getattr(stmt, "selected_columns", []))
+            if len(columns) == 1 and columns[0].key == "id":
+                return _Rows([r.id for r in rows])
             return _Rows(rows)
         if "tenant_access_policies" in sql:
             strings = [v for v in values if isinstance(v, str)]
@@ -177,4 +185,9 @@ def projects_client(service, monkeypatch, session, user=None) -> TestClient:
     app.dependency_overrides[org_scope_dependency] = lambda: None
     app.dependency_overrides[check_read_only_mode] = lambda: None
     app.dependency_overrides[get_db] = _db
-    return TestClient(app, raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    # A delete writes its follow-up row before the DELETE goes out (services/project_delete_store.py).
+    from tests._project_delete_fakes import durable_deletes
+
+    client.deletes = durable_deletes(monkeypatch)
+    return client

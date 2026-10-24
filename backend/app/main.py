@@ -485,6 +485,18 @@ async def lifespan(app: FastAPI):
     except Exception as schedule_err:
         logger.error("Could not start the snapshot schedule loop: %s", schedule_err, exc_info=True)
 
+    # Project deletes their request could not settle (unknown outcome, or a worker that died
+    # between sending the DELETE and reading the answer). Every worker sweeps; rows are leased.
+    # Its own try, for the reason the block above gives.
+    try:
+        from app.core.database import async_session_maker
+        from app.services.project_delete_sweeper import start_project_delete_sweeper
+
+        start_project_delete_sweeper(get_lxd_service, async_session_maker)
+        logger.info("Project delete sweeper started")
+    except Exception as sweeper_err:
+        logger.error("Could not start the project delete sweeper: %s", sweeper_err, exc_info=True)
+
     # The task journal follower (one worker, elected on a Postgres advisory lock) and the prune
     # loop (every worker, one wins each pass). Its own try, for the reason the block above gives.
     try:
@@ -656,8 +668,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     
-    # Cancel follow-ups of project deletes whose outcome was not known when they answered.
-    # Before the database closes: they hold sessions of their own.
+    # Stop the project delete sweeper and cancel the announcements still running. Before the
+    # database closes: they hold sessions of their own. A row left mid-way stays leased until its
+    # lease runs out, then any worker finishes it.
+    try:
+        from app.services.project_delete_sweeper import stop_project_delete_sweeper
+        await stop_project_delete_sweeper()
+    except Exception:
+        pass
     try:
         from app.services import project_deletion
         await project_deletion.shutdown()

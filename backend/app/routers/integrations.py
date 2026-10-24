@@ -5341,7 +5341,7 @@ async def proxy_operation(
                 # its own budget, under the cluster lock and the migration fence, and the access
                 # rules naming the project go with it. Without that a same-name project another
                 # organization creates later inherits the old bound.
-                result_data = await _delete_project_for_proxy(lxd_service, request)
+                result_data = await _delete_project_for_proxy(lxd_service, request, api_key.get("id"))
             else:
                 result_data = await run_blocking(
                     execute_proxy_operation,
@@ -5635,7 +5635,9 @@ async def proxy_operation(
         )
 
 
-async def _delete_project_for_proxy(lxd_service: LXDService, request: "ProxyRequest") -> Dict[str, Any]:
+async def _delete_project_for_proxy(
+    lxd_service: LXDService, request: "ProxyRequest", api_key_id: Optional[str]
+) -> Dict[str, Any]:
     """delete_project through the shared deletion service; the caller only waits on it.
 
     important: shielded (services/project_deletion.delete_for_integration). A disconnecting
@@ -5648,22 +5650,11 @@ async def _delete_project_for_proxy(lxd_service: LXDService, request: "ProxyRequ
     host = request.cluster_id
     task = project_deletion.spawn(
         project_deletion.delete_for_integration(
-            lxd_service, host, name, partial(_announce_proxy_project_deleted, host, request.project, name)
+            lxd_service, host, name, requester=api_key_id, scope_project=request.project
         )
     )
     outcome = await asyncio.shield(task)
     return {"deleted": True, "name": name, "already_deleted": outcome.already_gone}
-
-
-async def _announce_proxy_project_deleted(host: str, project: Optional[str], name: str) -> None:
-    """What a proxy delete owes once the project is gone: the caches and the event."""
-    from app.services.webhooks.emitter import emit_for_proxy_operation
-
-    get_cache_manager().invalidate_after_external_write()
-    get_cache_manager().invalidate_project_caches()
-    await emit_for_proxy_operation(
-        "delete_project", cluster_id=host, project=project, params={"name": name}, result={"deleted": True}
-    )
 
 
 # ============================================

@@ -81,6 +81,7 @@ async def emit_orcahub_event_durable(
     occurred_at: Optional[str] = None,
     state: Optional[str] = None,
     resource_type: str = "INSTANCE",
+    namespace: str = "orcastra-migration",
 ) -> int:
     """Deliver one retry-safe OrcaHub event from a durable caller.
 
@@ -101,7 +102,7 @@ async def emit_orcahub_event_durable(
         if not creds:
             continue
         stable_event_id = str(
-            uuid.uuid5(uuid.NAMESPACE_URL, f"orcastra-migration:{event_id}:{org.id}")
+            uuid.uuid5(uuid.NAMESPACE_URL, f"{namespace}:{event_id}:{org.id}")
         )
         payload = {
             "eventId": stable_event_id,

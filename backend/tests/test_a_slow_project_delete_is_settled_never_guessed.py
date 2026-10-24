@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
 import pytest
@@ -18,7 +19,13 @@ from fastapi import HTTPException
 import requests
 from pylxd.exceptions import LXDAPIException, NotFound
 
-from app.services import project_deletion, project_grants
+from app.services import (
+    project_delete_announce,
+    project_delete_store,
+    project_delete_sweeper,
+    project_deletion,
+    project_grants,
+)
 from app.services.lxd import project_delete
 from app.services.lxd.exceptions import (
     LXDConnectionError,
@@ -158,17 +165,25 @@ class _Service:
         self.deleted.append(f"{host}/{name}")
 
 
-def _no_follow(monkeypatch) -> List[Any]:
-    started: List[Any] = []
-    monkeypatch.setattr(
-        project_deletion, "follow_unknown_delete", lambda service, unknown, finish, **_k: started.append(unknown)
+def _open_row(fakes, name: str, rule_ids, *, state: str = "pending", lease_seconds: float = -1.0,
+              deadline_minutes: float = 10.0, origin: str = "route"):
+    """An open follow-up as an earlier request (or a worker that died) left it."""
+    from app.models.project_delete_models import ProjectDeleteFollowup
+
+    now = datetime.now(timezone.utc)
+    row = ProjectDeleteFollowup(
+        cluster_id=HOST, project_name=name, origin=origin, requester="qa-earlier", event_id=f"ev-{name}",
+        rule_ids=sorted(rule_ids), state=state, lease_until=now + timedelta(seconds=lease_seconds),
+        next_check_at=now - timedelta(seconds=1), deadline_at=now + timedelta(minutes=deadline_minutes),
     )
-    return started
+    fakes.db.sync.add(row)
+    fakes.db.sync.commit()
+    return row
 
 
-def test_an_unknown_outcome_is_503_project_write_unknown_with_no_address(monkeypatch) -> None:
-    started = _no_follow(monkeypatch)
-    session = GrantSession(rules=[Rule(7, HOST, "web")])
+def test_an_unknown_outcome_is_503_and_leaves_a_pending_row_with_the_captured_rules(monkeypatch) -> None:
+    rule = Rule(7, HOST, "web")
+    session = GrantSession(rules=[rule])
     client = projects_client(_Service(LXDOperationUnknownError("delete", "web")), monkeypatch, session, user=partner())
 
     r = client.delete(f"/projects/{HOST}/web")
@@ -176,35 +191,29 @@ def test_an_unknown_outcome_is_503_project_write_unknown_with_no_address(monkeyp
     assert r.status_code == 503, r.text
     assert r.json()["detail"]["code"] == "project_write_unknown"
     assert "100.66" not in r.text and "HTTPSConnectionPool" not in r.text
-    assert len(started) == 1 and started[0].rule_ids
+    rows = client.deletes.rows()
+    assert [(row.state, row.rule_ids, row.origin, row.requester) for row in rows] == [
+        ("pending", [rule.id], "route", "qa-partner")
+    ], "the sweeper, in any worker, owns it from here"
     assert session.deleted == [], "no rule is revoked while the outcome is unknown"
+    assert client.deletes.announced == []
 
 
-def test_a_404_with_nothing_pending_revokes_nothing_and_announces_nothing(monkeypatch) -> None:
+def test_a_404_with_nothing_pending_revokes_nothing_announces_nothing_and_keeps_no_row(monkeypatch) -> None:
     """Anyone with a cluster-wide delete could otherwise strip every organization's staged rules."""
-    from app.services.webhooks import emitter
-
-    events: List[Any] = []
-
-    async def record(**kwargs):
-        events.append(kwargs)
-
-    monkeypatch.setattr(project_deletion, "_pending", {})
     session = GrantSession(rules=[Rule(7, HOST, "web")])
     client = projects_client(_Service(LXDProjectNotFoundError("web")), monkeypatch, session, user=partner())
-    monkeypatch.setattr(emitter, "emit_resource_event", record)
 
     r = client.delete(f"/projects/{HOST}/web")
 
     assert r.status_code == 200, r.text
     assert "already deleted" in r.json()["message"]
     assert session.deleted == [], "a rule another organization staged for the name stays"
-    assert events == [], "no project.deleted for a project this call did not delete"
+    assert client.deletes.announced == [], "no project.deleted for a project this call did not delete"
+    assert client.deletes.rows() == []
 
 
-def test_a_404_that_lands_a_pending_follow_up_revokes_its_captured_rules(monkeypatch) -> None:
-    pending = project_deletion._FollowUp(rule_ids={41})
-    monkeypatch.setattr(project_deletion, "_pending", {(HOST, "web"): pending})
+def test_a_404_that_lands_an_earlier_delete_revokes_only_what_that_delete_captured(monkeypatch) -> None:
     revoked: List[Any] = []
 
     async def forget(_db, **kwargs):
@@ -212,13 +221,47 @@ def test_a_404_that_lands_a_pending_follow_up_revokes_its_captured_rules(monkeyp
         return ""
 
     monkeypatch.setattr(project_grants, "forget_deleted_project", forget)
-    client = projects_client(_Service(LXDProjectNotFoundError("web")), monkeypatch, GrantSession(), user=partner())
+    staged_since = Rule(9, HOST, "web")
+    client = projects_client(
+        _Service(LXDProjectNotFoundError("web")), monkeypatch, GrantSession(rules=[staged_since]), user=partner()
+    )
+    _open_row(client.deletes, "web", {41})
 
     r = client.delete(f"/projects/{HOST}/web")
 
     assert r.status_code == 200, r.text
-    assert revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({41})}]
-    assert project_deletion._pending == {}
+    assert revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({41})}], (
+        "the rule staged after the earlier delete landed belongs to a later project"
+    )
+    (row,) = client.deletes.rows()
+    assert row.state == "settled" and row.rule_ids == [41]
+    assert [(f.event_id, later) for f, later in client.deletes.announced] == [("ev-web", True)]
+
+
+def test_a_real_delete_revokes_every_rule_and_announces_from_its_row(monkeypatch) -> None:
+    session = GrantSession(rules=[Rule(7, HOST, "web")])
+    service = _Service()
+    client = projects_client(service, monkeypatch, session, user=partner())
+
+    r = client.delete(f"/projects/{HOST}/web")
+
+    assert r.status_code == 200, r.text
+    assert service.deleted == [f"{HOST}/web"]
+    assert [d.project_name for d in session.deleted if isinstance(d, Rule)] == ["web"]
+    (row,) = client.deletes.rows()
+    assert row.state == "settled", "settled until its announcement has gone out"
+    ((announced, later),) = client.deletes.announced
+    assert announced.event_id == row.event_id and later is False
+    assert client.deletes.cleared == ["route"]
+
+
+def test_a_refused_delete_keeps_no_row(monkeypatch) -> None:
+    client = projects_client(
+        _Service(LXDOperationError("Only empty projects can be removed")), monkeypatch, GrantSession(), user=partner()
+    )
+    r = client.delete(f"/projects/{HOST}/web")
+    assert r.status_code == 400 and "Only empty projects" in r.text
+    assert client.deletes.rows() == []
 
 
 def test_a_transport_failure_never_reaches_the_body(monkeypatch) -> None:
@@ -226,6 +269,7 @@ def test_a_transport_failure_never_reaches_the_body(monkeypatch) -> None:
     r = client.delete(f"/projects/{HOST}/web")
     assert r.status_code == 503
     assert "100.66" not in r.text
+    assert client.deletes.rows() == []
 
 
 def test_a_cluster_held_by_another_change_is_409_not_a_hang(monkeypatch) -> None:
@@ -241,77 +285,200 @@ def test_a_cluster_held_by_another_change_is_409_not_a_hang(monkeypatch) -> None
     assert r.json()["detail"]["code"] == "cluster_busy"
 
 
-# ── the follow-up ─────────────────────────────────────────────────────────────────────────
+def test_the_route_owes_nothing_after_the_shielded_delete_returns() -> None:
+    import inspect
+
+    from app.routers import projects
+
+    route = inspect.getsource(projects.delete_project)
+    assert "_finish_critical_write(" in route and "project_deletion.delete_project_and_forget(" in route
+    assert "_announce" not in route and "schedule_orcahub_event" not in route, (
+        "everything a delete owes happens inside the shielded call, so a requester that left costs nothing"
+    )
+    service = inspect.getsource(project_deletion.delete_project_and_forget)
+    assert service.count("await _settled(") == 2
+
+
+# ── the intent row and the sweeper ────────────────────────────────────────────────────────
 
 
 class _Probe:
     def __init__(self, answers):
         self.answers = list(answers)
+        self.asked = 0
 
     async def project_exists(self, _host, _name):
-        answer = self.answers.pop(0) if self.answers else self.answers_default
+        self.asked += 1
+        answer = self.answers.pop(0) if self.answers else True
         if isinstance(answer, BaseException):
             raise answer
         return answer
 
-    answers_default = True
 
+@pytest.fixture
+def durable(monkeypatch):
+    from tests._project_delete_fakes import durable_deletes
 
-@asynccontextmanager
-async def _sessions():
-    yield object()
-
-
-@asynccontextmanager
-async def _lock(*_args, **_kwargs):
-    yield
-
-
-async def _run_follow(monkeypatch, probe: _Probe) -> tuple[List[Any], List[str]]:
+    fakes = durable_deletes(monkeypatch)
     revoked: List[Any] = []
-    finished: List[str] = []
 
     async def forget(_db, **kwargs):
         revoked.append(kwargs)
         return ""
 
-    async def finish():
-        finished.append("done")
+    @asynccontextmanager
+    async def lock(*_args, **_kwargs):
+        yield
 
-    monkeypatch.setattr(project_deletion, "FOLLOW_INTERVAL_SECONDS", 0)
-    monkeypatch.setattr(project_deletion, "FOLLOW_WINDOW_SECONDS", 0.2)
-    monkeypatch.setattr(project_deletion, "serialize_cluster_configuration", _lock)
     monkeypatch.setattr(project_grants, "forget_deleted_project", forget)
-    unknown = project_deletion.ProjectDeleteUnknown(HOST, "web", frozenset({11, 12}))
-    assert project_deletion.follow_unknown_delete(probe, unknown, finish, session_maker=_sessions)
-    await asyncio.gather(*list(project_deletion._background))
-    return revoked, finished
+    monkeypatch.setattr(project_delete_sweeper, "serialize_cluster_configuration", lock)
+    fakes.revoked = revoked
+    return fakes
 
 
 @pytest.mark.asyncio
-async def test_once_gone_the_follow_up_revokes_only_the_captured_rules(monkeypatch) -> None:
-    revoked, finished = await _run_follow(monkeypatch, _Probe([True, LXDOperationUnknownError("delete", "web"), False, False]))
-    assert revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({11, 12})}]
-    assert finished == ["done"]
+async def test_a_crash_between_sending_and_the_answer_is_settled_by_another_worker(durable) -> None:
+    opened = await project_delete_store.open_intent(
+        HOST, "web", rule_ids={11, 12}, origin="route", requester="qa-partner", scope_project=None
+    )
+    assert opened.created_here and opened.state == "sending"
+    assert await project_delete_store.claim_due(8) == [], "a live request still holds its lease"
+
+    (row,) = durable.rows()
+    row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)  # the worker died
+    durable.db.sync.commit()
+    (claimed,) = await project_delete_store.claim_due(8)
+
+    outcome = await project_delete_sweeper.finish(_Probe([False, False]), claimed, durable.maker)
+
+    assert outcome == "settled"
+    assert durable.revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({11, 12})}]
+    assert [(f.requester, later) for f, later in durable.announced] == [("qa-partner", True)]
+    assert durable.rows()[0].state == "settled"
 
 
 @pytest.mark.asyncio
-async def test_a_same_name_project_back_under_the_lock_keeps_every_rule(monkeypatch) -> None:
-    revoked, finished = await _run_follow(monkeypatch, _Probe([False, True]))
-    assert revoked == [] and finished == []
+async def test_a_same_name_project_back_under_the_lock_keeps_every_rule(durable) -> None:
+    _open_row(durable, "web", {11})
+    (claimed,) = await project_delete_store.claim_due(8)
+    assert await project_delete_sweeper.finish(_Probe([False, True]), claimed, durable.maker) == "superseded"
+    assert durable.revoked == [] and durable.announced == []
+    assert durable.rows()[0].state == "expired"
 
 
 @pytest.mark.asyncio
-async def test_still_present_when_the_window_ends_revokes_nothing(monkeypatch) -> None:
-    revoked, finished = await _run_follow(monkeypatch, _Probe([]))
-    assert revoked == [] and finished == []
+async def test_still_present_it_waits_and_at_the_deadline_expires_with_nothing_revoked(durable) -> None:
+    _open_row(durable, "web", {11})
+    (claimed,) = await project_delete_store.claim_due(8)
+    assert await project_delete_sweeper.finish(_Probe([True]), claimed, durable.maker) == "waiting"
+    (row,) = durable.rows()
+    assert row.state == "pending" and row.lease_until is None
+    assert await project_delete_store.claim_due(8) == [], "rechecked later, not on every pass"
+
+    row.next_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    row.deadline_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    durable.db.sync.commit()
+    (claimed,) = await project_delete_store.claim_due(8)
+    probe = _Probe([False])
+    assert await project_delete_sweeper.finish(probe, claimed, durable.maker) == "expired"
+    assert probe.asked == 0 and durable.revoked == []
+
+
+@pytest.mark.asyncio
+async def test_a_pass_takes_one_row_per_cluster_and_leases_it(durable) -> None:
+    _open_row(durable, "a", {1})
+    _open_row(durable, "b", {2})
+    from app.models.project_delete_models import ProjectDeleteFollowup
+
+    other = durable.rows()[1]
+    other.cluster_id = "other"
+    durable.db.sync.commit()
+    first = await project_delete_store.claim_due(8)
+    assert sorted(f.cluster_id for f in first) == [HOST, "other"]
+    _open_row(durable, "c", {3})
+    second = await project_delete_store.claim_due(8)
+    assert [f.project_name for f in second] == ["c"], "leased rows are not claimed twice"
+    assert ProjectDeleteFollowup
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_joins_the_open_row_and_the_caps_bound_the_rest(durable, monkeypatch) -> None:
+    monkeypatch.setattr(project_delete_store, "MAX_OPEN_PER_CLUSTER", 2)
+
+    async def intent(host: str, name: str, ids):
+        return await project_delete_store.open_intent(
+            host, name, rule_ids=ids, origin="route", requester=None, scope_project=None
+        )
+
+    a = await intent(HOST, "a", {1})
+    joined = await intent(HOST, "a", {2})
+    assert a.created_here and not joined.created_here
+    assert joined.id == a.id and joined.rule_ids == frozenset({1}), (
+        "a joining call stores none of its rules unless its own delete ends unknown"
+    )
+    await project_delete_store.mark_pending(joined, merge_ids={2})
+    assert durable.rows()[0].rule_ids == [1, 2]
+    assert await intent(HOST, "b", {3}) is not None
+    assert await intent(HOST, "c", {4}) is None, "one cluster cannot take every slot"
+    assert await intent("other", "c", {4}) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_cluster_the_breaker_gave_up_on_is_not_probed(monkeypatch) -> None:
+    from app.services.lxd import health
+
+    probe = _Probe([False])
+    monkeypatch.setattr(health, "is_tripped", lambda host: host == HOST)
+    assert await project_delete_sweeper._exists(probe, HOST, "web") is None
+    assert probe.asked == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_announcement_stays_settled_for_a_retry_with_the_same_event_id(monkeypatch) -> None:
+    from app.services import orcahub_webhook
+    from app.services.webhooks import emitter
+    from tests._project_delete_fakes import durable_deletes
+
+    fakes = durable_deletes(monkeypatch, record_announcements=False)
+    _open_row(fakes, "web", {11}, state="settled")
+    events: List[str] = []
+    audits: List[str] = []
+    fail = {"orcahub": True}
+
+    async def webhook(**kwargs):
+        events.append(kwargs["event_id"])
+        return 1
+
+    async def orcahub(**kwargs):
+        if fail["orcahub"]:
+            raise RuntimeError("OrcaHub answered 502")
+        return 1
+
+    monkeypatch.setattr(emitter, "emit_resource_event", webhook)
+    monkeypatch.setattr(orcahub_webhook, "emit_orcahub_event_durable", orcahub)
+    monkeypatch.setattr(
+        project_delete_announce, "get_activity_logger",
+        lambda: type("L", (), {"log_activity": lambda self, **kw: audits.append(kw["actor_user_id"])})(),
+    )
+
+    (claimed,) = await project_delete_store.claim_due(8)
+    assert await project_delete_sweeper.finish(_Probe([]), claimed, fakes.maker) == "announced"
+    (row,) = fakes.rows()
+    assert row.state == "settled" and "502" in row.last_error and audits == [], (
+        "the audit line waits until the webhook and OrcaHub have both gone out"
+    )
+
+    fail["orcahub"] = False
+    row.next_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    fakes.db.sync.commit()
+    (claimed,) = await project_delete_store.claim_due(8)
+    await project_delete_sweeper.finish(_Probe([]), claimed, fakes.maker)
+    assert fakes.rows()[0].state == "done"
+    assert events == ["evt_ev-web", "evt_ev-web"], "the webhook dedupes a retry by the row's event id"
+    assert audits == ["qa-earlier"], "attributed to the requester even after a restart"
 
 
 def test_the_captured_rule_filter_is_part_of_the_revoke_query() -> None:
-    from sqlalchemy import and_, select
-
-    from app.models.db_models import TenantPolicyRule
-
     seen: List[str] = []
 
     class _Recording(GrantSession):
@@ -325,51 +492,6 @@ def test_the_captured_rule_filter_is_part_of_the_revoke_query() -> None:
         )
     )
     assert "tenant_policy_rules.id IN" in seen[0]
-    assert and_ and select and TenantPolicyRule  # imported for the statement shape above
-
-
-@pytest.mark.asyncio
-async def test_the_follow_ups_are_bounded_and_one_per_project(monkeypatch) -> None:
-    started: List[Any] = []
-    monkeypatch.setattr(project_deletion, "_pending", {})
-    monkeypatch.setattr(project_deletion, "spawn", lambda coro: (coro.close(), started.append(1), _Done())[2])
-
-    def unknown(host: str, name: str, ids):
-        return project_deletion.ProjectDeleteUnknown(host, name, frozenset(ids))
-
-    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "a", {1}), lambda: None)
-    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "a", {2}), lambda: None)
-    assert len(started) == 1, "a repeat joins the running follow-up"
-    assert project_deletion._pending[(HOST, "a")].rule_ids == {1, 2}
-    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "b", {3}), lambda: None)
-    assert project_deletion.follow_unknown_delete(_Probe([]), unknown(HOST, "c", {4}), lambda: None) is False, (
-        "one cluster cannot take every slot"
-    )
-    assert project_deletion.follow_unknown_delete(_Probe([]), unknown("other", "c", {4}), lambda: None)
-
-
-class _Done:
-    def add_done_callback(self, _callback) -> None:
-        return None
-
-    def cancel(self) -> None:
-        return None
-
-
-@pytest.mark.asyncio
-async def test_a_cluster_the_breaker_gave_up_on_is_not_probed(monkeypatch) -> None:
-    from app.services.lxd import health
-
-    probes: List[str] = []
-
-    class _Counting:
-        async def project_exists(self, host, name):
-            probes.append(host)
-            return False
-
-    monkeypatch.setattr(health, "is_tripped", lambda host: host == HOST)
-    assert await project_deletion._exists(_Counting(), HOST, "web") is None
-    assert probes == []
 
 
 # ── the proxy door ────────────────────────────────────────────────────────────────────────
@@ -385,49 +507,44 @@ def test_a_proxy_failure_never_carries_transport_text() -> None:
     assert "Only empty projects" in _proxy_error_text(refusal, "invalid_request", "delete_project", HOST)
 
 
+@asynccontextmanager
+async def _sessions():
+    yield object()
+
+
 @pytest.mark.asyncio
-async def test_the_proxy_deletes_through_the_shared_delete_and_follows_an_unknown_one(monkeypatch) -> None:
+async def test_the_proxy_deletes_through_the_shared_delete_as_its_own_origin(monkeypatch) -> None:
     from app.core import database
     from app.routers import integrations
-    from tests._project_grant_fakes import NoCache
 
     calls: List[Any] = []
-    followed: List[Any] = []
-    announced: List[str] = []
 
-    async def shared(db, service, host, name):
-        calls.append((host, name))
+    async def shared(db, service, host, name, **kwargs):
+        calls.append((host, name, kwargs))
         if name == "slow":
             raise project_deletion.ProjectDeleteUnknown(host, name, frozenset({3}))
         if name == "never-there":
             return project_deletion.ProjectDeleted(already_gone=True, revoke_note="")
         return project_deletion.ProjectDeleted(already_gone=False, revoke_note="")
 
-    async def announce(host, project, name):
-        announced.append(name)
-
     monkeypatch.setattr(project_deletion, "delete_project_and_forget", shared)
-    monkeypatch.setattr(project_deletion, "follow_unknown_delete", lambda s, u, f, **_k: followed.append(u))
     monkeypatch.setattr(database, "async_session_maker", _sessions)
-    monkeypatch.setattr(integrations, "get_cache_manager", lambda: NoCache())
-    monkeypatch.setattr(integrations, "_announce_proxy_project_deleted", announce)
 
     def request(name: str):
         return integrations.ProxyRequest(
             cluster_id=HOST, operation="delete_project", project="default", params={"name": name}
         )
 
-    done = await integrations._delete_project_for_proxy(object(), request("web"))
+    done = await integrations._delete_project_for_proxy(object(), request("web"), "oak_qa")
     assert done == {"deleted": True, "name": "web", "already_deleted": False}
-    gone = await integrations._delete_project_for_proxy(object(), request("never-there"))
+    gone = await integrations._delete_project_for_proxy(object(), request("never-there"), "oak_qa")
     assert gone["already_deleted"] is True
     with pytest.raises(project_deletion.ProjectDeleteUnknown):
-        await integrations._delete_project_for_proxy(object(), request("slow"))
-    assert calls == [(HOST, "web"), (HOST, "never-there"), (HOST, "slow")]
-    assert [u.rule_ids for u in followed] == [frozenset({3})]
-    assert announced == ["web"], "only a project this call deleted is announced"
+        await integrations._delete_project_for_proxy(object(), request("slow"), "oak_qa")
+    assert [c[:2] for c in calls] == [(HOST, "web"), (HOST, "never-there"), (HOST, "slow")]
+    assert calls[0][2] == {"origin": "proxy", "requester": "oak_qa", "scope_project": "default"}
     with pytest.raises(Exception):
-        await integrations._delete_project_for_proxy(object(), request(".."))
+        await integrations._delete_project_for_proxy(object(), request(".."), "oak_qa")
     assert len(calls) == 3, "a bad name never reaches the delete"
 
 
@@ -439,39 +556,23 @@ async def test_a_proxy_caller_that_leaves_does_not_cut_the_delete_short(monkeypa
     release = asyncio.Event()
     finished: List[str] = []
 
-    async def slow_delete(db, service, host, name):
+    async def slow_delete(db, service, host, name, **_kwargs):
         await release.wait()
         finished.append(name)
         return project_deletion.ProjectDeleted(already_gone=False, revoke_note="")
 
-    async def announce(host, project, name):
-        finished.append(f"announced {name}")
-
     monkeypatch.setattr(project_deletion, "delete_project_and_forget", slow_delete)
     monkeypatch.setattr(database, "async_session_maker", _sessions)
-    monkeypatch.setattr(integrations, "_announce_proxy_project_deleted", announce)
     request = integrations.ProxyRequest(cluster_id=HOST, operation="delete_project", project="default", params={"name": "web"})
 
-    caller = asyncio.ensure_future(integrations._delete_project_for_proxy(object(), request))
+    caller = asyncio.ensure_future(integrations._delete_project_for_proxy(object(), request, "oak_qa"))
     await asyncio.sleep(0)
     caller.cancel()
     with pytest.raises(asyncio.CancelledError):
         await caller
     release.set()
     await asyncio.gather(*list(project_deletion._background))
-    assert finished == ["web", "announced web"]
-
-
-def test_a_dashboard_delete_whose_requester_left_still_announces(monkeypatch) -> None:
-    import inspect
-
-    from app.routers import projects
-
-    source = inspect.getsource(projects.delete_project)
-    cancelled = source.index("if request_cancelled:")
-    assert source.index("project_deletion.spawn(_announce_project_deleted", cancelled) < source.index(
-        "raise asyncio.CancelledError", cancelled
-    )
+    assert finished == ["web"]
 
 
 def test_a_dot_name_is_the_callers_400_and_never_reaches_lxd() -> None:

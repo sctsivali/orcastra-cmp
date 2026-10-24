@@ -161,6 +161,9 @@ async def test_project_delete_blocks_concurrent_migration_admission_until_daemon
         assert cluster_lock.locked()
         return frozenset()
 
+    from tests._project_delete_fakes import durable_deletes
+
+    durable_deletes(monkeypatch)
     monkeypatch.setattr(project_deletion, "serialize_cluster_configuration", configuration_lock)
     monkeypatch.setattr(project_deletion, "assert_project_not_migration_fenced", fence)
     monkeypatch.setattr(projects, "verify_cluster_access", lambda _host: None)
@@ -178,7 +181,7 @@ async def test_project_delete_blocks_concurrent_migration_admission_until_daemon
             project_name="source",
             lxd_service=ProjectService(),
             _=None,
-            _rbac=object(),
+            _rbac=SimpleNamespace(user_id="qa-admin"),
             db=db,
         )
     )

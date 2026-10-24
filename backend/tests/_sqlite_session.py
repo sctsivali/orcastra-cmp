@@ -17,6 +17,13 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 
 _PARTIAL_INDEXES = {
+    "project_delete_followups": [
+        (
+            "uq_project_delete_followup_open",
+            "CREATE UNIQUE INDEX uq_project_delete_followup_open ON project_delete_followups "
+            "(cluster_id, project_name) WHERE state IN ('sending', 'pending')",
+        )
+    ],
     "organization_clusters": [
         (
             "uq_org_cluster_null",

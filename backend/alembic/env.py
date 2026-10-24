@@ -23,8 +23,10 @@ from app.models import db_models
 # important: a model module Base.metadata never sees produces no autogenerate diff and no
 # schema-parity failure, so a new table would simply never exist. Every module holding
 # tables must be imported here.
+from app.models import api_key_usage_models  # noqa: F401
 from app.models import extension_models  # noqa: F401
 from app.models import migration_models  # noqa: F401
+from app.models import project_delete_models  # noqa: F401
 from app.models import snapshot_schedule_models  # noqa: F401
 from app.models import task_journal_models  # noqa: F401
 from app.models import trust_cleanup_models  # noqa: F401
