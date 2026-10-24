@@ -345,7 +345,9 @@ async def test_a_crash_between_sending_and_the_answer_is_settled_by_another_work
     assert await project_delete_store.claim_due(8) == [], "a live request still holds its lease"
 
     (row,) = durable.rows()
-    row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)  # the worker died
+    # The worker died: its lease (and the first check, set to the same time) ran out.
+    row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    row.next_check_at = row.lease_until
     durable.db.sync.commit()
     (claimed,) = await project_delete_store.claim_due(8)
 
@@ -355,6 +357,29 @@ async def test_a_crash_between_sending_and_the_answer_is_settled_by_another_work
     assert durable.revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({11, 12})}]
     assert [(f.requester, later) for f, later in durable.announced] == [("qa-partner", True)]
     assert durable.rows()[0].state == "settled"
+
+
+@pytest.mark.asyncio
+async def test_a_row_left_by_a_dead_request_is_claimed_again_after_a_wait(durable) -> None:
+    # Found live: the first pass found the project still there and released the row, which cleared
+    # its lease; a `sending` row was claimable only by an expired lease, so it was never taken again.
+    await project_delete_store.open_intent(
+        HOST, "web", rule_ids={11}, origin="route", requester="qa-partner", scope_project=None
+    )
+    (row,) = durable.rows()
+    row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    row.next_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    durable.db.sync.commit()
+    (claimed,) = await project_delete_store.claim_due(8)
+    assert await project_delete_sweeper.finish(_Probe([True]), claimed, durable.maker) == "waiting"
+    (row,) = durable.rows()
+    assert row.state == "pending", "claimed once, the row belongs to the sweeper"
+
+    row.next_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    durable.db.sync.commit()
+    (again,) = await project_delete_store.claim_due(8)
+    assert await project_delete_sweeper.finish(_Probe([False, False]), again, durable.maker) == "settled"
+    assert durable.revoked == [{"cluster_id": HOST, "project_name": "web", "only_rule_ids": frozenset({11})}]
 
 
 @pytest.mark.asyncio

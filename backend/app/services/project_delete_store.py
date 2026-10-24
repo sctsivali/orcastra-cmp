@@ -265,15 +265,16 @@ async def retry_later(followup_id: Optional[int], delay: timedelta, error: Optio
 async def claim_due(limit: int) -> List[Followup]:
     """Lease up to `limit` rows that are due, at most one per cluster, for this worker.
 
-    A `sending` row is due only once its lease ran out: its request is gone (the worker crashed or
-    restarted between sending the DELETE and reading the answer), and nobody else will settle it.
+    A `sending` row is due only once its request's lease ran out: that request is gone (its worker
+    crashed or restarted between sending the DELETE and reading the answer), and nobody else will
+    settle it. Claimed, it becomes `pending`, so a later pass can take it again.
     """
     now = _now()
     unleased = or_(ProjectDeleteFollowup.lease_until.is_(None), ProjectDeleteFollowup.lease_until < now)
-    due = or_(
-        and_(ProjectDeleteFollowup.state == "pending", ProjectDeleteFollowup.next_check_at <= now, unleased),
-        and_(ProjectDeleteFollowup.state == "sending", ProjectDeleteFollowup.lease_until < now),
-        and_(ProjectDeleteFollowup.state == "settled", ProjectDeleteFollowup.next_check_at <= now, unleased),
+    due = and_(
+        ProjectDeleteFollowup.state.in_(("sending", "pending", "settled")),
+        ProjectDeleteFollowup.next_check_at <= now,
+        unleased,
     )
     async with _maker()() as db:
         rows = (
@@ -291,6 +292,8 @@ async def claim_due(limit: int) -> List[Followup]:
             if row.cluster_id in clusters:
                 continue
             clusters.add(row.cluster_id)
+            if row.state == "sending":
+                row.state = "pending"
             row.locked_by = WORKER_ID
             row.lease_until = now + LEASE
             row.attempts = int(row.attempts or 0) + 1
