@@ -11,6 +11,7 @@
 #   CI_LOCAL_BASE=github/dev         lint the messages of CI_LOCAL_BASE..HEAD (default: the upstream)
 #   CI_LOCAL_LOG_DIR=path            one log per step (default: under $TMPDIR, printed at the end)
 #   CI_LOCAL_POSTGRES=skip           skip the throwaway journal database (it needs docker)
+#   CI_LOCAL_PARALLEL=1              run the backend stage alongside the Node stages, as CI runs its jobs
 #
 # note: this tests the working tree while CI tests the commit, so a run with uncommitted or
 # untracked files says so up front. Toolchains live in ~/.cache/orcastra-ci-local, never in the repo.
@@ -26,6 +27,7 @@ PROJECTS=${E2E_PROJECTS:-desktop-light mobile-dark desktop-dark mobile-light}
 failed=0
 STEP_LOG=
 PG_CONTAINER=
+BACKEND_PID=
 for stage in $STAGES; do
   case $stage in
     commits | guards | backend | frontend | e2e) ;;
@@ -40,7 +42,8 @@ if command -v flock > /dev/null && ! flock -n 9; then
   echo "another ci-local run is in progress" >&2
   exit 2
 fi
-trap '[ -n "$PG_CONTAINER" ] && docker rm -f "$PG_CONTAINER" > /dev/null 2>&1' EXIT
+trap '[ -n "$BACKEND_PID" ] && kill -TERM -- "-$BACKEND_PID" 2> /dev/null
+  [ -n "$PG_CONTAINER" ] && docker rm -f "$PG_CONTAINER" > /dev/null 2>&1' EXIT
 trap 'exit 130' INT TERM
 
 note() { printf '%s\n' "$*" | tee -a "$LOG/summary.txt"; }
@@ -211,9 +214,41 @@ stage_e2e() {
   done
 }
 
-note "ci-local on $(git rev-parse --short HEAD), stages:$STAGES"
+# note: the backend stage gets its own process group (set -m) so the EXIT trap can stop pytest
+# and the journal container with it; its failure count comes back through a file.
+backend_in_background() {
+  set -m
+  # shellcheck disable=SC2030 # the subshell keeps its own count on purpose
+  (
+    failed=0 PG_CONTAINER=
+    trap '[ -n "$PG_CONTAINER" ] && docker rm -f "$PG_CONTAINER" > /dev/null 2>&1' EXIT
+    trap 'exit 130' INT TERM
+    use_python && stage_backend
+    echo "$failed" > "$LOG/backend.failed"
+  ) &
+  BACKEND_PID=$!
+  set +m
+}
+
+backend_result() {
+  local n
+  wait "$BACKEND_PID"
+  BACKEND_PID=
+  n=$(cat "$LOG/backend.failed" 2> /dev/null)
+  # shellcheck disable=SC2031 # this is the parent's count; the child's arrives in $n
+  case $n in
+    '' | *[!0-9]*) failed=$((failed + 1)); note "FAIL  backend stage ended without a result" ;;
+    *) failed=$((failed + n)) ;;
+  esac
+}
+
+parallel=0
+[ "${CI_LOCAL_PARALLEL:-}" = 1 ] && selected backend && parallel=1
+note "ci-local on $(git rev-parse --short HEAD), stages:$STAGES$([ "$parallel" = 1 ] && printf '(backend in parallel)')"
 [ -n "$(git status --porcelain)" ] \
   && note "warning: uncommitted or untracked files are part of this run; CI would test the commit alone"
+rm -f "$LOG/backend.failed"
+[ "$parallel" = 1 ] && backend_in_background
 
 node_ok=1
 if selected commits || selected guards || selected frontend || selected e2e; then
@@ -229,11 +264,12 @@ for stage in commits guards backend frontend e2e; do
   case $stage in
     commits) stage_commits ;;
     guards) stage_guards ;;
-    backend) use_python && stage_backend ;;
+    backend) [ "$parallel" = 1 ] || { use_python && stage_backend; } ;;
     frontend) stage_frontend ;;
     e2e) stage_e2e ;;
   esac
 done
+[ -n "$BACKEND_PID" ] && backend_result
 
 note "logs: $LOG"
 if [ "$failed" -eq 0 ]; then
