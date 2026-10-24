@@ -68,6 +68,31 @@ async def test_the_proxies_answer_404_cluster_not_registered_not_an_outage(regis
     assert refused.value.detail["code"] == "cluster_not_registered"
 
 
+@pytest.mark.asyncio
+async def test_a_fan_out_reports_a_stale_id_as_not_registered_without_looking_it_up(registry, monkeypatch) -> None:
+    # The /sync poll fanned out to nuc-2 and blitz01 and logged a Vault 404 for each, every poll.
+    monkeypatch.setattr(integrations.health, "is_tripped", lambda cluster_id: False)
+    fetched: List[str] = []
+
+    def fetch(ctx: Any, cluster_id: str) -> List[Dict[str, Any]]:
+        fetched.append(cluster_id)
+        return [{"cluster_id": cluster_id}]
+
+    fanout = await integrations._gather_per_cluster(fetch, None, {"nuc2", "nuc-2", "blitz01"}, "projects")
+    assert fetched == ["nuc2"]
+    assert fanout.items == [{"cluster_id": "nuc2"}]
+    assert sorted(fanout.unreachable, key=lambda m: m["cluster_id"]) == [
+        {"cluster_id": "blitz01", "reason": "not registered"},
+        {"cluster_id": "nuc-2", "reason": "not registered"},
+    ]
+
+    registry["ids"] = None
+    fetched.clear()
+    fanout = await integrations._gather_per_cluster(fetch, None, ["nuc2", "nuc-2"], "projects")
+    assert sorted(fetched) == ["nuc-2", "nuc2"], "an unreadable registry must not hide a cluster"
+    assert fanout.unreachable == []
+
+
 def test_both_proxy_doors_check_registration_right_after_the_grant() -> None:
     import inspect
 

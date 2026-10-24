@@ -1450,14 +1450,22 @@ async def _gather_per_cluster(
 
     important: every `unreachable` reason is sanitized. Raw exception text carries the Vault
     address, KV paths and certificate paths, and this body goes to an external key holder.
+
+    note: a grant can name an id no cluster is registered under any more. It is reported as
+    not registered without a fetch: looking it up only logged a Vault 404 per call, and the
+    /sync poll of a key holding two such ids did that every few minutes.
     """
     misses: List[Dict[str, str]] = []
+    cluster_ids = list(cluster_ids)
+    unregistered = await _unregistered_cluster_ids(cluster_ids)
 
     def missed(cluster_id: str, reason: Any) -> List[Dict[str, Any]]:
         misses.append({"cluster_id": cluster_id, "reason": sanitize_error(reason, limit=200)})
         return []
 
     async def one(cluster_id: str) -> List[Dict[str, Any]]:
+        if cluster_id in unregistered:
+            return missed(cluster_id, "not registered")
         if skip_tripped and health.is_tripped(cluster_id):
             logger.debug(f"sync: skipping {label} for tripped cluster {cluster_id}")
             return missed(cluster_id, health.get_reason(cluster_id) or "recently unreachable")
