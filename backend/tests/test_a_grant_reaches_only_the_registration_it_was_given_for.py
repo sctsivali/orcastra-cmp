@@ -385,3 +385,14 @@ def test_a_creator_still_manages_a_key_whose_every_grant_is_paused_and_no_one_el
     assert source.index("cache.set(") < source.index("_key_in_scope(m, scope, generations, user.email)"), (
         "the creator rule runs after the cache every caller with this scope shares"
     )
+
+
+def test_every_door_that_refuses_a_missing_grant_answers_a_paused_one_with_404() -> None:
+    # Found live: raw-proxy and proxy look the grant up themselves, so a paused nuc-2 grant
+    # answered 403 "No permission" where the published contract says 404 cluster_not_registered.
+    from app.routers import integrations
+
+    source = inspect.getsource(integrations)
+    refusals = source.count('detail=f"No permission for cluster {')
+    guarded = source.count("refuse_a_paused_grant(api_key, ")
+    assert refusals == 5 and guarded == refusals, (refusals, guarded)

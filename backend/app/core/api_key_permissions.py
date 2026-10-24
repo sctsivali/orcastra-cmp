@@ -40,6 +40,30 @@ def granted_level_name(permissions: Optional[List[str]]) -> Optional[str]:
     return next((name for name, rank in PERMISSION_LEVELS.items() if rank == level), None)
 
 
+def refuse_a_paused_grant(api_key: Dict[str, Any], cluster_id: str) -> None:
+    """404 `cluster_not_registered` when the key holds `cluster_id` only through a paused grant.
+
+    A paused grant was made for a registration of the id that has ended (services/
+    cluster_generations.py), so the cluster it was granted is gone: the same answer an id no cluster
+    is registered under gets. The key already holds the id, so this discloses nothing. Call it
+    wherever a missing grant would otherwise answer 403.
+    """
+    live = {g.get("cluster_id") for g in api_key.get("cluster_permissions", []) if isinstance(g, dict)}
+    if cluster_id in live:
+        return
+    if any(
+        isinstance(held, dict) and held.get("cluster_id") == cluster_id
+        for held in api_key.get("_held_cluster_permissions", [])
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "cluster_not_registered",
+                "message": f"Cluster '{cluster_id}' is not registered with this control plane",
+            },
+        )
+
+
 def assert_cluster_permission(
     api_key: Dict[str, Any], cluster_id: str, required: str
 ) -> Dict[str, Any]:
@@ -54,20 +78,7 @@ def assert_cluster_permission(
     }
     grant = grants.get(cluster_id)
     if grant is None:
-        # A grant the key holds for a registration of this id that has ended (services/
-        # cluster_generations.py): the same 404 an id no cluster is registered under gets, since
-        # the cluster it was granted is gone. The key already holds the id, so this discloses nothing.
-        if any(
-            isinstance(held, dict) and held.get("cluster_id") == cluster_id
-            for held in api_key.get("_held_cluster_permissions", [])
-        ):
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "code": "cluster_not_registered",
-                    "message": f"Cluster '{cluster_id}' is not registered with this control plane",
-                },
-            )
+        refuse_a_paused_grant(api_key, cluster_id)
         raise HTTPException(status_code=403, detail=f"No permission for cluster {cluster_id}")
 
     held = grant.get("permissions", ["read"])

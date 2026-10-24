@@ -99,7 +99,7 @@ from app.core.api_key_expiry import (
     tally_keys,
     utc_isoformat,
 )
-from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, granted_level
+from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, granted_level, refuse_a_paused_grant
 from app.core.api_key_capabilities import (
     policy_keys_in_config,
     policy_keys_in_raw_body,
@@ -4479,6 +4479,7 @@ async def get_integration_operation(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     if cluster_id not in _clusters_for_key(api_key, cluster_id):
+        refuse_a_paused_grant(api_key, cluster_id)
         raise HTTPException(status_code=403, detail=f"No permission for cluster {cluster_id}")
     allowed = _granted_projects(api_key, cluster_id)
     if allowed is not None and project not in allowed:
@@ -4625,6 +4626,7 @@ async def raw_proxy(
         }
         
         if request.cluster_id not in cluster_permissions:
+            refuse_a_paused_grant(api_key, request.cluster_id)
             raise HTTPException(
                 status_code=403,
                 detail=f"No permission for cluster {request.cluster_id}"
@@ -5110,6 +5112,7 @@ async def proxy_operation(
         }
         
         if request.cluster_id not in cluster_permissions:
+            refuse_a_paused_grant(api_key, request.cluster_id)
             raise HTTPException(
                 status_code=403,
                 detail=f"No permission for cluster {request.cluster_id}"
@@ -7321,6 +7324,7 @@ async def provision_tenant_access(
     # own org and hand its tenants real access. Same check as revoke_tenant_access.
     cluster_permissions = {p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])}
     if body.cluster_id not in cluster_permissions:
+        refuse_a_paused_grant(api_key, body.cluster_id)
         raise HTTPException(status_code=403, detail=f"No permission for cluster {body.cluster_id}")
     allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
     if body.project_name not in allowed_projects and "*" not in allowed_projects:
@@ -7703,6 +7707,7 @@ async def revoke_tenant_access(
     # Scope check: same cluster/project allow-list the raw proxy uses.
     cluster_permissions = {p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])}
     if body.cluster_id not in cluster_permissions:
+        refuse_a_paused_grant(api_key, body.cluster_id)
         raise HTTPException(status_code=403, detail=f"No permission for cluster {body.cluster_id}")
     allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
     if body.project_name not in allowed_projects and "*" not in allowed_projects:
