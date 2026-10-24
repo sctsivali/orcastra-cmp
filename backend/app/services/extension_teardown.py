@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_cache_manager
 from app.routers.integrations import VAULT_INTEGRATIONS_PATH
+from app.services import api_key_usage
 from app.services.extension_credentials import (
     destroy_install_credential,
     destroy_signing_secret,
@@ -109,6 +110,10 @@ INSTALL_ARTEFACTS: Dict[str, Artefact] = {
         "a grant whose principal is a key that no longer exists would authorize nothing "
         "identifiable, and would survive a re-registration of the same cluster id",
     ),
+    "postgres:api_key_usage": Artefact(
+        "postgres", "record_use", "teardown_install",
+        "when the credential last authenticated, kept apart from the key document",
+    ),
     "opensearch:audit_records": Artefact(
         "opensearch", "log_activity", None,
         "kept deliberately. They are the record that the installation existed, and the tenant "
@@ -142,6 +147,10 @@ async def teardown_install(
     if previous_api_key_id:
         if await asyncio.to_thread(lambda: destroy_install_credential(vault_client, previous_api_key_id)):
             done.append("vault:superseded_api_key")
+
+    for key_id in filter(None, (api_key_id, previous_api_key_id)):
+        await api_key_usage.forget(key_id)
+    done.append("postgres:api_key_usage")
 
     # important: these two swallow their own failures, so calling them proves nothing. They are
     # the entries that matter most, because a Vault-side failure leaves real secret material

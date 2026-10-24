@@ -293,3 +293,76 @@ def test_what_validate_reports_is_never_written_back_into_a_grant() -> None:
         assert 'model_dump(exclude={"registered"})' in inspect.getsource(route), route.__name__
     grant = integrations.ClusterPermissionRequest(cluster_id="nuc2", permissions=["read"], registered=False)
     assert "registered" not in grant.model_dump(exclude={"registered"})
+
+
+@pytest.mark.asyncio
+async def test_a_grant_edit_reads_what_the_key_holds_under_its_lock_and_lets_go_before_the_mappings(
+    monkeypatch,
+) -> None:
+    # A cleanup removing an id between an unlocked read of the held ids and the locked write let the
+    # write put that id back, because it still counted as held.
+    events: List[Any] = []
+    stored = {
+        "id": "oak_x", "name": "QA", "app_name": "QA", "created_at": "2026-10-24T00:00:00+00:00",
+        "cluster_permissions": [{"cluster_id": "nuc2", "permissions": ["read"], "projects": ["*"]}],
+    }
+
+    @asynccontextmanager
+    async def lock(_db, key_id):
+        events.append("lock")
+        yield
+        events.append("unlock")
+
+    async def authorize(*_a, **_k):
+        return dict(stored)
+
+    async def refuse(requested, already_held):
+        events.append(("refuse", sorted(already_held)))
+
+    async def commit(_db):
+        events.append("commit")
+
+    async def projects_exist(*_a, **_k):
+        events.append("projects")
+
+    class _Vault:
+        def vault_kv_put(self, path, data):
+            events.append("write")
+
+    def read(_vault, key_id, use_cache=True):
+        events.append(("read", use_cache))
+        return dict(stored), "hash"
+
+    def mappings(*_a):
+        events.append("mappings")
+        return []
+
+    class _Cache:
+        def delete_pattern(self, *_a):
+            return None
+
+    async def no_usage(keys):
+        return keys
+
+    monkeypatch.setattr(integrations, "serialize_key_ownership", lock)
+    monkeypatch.setattr(integrations, "_authorize_api_key", authorize)
+    monkeypatch.setattr(integrations, "refuse_grant_edit", lambda metadata: None)
+    monkeypatch.setattr(integrations, "get_current_allowed_clusters", lambda: None)
+    monkeypatch.setattr(integrations, "_refuse_new_grants_to_unregistered_clusters", refuse)
+    monkeypatch.setattr(integrations, "release_key_locks", commit)
+    monkeypatch.setattr(integrations, "_assert_granted_projects_exist", projects_exist)
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: _Vault())
+    monkeypatch.setattr(integrations, "get_api_key_from_vault", read)
+    monkeypatch.setattr(integrations, "get_user_mappings_from_vault", mappings)
+    monkeypatch.setattr(integrations, "get_cache_manager", lambda: _Cache())
+    monkeypatch.setattr(integrations, "evict_api_key_cache", lambda key_id: None)
+    monkeypatch.setattr(integrations, "_with_usage", no_usage)
+
+    request = [integrations.ClusterPermissionRequest(cluster_id="nuc2", permissions=["write"], projects=["*"])]
+    await integrations.update_api_key_permissions(
+        "oak_x", request, _=None, _rbac=object(), lxd_service=object(), db=object()
+    )
+
+    assert events == [
+        "projects", "lock", ("read", False), ("refuse", ["nuc2"]), "write", "commit", "unlock", "mappings",
+    ]

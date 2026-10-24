@@ -21,7 +21,7 @@ import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd.proxy_path_params import assert_path_params
-from app.services import project_deletion
+from app.services import api_key_usage, project_deletion
 from app.services.integration_cluster_checks import (
     cluster_display_names_sync as _cluster_display_names_sync,
     cluster_infos_sync as _cluster_infos_sync,
@@ -1107,25 +1107,6 @@ def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[External
         return []
 
 
-def update_api_key_last_used(vault_client, key_id: str):
-    """Update the last_used_at timestamp for an API key.
-
-    important: aware, like every other timestamp here. A naive `utcnow().isoformat()` carries no
-    offset, and a browser parsing it reads local time, so the add-on health panel rendered a use
-    as though it had happened the reader's UTC offset ago. `credential_expires_at`, rendered
-    beside it, was already written through utc_isoformat and was correct.
-    """
-    try:
-        metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        metadata["last_used_at"] = utc_isoformat()
-        vault_client.vault_kv_put(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-            metadata
-        )
-    except Exception as e:
-        logger.warning(f"Failed to update last_used_at: {e}")
-
-
 # Process-local API key cache and last-used throttle.
 #
 # important: this stays in process memory and never reaches Redis. CacheManager writes
@@ -1203,34 +1184,20 @@ def evict_api_key_cache(key_id: str) -> None:
         logger.warning("Could not publish API key revocation for %s: %s", key_id, exc)
 
 
-def _write_last_used_blocking(key_id: str) -> None:
-    """Runs on auth_executor.
-
-    important: the Vault client is built here, inside the thread, not by the caller.
-    get_vault_integrations_client raises when Vault is unconfigured, and building it on the
-    event loop would turn a bookkeeping failure into a failed authentication.
-    """
-    try:
-        update_api_key_last_used(get_vault_integrations_client(), key_id)
-    except Exception as e:
-        logger.debug(f"last_used_at update skipped for {key_id}: {e}")
-
-
 def _schedule_last_used_update(key_id: str) -> None:
-    """Record last_used_at at most once per interval, off the event loop, without awaiting.
+    """Record a key's use at most once per interval, without awaiting it.
 
-    Fire and forget on purpose: a request must never pay Vault latency, nor fail, for a
-    bookkeeping field.
+    Fire and forget on purpose: a request must never pay for, nor fail on, a bookkeeping field.
+    important: into api_key_usage, never the key document. Rewriting the whole document here, from
+    a cached read and without the key's lock, could put back a grant a cleanup had just removed,
+    an old `is_revoked`, or old capabilities.
     """
     now = time.monotonic()
     with _key_cache_lock:
         if now - _last_used_written.get(key_id, 0.0) < LAST_USED_WRITE_INTERVAL:
             return
         _last_used_written[key_id] = now
-    try:
-        auth_executor.submit(_write_last_used_blocking, key_id)
-    except RuntimeError:  # pool shutting down
-        pass
+    api_key_usage.schedule_use(key_id)
 
 
 def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
@@ -2677,6 +2644,14 @@ async def _with_ownership(db: AsyncSession, user: AuthenticatedUser, keys: List[
     return keys
 
 
+async def _with_usage(keys: List[APIKeyInfo]) -> List[APIKeyInfo]:
+    """The recorded last use (services/api_key_usage.py), when it is newer than the document's."""
+    recorded = await api_key_usage.last_used(info.id for info in keys)
+    for info in keys:
+        info.last_used_at = api_key_usage.newer(info.last_used_at, recorded.get(info.id))
+    return keys
+
+
 @router.get(
     "/api-keys",
     response_model=APIKeyListResponse,
@@ -2762,7 +2737,7 @@ async def list_api_keys(
             _key_info(metadata, user_counts.get(metadata.get("id"), 0))
             for metadata in records
         ]
-        keys = await _with_ownership(db, user, keys)
+        keys = await _with_usage(await _with_ownership(db, user, keys))
 
         return APIKeyListResponse(
             total=len(keys),
@@ -2798,7 +2773,7 @@ async def get_api_key(
     try:
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
         
-        (info,) = await _with_ownership(db, user, [_key_info(metadata, len(user_mappings))])
+        (info,) = await _with_usage(await _with_ownership(db, user, [_key_info(metadata, len(user_mappings))]))
         return info
         
     except HTTPException:
@@ -2839,37 +2814,33 @@ async def update_api_key_permissions(
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
 
-    vault_client = get_vault_integrations_client()
-    try:
-        stored, _ = await asyncio.to_thread(get_api_key_from_vault, vault_client, key_id, use_cache=False)
-    except Exception:  # noqa: BLE001 - the write below reads it again and answers for a missing key
-        stored = {}
-    await _refuse_new_grants_to_unregistered_clusters(
-        (p.cluster_id for p in permissions),
-        frozenset(
-            grant.get("cluster_id") for grant in (stored or {}).get("cluster_permissions", [])
-            if isinstance(grant, dict)
-        ),
-    )
-
+    # The cluster reads stay outside the key's lock: nothing in them depends on what the key holds.
     await _assert_granted_projects_exist(lxd_service, permissions)
 
+    vault_client = get_vault_integrations_client()
     try:
-        # note: read and written under the key's lock, like revoke and the capability edit, so a
-        # revoke landing in between is not written back over
+        # important: the held ids, the registry refusal and the write all under the key's lock, like
+        # revoke and the capability edit. Read before the lock, an id a deregistration cleanup removed
+        # in between still counted as held, and the write put it back. Committed right after the
+        # write, so the lock is not held through the mapping read below.
         async with serialize_key_ownership(db, key_id):
             metadata, secret_hash = await asyncio.to_thread(
                 get_api_key_from_vault, vault_client, key_id, use_cache=False
             )
-
-            # Update permissions
-            metadata["cluster_permissions"] = [p.model_dump(exclude={"registered"}) for p in permissions]
-
-            # Save updated metadata
-            vault_client.vault_kv_put(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
-                metadata
+            await _refuse_new_grants_to_unregistered_clusters(
+                (p.cluster_id for p in permissions),
+                frozenset(
+                    grant.get("cluster_id") for grant in metadata.get("cluster_permissions", [])
+                    if isinstance(grant, dict)
+                ),
             )
+            metadata["cluster_permissions"] = [p.model_dump(exclude={"registered"}) for p in permissions]
+            await asyncio.to_thread(
+                vault_client.vault_kv_put,
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+                metadata,
+            )
+            await release_key_locks(db)
         
         # Clear all scoped cache variants
         cache = get_cache_manager()
@@ -2879,7 +2850,7 @@ async def update_api_key_permissions(
         evict_api_key_cache(key_id)
 
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
-        return _key_info(metadata, len(user_mappings))
+        return (await _with_usage([_key_info(metadata, len(user_mappings))]))[0]
 
     except HTTPException:
         raise
@@ -2989,7 +2960,7 @@ async def update_api_key_capabilities(
         )
 
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
-        return _key_info(metadata, len(user_mappings))
+        return (await _with_usage([_key_info(metadata, len(user_mappings))]))[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -3053,7 +3024,7 @@ async def revoke_api_key(
         )
 
         user_mappings = await asyncio.to_thread(get_user_mappings_from_vault, vault_client, key_id)
-        return _key_info(metadata, len(user_mappings))
+        return (await _with_usage([_key_info(metadata, len(user_mappings))]))[0]
         
     except HTTPException:
         raise
@@ -3238,6 +3209,7 @@ async def delete_api_key(
         # Clear all scoped cache variants (the validation cache went with the delete)
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+        await api_key_usage.forget(key_id)
 
         _audit_credential_lifecycle(
             action="integration.api_key.delete", key_id=key_id, metadata=metadata

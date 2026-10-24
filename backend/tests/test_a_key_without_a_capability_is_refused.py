@@ -201,7 +201,6 @@ def test_no_metadata_writer_can_drop_the_capabilities_field() -> None:
 
     # Reads the stored dict before writing it back, so every field it does not touch survives.
     READ_MODIFY_WRITE = {
-        "update_api_key_last_used",
         "_validate_api_key_blocking",
         "_store_app_url_in_vault",
         "update_api_key_permissions",

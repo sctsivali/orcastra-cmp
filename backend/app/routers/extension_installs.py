@@ -273,9 +273,15 @@ async def get_installation(
     db: AsyncSession = Depends(get_db),
 ) -> InstallResponse:
     record, extension, org_slug = await _load(db, install_id, user)
-    return extension_install.to_response(
-        record, extension, org_slug, credential=_credential_health(record.api_key_id)
-    )
+    credential = _credential_health(record.api_key_id)
+    if credential is not None:
+        from app.services import api_key_usage
+
+        recorded = await api_key_usage.last_used([record.api_key_id])
+        credential["last_used_at"] = api_key_usage.newer(
+            credential.get("last_used_at"), recorded.get(record.api_key_id)
+        )
+    return extension_install.to_response(record, extension, org_slug, credential=credential)
 
 
 def _credential_health(key_id: str) -> Optional[Dict[str, Any]]:
