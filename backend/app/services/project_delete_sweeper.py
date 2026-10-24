@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -83,7 +84,9 @@ async def finish(lxd_service: Any, followup: store.Followup, session_maker: Call
     await store.mark_settled(followup.id)
     announcer.clear_caches(followup.origin)
     logger.info("Project %s on %s finished deleting after its request answered", name, host)
-    await announcer.announce_and_finish(followup, settled_later=True)
+    # note: attempts restart here, as mark_settled restarts them in the row. The claim counted every
+    # probe pass, and carried into the announcement a first failure would have been its last.
+    await announcer.announce_and_finish(replace(followup, state="settled", attempts=0), settled_later=True)
     return "settled"
 
 

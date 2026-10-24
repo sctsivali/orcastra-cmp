@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
@@ -650,3 +651,15 @@ def test_a_delete_that_lands_while_an_earlier_one_is_open_is_announced_as_its_ow
     ((announced, later),) = client.deletes.announced
     assert (announced.origin, announced.requester, later) == ("route", "qa-partner", False)
     assert announced.event_id == "ev-web", "the row's event id, so a sweep cannot announce it again"
+
+
+@pytest.mark.asyncio
+async def test_a_long_wait_before_the_project_went_does_not_use_up_its_announcement_retries(durable) -> None:
+    # Seen live: a row probed every 10 s for six minutes carried attempts=39 into the announcement,
+    # where a first failure would have been treated as the twentieth.
+    _open_row(durable, "web", {11})
+    (claimed,) = await project_delete_store.claim_due(8)
+    long_waited = replace(claimed, attempts=39)
+    assert await project_delete_sweeper.finish(_Probe([False, False]), long_waited, durable.maker) == "settled"
+    ((announced, _later),) = durable.announced
+    assert announced.attempts == 0 and announced.state == "settled"
