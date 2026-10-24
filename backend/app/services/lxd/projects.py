@@ -21,7 +21,7 @@ from app.core.lxd_path import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 
 from . import health, project_delete
-from .project_delete import definitive_lxd_refusal as _definitive_lxd_refusal
+from app.core.lxd_errors import definitive_lxd_refusal as _definitive_lxd_refusal
 from .exceptions import (
     LXDConnectionError,
     LXDLocalUnavailableError,

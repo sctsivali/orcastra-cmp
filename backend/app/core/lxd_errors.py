@@ -15,6 +15,7 @@ from typing import Optional
 import requests.exceptions as requests_exc
 import urllib3.exceptions as urllib3_exc
 from fastapi import HTTPException
+from pylxd.exceptions import LXDAPIException
 from urllib3.exceptions import MaxRetryError
 
 from app.core.error_sanitizer import sanitize_error
@@ -108,3 +109,16 @@ def lxd_transport_error(exc: BaseException, host: str, action: str) -> HTTPExcep
         status_code=503,
         detail=f"Could not reach {host} while {action}" + (f": {detail}" if detail else ""),
     )
+
+
+def definitive_lxd_refusal(exc: LXDAPIException, phase: str) -> bool:
+    """Whether LXD supplied a terminal verdict rather than a transport/wait ambiguity."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if phase == "submitting" and isinstance(status_code, int) and 400 <= status_code < 500:
+        return True
+    try:
+        metadata = response.json().get("metadata")
+    except Exception:
+        return False
+    return isinstance(metadata, dict) and metadata.get("status") in {"Failure", "Cancelled"}

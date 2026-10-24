@@ -333,6 +333,77 @@ def test_a_create_the_cluster_accepts_without_an_operation_is_not_a_201(audited,
     assert invalidated == ["snapshots_fleet", "storage_pool_resources"]
 
 
+class _LXDResponse:
+    def __init__(self, status: int, message: str):
+        self.status_code = status
+        self._body = {"type": "error", "error": message, "error_code": status}
+
+    def json(self):
+        return self._body
+
+
+def _lxd_refusal(status: int, message: str):
+    from pylxd.exceptions import LXDAPIException
+
+    response = _LXDResponse(status, message)
+    error = LXDAPIException(response)
+    error.response = response
+    return error
+
+
+def _create(node):
+    return _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "refused"},
+    )
+
+
+def test_a_restricted_project_refusing_a_snapshot_is_a_409_not_an_unknown_outcome(
+    audited, monkeypatch
+):
+    # Every Partner project on a shared cluster is created restricted, and LXD blocks snapshots
+    # there. This answered 502 snapshot_outcome_unknown and the form blocked the retry.
+    from app.routers import instance_snapshots
+
+    invalidated = []
+
+    class _Cache:
+        def invalidate_resource_cache(self, resource):
+            invalidated.append(resource)
+
+    monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
+    node = FakeInstanceNode()
+    node.create_error = _lxd_refusal(
+        400, f'Project "{PROJECT}" doesn\'t allow for snapshot creation'
+    )
+
+    response = _create(node)
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["error"] == "snapshot_refused"
+    assert detail["message"].startswith("This project does not allow snapshots.")
+    denied = [row for row in audited if row.get("action") == "instance.snapshot.create"]
+    assert [row["result"] for row in denied] == ["denied"]
+    assert denied[0]["error_message"] == "snapshot_refused"
+    assert invalidated == [], "a refusal created nothing, so there is nothing to clear"
+
+
+def test_another_refusal_keeps_the_clusters_reason_and_a_5xx_stays_unknown(audited) -> None:
+    node = FakeInstanceNode()
+    node.create_error = _lxd_refusal(403, "not authorized against https://10.20.30.40:8443")
+    response = _create(node)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["message"].startswith("The cluster refused the snapshot: ")
+    assert "10.20.30.40" not in response.text
+
+    node = FakeInstanceNode()
+    node.create_error = _lxd_refusal(500, "Failed creating instance snapshot record")
+    response = _create(node)
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"]["error"] == "snapshot_outcome_unknown"
+
+
 def test_a_create_transport_failure_after_post_started_has_an_unknown_outcome(
     audited, monkeypatch
 ):

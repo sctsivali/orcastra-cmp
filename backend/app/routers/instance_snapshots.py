@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from pylxd.exceptions import LXDAPIException
 
 from app.core.cache import get_cache_manager
 from app.core.config import get_settings
@@ -32,7 +33,7 @@ from app.core.dependencies import (
     require_tenant,
 )
 from app.core.error_sanitizer import sanitize_error
-from app.core.lxd_errors import lxd_http_error
+from app.core.lxd_errors import definitive_lxd_refusal, lxd_http_error
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.org_scope import (
     org_scope_dependency,
@@ -84,6 +85,8 @@ _SNAPSHOT_OUTCOME_UNKNOWN = {
         "Check this instance's snapshots before trying again."
     ),
 }
+# LXD's refusal for a restricted project without restricted.snapshots=allow, lowercased.
+_RESTRICTED_SNAPSHOTS = "doesn't allow for snapshot creation"
 
 
 async def _assert_snapshot_source_is_writable(
@@ -372,6 +375,40 @@ def _raise_create_outcome_unknown(
     raise HTTPException(status_code=502, detail=_SNAPSHOT_OUTCOME_UNKNOWN)
 
 
+def _raise_create_refused(
+    instance_name: str,
+    host: str,
+    project: str,
+    snapshot_name: str,
+    exc: LXDAPIException,
+) -> None:
+    """409 for a create LXD answered with a 4xx: it refused, so nothing was created.
+
+    note: a project created restricted (every Partner project on a shared cluster) blocks
+    snapshots unless restricted.snapshots allows them, and LXD says so in one sentence. Reported
+    as an unknown outcome, it told the operator to go and check for a snapshot that could not
+    exist and blocked the retry.
+    """
+    reason = str(exc)
+    if _RESTRICTED_SNAPSHOTS in reason.lower():
+        message = (
+            "This project does not allow snapshots. The cluster restricts snapshots in projects "
+            "it isolates."
+        )
+    else:
+        message = f"The cluster refused the snapshot: {sanitize_error(reason, limit=200)}"
+    _audit(
+        "instance.snapshot.create",
+        instance_name,
+        host,
+        project,
+        result="denied",
+        error_message="snapshot_refused",
+        details={"snapshot": snapshot_name, "reason": sanitize_error(reason, limit=200)},
+    )
+    raise HTTPException(status_code=409, detail={"error": "snapshot_refused", "message": message})
+
+
 @router.get("/{instance_name}/snapshots", response_model=SnapshotListResponse)
 async def list_snapshots(
     instance_name: Annotated[
@@ -498,6 +535,10 @@ async def create_snapshot(
             except snapshots_service.SnapshotNameError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
             except Exception as exc:  # noqa: BLE001
+                if create_started and isinstance(exc, LXDAPIException) and definitive_lxd_refusal(
+                    exc, "submitting"
+                ):
+                    _raise_create_refused(instance_name, body.host, body.project, snapshot_name, exc)
                 if create_started:
                     _raise_create_outcome_unknown(
                         instance_name, body.host, body.project, snapshot_name, exc

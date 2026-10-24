@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 from pylxd.exceptions import LXDAPIException, NotFound
 from requests import exceptions as requests_exceptions
 
+from app.core.lxd_errors import definitive_lxd_refusal
 from app.core.lxd_segment import lxd_segment
 from app.services.lxd.utils import wait_for_lxd_operation
 
@@ -33,19 +34,6 @@ DELETE_OPERATION_SECONDS = 10
 PROBE_TIMEOUT = (3, 5)
 
 ClientFor = Callable[[str], Optional[Any]]
-
-
-def definitive_lxd_refusal(exc: LXDAPIException, phase: str) -> bool:
-    """Whether LXD supplied a terminal verdict rather than a transport/wait ambiguity."""
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
-    if phase == "submitting" and isinstance(status_code, int) and 400 <= status_code < 500:
-        return True
-    try:
-        metadata = response.json().get("metadata")
-    except Exception:
-        return False
-    return isinstance(metadata, dict) and metadata.get("status") in {"Failure", "Cancelled"}
 
 
 def project_exists_sync(client_for: ClientFor, host: str, name: str) -> bool:
