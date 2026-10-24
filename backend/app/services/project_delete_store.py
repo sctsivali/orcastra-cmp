@@ -214,14 +214,19 @@ async def give_back(followup: Followup) -> None:
 
 
 async def mark_settled(followup_id: Optional[int]) -> None:
-    """The project is gone and its rules were revoked; only the announcement is still owed."""
+    """The project is gone and its rules were revoked; only the announcement is still owed.
+
+    important: the caller keeps the lease while it announces. Released here, another worker's
+    sweep claimed the row in the same instant and announced it a second time (seen live: two
+    audit lines 150 ms apart). If the caller dies first, the lease runs out and a sweep announces.
+    """
 
     def change(row: ProjectDeleteFollowup, now: datetime) -> bool:
         row.state = "settled"
         row.settled_at = now
-        row.locked_by = None
-        row.lease_until = None
-        row.next_check_at = now
+        row.locked_by = WORKER_ID
+        row.lease_until = now + LEASE
+        row.next_check_at = now + LEASE
         row.attempts = 0
         return True
 

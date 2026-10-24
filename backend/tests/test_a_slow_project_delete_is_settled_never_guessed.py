@@ -383,6 +383,23 @@ async def test_a_row_left_by_a_dead_request_is_claimed_again_after_a_wait(durabl
 
 
 @pytest.mark.asyncio
+async def test_a_settled_row_is_announced_once_not_by_every_worker(durable) -> None:
+    # Seen live: settling released the lease, and a second worker's sweep claimed the row and
+    # announced it again 150 ms later.
+    _open_row(durable, "web", {11})
+    (claimed,) = await project_delete_store.claim_due(8)
+    await project_delete_store.mark_settled(claimed.id)
+    assert await project_delete_store.claim_due(8) == [], "the worker announcing still holds it"
+
+    (row,) = durable.rows()
+    row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    row.next_check_at = row.lease_until
+    durable.db.sync.commit()
+    (orphan,) = await project_delete_store.claim_due(8)
+    assert orphan.state == "settled", "a worker that died mid-announcement leaves it to a sweep"
+
+
+@pytest.mark.asyncio
 async def test_a_same_name_project_back_under_the_lock_keeps_every_rule(durable) -> None:
     _open_row(durable, "web", {11})
     (claimed,) = await project_delete_store.claim_due(8)
