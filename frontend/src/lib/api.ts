@@ -2393,8 +2393,17 @@ export const integrationsAPI = {
     });
   },
 
-  updateAPIKeyPermissions: async (keyId: string, permissions: ClusterPermission[]): Promise<APIKeyInfo> => {
-    return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/permissions`, {
+  // `rebindClusterIds`: paused grants (their registration ended) to grant to the cluster now
+  // registered under the id. Without it a paused grant stays paused, whatever else the edit does.
+  updateAPIKeyPermissions: async (
+    keyId: string,
+    permissions: ClusterPermission[],
+    rebindClusterIds: string[] = [],
+  ): Promise<APIKeyInfo> => {
+    const query = new URLSearchParams();
+    rebindClusterIds.forEach((clusterId) => query.append("rebind_cluster_ids", clusterId));
+    const suffix = rebindClusterIds.length > 0 ? `?${query.toString()}` : "";
+    return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/permissions${suffix}`, {
       method: "PUT",
       body: JSON.stringify(permissions),
     });

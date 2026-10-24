@@ -7,6 +7,8 @@ export interface ClusterAccessDisplay {
   typeLabel: string;
   permissionLabel: string;
   projectsLabel: string;
+  /** The registration this grant was given for has ended, so it reaches nothing. */
+  paused: boolean;
 }
 
 export function formatClusterPermissionLabel(permissions: string[] = []): string {
@@ -75,6 +77,7 @@ export function getClusterAccessDisplay(
       // note: no `|| []` here. That collapsed absent into empty before the formatter could tell
       // them apart, so fixing only the formatter would have left the second half of the bug.
       projectsLabel: formatProjectsLabel(permission.projects),
+      paused: permission.registered === false,
     };
   });
 }

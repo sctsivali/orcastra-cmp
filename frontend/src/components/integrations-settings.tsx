@@ -240,8 +240,15 @@ function IntegrationsSettingsContent() {
   // Permissions update. Narrowing an over-broad grant used to mean revoking the credential and
   // asking the integrator for a new one, because this endpoint had no caller.
   const updatePermissionsMutation = useMutation({
-    mutationFn: ({ keyId, permissions }: { keyId: string; permissions: ClusterPermission[] }) =>
-      api.integrations.updateAPIKeyPermissions(keyId, permissions),
+    mutationFn: ({
+      keyId,
+      permissions,
+      rebindClusterIds,
+    }: {
+      keyId: string;
+      permissions: ClusterPermission[];
+      rebindClusterIds: string[];
+    }) => api.integrations.updateAPIKeyPermissions(keyId, permissions, rebindClusterIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
       toast({ title: "Cluster Access Updated" });
@@ -660,8 +667,8 @@ function IntegrationsSettingsContent() {
                       <EditAPIKeyPermissionsDialog
                         apiKey={apiKey}
                         clusters={clusters}
-                        onSubmit={(keyId, permissions) =>
-                          updatePermissionsMutation.mutateAsync({ keyId, permissions })
+                        onSubmit={(keyId, permissions, rebindClusterIds) =>
+                          updatePermissionsMutation.mutateAsync({ keyId, permissions, rebindClusterIds })
                         }
                         isSubmitting={updatePermissionsMutation.isPending}
                       />

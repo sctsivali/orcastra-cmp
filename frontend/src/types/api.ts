@@ -2139,6 +2139,11 @@ export interface ClusterPermission {
   cluster_name?: string | null;
   permissions: string[];  // read, write, admin
   projects: string[];
+  // Reported, never sent back: false when the registration the grant was given for has ended
+  // (the cluster was removed, or its id registered again), so it reaches nothing.
+  registered?: boolean;
+  // A paused grant whose id is registered again: its owner can grant it to that registration.
+  rebindable?: boolean;
 }
 
 export interface ExternalUserMapping {

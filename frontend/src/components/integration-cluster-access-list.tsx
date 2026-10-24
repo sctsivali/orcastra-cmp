@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import type { ClusterAccessDisplay } from "@/lib/integration-display";
+import { Badge } from "@/components/ui/badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { SearchInput } from "@/components/ui/search-input";
@@ -140,6 +141,11 @@ export function IntegrationClusterAccessList({
                 </p>
               </div>
               <div className="min-w-0 text-xs sm:text-right">
+                {cluster.paused && (
+                  <Badge variant="caution" className="mb-1">
+                    Access paused
+                  </Badge>
+                )}
                 <p className="font-medium text-foreground">{cluster.permissionLabel}</p>
                 <p className="text-muted-foreground">
                   <OverflowText

@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ClusterAccessSelector } from "@/components/cluster-access-selector";
+import { PausedGrantsNotice } from "@/components/integrations/paused-grants-notice";
 import { ProjectScopePicker } from "@/components/integrations/project-scope-picker";
 import { useProjectScopeOptions } from "@/hooks/use-project-scope-options";
 import type { APIKeyInfo, AvailableCluster, ClusterPermission } from "@/types";
@@ -71,7 +72,7 @@ interface EditAPIKeyPermissionsDialogProps {
   apiKey: APIKeyInfo;
   clusters: AvailableCluster[];
   /** Resolves when the update lands and rejects when it does not. */
-  onSubmit: (keyId: string, permissions: ClusterPermission[]) => Promise<unknown>;
+  onSubmit: (keyId: string, permissions: ClusterPermission[], rebindClusterIds: string[]) => Promise<unknown>;
   isSubmitting: boolean;
 }
 
@@ -96,7 +97,12 @@ export function EditAPIKeyPermissionsDialog({
   const [permissionLevel, setPermissionLevel] = useState(seed.permissionLevel);
   const [projectScope, setProjectScope] = useState<ProjectScope>(seed.scope);
   const [selectedProjects, setSelectedProjects] = useState<string[]>(seed.projects);
+  const [rebind, setRebind] = useState<string[]>([]);
   const submitInFlightRef = useRef(false);
+  const pausedGrants = useMemo(
+    () => (apiKey.cluster_permissions ?? []).filter((grant) => grant?.registered === false),
+    [apiKey],
+  );
 
   // Re-seed each time it opens. The key can change under the dialog between visits (another
   // session, or this one after a successful save), and a stale form would silently write the
@@ -107,6 +113,7 @@ export function EditAPIKeyPermissionsDialog({
     setPermissionLevel(seed.permissionLevel);
     setProjectScope(seed.scope);
     setSelectedProjects(seed.projects);
+    setRebind([]);
   }, [open, seed]);
 
   const projectScopeOptions = useProjectScopeOptions({
@@ -148,7 +155,8 @@ export function EditAPIKeyPermissionsDialog({
 
     submitInFlightRef.current = true;
     try {
-      await onSubmit(apiKey.id, permissions);
+      // Only a paused grant the operator ticked, and only if it is still part of the selection.
+      await onSubmit(apiKey.id, permissions, rebind.filter((id) => selectedClusterIds.includes(id)));
     } catch {
       // The parent surfaces the error and the dialog stays open with the operator's edit.
       return;
@@ -194,6 +202,17 @@ export function EditAPIKeyPermissionsDialog({
                 clusters={clusters}
                 selectedClusterIds={selectedClusterIds}
                 onToggle={toggleCluster}
+              />
+
+              <PausedGrantsNotice
+                grants={pausedGrants}
+                rebind={rebind}
+                onToggle={(clusterId) =>
+                  setRebind((prev) =>
+                    prev.includes(clusterId) ? prev.filter((id) => id !== clusterId) : [...prev, clusterId],
+                  )
+                }
+                disabled={isSubmitting}
               />
 
               <div className="grid grid-cols-2 gap-4">
