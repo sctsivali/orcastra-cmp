@@ -148,9 +148,9 @@ async def teardown_install(
         if await asyncio.to_thread(lambda: destroy_install_credential(vault_client, previous_api_key_id)):
             done.append("vault:superseded_api_key")
 
-    for key_id in filter(None, (api_key_id, previous_api_key_id)):
-        await api_key_usage.forget(key_id)
-    done.append("postgres:api_key_usage")
+    forgotten = [await api_key_usage.forget(key_id) for key_id in filter(None, (api_key_id, previous_api_key_id))]
+    if all(forgotten):
+        done.append("postgres:api_key_usage")
 
     # important: these two swallow their own failures, so calling them proves nothing. They are
     # the entries that matter most, because a Vault-side failure leaves real secret material

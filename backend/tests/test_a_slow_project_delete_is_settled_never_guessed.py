@@ -625,3 +625,28 @@ def test_a_dot_name_is_the_callers_400_and_never_reaches_lxd() -> None:
         assert refused.value.status_code == 400
         with pytest.raises(HTTPException):
             project_delete.project_exists_sync(_client_for(node), HOST, name)
+
+
+def test_a_delete_past_the_caps_is_refused_rather_than_sent_untracked(monkeypatch) -> None:
+    monkeypatch.setattr(project_delete_store, "MAX_OPEN_PER_CLUSTER", 1)
+    service = _Service()
+    client = projects_client(service, monkeypatch, GrantSession(), user=partner())
+    _open_row(client.deletes, "earlier", {1})
+
+    r = client.delete(f"/projects/{HOST}/web")
+
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["code"] == "project_deletes_backlogged"
+    assert service.deleted == [], "nothing would revoke its rules if its outcome were unknown"
+
+
+def test_a_delete_that_lands_while_an_earlier_one_is_open_is_announced_as_its_own(monkeypatch) -> None:
+    client = projects_client(_Service(), monkeypatch, GrantSession(), user=partner())
+    _open_row(client.deletes, "web", {41}, origin="proxy")
+
+    r = client.delete(f"/projects/{HOST}/web")
+
+    assert r.status_code == 200, r.text
+    ((announced, later),) = client.deletes.announced
+    assert (announced.origin, announced.requester, later) == ("route", "qa-partner", False)
+    assert announced.event_id == "ev-web", "the row's event id, so a sweep cannot announce it again"

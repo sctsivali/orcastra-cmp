@@ -93,10 +93,13 @@ def newer(stored: Optional[str], recorded: Optional[str]) -> Optional[str]:
         return recorded
 
 
-async def forget(key_id: str) -> None:
+async def forget(key_id: str) -> bool:
+    """Remove a deleted key's row; False when it could not be removed."""
     try:
         async with _maker()() as db:
             await db.execute(delete(ApiKeyUsage).where(ApiKeyUsage.key_id == key_id))
             await db.commit()
+        return True
     except Exception as exc:  # noqa: BLE001 - a deleted key's row reports nothing to anyone
         logger.warning("Could not remove the usage row of %s: %s", key_id, exc)
+        return False

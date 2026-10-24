@@ -127,6 +127,44 @@ def get_cert_manager() -> LXDCertificateManager:
         )
 
 
+def _owns_a_binding(rows, org_ids, email: str) -> bool:
+    """Whether one of a cluster's ownership rows (organization_id, registered_by) is the caller's."""
+    return any(
+        (row[0] is not None and row[0] in org_ids)
+        or (row[0] is None and row[1] == email)
+        or row[1] == email
+        for row in rows
+    )
+
+
+async def _continues_its_registration(db: AsyncSession, cluster_id: str, user: AuthenticatedUser) -> bool:
+    """Whether this register call is the cluster's owner (or an Admin) registering it again.
+
+    important: a Vault record alone does not say so. A partner can unbind a cluster without
+    deregistering it, which leaves the record and its registration behind with no owner; another
+    organization registering that id must get a new registration, or every grant made for the old
+    one would reach its cluster. No ownership row means a new trust identity.
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.core.org_scope import get_user_org_ids
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+    from app.models.db_models import OrganizationCluster
+
+    rows = (
+        await db.execute(
+            sa_select(OrganizationCluster.organization_id, OrganizationCluster.registered_by).where(
+                OrganizationCluster.cluster_id == cluster_id
+            )
+        )
+    ).all()
+    if not rows:
+        return False
+    if get_highest_role(resolve_roles(user)) == Role.ADMIN:
+        return True
+    return _owns_a_binding(rows, await get_user_org_ids(user, db), user.email)
+
+
 async def _guard_registration_binding(
     db: AsyncSession,
     cluster_id: str,
@@ -158,12 +196,7 @@ async def _guard_registration_binding(
     ).all()
     if not rows:
         return org_ids
-    owns_existing_identity = any(
-        (row[0] is not None and row[0] in org_ids)
-        or (row[0] is None and row[1] == user.email)
-        or row[1] == user.email
-        for row in rows
-    )
+    owns_existing_identity = _owns_a_binding(rows, org_ids, user.email)
     if (
         get_highest_role(resolve_roles(user)) != Role.ADMIN
         and not owns_existing_identity
@@ -237,9 +270,9 @@ async def register_cluster(
             ) from exc
 
         # Which registration this is (services/cluster_generations.py), in this transaction and
-        # under the share lock. An id the registry lists right now is its owner registering it
-        # again (a new endpoint, say): the registration, and every API key grant made for it,
-        # carries on. Anything else starts a new one, which no earlier grant reaches.
+        # under the share lock. An id the registry lists right now, registered again by its owner
+        # or an Admin (a new endpoint, say), keeps its registration and every API key grant made
+        # for it. Anything else starts a new one, which no earlier grant reaches.
         # important: from Vault itself. A remembered registry could call a deregistered id live.
         read = await asyncio.to_thread(cert_manager.read_registry, False)
         if getattr(read, "source", None) != "vault":
@@ -248,7 +281,10 @@ async def register_cluster(
                 detail="The cluster registry could not be read. Try again in a moment.",
             )
         await cluster_generations.begin_registration(
-            db, cluster_id, live=cluster_id in set(read.cluster_ids)
+            db,
+            cluster_id,
+            live=cluster_id in set(read.cluster_ids)
+            and await _continues_its_registration(db, cluster_id, _rbac),
         )
         
         # Step 1: Pre-auth type detection from /1.0 API endpoint
@@ -1366,12 +1402,25 @@ async def delete_cluster(
         keys_changed: Optional[int] = None
         try:
             from app.services.key_grant_hygiene import strip_cluster_from_key_grants
+            from app.services.lxd import registry as cluster_registry
             from app.services.project_deletion import spawn
 
-            cleanup = spawn(strip_cluster_from_key_grants(cluster_id, ended))
-            keys_changed = await asyncio.wait_for(
-                asyncio.shield(cleanup), timeout=KEY_GRANT_CLEANUP_TIMEOUT
-            )
+            cleanup = None
+            if get_settings().key_grant_generations:
+                cleanup = spawn(strip_cluster_from_key_grants(cluster_id, ended))
+            else:
+                # important: with generations switched off a grant matches by id alone again, so
+                # every grant naming the id goes, as before generations; but only once the registry
+                # confirms the id is gone, or a failed Vault delete would strip live grants.
+                still_registered = await cluster_registry.registered_cluster_ids(fresh=True)
+                if still_registered is not None and cluster_id not in still_registered:
+                    cleanup = spawn(strip_cluster_from_key_grants(cluster_id, None))
+                else:
+                    logger.warning("Not touching API key grants for %s: the registry does not confirm it is gone", cluster_id)
+            if cleanup is not None:
+                keys_changed = await asyncio.wait_for(
+                    asyncio.shield(cleanup), timeout=KEY_GRANT_CLEANUP_TIMEOUT
+                )
         except asyncio.TimeoutError:
             logger.warning(
                 "API key grant cleanup for %s is still running after %ss; it finishes in the background",

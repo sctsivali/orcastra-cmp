@@ -32,6 +32,9 @@ STAMP = "registration_id"
 # Fields only ever computed for a reader. A grant write drops them along with any stamp it was sent.
 REPORTED_ONLY = ("registered", "rebindable")
 CACHE_SECONDS = 15.0
+# How old a remembered state may be when the database cannot answer. Past it, a deregistration
+# another worker committed may be missing from it, so the answer is unavailable instead.
+LAST_KNOWN_MAX_SECONDS = 60.0
 _EPOCH_NS = "cluster_generations"
 _EPOCH_KEY = "epoch"
 
@@ -96,6 +99,7 @@ class Generations:
 
 _cached: Optional[Tuple[float, Optional[str], Generations]] = None
 _last_known: Optional[Generations] = None
+_last_known_at = 0.0
 
 
 async def _read(db: Any) -> Generations:
@@ -120,10 +124,9 @@ async def current(*, fresh: bool = False) -> Generations:
     """The registration state, cached per worker and re-read whenever another worker changed it.
 
     `fresh` is for a write that stamps from it. A database that cannot answer serves the last state
-    read: a registration cannot end without a commit here, so that state is never laxer than one
-    the database last answered with.
+    read for up to LAST_KNOWN_MAX_SECONDS, then nothing.
     """
-    global _cached, _last_known
+    global _cached, _last_known, _last_known_at
     epoch = _epoch()
     cached = _cached
     if not fresh and cached is not None and time.monotonic() - cached[0] < CACHE_SECONDS and cached[1] == epoch:
@@ -132,12 +135,13 @@ async def current(*, fresh: bool = False) -> Generations:
         async with _maker()() as db:
             value = await _read(db)
     except Exception as exc:  # noqa: BLE001 - reported to the caller as unavailable, below
-        if _last_known is not None and not fresh:
+        if _last_known is not None and not fresh and time.monotonic() - _last_known_at < LAST_KNOWN_MAX_SECONDS:
             logger.warning("Registration generations unreadable, serving the last known: %s", exc)
             return _last_known
         raise GenerationsUnavailable(str(exc)) from exc
     _cached = (time.monotonic(), epoch, value)
     _last_known = value
+    _last_known_at = time.monotonic()
     return value
 
 
@@ -397,8 +401,12 @@ async def stamped(
     return stamp(requested, held, generations, rebind)
 
 
-def annotate(grants: Iterable[Any], generations: Generations) -> List[Any]:
-    """Grants as a reader sees them: no stamp, and an inert one marked `registered: false`."""
+def annotate(grants: Iterable[Any], generations: Generations, *, for_managers: bool = False) -> List[Any]:
+    """Grants as a reader sees them: no stamp, and an inert one marked `registered: false`.
+
+    `rebindable` only `for_managers` (the key list and Edit Access). Told to the key holder, it
+    would confirm that an id it once reached is registered again, possibly by someone else.
+    """
     shown: List[Any] = []
     for grant in grants:
         if not isinstance(grant, dict):
@@ -407,7 +415,7 @@ def annotate(grants: Iterable[Any], generations: Generations) -> List[Any]:
         view = {k: v for k, v in grant.items() if k != STAMP}
         if not generations.matches(grant):
             view["registered"] = False
-            if generations.rebindable(grant):
+            if for_managers and generations.rebindable(grant):
                 view["rebindable"] = True
         shown.append(view)
     return shown

@@ -943,6 +943,14 @@ async def delete_project(
             raise asyncio.CancelledError
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except project_deletion.ProjectDeletesBacklogged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "project_deletes_backlogged",
+                "message": f"Earlier project deletes on {host} are still settling. Try again in a few minutes.",
+            },
+        ) from exc
     except ClusterConfigurationBusy as exc:
         raise HTTPException(
             status_code=409,

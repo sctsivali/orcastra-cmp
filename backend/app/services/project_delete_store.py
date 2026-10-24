@@ -30,7 +30,8 @@ LEASE = timedelta(seconds=60)
 FOLLOW_WINDOW = timedelta(minutes=10)
 FIRST_CHECK = timedelta(seconds=5)
 MAX_OPEN_PER_CLUSTER = 4
-MAX_OPEN = 64
+# Per requester, not overall: one organization's hanging clusters must not use up everyone's.
+MAX_OPEN_PER_REQUESTER = 16
 KEEP_FINISHED = timedelta(days=7)
 
 # Tests point this at SQLite. None means the application's own session maker.
@@ -90,16 +91,6 @@ def _snapshot(row: ProjectDeleteFollowup, created_here: bool = False) -> Followu
     )
 
 
-def unsaved(
-    host: str, name: str, *, origin: str, requester: Optional[str], scope_project: Optional[str]
-) -> Followup:
-    """The announcement of a delete that has no row (the caps were reached when it started)."""
-    return Followup(
-        id=None, cluster_id=host, project_name=name, origin=origin, requester=requester,
-        scope_project=scope_project, event_id=uuid.uuid4().hex, rule_ids=frozenset(), state="settled",
-    )
-
-
 def _open(host: str, name: str):
     return and_(
         ProjectDeleteFollowup.cluster_id == host,
@@ -123,7 +114,8 @@ async def open_intent(
     its delete ends unknown (mark_pending). A 404 then revokes exactly what earlier deletes
     captured, never the rules staged since for a later project of the same name.
 
-    None when the caps are reached: the delete still runs, without a durable follow-up.
+    None when the caps are reached; the caller must then not send the DELETE, because nothing
+    would revoke its rules if its outcome were unknown.
     """
     async with _maker()() as db:
         for _attempt in range(2):
@@ -137,16 +129,21 @@ async def open_intent(
                 await db.commit()
                 return _snapshot(row)
             open_rows = ProjectDeleteFollowup.state.in_(OPEN_STATES)
-            total = await db.scalar(select(func.count()).select_from(ProjectDeleteFollowup).where(open_rows))
+            by_requester = (
+                ProjectDeleteFollowup.requester == requester
+                if requester is not None
+                else ProjectDeleteFollowup.requester.is_(None)
+            )
+            mine = await db.scalar(select(func.count()).select_from(ProjectDeleteFollowup).where(open_rows, by_requester))
             on_cluster = await db.scalar(
                 select(func.count())
                 .select_from(ProjectDeleteFollowup)
                 .where(open_rows, ProjectDeleteFollowup.cluster_id == host)
             )
-            if (total or 0) >= MAX_OPEN or (on_cluster or 0) >= MAX_OPEN_PER_CLUSTER:
+            if (mine or 0) >= MAX_OPEN_PER_REQUESTER or (on_cluster or 0) >= MAX_OPEN_PER_CLUSTER:
                 logger.warning(
-                    "Project %s on %s is deleted without a durable follow-up: %s open, %s on its cluster",
-                    name, host, total, on_cluster,
+                    "Not deleting project %s on %s yet: %s open follow-ups for its requester, %s on its cluster",
+                    name, host, mine, on_cluster,
                 )
                 return None
             row = ProjectDeleteFollowup(

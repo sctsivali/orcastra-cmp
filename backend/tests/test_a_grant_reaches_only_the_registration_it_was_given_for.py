@@ -117,14 +117,14 @@ def test_an_edit_keeps_a_paused_grant_paused_unless_it_is_granted_again() -> Non
 
 def test_a_reader_never_sees_the_stamp_and_sees_a_paused_grant_as_such() -> None:
     state = _state(nuc2=LIVE, pandora=OLD)
-    shown = gens.annotate(
-        [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "pandora", "registration_id": "reg-old"}],
-        state,
-    )
-    assert shown == [
+    grants = [{"cluster_id": "nuc2", "registration_id": "reg-1"}, {"cluster_id": "pandora", "registration_id": "reg-old"}]
+    assert gens.annotate(grants, state, for_managers=True) == [
         {"cluster_id": "nuc2", "registered": False, "rebindable": True},
         {"cluster_id": "pandora"},
     ]
+    assert gens.annotate(grants, state) == [{"cluster_id": "nuc2", "registered": False}, {"cluster_id": "pandora"}], (
+        "the key holder is not told the id is registered again, possibly by someone else"
+    )
 
 
 # ── registration, deregistration, adoption ───────────────────────────────────────────────────
@@ -300,3 +300,88 @@ def test_every_grant_write_goes_through_the_stamp() -> None:
 
 def _ignore(*_a: Any, **_k: Any) -> Dict[str, Any]:  # pragma: no cover - shape helper
     return {}
+
+
+# ── from the security review ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_only_its_owner_or_an_admin_continues_a_registration(monkeypatch) -> None:
+    # A partner can unbind a cluster without deregistering it; the Vault record and its
+    # registration stay. Another organization registering that id must not inherit it.
+    from app.core import org_scope
+    from app.models.db_models import OrganizationCluster
+    from app.routers import cluster_registration
+    from tests._project_grant_fakes import admin, partner
+    from tests._sqlite_session import org_tables
+
+    db = sqlite_session(*org_tables())
+
+    async def orgs(user, _db):
+        return [7] if user.user_id == "qa-partner" else [8]
+
+    monkeypatch.setattr(org_scope, "get_user_org_ids", orgs)
+    owner, other = partner(), partner("other@example.test")
+    other.user_id = "qa-other"
+    assert await cluster_registration._continues_its_registration(db, "x", owner) is False, "no owner row: a new identity"
+
+    db.add(OrganizationCluster(organization_id=7, cluster_id="x", registered_by="p@example.test"))
+    db.sync.commit()
+    assert await cluster_registration._continues_its_registration(db, "x", owner) is True
+    assert await cluster_registration._continues_its_registration(db, "x", other) is False
+    assert await cluster_registration._continues_its_registration(db, "x", admin()) is True
+
+    register = inspect.getsource(cluster_registration.register_cluster)
+    assert "and await _continues_its_registration(db, cluster_id, _rbac)" in register
+
+
+def test_with_generations_off_a_deregistration_strips_every_grant_naming_the_id() -> None:
+    from app.routers import cluster_registration
+
+    delete = inspect.getsource(cluster_registration.delete_cluster)
+    off = delete.index("if get_settings().key_grant_generations:")
+    assert delete.index("registered_cluster_ids(fresh=True)", off) < delete.index(
+        "strip_cluster_from_key_grants(cluster_id, None)", off
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_remembered_state_is_served_for_a_minute_at_most(registrations, monkeypatch) -> None:
+    await gens.begin_registration(registrations, "nuc2", live=False)
+    registrations.sync.commit()
+    await gens.current(fresh=True)
+
+    class _Down:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            raise RuntimeError("database down")
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setattr(gens, "session_maker", _Down())
+    monkeypatch.setattr(gens, "_cached", None)
+    monkeypatch.setattr(gens, "_last_known_at", gens._last_known_at - gens.LAST_KNOWN_MAX_SECONDS - 1)
+    with pytest.raises(gens.GenerationsUnavailable):
+        await gens.current()
+
+
+def test_a_creator_still_manages_a_key_whose_every_grant_is_paused_and_no_one_else_does() -> None:
+    from app.routers import integrations
+
+    state = _state(nuc2=LIVE)
+    orphan = {"created_by": "A@example.test", "cluster_permissions": [{"cluster_id": "nuc2", "registration_id": "reg-1"}]}
+    assert integrations._key_in_scope(orphan, {"other"}, state, "a@example.test") is True
+    assert integrations._key_in_scope(orphan, {"nuc2"}, state, "b@example.test") is False, (
+        "the organization holding nuc2 now does not get the key through its paused grant"
+    )
+    live = {"created_by": "a@example.test", "cluster_permissions": [{"cluster_id": "nuc2", "registration_id": "reg-2"}]}
+    assert integrations._key_in_scope(live, {"other"}, state, "a@example.test") is False, (
+        "a key that still reaches a cluster follows the ordinary scope rule"
+    )
+    source = inspect.getsource(integrations.list_api_keys)
+    assert source.index("cache.set(") < source.index("_key_in_scope(m, scope, generations, user.email)"), (
+        "the creator rule runs after the cache every caller with this scope shares"
+    )

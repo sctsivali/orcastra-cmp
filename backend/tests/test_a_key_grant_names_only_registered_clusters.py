@@ -281,8 +281,9 @@ def test_deregistration_strips_the_grants_of_the_registration_it_ended() -> None
 
     source = inspect.getsource(cluster_registration.delete_cluster)
     assert source.index("end_registration(") < source.index("strip_cluster_from_key_grants(cluster_id, ended)")
-    assert "registered_cluster_ids(fresh=True)" not in source, (
-        "the ended registration, not a registry read, says which grants were made for it"
+    on = source.index("strip_cluster_from_key_grants(cluster_id, ended)")
+    assert source.index("registered_cluster_ids(fresh=True)") > on, (
+        "with generations on, the ended registration, not a registry read, says which grants go"
     )
     assert "asyncio.shield(cleanup)" in source, "a timeout must stop the wait, never the key rewrite"
 

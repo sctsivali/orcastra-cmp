@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, FrozenSet, Optional, Set
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ from app.services import project_delete_store as store
 from app.services import project_grants
 from app.services.lxd.exceptions import LXDOperationUnknownError, LXDProjectNotFoundError
 from app.services.migration_fence import assert_project_not_migration_fenced
-from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.shared_cluster_audit import ClusterConfigurationBusy, serialize_cluster_configuration
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +40,17 @@ class ProjectDeleted:
     settled_pending: bool = False
 
 
+class ProjectDeletesBacklogged(ClusterConfigurationBusy):
+    """Too many earlier deletes are still settling; this one is not sent, so it cannot go untracked."""
+
+
 class ProjectDeleteUnknown(Exception):
     """LXD may still delete the project; the captured rules wait for the sweeper."""
 
-    def __init__(self, host: str, name: str, rule_ids: FrozenSet[int], tracked: bool = True) -> None:
+    def __init__(self, host: str, name: str, rule_ids: FrozenSet[int]) -> None:
         self.host = host
         self.name = name
         self.rule_ids = rule_ids
-        # False when the follow-up caps were reached and nothing will settle this delete.
-        self.tracked = tracked
         super().__init__(f"The delete outcome for project '{name}' could not be confirmed")
 
 
@@ -85,16 +87,17 @@ async def delete_project_and_forget(
         followup = await store.open_intent(
             host, name, rule_ids=rule_ids, origin=origin, requester=requester, scope_project=scope_project
         )
+        if followup is None:
+            raise ProjectDeletesBacklogged(host)
         try:
             await lxd_service.delete_project(host, name)
         except LXDProjectNotFoundError:
-            if followup is None or followup.created_here:
+            if followup.created_here:
                 # important: a 404 revokes nothing on its own. Anyone with a cluster-wide delete
                 # could otherwise name a project that does not exist and strip every
                 # organization's rules staged for that name. Only the rules an earlier delete
                 # captured go, because that delete is what made the project disappear.
-                if followup is not None:
-                    await store.give_back(followup)
+                await store.give_back(followup)
                 return ProjectDeleted(already_gone=True, revoke_note="")
             note = await project_grants.forget_deleted_project(
                 db, cluster_id=host, project_name=name, only_rule_ids=followup.rule_ids
@@ -102,19 +105,17 @@ async def delete_project_and_forget(
             await _settled(followup, settled_later=True)
             return ProjectDeleted(already_gone=True, revoke_note=note, settled_pending=True)
         except LXDOperationUnknownError as exc:
-            if followup is not None:
-                await store.mark_pending(followup, merge_ids=rule_ids)
-            raise ProjectDeleteUnknown(host, name, rule_ids, tracked=followup is not None) from exc
+            await store.mark_pending(followup, merge_ids=rule_ids)
+            raise ProjectDeleteUnknown(host, name, rule_ids) from exc
         except Exception:
-            if followup is not None:
-                await store.give_back(followup)
+            await store.give_back(followup)
             raise
         note = await project_grants.forget_deleted_project(db, cluster_id=host, project_name=name)
-    await _settled(
-        followup
-        or store.unsaved(host, name, origin=origin, requester=requester, scope_project=scope_project),
-        settled_later=False,
-    )
+    if not followup.created_here:
+        # This call's own delete landed while an earlier one's row was open: announce it as this
+        # caller's, under that row's event id so a sweep cannot announce it a second time.
+        followup = replace(followup, origin=origin, requester=requester, scope_project=scope_project)
+    await _settled(followup, settled_later=False)
     return ProjectDeleted(already_gone=False, revoke_note=note)
 
 
