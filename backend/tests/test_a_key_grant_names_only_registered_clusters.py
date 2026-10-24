@@ -181,8 +181,8 @@ def _metadata(*cluster_ids: str, add_on: bool = False) -> Dict[str, Any]:
     return metadata
 
 
-def _stale(cluster_id: str) -> bool:
-    return cluster_id not in REGISTERED
+def _stale(grant) -> bool:
+    return grant.get("cluster_id") not in REGISTERED
 
 
 def test_the_plan_drops_only_unregistered_ids_and_reports_what_it_will_not_touch() -> None:
@@ -274,15 +274,16 @@ def test_the_cluster_delete_route_strips_key_grants() -> None:
 
 
 
-def test_deregistration_strips_grants_only_once_the_registry_confirms_the_id_is_gone() -> None:
+def test_deregistration_strips_the_grants_of_the_registration_it_ended() -> None:
     import inspect
 
     from app.routers import cluster_registration
 
     source = inspect.getsource(cluster_registration.delete_cluster)
-    check = source.index("registered_cluster_ids(fresh=True)")
-    strip = source.index("strip_cluster_from_key_grants(cluster_id)")
-    assert check < strip
+    assert source.index("end_registration(") < source.index("strip_cluster_from_key_grants(cluster_id, ended)")
+    assert "registered_cluster_ids(fresh=True)" not in source, (
+        "the ended registration, not a registry read, says which grants were made for it"
+    )
     assert "asyncio.shield(cleanup)" in source, "a timeout must stop the wait, never the key rewrite"
 
 
@@ -358,11 +359,18 @@ async def test_a_grant_edit_reads_what_the_key_holds_under_its_lock_and_lets_go_
     monkeypatch.setattr(integrations, "evict_api_key_cache", lambda key_id: None)
     monkeypatch.setattr(integrations, "_with_usage", no_usage)
 
+    async def stamped(requested, held=(), rebind=()):
+        events.append(("stamp", sorted(g["cluster_id"] for g in held)))
+        return list(requested)
+
+    monkeypatch.setattr(integrations.cluster_generations, "stamped", stamped)
+
     request = [integrations.ClusterPermissionRequest(cluster_id="nuc2", permissions=["write"], projects=["*"])]
     await integrations.update_api_key_permissions(
         "oak_x", request, _=None, _rbac=object(), lxd_service=object(), db=object()
     )
 
     assert events == [
-        "projects", "lock", ("read", False), ("refuse", ["nuc2"]), "write", "commit", "unlock", "mappings",
+        "projects", "lock", ("read", False), ("refuse", ["nuc2"]), ("stamp", ["nuc2"]), "write", "commit",
+        "unlock", "mappings",
     ]

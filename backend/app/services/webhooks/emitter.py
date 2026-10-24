@@ -43,6 +43,8 @@ from app.models.extension_models import (
 from .dispatcher import enqueue_event
 from .envelope import ResourceEvent
 
+from app.services import cluster_generations
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -95,18 +97,19 @@ async def _subscriptions_for_cluster(
         )
     ).all()
 
+    # important: only grants for a registration still active (services/cluster_generations.py). A
+    # grant left from an ended registration names an id another organization may hold now, and
+    # routing on it sent that organization's events to this add-on until the reconcile sweep
+    # narrowed the grant.
+    generations = await cluster_generations.current_or_none()
     interested: List[WebhookSubscription] = []
     for subscription, install in rows:
         if event_type not in (subscription.event_types or []):
             continue
-        reachable = {
-            grant.get("cluster_id")
-            for grant in (install.granted_scope or [])
-            if isinstance(grant, dict)
-        }
-        if cluster_id in reachable:
+        if cluster_id in cluster_generations.reachable(install.granted_scope, generations):
             interested.append(subscription)
     return interested
+
 
 
 async def emit_resource_event(

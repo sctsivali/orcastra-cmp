@@ -21,7 +21,7 @@ import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd.proxy_path_params import assert_path_params
-from app.services import api_key_usage, project_deletion
+from app.services import api_key_usage, cluster_generations, project_deletion
 from app.services.integration_cluster_checks import (
     cluster_display_names_sync as _cluster_display_names_sync,
     cluster_infos_sync as _cluster_infos_sync,
@@ -2197,9 +2197,26 @@ async def validate_api_key(
                 status_code=503, detail="Authentication backend unavailable"
             ) from None
 
+    metadata = await _bound_to_registrations(metadata)
     _schedule_last_used_update(x_api_key_id)
 
     return metadata
+
+
+async def _bound_to_registrations(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """The key as it may act now: grants for a registration that has ended are left out.
+
+    important: after the validation cache, on every request, into a copy (cluster_generations.bind).
+    A registration that ends must stop its grants at once on every worker, and the cached document
+    must still hold them for when the cluster is granted again.
+    """
+    if not get_settings().key_grant_generations:
+        return metadata
+    try:
+        generations = await cluster_generations.current()
+    except cluster_generations.GenerationsUnavailable:
+        raise HTTPException(status_code=503, detail="Authentication backend unavailable") from None
+    return cluster_generations.bind(metadata, generations)
 
 
 OWNER_KEYS_FEATURE = "organization_owner_keys.v1"
@@ -2350,8 +2367,11 @@ async def create_api_key(
             "is_active": True,
             "is_revoked": False,
             "last_used_at": None,
-            # `registered` is what /validate reports about a grant, never part of one.
-            "cluster_permissions": [p.model_dump(exclude={"registered"}) for p in request.cluster_permissions],
+            # Stamped by the server with the registration each cluster has now; anything a caller
+            # sent as a stamp, or as `registered`, is dropped (services/cluster_generations.stamp).
+            "cluster_permissions": await cluster_generations.stamped(
+                [p.model_dump(exclude={"registered"}) for p in request.cluster_permissions]
+            ),
         }
         
         # Save to Vault (include raw secret for callback authentication)
@@ -2385,15 +2405,17 @@ async def create_api_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _assert_key_in_scope(metadata: Dict[str, Any], allowed: Optional[set[str]]) -> None:
+def _assert_key_in_scope(
+    metadata: Dict[str, Any],
+    allowed: Optional[set[str]],
+    generations: Optional["cluster_generations.Generations"] = None,
+) -> None:
     """The overlap rule list_api_keys uses. 404 so an out-of-scope id reads as a missing one."""
     if not metadata:
         raise HTTPException(status_code=404, detail="API key not found")
     if allowed is None:
         return
-    perms = metadata.get("cluster_permissions", []) or []
-    key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
-    if not (key_clusters & allowed):
+    if not (_key_clusters(metadata, generations) & allowed):
         raise HTTPException(status_code=404, detail="API key not found")
 
 
@@ -2418,12 +2440,31 @@ async def _run_org_keys(db: AsyncSession, email: str) -> set[str]:
     return await cluster_parties.run_org_keys(db, email)
 
 
-def _key_clusters(metadata: Dict[str, Any]) -> set[str]:
-    return {
-        str(p.get("cluster_id") or "")
-        for p in metadata.get("cluster_permissions", []) or []
-        if isinstance(p, dict)
-    }
+def _key_clusters(
+    metadata: Dict[str, Any], generations: Optional["cluster_generations.Generations"] = None
+) -> set[str]:
+    """The clusters a key reaches, for deciding who manages it.
+
+    important: only grants for a registration still active. A grant left from an ended
+    registration names an id another organization may hold now, and counting it made that
+    organization's partners managers of this key: able to list, revoke, delete and edit it.
+    """
+    return {str(c or "") for c in cluster_generations.reachable(metadata.get("cluster_permissions"), generations)}
+
+
+def _with_registration_state(
+    grants: List[Any], generations: Optional["cluster_generations.Generations"]
+) -> List[Dict[str, Any]]:
+    """Grants for a reader: no stamp, and a paused one marked `registered: false`."""
+    dicts = [g for g in grants if isinstance(g, dict)]
+    if generations is None:
+        return [{k: v for k, v in g.items() if k != cluster_generations.STAMP} for g in dicts]
+    return cluster_generations.annotate(dicts, generations)
+
+
+async def _generations_for_scope() -> Optional["cluster_generations.Generations"]:
+    """Registration state for the management checks, or None (every grant counts) if unreadable."""
+    return await cluster_generations.current_or_none()
 
 
 async def _keys_the_caller_manages(
@@ -2449,11 +2490,12 @@ async def _keys_the_caller_manages(
     rest = [k for k in keys if str(k.get("created_by") or "").lower() != email]
     if not rest:
         return keys
+    generations = await _generations_for_scope()
     held = await _clusters_held_by_another_party(
-        db, user.email, set().union(*(_key_clusters(k) for k in rest))
+        db, user.email, set().union(*(_key_clusters(k, generations) for k in rest))
     )
     linked = await _run_org_keys(db, user.email) if held else set()
-    kept = [k for k in rest if not (_key_clusters(k) & held) or str(k.get("id") or "") in linked]
+    kept = [k for k in rest if not (_key_clusters(k, generations) & held) or str(k.get("id") or "") in linked]
     return [k for k in keys if k in mine or k in kept]
 
 
@@ -2466,7 +2508,7 @@ async def _authorize_api_key(key_id: str, user: AuthenticatedUser, db: AsyncSess
     because Vault answers synchronously.
     """
     metadata = await asyncio.to_thread(_read_api_key_metadata_blocking, key_id)
-    _assert_key_in_scope(metadata, get_current_allowed_clusters())
+    _assert_key_in_scope(metadata, get_current_allowed_clusters(), await _generations_for_scope())
     if not await _keys_the_caller_manages(db, user, [metadata]):
         raise HTTPException(status_code=404, detail="API key not found")
     return metadata
@@ -2685,14 +2727,11 @@ async def list_api_keys(
             # whose cluster_permissions overlap with their allowed clusters
             allowed = get_current_allowed_clusters()
             if allowed is not None:
-                filtered = []
-                for meta in all_metadata:
-                    perms = meta.get("cluster_permissions", [])
-                    # show key if ANY of its permitted clusters is in the user's set
-                    key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
-                    if key_clusters & allowed:
-                        filtered.append(meta)
-                all_metadata = filtered
+                generations = await _generations_for_scope()
+                # show key if ANY cluster it still reaches is in the user's set
+                all_metadata = [
+                    meta for meta in all_metadata if _key_clusters(meta, generations) & allowed
+                ]
 
             # important: the user mapping count is resolved HERE, inside the cache miss, and
             # cached with the metadata it belongs to. It used to be read one key at a time
@@ -2796,6 +2835,14 @@ async def update_api_key_permissions(
     _rbac: AuthenticatedUser = Depends(require_partner()),
     lxd_service: LXDService = Depends(get_lxd_service),
     db: AsyncSession = Depends(get_db),
+    # note: last, so callers passing the others by position are unchanged.
+    rebind_cluster_ids: List[str] = Query(
+        default=[],
+        description=(
+            "Clusters whose paused grant (made for a registration of the id that has since ended) "
+            "should now reach the cluster registered under it. Without it a paused grant stays paused."
+        ),
+    ),
 ):
     """Update API key cluster permissions."""
     # important: before the cluster reads below. An add-on installation owns its grant.
@@ -2834,7 +2881,11 @@ async def update_api_key_permissions(
                     if isinstance(grant, dict)
                 ),
             )
-            metadata["cluster_permissions"] = [p.model_dump(exclude={"registered"}) for p in permissions]
+            metadata["cluster_permissions"] = await cluster_generations.stamped(
+                [p.model_dump(exclude={"registered"}) for p in permissions],
+                held=metadata.get("cluster_permissions") or [],
+                rebind=rebind_cluster_ids,
+            )
             await asyncio.to_thread(
                 vault_client.vault_kv_put,
                 f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
@@ -3388,7 +3439,8 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             except Exception as e:
                 logger.warning(f"Could not enrich cluster names: {e}")
 
-        for perm in raw_permissions:
+        generations = await _generations_for_scope()
+        for perm in _with_registration_state(raw_permissions, generations):
             cluster_id = perm.get("cluster_id")
             enriched_perm = _reported_grant(dict(perm), unregistered)
             enriched_perm["cluster_name"] = cluster_names.get(cluster_id, cluster_id)
@@ -3952,8 +4004,17 @@ def _key_info(metadata: Dict[str, Any], user_mappings_count: int = 0) -> "APIKey
     but the field is documented as "past its expiration" and an integration branches on it. A
     key that is both would otherwise report `is_expired: false` next to `expiry_state: expired`.
     """
+    grants = metadata.get("cluster_permissions") or []
+    generations = cluster_generations.known()
+    # Never the stamp; a paused grant (its registration ended) reads `registered: false`, and
+    # `rebindable` when its id is registered again (cluster_generations.annotate).
+    shown = (
+        cluster_generations.annotate(grants, generations)
+        if generations is not None
+        else [{k: v for k, v in g.items() if k != cluster_generations.STAMP} if isinstance(g, dict) else g for g in grants]
+    )
     return APIKeyInfo(
-        **metadata,
+        **{**metadata, "cluster_permissions": shown},
         is_expired=is_expired(metadata.get("expires_at")),
         expiry_state=expiry_state(metadata.get("expires_at")),
         user_mappings_count=user_mappings_count,
@@ -4144,11 +4205,13 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
     `/validate` carries: it grants nothing and reports only what the presented key already holds.
     """
     granted = granted_capabilities(api_key)
+    # What the key holds, paused grants included: the published contract reports every stored entry.
     grants = [
-        grant for grant in api_key.get("cluster_permissions", [])
+        grant for grant in api_key.get("_held_cluster_permissions") or api_key.get("cluster_permissions", [])
         if isinstance(grant, dict) and "cluster_id" in grant
     ]
     unregistered = await _unregistered_cluster_ids(grant["cluster_id"] for grant in grants)
+    grants = _with_registration_state(grants, await _generations_for_scope())
     return APIKeyValidateResponse(
         valid=True,
         app_name=api_key.get("app_name"),

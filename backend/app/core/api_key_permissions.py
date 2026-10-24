@@ -54,6 +54,20 @@ def assert_cluster_permission(
     }
     grant = grants.get(cluster_id)
     if grant is None:
+        # A grant the key holds for a registration of this id that has ended (services/
+        # cluster_generations.py): the same 404 an id no cluster is registered under gets, since
+        # the cluster it was granted is gone. The key already holds the id, so this discloses nothing.
+        if any(
+            isinstance(held, dict) and held.get("cluster_id") == cluster_id
+            for held in api_key.get("_held_cluster_permissions", [])
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "cluster_not_registered",
+                    "message": f"Cluster '{cluster_id}' is not registered with this control plane",
+                },
+            )
         raise HTTPException(status_code=403, detail=f"No permission for cluster {cluster_id}")
 
     held = grant.get("permissions", ["read"])

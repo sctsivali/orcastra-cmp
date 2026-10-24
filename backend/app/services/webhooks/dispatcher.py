@@ -197,12 +197,10 @@ async def _still_authorised(
 
     cluster_id = (payload.get("data") or {}).get("cluster_id")
     if cluster_id:
-        reachable = {
-            grant.get("cluster_id")
-            for grant in (install.granted_scope or [])
-            if isinstance(grant, dict)
-        }
-        if cluster_id not in reachable:
+        from app.services import cluster_generations
+
+        generations = await cluster_generations.current_or_none()
+        if cluster_id not in cluster_generations.reachable(install.granted_scope, generations):
             return "the installation no longer reaches that cluster"
     return None
 

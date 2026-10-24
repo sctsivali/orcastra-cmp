@@ -600,11 +600,12 @@ async def uncovered_clusters(
     bound = await db.execute(
         select(OrganizationCluster.cluster_id).where(OrganizationCluster.organization_id == organization_id)
     )
-    granted = {
-        grant.get("cluster_id")
-        for grant in ((metadata or {}).get("cluster_permissions") or [])
-        if isinstance(grant, dict)
-    }
+    # A grant for a registration that has ended covers nothing: the id may be someone else's now.
+    from app.services import cluster_generations
+
+    granted = cluster_generations.reachable(
+        (metadata or {}).get("cluster_permissions"), await cluster_generations.current_or_none()
+    )
     return sorted({cluster_id for cluster_id in bound.scalars().all() if cluster_id and cluster_id not in granted})
 
 

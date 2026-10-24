@@ -55,7 +55,7 @@ async def run(apply: bool) -> int:
 
     registered = set(await asyncio.to_thread(_registered_ids))
     print(f"registered clusters: {', '.join(sorted(registered))}\n")
-    stale = lambda cluster_id: cluster_id not in registered  # noqa: E731
+    stale = lambda grant: grant.get("cluster_id") not in registered  # noqa: E731
 
     vault_client = get_vault_integrations_client()
     key_ids = await asyncio.to_thread(key_grant_hygiene.list_key_ids_strict, vault_client)

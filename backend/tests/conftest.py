@@ -77,6 +77,21 @@ def _default_to_no_active_migration_fence(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _grants_match_as_before_generations(monkeypatch):
+    """Unit tests have no database for registration generations (services/cluster_generations.py).
+
+    The default is the state before the legacy backfill: nothing adopted, adoption open, so every
+    grant matches by id as it always did. Tests of generations put the real reader back.
+    """
+    from app.services import cluster_generations
+
+    async def _before_generations(*, fresh: bool = False):
+        return cluster_generations.Generations(active={}, closed=False)
+
+    monkeypatch.setattr(cluster_generations, "current", _before_generations)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_rate_sampler(monkeypatch):
     """Keep rate baselines in-process and empty for every test.
 

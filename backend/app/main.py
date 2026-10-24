@@ -485,6 +485,17 @@ async def lifespan(app: FastAPI):
     except Exception as schedule_err:
         logger.error("Could not start the snapshot schedule loop: %s", schedule_err, exc_info=True)
 
+    # Registration generations (services/cluster_generations.py): adopt every cluster registered
+    # before they existed, once, then close adoption. Every worker tries; the work is idempotent.
+    try:
+        from app.services import cluster_generations
+
+        # No Vault, no registry: nothing was ever registered, and nothing can be adopted.
+        if settings.key_grant_generations and get_lxd_service().cert_manager is not None:
+            cluster_generations.start_backfill(lambda: get_lxd_service().cert_manager.read_registry(False))
+    except Exception as generations_err:
+        logger.error("Could not start the registration generation backfill: %s", generations_err, exc_info=True)
+
     # Project deletes their request could not settle (unknown outcome, or a worker that died
     # between sending the DELETE and reading the answer). Every worker sweeps; rows are leased.
     # Its own try, for the reason the block above gives.
@@ -674,6 +685,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.project_delete_sweeper import stop_project_delete_sweeper
         await stop_project_delete_sweeper()
+    except Exception:
+        pass
+    try:
+        from app.services import cluster_generations
+        await cluster_generations.stop_backfill()
     except Exception:
         pass
     try:

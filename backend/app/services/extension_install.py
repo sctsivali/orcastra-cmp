@@ -48,6 +48,7 @@ from app.services.integration_key_ownership import (
     refuse_if_key_owns_organizations,
     serialize_key_ownership,
 )
+from app.services import cluster_generations
 from app.services.organization_owners import serialize_org_owners
 
 logger = logging.getLogger(__name__)
@@ -255,7 +256,11 @@ async def install_extension(
             )
 
     organization = await _organization(db, organization_id)
-    grant_dicts = [g.model_dump() if hasattr(g, "model_dump") else dict(g) for g in grants]
+    # Stamped with the registration each cluster has now (services/cluster_generations.py); the
+    # key and every later rotation copy this, so the add-on reaches only that registration.
+    grant_dicts = await cluster_generations.stamped(
+        [g.model_dump() if hasattr(g, "model_dump") else dict(g) for g in grants]
+    )
 
     plain, secret_values = extension_settings.validate_values(
         extension.settings_schema, settings_values or {}
@@ -344,7 +349,11 @@ async def rescope_install(
         is_admin=is_admin,
     )
 
-    grant_dicts = [g.model_dump() if hasattr(g, "model_dump") else dict(g) for g in grants]
+    # A rescope is a fresh consent to the whole grant by someone allowed on each cluster now, so
+    # every grant in it is stamped with the registration its cluster has now.
+    grant_dicts = await cluster_generations.stamped(
+        [g.model_dump() if hasattr(g, "model_dump") else dict(g) for g in grants]
+    )
     # important: decided and written on the locked row, under the lock of every credential it rewrites
     # (lock_installation). From a copy read before a rotation, this rewrote the retired key and the new
     # one kept the old scope, which the sweep never notices because it compares the row with itself.

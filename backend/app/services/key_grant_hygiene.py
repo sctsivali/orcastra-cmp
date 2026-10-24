@@ -20,7 +20,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-Stale = Callable[[str], bool]
+# One grant dict in, whether it names a registration that is gone.
+Stale = Callable[[Mapping[str, Any]], bool]
 
 
 @dataclass(frozen=True)
@@ -48,10 +49,11 @@ def plan_cleanup(key_id: str, metadata: Mapping[str, Any], stale: Stale) -> Opti
     from app.services.add_on_credential_edits import is_add_on_credential
 
     grants = _grants(metadata)
-    drop = sorted({str(g["cluster_id"]) for g in grants if g.get("cluster_id") and stale(str(g["cluster_id"]))})
-    if not drop:
+    dropped = [g for g in grants if g.get("cluster_id") and stale(g)]
+    if not dropped:
         return None
-    kept = [g for g in grants if g.get("cluster_id") not in drop]
+    drop = sorted({str(g["cluster_id"]) for g in dropped})
+    kept = [g for g in grants if not any(g is d for d in dropped)]
     return GrantCleanup(
         key_id=key_id,
         app_name=str(metadata.get("app_name") or metadata.get("name") or ""),
@@ -59,6 +61,21 @@ def plan_cleanup(key_id: str, metadata: Mapping[str, Any], stale: Stale) -> Opti
         add_on=is_add_on_credential(metadata),
         left_empty=not kept,
     )
+
+
+def made_for(cluster_id: str, ended: Optional[Any]) -> Stale:
+    """A grant for `cluster_id` written for the registration `ended` (any, when None)."""
+    from app.services.cluster_generations import STAMP
+
+    def stale(grant: Mapping[str, Any]) -> bool:
+        if grant.get("cluster_id") != cluster_id:
+            return False
+        if ended is None:
+            return True
+        stamp = grant.get(STAMP)
+        return stamp == ended.registration_id if stamp else bool(ended.legacy)
+
+    return stale
 
 
 def list_key_ids_strict(vault_client: Any) -> List[str]:
@@ -98,7 +115,7 @@ async def apply_cleanup(db: Any, vault_client: Any, key_id: str, stale: Stale, r
         if cleanup is None or not cleanup.writable:
             await db.commit()
             return []
-        metadata["cluster_permissions"] = [g for g in _grants(metadata) if g.get("cluster_id") not in cleanup.drop]
+        metadata["cluster_permissions"] = [g for g in _grants(metadata) if not (g.get("cluster_id") and stale(g))]
         await asyncio.to_thread(
             vault_client.vault_kv_put,
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
@@ -119,9 +136,15 @@ async def apply_cleanup(db: Any, vault_client: Any, key_id: str, stale: Stale, r
 
 
 async def strip_cluster_from_key_grants(
-    cluster_id: str, session_maker: Optional[Callable[[], Any]] = None
+    cluster_id: str,
+    ended: Optional[Any] = None,
+    session_maker: Optional[Callable[[], Any]] = None,
 ) -> int:
-    """After a deregistration: drop the id from every key grant that can be rewritten.
+    """After a deregistration: drop the grants made for the registration that ended.
+
+    `ended` is that registration (services/cluster_generations.end_registration): only a grant
+    stamped with it, or an unstamped one when it was a legacy registration, goes. A grant for a
+    registration made since (a quick re-register) stays. Without it every grant naming the id goes.
 
     Returns how many keys changed. A failure is logged and counted out, never raised: the cluster
     is already deregistered, and the repair script covers whatever this could not reach. Each key
@@ -145,7 +168,7 @@ async def strip_cluster_from_key_grants(
         try:
             async with session_maker() as db:
                 dropped = await apply_cleanup(
-                    db, vault_client, key_id, lambda c: c == cluster_id, reason=f"cluster {cluster_id} deregistered"
+                    db, vault_client, key_id, made_for(cluster_id, ended), reason=f"cluster {cluster_id} deregistered"
                 )
         except Exception as exc:  # noqa: BLE001 - one key must not stop the others
             logger.warning("Could not drop deregistered cluster %s from API key %s: %s", cluster_id, key_id, exc)

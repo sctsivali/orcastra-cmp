@@ -55,6 +55,12 @@ class _Cert:
     def save_cluster_secrets(self, **kwargs):
         return True
 
+    def read_registry(self, use_cache=True, **_kwargs):
+        # Registration reads the registry from Vault to decide which generation it starts.
+        from types import SimpleNamespace
+
+        return SimpleNamespace(source="vault", cluster_ids=[])
+
     def generate_and_store_certificate(self, **kwargs):
         return {"cert": "-----BEGIN CERTIFICATE-----\nQA\n-----END CERTIFICATE-----"}
 
@@ -131,6 +137,12 @@ def _client(monkeypatch, user=None, allowed=None):
     monkeypatch.setattr("app.core.node_metadata.get_node_metadata_store", lambda: _Store())
     monkeypatch.setattr("app.services.lxd_service.get_lxd_service", lambda: _Service())
     monkeypatch.setattr("app.core.org_scope.get_user_org_ids", org_ids)
+
+    async def no_generation(*_args, **_kwargs):
+        return None
+
+    # The registration generation is its own test (test_a_grant_reaches_only_the_registration_it_was_given_for.py).
+    monkeypatch.setattr(module.cluster_generations, "begin_registration", no_generation)
 
     app = FastAPI()
     app.include_router(module.router)

@@ -48,6 +48,7 @@ from app.core.type_utils import (
     resolve_cluster_type,
     resolve_clustered,
 )
+from app.services import cluster_generations
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import trust_cleanup
@@ -234,6 +235,21 @@ async def register_cluster(
                 status_code=exc.status_code,
                 detail=exc.as_detail(),
             ) from exc
+
+        # Which registration this is (services/cluster_generations.py), in this transaction and
+        # under the share lock. An id the registry lists right now is its owner registering it
+        # again (a new endpoint, say): the registration, and every API key grant made for it,
+        # carries on. Anything else starts a new one, which no earlier grant reaches.
+        # important: from Vault itself. A remembered registry could call a deregistered id live.
+        read = await asyncio.to_thread(cert_manager.read_registry, False)
+        if getattr(read, "source", None) != "vault":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The cluster registry could not be read. Try again in a moment.",
+            )
+        await cluster_generations.begin_registration(
+            db, cluster_id, live=cluster_id in set(read.cluster_ids)
+        )
         
         # Step 1: Pre-auth type detection from /1.0 API endpoint
         # The /1.0 endpoint returns api_extensions even without auth, which is enough to tell
@@ -342,6 +358,7 @@ async def register_cluster(
             # locks are released only at transaction end, and configuration writes must not
             # remain blocked during certificate generation after ownership is settled.
             await db.commit()
+            cluster_generations.changed()
         except Exception as exc:
             await db.rollback()
             logger.error("Failed to persist cluster ownership for %s", cluster_id)
@@ -1149,6 +1166,25 @@ async def delete_cluster(
         await assert_cluster_not_migration_fenced(cluster_id=cluster_id, db=db)
     except MigrationFenceConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
+    # The registration ends first, in a transaction of its own that must commit before anything is
+    # deleted (services/cluster_generations.py). The Vault deletes below are best effort; if this
+    # lived among them, a re-registration could find the old registration still active and hand
+    # every grant made for it to whoever registers the id next.
+    try:
+        async with serialize_cluster_share(db, cluster_id):
+            ended = await cluster_generations.end_registration(db, cluster_id)
+            await db.commit()
+    except Exception as exc:
+        logger.error("Could not end the registration of %s; nothing was deleted: %s", cluster_id, exc)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The cluster's registration could not be ended, so nothing was deleted. Try again.",
+        ) from exc
+    cluster_generations.changed()
     # Step 0: revoke our own access while the key still exists. Before any Vault delete, because
     # removing a trust entry needs the current certificate. Best effort: it never blocks the delete.
     manual_trust_commands: list = []
@@ -1320,28 +1356,22 @@ async def delete_cluster(
         except Exception as e:
             logger.warning(f"Failed to delete node metadata for {cluster_id}: {e}")
 
-        # Step 8: Drop the id from API key grants. Left behind, a grant names an id no cluster
-        # holds: it authorises nothing, but the key reports it as held, its integration polls it,
-        # and the same id registered later by someone else would come back inside the old grant.
+        # Step 8: Drop the grants made for the registration that just ended. They already reach
+        # nothing (the registration is over), but a key reports them as held and its integration
+        # polls them. Only grants for `ended` go, so a grant for a registration made since, by a
+        # quick re-register, stays.
         # important: shielded and never cancelled. A key rewrite cut off between its Vault write
         # and its lock release could land after a concurrent revoke and bring the key back; on a
         # slow Vault the route stops waiting and the cleanup carries on.
         keys_changed: Optional[int] = None
         try:
             from app.services.key_grant_hygiene import strip_cluster_from_key_grants
-            from app.services.lxd import registry as cluster_registry
             from app.services.project_deletion import spawn
 
-            still_registered = await cluster_registry.registered_cluster_ids(fresh=True)
-            if still_registered is not None and cluster_id not in still_registered:
-                cleanup = spawn(strip_cluster_from_key_grants(cluster_id))
-                keys_changed = await asyncio.wait_for(
-                    asyncio.shield(cleanup), timeout=KEY_GRANT_CLEANUP_TIMEOUT
-                )
-            else:
-                # The registry still lists it (a Vault delete above failed) or cannot say: every
-                # grant naming it is still right. The repair script covers it once it is gone.
-                logger.warning("Not touching API key grants for %s: the registry does not confirm it is gone", cluster_id)
+            cleanup = spawn(strip_cluster_from_key_grants(cluster_id, ended))
+            keys_changed = await asyncio.wait_for(
+                asyncio.shield(cleanup), timeout=KEY_GRANT_CLEANUP_TIMEOUT
+            )
         except asyncio.TimeoutError:
             logger.warning(
                 "API key grant cleanup for %s is still running after %ss; it finishes in the background",

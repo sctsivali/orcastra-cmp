@@ -420,6 +420,16 @@ class Settings(BaseSettings):
         description="Clear cached lists when a cluster's event stream reports a change made outside the console."
     )
 
+    # An API key grant reaches only the registration of a cluster id it was given for
+    # (services/cluster_generations.py). A kill switch, not a rollout stage: off, a grant matches
+    # by id alone again, and a key still naming a deregistered id reaches whatever is registered
+    # under it next.
+    key_grant_generations: bool = Field(
+        default=True,
+        alias="KEY_GRANT_GENERATIONS",
+        description="Bind API key grants to the cluster registration they were given for."
+    )
+
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
     # On, with an off switch kept for an operator who wants one.
     #
