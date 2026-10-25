@@ -159,7 +159,8 @@ async function fulfillSnapshotCreate(route, state, options, mutation) {
       status === 202
         ? "ops-maintenance-20260920t120000z"
         : "ops-maintenance-20260920t120001z",
-    operation_id: status === 202 ? "fixture-operation-1" : null,
+    // A settled create still names its operation, as the backend does; following it is a defect.
+    operation_id: status === 202 ? "fixture-operation-1" : "fixture-operation-settled",
     message:
       status === 202
         ? "Snapshot creation is still in progress."
