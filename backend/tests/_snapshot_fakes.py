@@ -127,6 +127,10 @@ class FakeInstanceNode:
         self.operations_all_projects_error: Optional[Exception] = None
         # What `GET /1.0/warnings?recursion=1` answers.
         self.warnings: List[Dict[str, Any]] = []
+        # The pool behind the root disk and its driver. None leaves the root disk out of
+        # `expanded_devices`, which is what every test written before the restore plan expects.
+        self.root_pool: Optional[str] = None
+        self.pool_driver: str = "dir"
 
     @property
     def snapshots_api(self):
@@ -136,12 +140,16 @@ class FakeInstanceNode:
     def backups(self):
         return _Backups(self)
 
-    def get(self, params=None):
+    def get(self, params=None, timeout=None):
+        expanded = dict(self.devices)
+        if self.root_pool:
+            expanded["root"] = {"type": "disk", "path": "/", "pool": self.root_pool}
         return _Response(
             {
                 "metadata": {
                     "config": self.config,
                     "devices": self.devices,
+                    "expanded_devices": expanded,
                     "profiles": self.profiles,
                     "architecture": "x86_64",
                 }
@@ -397,7 +405,25 @@ class _Api:
 
     @property
     def storage_pools(self):
-        return _Response({"metadata": ["/1.0/storage-pools/default"]})
+        return _StoragePools(self._node)
+
+
+class _StoragePools(_Response):
+    """The pool listing as before, plus one pool's record for the restore plan's driver read."""
+
+    def __init__(self, node: FakeInstanceNode):
+        super().__init__({"metadata": ["/1.0/storage-pools/default"]})
+        self._node = node
+
+    def __getitem__(self, pool):
+        node = self._node
+
+        class _Pool:
+            def get(self, params=None, timeout=None):
+                node.recorded.append(("get_storage_pool", pool, timeout))
+                return _Response({"metadata": {"name": pool, "driver": node.pool_driver}})
+
+        return _Pool()
 
 
 class FakeClient:

@@ -20,7 +20,7 @@ Three rules follow from that split and are load-bearing:
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pylxd.exceptions import LXDAPIException
@@ -53,7 +53,7 @@ from app.services.lxd.lazy_client import client_for
 from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT, proxy_executor
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.settle_invalidation import invalidate_when_settled
-from app.services.snapshots import fleet_sizes
+from app.services.snapshots import fleet_sizes, operation_initiator, restore_plan
 from app.models.schemas import (
     SnapshotActionResponse,
     SnapshotCreateResponse,
@@ -269,6 +269,57 @@ def _gate_ownership(
             details={"snapshot": snapshot_name, "snapshot_origin": origin.value},
         )
         raise
+
+
+async def _read_root_pool_driver(client, instance_name: str, project: str) -> Optional[str]:
+    """The root disk's storage driver, or None when it cannot be read.
+
+    note: unknown proceeds as before. The daemon's own refusal is reported (wait_for_operation reads
+    a failed operation back), at the cost of the safety copy staying behind.
+    """
+    try:
+        return await _blocking(
+            restore_plan.read_root_pool_driver, client, instance_name, project,
+            label="snapshots.pool",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read the storage driver of %s/%s: %s", project, instance_name, exc)
+        return None
+
+
+def _gate_restore_plan(
+    driver: Optional[str],
+    existing: List[Dict[str, Any]],
+    snapshot_name: str,
+    safety_wanted: bool,
+    *,
+    instance_name: str,
+    host: str,
+    project: str,
+) -> None:
+    """Refuse, before the safety copy is written, a restore the storage cannot perform."""
+    plan = restore_plan.plan_restore(driver, existing, snapshot_name)
+    refusal: Optional[Dict[str, str]] = None
+    if not plan.restorable:
+        refusal = {"error": "restore_needs_newest_snapshot", "message": plan.reason or ""}
+    elif safety_wanted and not plan.safety_snapshot_supported:
+        refusal = {
+            "error": "safety_snapshot_unsupported",
+            "message": f"{plan.reason} Restore without a safety snapshot.",
+        }
+    if refusal is None:
+        return
+    _audit(
+        "instance.snapshot.restore", instance_name, host, project,
+        result="denied",
+        error_message=refusal["error"],
+        details={
+            "snapshot": snapshot_name,
+            "storage_driver": plan.storage_driver,
+            "newer_snapshots": plan.newer_snapshots,
+        },
+    )
+    raise HTTPException(status_code=409, detail=refusal)
 
 
 async def _read_policy(client, instance_name: str, project: str) -> Dict[str, Any]:
@@ -541,6 +592,10 @@ async def create_snapshot(
                     expires_at=expires_at,
                     label="snapshots.create",
                 )
+                operation_initiator.remember(
+                    body.host, operation_id, actor=operation_initiator.actor_of(user),
+                    project=body.project, instance=instance_name,
+                )
                 outcome = await _settle(client, operation_id, body.project)
             except HTTPException:
                 raise
@@ -722,6 +777,10 @@ async def delete_snapshot(
                 snapshot_name,
                 label="snapshots.delete",
             )
+            operation_initiator.remember(
+                host, operation_id, actor=operation_initiator.actor_of(user), project=project,
+                instance=instance_name,
+            )
             outcome = await _settle(client, operation_id, project)
     except HTTPException:
         raise
@@ -742,14 +801,15 @@ async def delete_snapshot(
     if outcome.get("failed"):
         # The daemon accepted the request and then refused it. Answering 200 "deleted" here would
         # tell an operator a restore point is gone while it is still on the cluster.
+        failure_detail = sanitize_error(str(outcome.get("err") or "unknown error"))
         _audit(
             "instance.snapshot.delete", instance_name, host, project,
-            result="failure", error_message=outcome.get("err"),
+            result="failure", error_message=failure_detail,
             details={"snapshot": snapshot_name},
         )
         raise HTTPException(
             status_code=502,
-            detail=f"The cluster refused the deletion: {outcome.get('err') or 'unknown error'}",
+            detail=f"The cluster refused the deletion: {failure_detail}",
         )
 
     _audit(
@@ -864,6 +924,11 @@ async def restore_snapshot(
                     status_code=404,
                     detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}.",
                 )
+            _gate_restore_plan(
+                await _read_root_pool_driver(client, instance_name, body.project),
+                existing, snapshot_name, body.safety_snapshot,
+                instance_name=instance_name, host=body.host, project=body.project,
+            )
 
             # Its own module beside the ownership and billing gates, because it is a third
             # refusal with the same shape: it decides whether the action may proceed and says
@@ -894,6 +959,10 @@ async def restore_snapshot(
                 snapshot_name,
                 label="snapshots.restore",
             )
+            operation_initiator.remember(
+                body.host, operation_id, actor=operation_initiator.actor_of(user),
+                project=body.project, instance=instance_name,
+            )
             outcome = await _settle(client, operation_id, body.project)
     except HTTPException:
         raise
@@ -916,16 +985,17 @@ async def restore_snapshot(
     if outcome.get("failed"):
         # A restore stops the instance before rolling it back, so a daemon-side failure can leave
         # it stopped. Reporting success would send the operator away from a broken instance.
+        failure_detail = sanitize_error(str(outcome.get("err") or "unknown error"))
         _audit(
             "instance.snapshot.restore", instance_name, body.host, body.project,
-            result="failure", error_message=outcome.get("err"),
+            result="failure", error_message=failure_detail,
             details={"snapshot": snapshot_name, "safety_snapshot": safety_name},
         )
         _invalidate_after_restore(body.host, body.project, instance_name)
         raise HTTPException(
             status_code=502,
             detail=(
-                f"The cluster refused the restore: {outcome.get('err') or 'unknown error'}."
+                f"The cluster refused the restore: {failure_detail}."
                 + (f" Safety snapshot {safety_name} was taken and is still present." if safety_name else "")
             ),
         )

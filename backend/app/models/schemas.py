@@ -2215,3 +2215,23 @@ class SnapshotRestoreRequest(BaseModel):
             "separate from the billing acknowledgement: they answer different questions"
         ),
     )
+
+
+class SnapshotRestorePlanResponse(BaseModel):
+    """What a restore of this snapshot can do on the instance's storage, read before it runs."""
+
+    storage_driver: Optional[str] = Field(None, description="Driver of the pool behind the root disk, when known")
+    restorable: bool = Field(..., description="False when the storage cannot roll back to this snapshot")
+    safety_snapshot_supported: bool = Field(
+        ..., description="False when no safety snapshot can be kept through the restore (ZFS)"
+    )
+    newer_snapshots: List[str] = Field(default_factory=list, description="Later snapshots that block it")
+    reason: Optional[str] = Field(None, description="Why the restore is limited, in words an operator can act on")
+
+
+class SnapshotOperationStatusResponse(BaseModel):
+    """A snapshot operation's status, for the caller who started it."""
+
+    status: Optional[str] = None
+    status_code: Optional[int] = None
+    err: Optional[str] = None

@@ -982,6 +982,8 @@ Ensure your client certificates are properly configured.
     # Instance snapshots (JWT): operator rollback points, distinct from OrcaHub's paid product
     from app.routers.instance_snapshots import router as instance_snapshots_router
     app.include_router(instance_snapshots_router, prefix=settings.api_prefix)
+    from app.routers.instance_snapshot_follow import router as instance_snapshot_follow_router
+    app.include_router(instance_snapshot_follow_router, prefix=settings.api_prefix)
     from app.routers.snapshots_fleet import router as snapshots_fleet_router
     app.include_router(snapshots_fleet_router, prefix=settings.api_prefix)
     if settings.snapshot_schedules_enabled:
