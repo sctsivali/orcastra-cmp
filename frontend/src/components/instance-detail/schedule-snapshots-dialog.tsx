@@ -284,7 +284,7 @@ export function ScheduleSnapshotsDialog({
 
         <DialogSubmitError message={error} />
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             Cancel
           </Button>

@@ -223,7 +223,7 @@ export function RestoreSnapshotDialog({
             without the live region a screen-reader user is told nothing at all. */}
         <DialogSubmitError message={error} />
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={restore.isPending}>
             Cancel
           </Button>

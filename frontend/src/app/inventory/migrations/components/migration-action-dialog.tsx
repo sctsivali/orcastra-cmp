@@ -167,7 +167,7 @@ export function MigrationActionDialog({
   return (
     <Dialog open onOpenChange={(open) => !mutation.isPending && onOpenChange(open)}>
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
@@ -239,7 +239,7 @@ export function MigrationActionDialog({
           )}
         </div>
 
-        <DialogFooter className="gap-2 sm:space-x-0">
+        <DialogFooter className="gap-2 pt-4 sm:space-x-0">
           <Button
             className="min-h-11 w-full sm:min-h-10 sm:w-auto"
             variant="outline"
