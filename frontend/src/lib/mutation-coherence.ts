@@ -224,7 +224,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "cluster.register": {
     completion: "response",
-    queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources", "instances", "instanceDetails", "monitoring", "ipam", "projects", "images", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "networkDetails", "networkAcls", "profiles", "profileDetails", "snapshots", "snapshotSchedules", "certificates", "regions", "warnings", "organizations", "identities", "identityDetails", "groups", "groupDetails"],
+    queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources", "instances", "instanceDetails", "monitoring", "ipam", "projects", "images", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "networkDetails", "networkAcls", "profiles", "profileDetails", "snapshots", "snapshotSchedules", "certificates", "regions", "warnings", "organizations", "identities", "identityDetails", "groups", "groupDetails", "integrations"],
     apiCalls: ["api.clusters.register"],
   },
   "cluster.auth-check": {
@@ -235,7 +235,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "cluster.delete": {
     completion: "response",
-    queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources", "instances", "instanceDetails", "monitoring", "ipam", "projects", "images", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "networkDetails", "networkAcls", "profiles", "profileDetails", "snapshots", "snapshotSchedules", "certificates", "regions", "warnings", "organizations", "identities", "identityDetails", "groups", "groupDetails"],
+    queryFamilies: ["clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "nodeResources", "instances", "instanceDetails", "monitoring", "ipam", "projects", "images", "storagePools", "storagePoolDetails", "storageVolumes", "networks", "networkDetails", "networkAcls", "profiles", "profileDetails", "snapshots", "snapshotSchedules", "certificates", "regions", "warnings", "organizations", "identities", "identityDetails", "groups", "groupDetails", "integrations"],
     apiCalls: ["api.clusters.delete"],
   },
   "cluster.certificate": {
@@ -314,7 +314,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   },
   "organization.write": {
     completion: "response",
-    queryFamilies: ["organizations", "clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "instances", "projects", "identities", "groups", "tenantAccess", "personalization"],
+    queryFamilies: ["organizations", "clusters", "clusterDetails", "clusterMembers", "nodes", "nodePicker", "instances", "projects", "identities", "groups", "tenantAccess", "personalization", "integrations"],
     apiCalls: [
       "api.organizations.create", "api.organizations.update", "api.organizations.delete",
       "api.organizations.addMember", "api.organizations.updateMember",

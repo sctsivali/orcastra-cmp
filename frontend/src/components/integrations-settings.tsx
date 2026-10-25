@@ -199,12 +199,21 @@ function IntegrationsSettingsContent() {
   const vaultUnavailable = isVaultUnavailable(keysError);
 
   // Fetch available clusters
-  const { data: clustersData } = useQuery({
+  const { data: clustersData, isFetching: clustersFetching } = useQuery({
     queryKey: ["integrations", "available-clusters"],
     queryFn: () => api.integrations.getAvailableClusters(),
     enabled: mounted,
     staleTime: 60000,
   });
+
+  // Opening a key dialog reads both lists again. A cluster registered since this page loaded
+  // (through the API, by another admin, in another tab) is then offered by name, and a grant
+  // that has just come back is no longer shown as paused. Unforced: neither answer is cached in
+  // a way that would hide a registration.
+  const refreshAccessLists = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["integrations", "available-clusters"] });
+    void queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
+  }, [queryClient]);
 
   // Fetch the capability vocabulary. Served rather than hardcoded so the picker always matches
   // what the external router enforces. It only changes on deploy, so it is cached for an hour.
@@ -416,6 +425,8 @@ function IntegrationsSettingsContent() {
           />
           <CreateAPIKeyDialog
             clusters={clusters}
+            clustersChecking={clustersFetching}
+            onOpen={refreshAccessLists}
             capabilities={capabilityData?.capabilities ?? []}
             applicationTypes={capabilityData?.application_types ?? []}
             onSubmit={(data) => createMutation.mutateAsync(data)}
@@ -488,6 +499,8 @@ function IntegrationsSettingsContent() {
               </div>
               <CreateAPIKeyDialog
                 clusters={clusters}
+                clustersChecking={clustersFetching}
+                onOpen={refreshAccessLists}
                 capabilities={capabilityData?.capabilities ?? []}
                 applicationTypes={capabilityData?.application_types ?? []}
                 onSubmit={(data) => createMutation.mutateAsync(data)}
@@ -667,6 +680,8 @@ function IntegrationsSettingsContent() {
                       <EditAPIKeyPermissionsDialog
                         apiKey={apiKey}
                         clusters={clusters}
+                        clustersChecking={clustersFetching}
+                        onOpen={refreshAccessLists}
                         onSubmit={(keyId, permissions, rebindClusterIds) =>
                           updatePermissionsMutation.mutateAsync({ keyId, permissions, rebindClusterIds })
                         }

@@ -71,6 +71,10 @@ function seedFromGrants(permissions: ClusterPermission[] | undefined): SeededGra
 interface EditAPIKeyPermissionsDialogProps {
   apiKey: APIKeyInfo;
   clusters: AvailableCluster[];
+  /** True while the cluster list is being read again. */
+  clustersChecking?: boolean;
+  /** Called each time the dialog opens, so the page can read the cluster and key lists again. */
+  onOpen?: () => void;
   /** Resolves when the update lands and rejects when it does not. */
   onSubmit: (keyId: string, permissions: ClusterPermission[], rebindClusterIds: string[]) => Promise<unknown>;
   isSubmitting: boolean;
@@ -87,11 +91,16 @@ interface EditAPIKeyPermissionsDialogProps {
 export function EditAPIKeyPermissionsDialog({
   apiKey,
   clusters,
+  clustersChecking = false,
+  onOpen,
   onSubmit,
   isSubmitting,
 }: EditAPIKeyPermissionsDialogProps) {
   const [open, setOpen] = useState(false);
   const seed = useMemo(() => seedFromGrants(apiKey.cluster_permissions), [apiKey]);
+  // note: by content, not identity. Opening reads the key list again, and a refetch that changes
+  // only a last use or a registered flag must not wipe what the operator is typing.
+  const seedKey = JSON.stringify(seed);
 
   const [selectedClusterIds, setSelectedClusterIds] = useState<string[]>(seed.clusterIds);
   const [permissionLevel, setPermissionLevel] = useState(seed.permissionLevel);
@@ -114,7 +123,8 @@ export function EditAPIKeyPermissionsDialog({
     setProjectScope(seed.scope);
     setSelectedProjects(seed.projects);
     setRebind([]);
-  }, [open, seed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seedKey stands for seed
+  }, [open, seedKey]);
 
   const projectScopeOptions = useProjectScopeOptions({
     selectedClusterIds,
@@ -167,7 +177,13 @@ export function EditAPIKeyPermissionsDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) onOpen?.();
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <KeyRound className="mr-1 h-4 w-4" aria-hidden="true" />
@@ -202,6 +218,7 @@ export function EditAPIKeyPermissionsDialog({
                 clusters={clusters}
                 selectedClusterIds={selectedClusterIds}
                 onToggle={toggleCluster}
+                listChecking={clustersChecking}
               />
 
               <PausedGrantsNotice

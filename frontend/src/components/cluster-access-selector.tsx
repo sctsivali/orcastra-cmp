@@ -17,6 +17,11 @@ interface ClusterAccessSelectorProps {
   clusters: AvailableCluster[];
   selectedClusterIds: string[];
   onToggle: (clusterId: string) => void;
+  /**
+   * The cluster list is being read again. A grant the list does not hold yet may be a cluster
+   * registered a moment ago, so it is not called unknown until the read answers.
+   */
+  listChecking?: boolean;
 }
 
 /** One row, whether it came from the cluster list or from a grant with no cluster behind it. */
@@ -48,13 +53,15 @@ function toRow(cluster: AvailableCluster): Row {
   };
 }
 
-function orphanRow(clusterId: string): Row {
+function orphanRow(clusterId: string, checking: boolean): Row {
   return {
     id: clusterId,
     name: clusterId,
     endpoint: "",
     typeLabel: formatHypervisorType(null),
-    meta: clusterStatusMeta(undefined),
+    // important: no status while the list is being read. "Unknown" is a claim about the
+    // cluster, and a cluster registered a moment ago is exactly the case it would get wrong.
+    meta: checking ? undefined : clusterStatusMeta(undefined),
     orphan: true,
   };
 }
@@ -75,6 +82,7 @@ export function ClusterAccessSelector({
   clusters,
   selectedClusterIds,
   onToggle,
+  listChecking = false,
 }: ClusterAccessSelectorProps) {
   const [search, setSearch] = React.useState("");
   const safeClusterList = React.useMemo(
@@ -99,9 +107,9 @@ export function ClusterAccessSelector({
     const orphans = [...seenOrphans.current]
       .filter((id) => !known.has(id))
       .sort()
-      .map(orphanRow);
+      .map((id) => orphanRow(id, listChecking));
     return [...listed, ...orphans];
-  }, [safeClusterList, selectedClusterIds]);
+  }, [safeClusterList, selectedClusterIds, listChecking]);
 
   // Reachable clusters lead, so the ones an operator can act on are not buried mid-list.
   //
@@ -240,7 +248,9 @@ export function ClusterAccessSelector({
                     )}
                     {row.orphan && (
                       <p className="text-xs text-muted-foreground">
-                        Not in your cluster list. Untick to remove this grant.
+                        {listChecking
+                          ? "Checking cluster list"
+                          : "Not in your cluster list. Untick to remove this grant."}
                       </p>
                     )}
                   </div>

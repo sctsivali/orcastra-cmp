@@ -42,6 +42,10 @@ type ProjectScope = "default" | "all" | "specific";
 
 interface CreateAPIKeyDialogProps {
   clusters: AvailableCluster[];
+  /** True while the cluster list is being read again. */
+  clustersChecking?: boolean;
+  /** Called each time the dialog opens, so a cluster registered since page load is offered. */
+  onOpen?: () => void;
   capabilities: CapabilityOption[];
   applicationTypes: ApplicationTypeOption[];
   // Resolves when the key is created and rejects when it is not, so the form is only cleared
@@ -52,6 +56,8 @@ interface CreateAPIKeyDialogProps {
 
 export function CreateAPIKeyDialog({
   clusters,
+  clustersChecking = false,
+  onOpen,
   capabilities,
   applicationTypes,
   onSubmit,
@@ -197,7 +203,13 @@ export function CreateAPIKeyDialog({
     : [{ name: DEFAULT_APP_TYPE, default_capabilities: [] }];
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) onOpen?.();
+      }}
+    >
       <DialogTrigger asChild>
         <Button size="sm">
           <Plus className="h-4 w-4 mr-2" />
@@ -281,6 +293,7 @@ export function CreateAPIKeyDialog({
                 clusters={clusters}
                 selectedClusterIds={selectedClusterIds}
                 onToggle={toggleCluster}
+                listChecking={clustersChecking}
               />
 
               <div className="grid grid-cols-2 gap-4">
