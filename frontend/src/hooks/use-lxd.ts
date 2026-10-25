@@ -2503,14 +2503,21 @@ export function useCreateSnapshot() {
         // second instead of after the fleet read that lists every cluster.
         const settled = result.status === "succeeded";
         if (settled) await refreshSnapshotSlice(queryClient, scopeKey, body.host, project);
-        await reconcileSnapshotState(queryClient, scopeKey);
+        const reconciled = reconcileSnapshotState(queryClient, scopeKey);
         // note: a settled answer is final, so its operation is not followed. Following it read a
         // success at once and ran the forced fleet reconcile above a second time.
-        if (settled || !result.operation_id) return;
+        if (settled || !result.operation_id) {
+          await reconciled;
+          return;
+        }
+        // important: followed at once, beside the reconcile rather than after it. LXD drops a
+        // finished operation shortly after it ends (on nuc2 one read 10 s later answered 404), and
+        // a follow that first waited for the fleet read lost the verdict that way.
         const { verdict } = await reconcileSnapshotOperation(
           queryClient, scopeKey, result.operation_id,
           { host: body.host, project, instance: instanceName },
         );
+        await reconciled;
         if (verdict === "success") {
           await refreshSnapshotSlice(queryClient, scopeKey, body.host, project);
         }
@@ -2563,12 +2570,17 @@ export function useDeleteSnapshot() {
       const settled = result.settled !== false;
       const token = markSnapshotDeleted(queryClient, identity, { settled });
       void (async () => {
-        await reconcileSnapshotState(queryClient, scopeKey);
-        if (settled || !result.operation_id) return;
+        // Followed beside the reconcile, not after it: see useCreateSnapshot.
+        const reconciled = reconcileSnapshotState(queryClient, scopeKey);
+        if (settled || !result.operation_id) {
+          await reconciled;
+          return;
+        }
         const { verdict, err } = await reconcileSnapshotOperation(
           queryClient, scopeKey, result.operation_id,
           { host, project: identity.project, instance: instanceName },
         );
+        await reconciled;
         if (verdict === "failure" || verdict === "partial") {
           clearSnapshotDelete(queryClient, identity, token);
           await reconcileSnapshotState(queryClient, scopeKey);
@@ -2602,12 +2614,17 @@ export function useRestoreSnapshot() {
     retry: false,
     onSuccess: (result, { instanceName, body }) => {
       void (async () => {
-        await reconcileSnapshotState(queryClient, scopeKey);
-        if (result.settled !== false || !result.operation_id) return;
+        // Followed beside the reconcile, not after it: see useCreateSnapshot.
+        const reconciled = reconcileSnapshotState(queryClient, scopeKey);
+        if (result.settled !== false || !result.operation_id) {
+          await reconciled;
+          return;
+        }
         await reconcileSnapshotOperation(
           queryClient, scopeKey, result.operation_id,
           { host: body.host, project: body.project || "default", instance: instanceName },
         );
+        await reconciled;
       })();
     },
   });
