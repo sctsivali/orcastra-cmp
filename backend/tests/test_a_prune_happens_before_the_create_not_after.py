@@ -99,3 +99,24 @@ def test_a_prune_that_fails_does_not_cancel_the_snapshot():
     assert outcome.result == "success", outcome.error
     assert outcome.pruned == []
     assert "create_snapshot" in _labels(node)
+
+
+def test_a_prune_the_daemon_accepts_then_fails_is_not_counted_as_pruned():
+    """The delete is accepted (202) and its operation then fails.
+
+    LXD answers the wait of a failed operation with an error-typed body. The wait used to raise on
+    that, which is the only way this loop learned the prune had failed; it now reads the failure
+    back, so the loop has to look at it or the failed prune is audited as a success.
+    """
+    node = FakeInstanceNode(snapshots=ops_rows(12, 3))
+    node.operation_status = {"op-delete": "Failure", "*": "Success"}
+    node.operation_err = {"op-delete": "snapshot is in use"}
+    svc = service(FakeClient(node))
+
+    outcome = asyncio.run(
+        run_one(FakeDB(), FakeSchedule(keep_last=3, due_slot=SLOT), now=SLOT, lxd_service=svc)
+    )
+
+    assert outcome.result == "success", outcome.error
+    assert outcome.pruned == [], "a prune the daemon failed was counted as done"
+    assert "create_snapshot" in _labels(node)

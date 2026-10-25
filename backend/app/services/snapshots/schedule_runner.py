@@ -323,7 +323,7 @@ async def _run_one_guarded(
                 label=f"prune {victim}",
             )
             if op:
-                await _blocking(
+                settled = await _blocking(
                     snapshots_service.wait_for_operation,
                     client,
                     op,
@@ -331,6 +331,10 @@ async def _run_one_guarded(
                     _SETTLE_TIMEOUT,
                     label=f"settle prune {victim}",
                 )
+                # note: a failed delete used to surface only as the wait raising. The wait now
+                # reads the failure back, so it is raised here to keep the failure audit below.
+                if settled.get("failed"):
+                    raise RuntimeError(settled.get("err") or f"the daemon did not delete {victim}")
             pruned.append(victim)
             _invalidate_snapshot_views(schedule)
             _audit(schedule, "instance.snapshot.schedule.pruned", "success", snapshot=victim)

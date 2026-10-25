@@ -316,7 +316,7 @@ class _OperationNode:
 
     @property
     def wait(self):
-        return self
+        return _OperationWait(self)
 
     def _outcome(self):
         """One status for the node, or a different one per operation id.
@@ -335,11 +335,37 @@ class _OperationNode:
         return status, err
 
     def get(self, params=None, timeout=None):
+        """The operation itself, which reads Failure and its reason even when the wait refuses."""
+        self._node.recorded.append(("get_operation", dict(params or {}), timeout))
+        status, err = self._outcome()
+        return _Response({"type": "sync", "metadata": {"status": status, "err": err}})
+
+
+class _OperationWait:
+    """`/1.0/operations/<id>/wait`, as LXD answers it.
+
+    important: LXD answers the wait of a FAILED or cancelled operation with an error-typed body
+    (verified on nuc2, LXD 5.21: a ZFS restore refused for a later snapshot), and pylxd raises
+    that as LXDAPIException. A fake that returned a tidy Failure here hid that every snapshot
+    write the daemon failed was reported as still running.
+    """
+
+    def __init__(self, operation: _OperationNode):
+        self._operation = operation
+
+    def get(self, params=None, timeout=None):
         # Recorded so a test can assert the socket window outlasts the wait asked of LXD. Without
         # that, the read dies first and every slow operation reports "still running".
-        self._node.recorded.append(("wait_operation", dict(params or {}), timeout))
-        status, err = self._outcome()
-        return _Response({"metadata": {"status": status, "err": err}})
+        node = self._operation._node
+        node.recorded.append(("wait_operation", dict(params or {}), timeout))
+        status, err = self._operation._outcome()
+        if status in ("Failure", "Cancelled"):
+            from pylxd.exceptions import LXDAPIException as PylxdAPIException
+
+            raise PylxdAPIException(
+                _Response({"type": "error", "error": err or status, "error_code": 500, "metadata": None})
+            )
+        return _Response({"type": "sync", "metadata": {"status": status, "err": err}})
 
 
 class _Projects(_Response):

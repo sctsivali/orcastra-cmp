@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+from pylxd.exceptions import LXDAPIException
+
 from app.core.lxd_names import POLICY_CONFIG_KEYS
 from app.core.lxd_path import safe_segment
 from app.core.lxd_segment import lxd_segment
@@ -445,10 +447,19 @@ def wait_for_operation(client, operation_id: str, project: str, timeout: int = 2
     could then only ever catch a failure that surfaced inside 8 seconds. Same rule, and the same
     reason, as guest_output.py:120-122 and the proxy's own client factory.
     """
-    response = client.api.operations[safe_segment(operation_id)].wait.get(
-        params=_project_params(project, timeout=timeout),
-        timeout=(3, int(timeout) + 10),
-    )
+    endpoint = client.api.operations[safe_segment(operation_id)]
+    try:
+        response = endpoint.wait.get(
+            params=_project_params(project, timeout=timeout),
+            timeout=(3, int(timeout) + 10),
+        )
+    except LXDAPIException:
+        # important: LXD answers the wait of a FAILED operation with an error-typed body, which
+        # pylxd raises. Taken as "still running", a restore ZFS refused (a later snapshot exists,
+        # which the safety copy guarantees) was answered "Restoring ..." and audited as accepted.
+        # The operation itself still reads Failure and why, so it is read once; a read that fails
+        # too (a reaped operation's 404) propagates as before.
+        response = endpoint.get(params=_project_params(project), timeout=(3, 15))
     metadata = _metadata(response) or {}
     status = metadata.get("status")
     return {

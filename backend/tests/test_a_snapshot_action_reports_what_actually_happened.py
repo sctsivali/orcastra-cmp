@@ -137,6 +137,35 @@ def test_a_restore_the_daemon_rejects_is_not_reported_as_started():
     assert "ops-pre-" in body, body
 
 
+def test_a_restore_zfs_refuses_after_the_safety_copy_is_reported_as_refused(audited):
+    """The nuc2 case: the safety copy lands, and ZFS then refuses to roll back past it.
+
+    ZFS rolls back only to the latest snapshot, and the safety copy is by construction later than
+    the target. LXD fails the restore operation, and answers its wait with an error-typed body
+    that pylxd raises. `_settle` took that raise as "still running", so the restore was answered
+    200 "Restoring ..." and audited as accepted while the instance was never touched.
+    """
+    node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+    node.operation_status = {"op-restore": "Failure", "*": "Success"}
+    node.operation_err = {
+        "op-restore": (
+            f'Failed to restore snapshot rootfs: Snapshot "{TARGET}" cannot be restored due to '
+            "subsequent snapshot(s). Set zfs.remove_snapshots to override"
+        )
+    }
+
+    response = _restore(node)
+    assert response.status_code == 502, response.text
+    detail = response.json()["detail"]
+    assert "cannot be restored due to subsequent snapshot(s)" in detail
+    assert "ops-pre-" in detail, "the safety copy is still on the pool and the operator is told so"
+    restores = [row for row in audited if row["action"] == "instance.snapshot.restore"]
+    assert [row["result"] for row in restores][-1] == "failure", restores
+    assert not any(row["result"] == "accepted" for row in restores), restores
+    reads = [c[0] for c in node.recorded if c[0] in ("wait_operation", "get_operation")]
+    assert reads[-2:] == ["wait_operation", "get_operation"], reads
+
+
 def test_a_settled_restore_says_it_finished():
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     response = _restore(node)
