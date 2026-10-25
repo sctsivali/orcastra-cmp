@@ -82,6 +82,8 @@ import {
   SnapshotCreateResponse,
   SnapshotRestoreRequest,
   SnapshotActionResponse,
+  SnapshotOperationStatus,
+  SnapshotRestorePlan,
 } from "@/types";
 
 const API_PREFIX = "/api/v1";
@@ -2723,6 +2725,35 @@ const snapshotAPI = {
       undefined,
       false,
       { retryAfterAuthRefresh: false },
+    );
+  },
+  restorePlan: async (
+    instanceName: string,
+    snapshotName: string,
+    host: string,
+    project = "default",
+    opts: ReadOptions = {},
+  ): Promise<SnapshotRestorePlan> => {
+    const qs = new URLSearchParams({ host, project }).toString();
+    return fetchRead<SnapshotRestorePlan>(
+      `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}/restore-plan?${qs}`,
+      opts,
+    );
+  },
+  /** Only the caller who started the operation is answered; anyone else gets 404. */
+  operation: async (
+    instanceName: string,
+    operationId: string,
+    host: string,
+    project = "default",
+  ): Promise<SnapshotOperationStatus> => {
+    const qs = new URLSearchParams({ host, project }).toString();
+    return fetchAPI<SnapshotOperationStatus>(
+      `/instances/${encodeURIComponent(instanceName)}/snapshot-operations/${encodeURIComponent(operationId)}?${qs}`,
+      {},
+      30_000,
+      false,
+      { force: true },
     );
   },
   restore: async (

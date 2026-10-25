@@ -505,11 +505,15 @@ function snapshotReadDescriptor({ path, url, entry, role, options, state, iso, f
   const expectedOperation = options.snapshotReconciliation?.operation ?? null;
   if (
     expectedOperation &&
-    path === `/operations/${encodeURIComponent(expectedOperation.id)}`
+    path ===
+      `/instances/${encodeURIComponent(target.instanceName)}/snapshot-operations/${encodeURIComponent(expectedOperation.id)}`
   ) {
+    // The follow reads through the initiator route, which names the instance and its project.
     const exactHost = url.searchParams.get("host") === expectedOperation.host;
-    const queryKeys = Array.from(url.searchParams.keys());
-    const exactQuery = exactHost && queryKeys.length === 1 && queryKeys[0] === "host";
+    const exactProject = url.searchParams.get("project") === target.project;
+    const queryKeys = Array.from(url.searchParams.keys()).sort();
+    const exactQuery =
+      exactHost && exactProject && queryKeys.length === 2 && queryKeys.join(",") === "host,project";
     state.snapshotReconciliation.operationReads.push({
       id: expectedOperation.id,
       host: url.searchParams.get("host"),

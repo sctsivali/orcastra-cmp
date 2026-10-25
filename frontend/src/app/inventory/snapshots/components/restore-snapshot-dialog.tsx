@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,6 +19,7 @@ import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { useSnapshotRestorePlan } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime } from "@/lib/utils";
 import type { SnapshotInfo } from "@/types/api";
@@ -56,6 +58,10 @@ interface RestoreSnapshotDialogProps {
  *
  * The safety snapshot defaults on and is taken before the restore runs. Taken afterwards it
  * would capture the already-rolled-back state and protect nothing.
+ *
+ * important: ZFS rolls back only to the newest snapshot, and a safety snapshot is always newer
+ * than the target, so the storage plan is read on open. On ZFS the safety option is off and a
+ * target with newer snapshots cannot be submitted; the server enforces the same plan.
  */
 export function RestoreSnapshotDialog({
   open,
@@ -75,6 +81,14 @@ export function RestoreSnapshotDialog({
   const [acknowledged, setAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitInFlightRef = useRef(false);
+  const plan = useSnapshotRestorePlan(
+    { host, project, instance: snapshot.source_name, snapshot: snapshot.name },
+    open,
+  );
+  const safetySupported = plan.data?.safety_snapshot_supported !== false;
+  const restorable = plan.data?.restorable !== false;
+  const planChecking = plan.isFetching && !plan.data;
+  const takeSafety = safety && safetySupported;
 
   useEffect(() => {
     if (open) {
@@ -95,7 +109,7 @@ export function RestoreSnapshotDialog({
   // produces copy-paste without reading.
   const { origin, needsAcknowledgement } = snapshotGates(snapshot, billingLinked);
   const overrideReady = !needsAcknowledgement || (acknowledged && reason.trim().length > 0);
-  const canSubmit = nameMatches && overrideReady && !restore.isPending;
+  const canSubmit = nameMatches && overrideReady && restorable && !planChecking && !restore.isPending;
 
   const handleSubmit = async () => {
     if (submitInFlightRef.current) return;
@@ -109,7 +123,7 @@ export function RestoreSnapshotDialog({
           host,
           project,
           confirm_name: snapshot.source_name,
-          safety_snapshot: safety,
+          safety_snapshot: takeSafety,
           reason: reason.trim() || undefined,
           acknowledge_billing_impact: billingLinked ? acknowledged : undefined,
           acknowledge_upstream_snapshot: origin === "upstream" ? acknowledged : undefined,
@@ -117,7 +131,7 @@ export function RestoreSnapshotDialog({
       });
       toast({
         title: "Restore started",
-        description: safety
+        description: takeSafety
           ? `${snapshot.source_name} is rolling back. A safety snapshot was taken first.`
           : `${snapshot.source_name} is rolling back to ${snapshot.name}.`,
       });
@@ -150,10 +164,25 @@ export function RestoreSnapshotDialog({
             </p>
           </div>
 
+          {planChecking && (
+            <p className="text-xs text-muted-foreground" role="status">
+              Checking what this instance&apos;s storage can restore
+            </p>
+          )}
+
+          {!restorable && plan.data?.reason && (
+            <Alert>
+              <Info className="h-4 w-4" aria-hidden />
+              <AlertTitle>This snapshot cannot be restored here</AlertTitle>
+              <AlertDescription>{plan.data.reason}</AlertDescription>
+            </Alert>
+          )}
+
           <div className="flex items-start gap-3">
             <Checkbox
               id="safety-snapshot"
-              checked={safety}
+              checked={takeSafety}
+              disabled={!safetySupported}
               onCheckedChange={(checked) => setSafety(checked === true)}
             />
             <div className="space-y-1">
@@ -161,8 +190,9 @@ export function RestoreSnapshotDialog({
                 Take a safety snapshot first
               </Label>
               <p className="text-xs text-muted-foreground">
-                Captures the current state before rolling back, so this restore can itself be
-                undone. It expires on its own like any operator snapshot.
+                {safetySupported
+                  ? "Captures the current state before rolling back, so this restore can itself be undone. It expires on its own like any operator snapshot."
+                  : "Not available on ZFS storage: a safety snapshot would be newer than the one restored, and ZFS can only roll back to the newest. This restore cannot be undone."}
               </p>
             </div>
           </div>

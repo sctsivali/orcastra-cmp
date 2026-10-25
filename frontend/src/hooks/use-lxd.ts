@@ -2367,6 +2367,26 @@ export function useInstanceSnapshots(
  * returning before it mounts the component that calls this at all, so an `enabled` option here
  * would be a second mechanism for one job and the one nobody reads.
  */
+/**
+ * What a restore of one snapshot can do on its instance's storage, read each time the dialog
+ * opens. A failed read leaves the dialog as it was: the server enforces the same plan.
+ */
+export function useSnapshotRestorePlan(
+  target: { host: string; project: string; instance: string; snapshot: string },
+  enabled: boolean,
+) {
+  const { scopeKey } = useActorQueryScope();
+  return useQuery({
+    queryKey: ["snapshotRestorePlan", scopeKey, target.host, target.project, target.instance, target.snapshot],
+    queryFn: ({ signal }) =>
+      api.snapshots.restorePlan(target.instance, target.snapshot, target.host, target.project, { signal }),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
 export function useFleetSnapshots(host?: string, project?: string) {
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
@@ -2476,7 +2496,7 @@ export function useCreateSnapshot() {
       api.snapshots.create(instanceName, body),
     // A timed-out POST can still have reached LXD. Retrying it can create a second restore point.
     retry: false,
-    onSuccess: (result, { body }) => {
+    onSuccess: (result, { instanceName, body }) => {
       const project = body.project || "default";
       void (async () => {
         // The slice read is one cluster and one project, so the new row shows in about a
@@ -2488,7 +2508,8 @@ export function useCreateSnapshot() {
         // success at once and ran the forced fleet reconcile above a second time.
         if (settled || !result.operation_id) return;
         const { verdict } = await reconcileSnapshotOperation(
-          queryClient, scopeKey, result.operation_id, body.host,
+          queryClient, scopeKey, result.operation_id,
+          { host: body.host, project, instance: instanceName },
         );
         if (verdict === "success") {
           await refreshSnapshotSlice(queryClient, scopeKey, body.host, project);
@@ -2545,7 +2566,8 @@ export function useDeleteSnapshot() {
         await reconcileSnapshotState(queryClient, scopeKey);
         if (settled || !result.operation_id) return;
         const { verdict, err } = await reconcileSnapshotOperation(
-          queryClient, scopeKey, result.operation_id, host,
+          queryClient, scopeKey, result.operation_id,
+          { host, project: identity.project, instance: instanceName },
         );
         if (verdict === "failure" || verdict === "partial") {
           clearSnapshotDelete(queryClient, identity, token);
@@ -2578,11 +2600,14 @@ export function useRestoreSnapshot() {
       body: SnapshotRestoreRequest;
     }) => api.snapshots.restore(instanceName, snapshotName, body),
     retry: false,
-    onSuccess: (result, { body }) => {
+    onSuccess: (result, { instanceName, body }) => {
       void (async () => {
         await reconcileSnapshotState(queryClient, scopeKey);
         if (result.settled !== false || !result.operation_id) return;
-        await reconcileSnapshotOperation(queryClient, scopeKey, result.operation_id, body.host);
+        await reconcileSnapshotOperation(
+          queryClient, scopeKey, result.operation_id,
+          { host: body.host, project: body.project || "default", instance: instanceName },
+        );
       })();
     },
   });
@@ -2653,12 +2678,15 @@ async function reconcileSnapshotState(
 /**
  * Follow the accepted daemon operation without ever replaying the snapshot mutation, and say how
  * it ended. `unknown` covers a follow that gave up or lost the actor.
+ *
+ * note: read through the snapshot route that answers the operation's initiator, not through
+ * `/operations/{id}`, which refuses every caller in a shared cluster's `default` project.
  */
 async function reconcileSnapshotOperation(
   queryClient: QueryClient,
   actorScope: string,
   operationId: string,
-  host: string,
+  target: { host: string; project: string; instance: string },
 ): Promise<{ verdict: CopyOperationVerdict; err?: string | null }> {
   const startedAt = Date.now();
   let transientFailures = 0;
@@ -2669,12 +2697,8 @@ async function reconcileSnapshotOperation(
     Date.now() - startedAt < COPY_OPERATION_MAX_POLL_MS
   ) {
     try {
-      const operation = await fetchAPI<CopyOperationInfo>(
-        `/operations/${encodeURIComponent(operationId)}?host=${encodeURIComponent(host)}`,
-        {},
-        30_000,
-        false,
-        { force: true },
+      const operation: CopyOperationInfo = await api.snapshots.operation(
+        target.instance, operationId, target.host, target.project,
       );
       if (!isAuthActorSynchronized(actorScope)) return { verdict: "unknown" };
 

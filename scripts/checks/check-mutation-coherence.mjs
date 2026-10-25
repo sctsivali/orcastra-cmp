@@ -1017,7 +1017,8 @@ for (const snippet of [
   "TERMINAL_INSTANCE_OPERATION.has(status)",
   "reconcileInstanceFleet(queryClient, scopeKey, { fresh: true })",
   "result.operation_id",
-  "fetchAPI<CopyOperationInfo>(",
+  // The snapshot follow reads through the initiator route, not /operations/{id} (round 5).
+  "api.snapshots.operation(",
   "copyOperationVerdict(operation)",
   'verdict === "success" || verdict === "failure" || verdict === "partial"',
   "isAuthActorSynchronized(actorScope)",

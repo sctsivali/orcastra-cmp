@@ -3407,6 +3407,24 @@ export interface BillingImpactRefusal {
   reason_field: string;
 }
 
+/** What a restore of one snapshot can do on the instance's storage, read before it runs. */
+export interface SnapshotRestorePlan {
+  storage_driver: string | null;
+  /** False when the storage cannot roll back to this snapshot (ZFS, with newer snapshots). */
+  restorable: boolean;
+  /** False when no safety snapshot can be kept through the restore (ZFS). */
+  safety_snapshot_supported: boolean;
+  newer_snapshots: string[];
+  reason: string | null;
+}
+
+/** A snapshot operation's status, readable by the caller who started it. */
+export interface SnapshotOperationStatus {
+  status: string | null;
+  status_code: number | null;
+  err: string | null;
+}
+
 export interface SnapshotActionResponse {
   success: boolean;
   instance_name: string;
