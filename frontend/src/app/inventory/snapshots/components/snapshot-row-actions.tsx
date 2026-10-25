@@ -103,7 +103,7 @@ export function SnapshotRowActions({
     submitInFlightRef.current = true;
     setDeleteError(null);
     try {
-      await deleteSnapshot.mutateAsync({
+      const result = await deleteSnapshot.mutateAsync({
         instanceName: snapshot.source_name,
         snapshotName: snapshot.name,
         host,
@@ -121,10 +121,17 @@ export function SnapshotRowActions({
         acknowledgeUpstreamSnapshot: origin === "upstream" || undefined,
         confirmSnapshot: needsTypedName ? snapshot.name : undefined,
       });
-      toast({
-        title: "Snapshot deleted",
-        description: `${snapshot.name} is gone from ${snapshot.source_name}.`,
-      });
+      // The cluster can accept a delete and still be removing it; the toast says which, and a
+      // delete that fails after this point brings the row back with its own message.
+      toast(result.settled === false
+        ? {
+          title: "Deleting snapshot",
+          description: `${snapshot.name} is being removed from ${snapshot.source_name}.`,
+        }
+        : {
+          title: "Snapshot deleted",
+          description: `${snapshot.name} is gone from ${snapshot.source_name}.`,
+        });
       setConfirmDelete(false);
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : "Could not delete the snapshot.");

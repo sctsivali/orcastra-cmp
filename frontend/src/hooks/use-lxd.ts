@@ -34,6 +34,15 @@ import {
 } from "@/lib/api";
 import { keyFor, removePendingCreate } from "@/lib/pending-creates";
 import {
+  clearSnapshotDelete,
+  markSnapshotDeleted,
+  readSnapshotList,
+  refreshSnapshotSlice,
+  settleSnapshotDelete,
+  type SnapshotIdentity,
+} from "@/lib/snapshot-reconciliation";
+import { toast } from "@/hooks/use-toast";
+import {
   VMCreateRequest,
   InstanceCreateRequest,
   InstanceSpecificationPreflightRequest,
@@ -2324,6 +2333,7 @@ export function useInstanceSnapshots(
   verifyFresh = false,
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const queryClient = useQueryClient();
   return useRefreshableQuery({
     queryKey: queryKeys.instanceSnapshots(scopeKey, host, project, instanceName),
     // note: `fresh` is deliberately NOT forwarded. It exists to bypass a backend response cache,
@@ -2332,7 +2342,12 @@ export function useInstanceSnapshots(
     // so an operator watching a restore and clicking Refresh could exhaust the allowance for the
     // surfaces that really are cached. The refetch still happens; only the pointless parameter is
     // gone. Cancellation still propagates so changing actor or target cannot land a stale row.
-    queryFn: ({ signal }) => api.snapshots.list(instanceName, host, project, { signal }),
+    queryFn: ({ signal }) => readSnapshotList(
+      queryClient,
+      scopeKey,
+      () => api.snapshots.list(instanceName, host, project, { signal }),
+      { host, project },
+    ),
     ...SEMI_STATIC_DATA_CONFIG,
     ...(verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
     // After the spread on purpose: the preset carries its own `enabled` and would otherwise
@@ -2353,12 +2368,15 @@ export function useInstanceSnapshots(
  * would be a second mechanism for one job and the one nobody reads.
  */
 export function useFleetSnapshots(host?: string, project?: string) {
+  const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
   return useRefreshableQuery({
     queryKey: ["fleetSnapshots", host ?? null, project ?? null],
     // note: the read options are forwarded. This used to ignore them, which was harmless while
     // /snapshots had no response cache and became a real defect the moment it gained one: the
     // Refresh button would report success having read the cache it was pressed to bypass.
-    queryFn: (opts) => api.snapshots.listFleet(host, project, opts),
+    // A row a delete already took away stays away even if this read started before it.
+    queryFn: (opts) => readSnapshotList(queryClient, scopeKey, () => api.snapshots.listFleet(host, project, opts)),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -2459,10 +2477,21 @@ export function useCreateSnapshot() {
     // A timed-out POST can still have reached LXD. Retrying it can create a second restore point.
     retry: false,
     onSuccess: (result, { body }) => {
+      const project = body.project || "default";
       void (async () => {
+        // The slice read is one cluster and one project, so the new row shows in about a
+        // second instead of after the fleet read that lists every cluster.
+        if (result.status === "succeeded") {
+          await refreshSnapshotSlice(queryClient, scopeKey, body.host, project);
+        }
         await reconcileSnapshotState(queryClient, scopeKey);
         if (result.operation_id) {
-          await reconcileSnapshotOperation(queryClient, scopeKey, result.operation_id, body.host);
+          const { verdict } = await reconcileSnapshotOperation(
+            queryClient, scopeKey, result.operation_id, body.host,
+          );
+          if (result.status !== "succeeded" && verdict === "success") {
+            await refreshSnapshotSlice(queryClient, scopeKey, body.host, project);
+          }
         }
       })();
     },
@@ -2499,12 +2528,38 @@ export function useDeleteSnapshot() {
         confirmSnapshot,
       }),
     retry: false,
-    onSuccess: (result, { host }) => {
+    onSuccess: (result, { instanceName, snapshotName, host, project }) => {
+      // important: hidden on the answer, not before it. A refused delete (403, 409, 502) never
+      // reaches here and its row never moves; one the cluster accepted but has not finished
+      // (`settled: false`) stays hidden until the operation's verdict, and comes back if it fails.
+      const identity: SnapshotIdentity = {
+        actorScope: scopeKey,
+        host,
+        project: project || "default",
+        instance: instanceName,
+        name: snapshotName,
+      };
+      const settled = result.settled !== false;
+      const token = markSnapshotDeleted(queryClient, identity, { settled });
       void (async () => {
         await reconcileSnapshotState(queryClient, scopeKey);
-        if (result.operation_id) {
-          await reconcileSnapshotOperation(queryClient, scopeKey, result.operation_id, host);
+        if (!result.operation_id) return;
+        const { verdict, err } = await reconcileSnapshotOperation(
+          queryClient, scopeKey, result.operation_id, host,
+        );
+        if (settled) return;
+        if (verdict === "failure" || verdict === "partial") {
+          clearSnapshotDelete(queryClient, identity, token);
+          await reconcileSnapshotState(queryClient, scopeKey);
+          toast({
+            variant: "destructive",
+            title: "Snapshot not deleted",
+            description: `The cluster could not delete ${snapshotName}${err ? `: ${err}` : "."}`,
+          });
+          return;
         }
+        settleSnapshotDelete(queryClient, identity);
+        if (verdict !== "success") await reconcileSnapshotState(queryClient, scopeKey);
       })();
     },
   });
@@ -2597,13 +2652,16 @@ async function reconcileSnapshotState(
   await reconcileInstanceFleet(queryClient, actorScope, { fresh: true }).catch(() => undefined);
 }
 
-/** Follow the accepted daemon operation without ever replaying the snapshot mutation. */
+/**
+ * Follow the accepted daemon operation without ever replaying the snapshot mutation, and say how
+ * it ended. `unknown` covers a follow that gave up or lost the actor.
+ */
 async function reconcileSnapshotOperation(
   queryClient: QueryClient,
   actorScope: string,
   operationId: string,
   host: string,
-): Promise<void> {
+): Promise<{ verdict: CopyOperationVerdict; err?: string | null }> {
   const startedAt = Date.now();
   let transientFailures = 0;
   let unknownReads = 0;
@@ -2620,13 +2678,13 @@ async function reconcileSnapshotOperation(
         false,
         { force: true },
       );
-      if (!isAuthActorSynchronized(actorScope)) return;
+      if (!isAuthActorSynchronized(actorScope)) return { verdict: "unknown" };
 
       transientFailures = 0;
       const verdict = copyOperationVerdict(operation);
       if (verdict === "success" || verdict === "failure" || verdict === "partial") {
         await reconcileSnapshotState(queryClient, actorScope);
-        return;
+        return { verdict, err: operation.err };
       }
       if (verdict === "unknown") {
         unknownReads += 1;
@@ -2635,7 +2693,7 @@ async function reconcileSnapshotOperation(
         unknownReads = 0;
       }
     } catch (error) {
-      if (!isAuthActorSynchronized(actorScope)) return;
+      if (!isAuthActorSynchronized(actorScope)) return { verdict: "unknown" };
       if (error instanceof APIError && error.status === 429) {
         const remainingMs = Math.max(
           0,
@@ -2659,4 +2717,5 @@ async function reconcileSnapshotOperation(
   if (isAuthActorSynchronized(actorScope)) {
     await reconcileSnapshotState(queryClient, actorScope);
   }
+  return { verdict: "unknown" };
 }

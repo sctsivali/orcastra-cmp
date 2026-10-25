@@ -3412,5 +3412,7 @@ export interface SnapshotActionResponse {
   instance_name: string;
   snapshot: string;
   operation_id?: string | null;
+  /** False when the cluster accepted the action and is still doing it. Absent on older backends. */
+  settled?: boolean;
   message: string;
 }
