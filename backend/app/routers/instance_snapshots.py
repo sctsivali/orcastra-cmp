@@ -789,6 +789,7 @@ async def delete_snapshot(
         instance_name=instance_name,
         snapshot=snapshot_name,
         operation_id=operation_id,
+        settled=bool(outcome.get("settled")),
         message=(
             f"Snapshot {snapshot_name} deleted."
             if outcome.get("settled")
@@ -961,6 +962,7 @@ async def restore_snapshot(
         instance_name=instance_name,
         snapshot=snapshot_name,
         operation_id=operation_id,
+        settled=bool(outcome.get("settled")),
         message=(
             (
                 f"{instance_name} restored to {snapshot_name}."

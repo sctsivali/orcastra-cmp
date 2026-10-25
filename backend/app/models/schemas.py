@@ -2158,6 +2158,13 @@ class SnapshotActionResponse(BaseModel):
     instance_name: str = Field(..., description="The source instance")
     snapshot: str = Field(..., description="The snapshot acted on")
     operation_id: Optional[str] = Field(None, description="LXD operation id when the action is asynchronous")
+    settled: bool = Field(
+        True,
+        description=(
+            "Whether the cluster finished the action before this answered. False means it accepted "
+            "the work and is still doing it; follow operation_id for the verdict"
+        ),
+    )
     message: str = Field(..., description="Operator-facing summary")
 
 

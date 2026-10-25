@@ -97,6 +97,9 @@ def test_a_delete_that_has_not_settled_says_so_rather_than_claiming_completion()
     response = _delete(node)
     assert response.status_code == 200, response.text
     assert "is being removed" in response.json()["message"]
+    # The console hides the row on this answer and follows the operation for the verdict, so
+    # the flag is what tells it the cluster has not finished.
+    assert response.json()["settled"] is False
 
 
 def test_a_settled_delete_says_so_and_forgets_only_its_own_instances_sizes():
@@ -114,6 +117,7 @@ def test_a_settled_delete_says_so_and_forgets_only_its_own_instances_sizes():
         node = FakeInstanceNode(snapshots=[{"name": TARGET}])
         response = _delete(node)
         assert response.status_code == 200, response.text
+        assert response.json()["settled"] is True
         assert "deleted" in response.json()["message"]
         assert cache.get("api_responses", key) == {PROJECT: {"ct-neighbour": entry}}
     finally:
@@ -138,6 +142,7 @@ def test_a_settled_restore_says_it_finished():
     response = _restore(node)
     assert response.status_code == 200, response.text
     assert "restored to" in response.json()["message"]
+    assert response.json()["settled"] is True
 
 
 # ── ownership, on both destructive actions ─────────────────────────────────────────────────
