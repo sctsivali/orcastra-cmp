@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -230,11 +231,7 @@ export function MigrationActionDialog({
             </div>
           )}
 
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
+          <DialogSubmitError message={error} className="mt-0" />
           {mutation.isPending && (
             <p role="status" className="sr-only" aria-live="polite">
               Submitting {copy.submit.toLowerCase()}.

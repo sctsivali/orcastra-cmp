@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -399,13 +400,10 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
           onRetryAcls={() => void creation.acls.refetch()} />
         {aclSelectionError && <p role="alert" className="text-sm text-destructive">{aclSelectionError}</p>}
 
-        {error && (
-          <div role="alert" className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-            {error}
-          </div>
-        )}
         </fieldset>
       </DialogBody>
+
+      <DialogSubmitError message={error} />
 
       <DialogFooter className="shrink-0 pt-4 sm:items-center">
         {/* A disabled button shows no title tooltip, so state the reason inline. */}

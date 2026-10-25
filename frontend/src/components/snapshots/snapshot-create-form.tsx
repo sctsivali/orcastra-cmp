@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
@@ -434,38 +435,29 @@ export function SnapshotCreateForm({
           </>
         )}
 
-        {/* Keep an ambiguous outcome and the reviewed draft visible even when its verification
-            read invalidates the active target. Submission remains fail-closed because canSubmit
-            still requires the live target, while the recovery action is read-only. */}
-        {error && (
-          <Alert variant="destructive">
-            <AlertTriangle className="h-4 w-4" aria-hidden />
-            <AlertTitle>
-              {outcomeUnknown ? "Snapshot result unknown" : "Snapshot not taken"}
-            </AlertTitle>
-            <AlertDescription className="space-y-3">
-              <p>{error}</p>
-              {outcomeUnknown && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleViewSnapshots()}
-                  disabled={checkingSnapshots}
-                  aria-busy={checkingSnapshots}
-                >
-                  {checkingSnapshots ? "Checking snapshots" : "Check snapshots"}
-                </Button>
-              )}
-            </AlertDescription>
-          </Alert>
-        )}
-        {snapshotCheckError && (
-          <p role="alert" className="text-sm text-destructive">
-            {snapshotCheckError}
-          </p>
-        )}
       </DialogBody>
+
+      {/* Keep an ambiguous outcome and the reviewed draft visible even when its verification
+          read invalidates the active target. Submission remains fail-closed because canSubmit
+          still requires the live target, while the recovery action is read-only. */}
+      <DialogSubmitError
+        message={error}
+        title={outcomeUnknown ? "Snapshot result unknown" : "Snapshot not taken"}
+      >
+        {outcomeUnknown && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void handleViewSnapshots()}
+            disabled={checkingSnapshots}
+            aria-busy={checkingSnapshots}
+          >
+            {checkingSnapshots ? "Checking snapshots" : "Check snapshots"}
+          </Button>
+        )}
+      </DialogSubmitError>
+      <DialogSubmitError message={snapshotCheckError} />
 
       <DialogFooter className="shrink-0 gap-2 pt-4 sm:space-x-0">
         <Button

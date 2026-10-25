@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -216,16 +217,11 @@ export function RestoreSnapshotDialog({
             </div>
           )}
 
-          {/* role="alert" so a submit failure is announced. Focus stays on the submit
-              button, which does not move, so without a live region a screen-reader user
-              is told nothing at all and the dialog simply appears not to respond.
-              DestructiveConfirmDialog already does this; these three did not. */}
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
         </DialogBody>
+
+        {/* Announced by its role while focus stays on the submit button, which does not move;
+            without the live region a screen-reader user is told nothing at all. */}
+        <DialogSubmitError message={error} />
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={restore.isPending}>
