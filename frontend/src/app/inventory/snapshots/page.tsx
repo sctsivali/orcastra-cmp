@@ -26,6 +26,7 @@ import { RefreshButton } from "@/components/ui/refresh-button";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { useFleetSnapshots, useNodeNames } from "@/hooks/use-lxd";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -34,6 +35,7 @@ import { useToast } from "@/hooks/use-toast";
 import { EMPTY_FACET, parseFacet } from "@/lib/filter-url";
 import { api } from "@/lib/api";
 import { TABLE_PAGE_SIZE } from "@/lib/pagination";
+import { readSnapshotList } from "@/lib/snapshot-reconciliation";
 import { Role } from "@/types/rbac";
 
 import { ALL_CLUSTERS, ALL_PROJECTS, SnapshotScopePicker } from "./components/snapshot-scope-picker";
@@ -150,6 +152,7 @@ function SnapshotsHeader({
 
 function SnapshotsContent() {
   const queryClient = useQueryClient();
+  const { scopeKey: actorScope } = useActorQueryScope();
   const { toast } = useToast();
   const readOnlyMode = useReadOnlyMode();
   const [takeSnapshotOpen, setTakeSnapshotOpen] = useState(false);
@@ -283,11 +286,16 @@ function SnapshotsContent() {
   const refreshPendingSnapshot = async (notice: PendingSnapshotNotice) => {
     // The page filters can differ from the target chosen in the dialog. Read the immutable
     // notice tuple explicitly so Refresh can never verify an unrelated scope, then warm the
-    // exact fleet query before moving the table to that target.
+    // exact fleet query before moving the table to that target. staleTime 0: the create's own
+    // slice read fills this key on a success verdict, and a click must still reach the cluster.
     await api.snapshots.list(notice.instanceName, notice.host, notice.project);
     await queryClient.fetchQuery({
       queryKey: ["fleetSnapshots", notice.host, notice.project],
-      queryFn: () => api.snapshots.listFleet(notice.host, notice.project, { fresh: true }),
+      queryFn: () =>
+        readSnapshotList(queryClient, actorScope, () =>
+          api.snapshots.listFleet(notice.host, notice.project, { fresh: true }),
+        ),
+      staleTime: 0,
     });
     filters.setFacet("host", [notice.host]);
     filters.setFacet("project", [notice.project]);
