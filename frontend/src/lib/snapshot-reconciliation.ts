@@ -106,12 +106,15 @@ function holdsSnapshot(queryKey: QueryKey, identity: SnapshotIdentity): boolean 
 }
 
 function dropFromCachedLists(queryClient: QueryClient, identity: SnapshotIdentity): void {
-  const now = readClock();
+  // important: every cached list predates the delete, so it is filtered as a read that started
+  // before any settle. Using "now" here missed the row whenever the delete had already settled,
+  // because a read starting at the settle instant counts as after it.
+  const beforeEverything = Number.NEGATIVE_INFINITY;
   for (const kind of ["fleetSnapshots", "instanceSnapshots"]) {
     for (const [queryKey, data] of queryClient.getQueriesData<SnapshotList>({ queryKey: [kind] })) {
       if (!data || !holdsSnapshot(queryKey, identity)) continue;
       const where = kind === "instanceSnapshots" ? { host: identity.host, project: identity.project } : undefined;
-      const next = withoutDeletedSnapshots(queryClient, identity.actorScope, data, now, where);
+      const next = withoutDeletedSnapshots(queryClient, identity.actorScope, data, beforeEverything, where);
       if (next !== data) queryClient.setQueryData(queryKey, next);
     }
   }
