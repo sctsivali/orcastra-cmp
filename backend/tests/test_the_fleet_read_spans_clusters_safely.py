@@ -75,6 +75,8 @@ def _client(svc, *, acl=None, allowed=None, flag_on=False) -> TestClient:
     acl_token = org_scope._tenant_acl_var.set(acl)
     allowed_token = org_scope._allowed_clusters_var.set(allowed)
     get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+    # The size map lives outside the list sweep on purpose, so a test starts it empty by hand.
+    get_cache_manager().delete_pattern("api_responses", "snapshot_sizes:*")
 
     client = TestClient(app, raise_server_exceptions=False)
     client._cleanup = lambda: (

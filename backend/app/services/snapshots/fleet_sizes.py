@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
-from app.core.cache import get_cache_manager
+from app.core.cache import SNAPSHOT_SIZES_KEY_PREFIX, get_cache_manager
 from app.services.lxd import snapshot_fleet as fleet_service
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.lazy_client import connect_or_get_client
@@ -45,14 +45,19 @@ MAX_SIZE_HOLDERS_FLEET = 150
 
 # important: deliberately NOT get_scope_cache_key. A size is a fact about the cluster, not about
 # who asked, and the map is only ever consulted for rows already past the visibility filter.
-# Sharing the `snapshots_fleet:` prefix is what puts it inside the cache.py
-# invalidate_instance_cache sweep and every invalidate_resource_cache("snapshots_fleet") a
-# mutation runs, so a create or delete drops it for free.
-SIZES_KEY_PREFIX = "snapshots_fleet:sizes:host="
+#
+# important: deliberately outside the `snapshots_fleet:` prefix. Every list clear sweeps that
+# prefix (invalidate_resource_cache("snapshots_fleet"), invalidate_instance_cache), so while the
+# map lived there one snapshot write on any cluster made the next fleet read re-measure every
+# holder on every cluster: 48 holders and 6.8 s on dev. A snapshot write now forgets only its own
+# holder (forget_holder), and an entry records each snapshot's created_at, so a snapshot or an
+# instance created again under an old name is a miss rather than an old size. Deregistering a
+# cluster drops its map (cache.py invalidate_cluster_cache), since the id can be registered again.
+SIZES_KEY_PREFIX = SNAPSHOT_SIZES_KEY_PREFIX
 
 # Rows of one request grouped by (host, project, source_name), the identity the ACL decided on.
 RowKey = Tuple[str, str, str]
-# {project: {instance: {"at": epoch seconds, "sizes": {snapshot name: size}}}}
+# {project: {instance: {"at": epoch seconds, "sizes": {name: size}, "created": {name: created_at}}}}
 HostSizesMap = Dict[str, Dict[str, Dict[str, Any]]]
 
 
@@ -85,20 +90,24 @@ def _cached_map(cache: Any, host: str) -> HostSizesMap:
 
 
 def _cache_hit(
-    entry: Optional[Dict[str, Any]], names: List[str], now: float
+    entry: Optional[Dict[str, Any]], rows: List[Dict[str, Any]], now: float
 ) -> Optional[Dict[str, Optional[int]]]:
     """The cached sizes for a holder, or None when the entry is absent, expired or incomplete.
 
-    Every visible snapshot name must be present: a snapshot taken since the entry was written is
-    a miss for its whole holder, so it is re-read rather than reported as never measured.
+    Every visible snapshot must be present under its name and its created_at: a snapshot taken
+    since the entry was written, or one deleted and taken again under the same name, is a miss
+    for its whole holder, so it is re-read rather than shown with a size that is not its own.
     """
     if not isinstance(entry, dict):
         return None
     sizes = entry.get("sizes")
     if not isinstance(sizes, dict) or now - float(entry.get("at") or 0) > SIZES_TTL:
         return None
-    if any(name not in sizes for name in names):
-        return None
+    created = entry.get("created")
+    created = created if isinstance(created, dict) else {}
+    for row in rows:
+        if row["name"] not in sizes or created.get(row["name"]) != row.get("created_at"):
+            return None
     return sizes
 
 
@@ -114,12 +123,14 @@ def _write_back(
     host: str,
     stored: HostSizesMap,
     measured: Dict[Holder, Dict[str, Optional[int]]],
+    rows_by_holder: Dict[Holder, List[Dict[str, Any]]],
 ) -> None:
     """Merge fresh entries over the unexpired ones and write the host's map back.
 
     Merged rather than replaced because one request measures only its own visible holders, and
     a narrow scope must not drop what a wider one measured a moment ago. Two scopes writing the
     same host at once is last-writer-wins on entries that are each within TTL, which is benign.
+    Each entry keeps the created_at of the rows it was measured for, which _cache_hit checks.
     """
     now = time.time()
     merged: HostSizesMap = {}
@@ -130,8 +141,28 @@ def _write_back(
             if isinstance(entry, dict) and now - float(entry.get("at") or 0) <= SIZES_TTL:
                 merged.setdefault(project, {})[name] = entry
     for (project, name), sizes in measured.items():
-        merged.setdefault(project, {})[name] = {"at": now, "sizes": sizes}
+        created = {row["name"]: row.get("created_at") for row in rows_by_holder.get((project, name), [])}
+        merged.setdefault(project, {})[name] = {"at": now, "sizes": sizes, "created": created}
     cache.set("api_responses", f"{SIZES_KEY_PREFIX}{host}", merged, ttl=SIZES_TTL)
+
+
+def forget_holder(cache: Any, host: str, project: str, instance: str) -> None:
+    """Drop one instance's cached sizes after a snapshot write on it, so the next read measures it.
+
+    Only that holder: a write on one instance changes no other instance's sizes. Best effort and
+    never raises, because the write it follows has already happened. A read in flight across the
+    write can put the old entry back; the created_at check still catches a new or re-used name,
+    and what is left is a neighbour's size up to SIZES_TTL old.
+    """
+    try:
+        stored = _cached_map(cache, host)
+        instances = stored.get(project)
+        if not isinstance(instances, dict) or instance not in instances:
+            return
+        del instances[instance]
+        cache.set("api_responses", f"{SIZES_KEY_PREFIX}{host}", stored, ttl=SIZES_TTL)
+    except Exception as exc:  # noqa: BLE001 - the write already happened; the TTL still bounds it
+        logger.debug("Could not forget the cached sizes of %s/%s on %s: %s", project, instance, host, exc)
 
 
 def _plan_live_reads(
@@ -153,7 +184,7 @@ def _plan_live_reads(
         rows = by_key[(host, project, name)]
         instances = stored[host].get(project)
         entry = instances.get(name) if isinstance(instances, dict) else None
-        hit = None if fresh else _cache_hit(entry, [row["name"] for row in rows], now)
+        hit = None if fresh else _cache_hit(entry, rows, now)
         if hit is not None:
             _apply(rows, hit)
             continue
@@ -240,5 +271,6 @@ async def measure_visible_sizes(
         for (project, name), sizes in measured.items():
             _apply(by_key[(host, project, name)], sizes)
         if measured:
-            _write_back(cache, host, stored[host], measured)
+            rows_by_holder = {holder: by_key[(host, *holder)] for holder in measured}
+            _write_back(cache, host, stored[host], measured, rows_by_holder)
     return len(by_key) - unmeasured, unmeasured

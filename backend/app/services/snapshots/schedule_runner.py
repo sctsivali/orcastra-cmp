@@ -27,6 +27,7 @@ from app.services.migration_fence import (
     MigrationFenceConflict,
     guard_instance_mutation,
 )
+from app.services.snapshots import fleet_sizes
 from app.services.snapshots import schedule_authority as authority
 from app.services.snapshots.naming import build_scheduled_snapshot_name, scheduled_snapshot_prefix
 
@@ -56,13 +57,19 @@ _NAME_RE = re.compile(LXD_NAME_PATTERN)
 _ALREADY_EXISTS = "already exists"
 
 
-def _invalidate_snapshot_views() -> None:
-    """Best-effort refresh after LXD has already decided the snapshot outcome."""
+def _invalidate_snapshot_views(schedule: Any) -> None:
+    """Best-effort refresh after LXD has already decided the snapshot outcome.
+
+    Only the scheduled instance's cached sizes are forgotten; an hourly schedule used to make the
+    next Snapshots page read re-measure every holder on every cluster.
+    """
     try:
-        get_cache_manager().invalidate_resource_cache(
+        cache = get_cache_manager()
+        cache.invalidate_resource_cache(
             "snapshots_fleet",
             "storage_pool_resources",
         )
+        fleet_sizes.forget_holder(cache, schedule.cluster_id, schedule.project, schedule.instance_name)
     except Exception as exc:  # noqa: BLE001 - cache failure cannot rewrite an LXD verdict
         logger.warning("Could not invalidate scheduled snapshot caches: %s", exc)
 
@@ -325,7 +332,7 @@ async def _run_one_guarded(
                     label=f"settle prune {victim}",
                 )
             pruned.append(victim)
-            _invalidate_snapshot_views()
+            _invalidate_snapshot_views(schedule)
             _audit(schedule, "instance.snapshot.schedule.pruned", "success", snapshot=victim)
         except Exception as exc:  # noqa: BLE001
             # A prune that failed is not a reason to skip the snapshot: `expires_at` on every row
@@ -382,7 +389,7 @@ async def _run_one_guarded(
 
     if not operation_id:
         # Synchronous 200: nothing to wait for and the work is done.
-        _invalidate_snapshot_views()
+        _invalidate_snapshot_views(schedule)
         _audit(schedule, "instance.snapshot.schedule.run", "success", snapshot=name)
         return RunOutcome(result="success", snapshot=name, pruned=pruned)
 
@@ -414,7 +421,7 @@ async def _run_one_guarded(
         settled=bool(outcome.get("settled")),
         pruned=pruned,
     )
-    _invalidate_snapshot_views()
+    _invalidate_snapshot_views(schedule)
     return RunOutcome(result="success", snapshot=name, pruned=pruned)
 
 
@@ -429,7 +436,7 @@ def _classify_create_failure(
     source of second copies.
     """
     if _ALREADY_EXISTS in (error or "").lower():
-        _invalidate_snapshot_views()
+        _invalidate_snapshot_views(schedule)
         _audit(
             schedule,
             "instance.snapshot.schedule.run",

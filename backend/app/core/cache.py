@@ -67,6 +67,9 @@ PROJECT_CACHE_KINDS = ("projects", "project_usage", "profiles", "networks", "ima
 # Not under the `snapshots_fleet:` pattern so an invalidation can clear list entries while leaving
 # the token that tells already-running fleet reads their answer is stale.
 SNAPSHOT_FLEET_GENERATION_KEY = "snapshot_fleet_generation"
+# Per-host snapshot size map (services/snapshots/fleet_sizes.py). Kept outside the
+# `snapshots_fleet:` list sweep on purpose; a cluster's own invalidation drops its map.
+SNAPSHOT_SIZES_KEY_PREFIX = "snapshot_sizes:host="
 RESOURCE_LIST_GENERATION_KEY_PREFIX = "resource_list_generation"
 CACHE_CLEAR_GENERATION_KEY = "cache_clear_generation"
 CAPACITY_GENERATION_KIND = "capacity"
@@ -530,6 +533,8 @@ class CacheManager:
             # registered again, by another organization or for other hardware, must not be
             # served the old members' kernels for the rest of the TTL.
             self.delete("api_responses", f"{HOST_KERNELS_CACHE_PREFIX}:{cluster_id}")
+            # Same reason for snapshot sizes: they are keyed by the cluster id alone.
+            self.delete("api_responses", f"{SNAPSHOT_SIZES_KEY_PREFIX}{cluster_id}")
             logger.info(f"Cleared cache for specific cluster {cluster_id}")
 
         # Always clear list caches to force fresh fetch

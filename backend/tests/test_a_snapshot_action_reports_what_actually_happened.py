@@ -99,6 +99,27 @@ def test_a_delete_that_has_not_settled_says_so_rather_than_claiming_completion()
     assert "is being removed" in response.json()["message"]
 
 
+def test_a_settled_delete_says_so_and_forgets_only_its_own_instances_sizes():
+    """Ablation: sweep the whole size map on a snapshot write and the next fleet read re-measures
+    every holder on every cluster (6.8 s on dev); forget nothing and the instance keeps a
+    neighbour's size from before the delete for ten minutes."""
+    from app.core.cache import get_cache_manager
+    from app.services.snapshots import fleet_sizes
+
+    cache = get_cache_manager()
+    key = f"{fleet_sizes.SIZES_KEY_PREFIX}{HOST}"
+    entry = {"at": 10**12, "sizes": {TARGET: 5}, "created": {TARGET: None}}
+    cache.set("api_responses", key, {PROJECT: {INSTANCE: entry, "ct-neighbour": entry}}, ttl=60)
+    try:
+        node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+        response = _delete(node)
+        assert response.status_code == 200, response.text
+        assert "deleted" in response.json()["message"]
+        assert cache.get("api_responses", key) == {PROJECT: {"ct-neighbour": entry}}
+    finally:
+        cache.delete("api_responses", key)
+
+
 def test_a_restore_the_daemon_rejects_is_not_reported_as_started():
     node = FakeInstanceNode(snapshots=[{"name": TARGET}])
     node.operation_status = "Failure"

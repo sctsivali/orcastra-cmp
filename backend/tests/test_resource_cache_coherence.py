@@ -470,16 +470,29 @@ def test_expired_upload_stays_non_terminal_when_exact_read_is_unknown(
     assert events == ["rollback", "cleanup:/staging/upload.bin"]
 
 
+_SCHEDULE = SimpleNamespace(cluster_id="nuc2", project="default", instance_name="ct-scheduled")
+
+
 def test_scheduled_snapshot_refreshes_rows_and_capacity(monkeypatch) -> None:
+    """Ablation: forget the host's whole size map and an hourly schedule on one instance makes
+    the next Snapshots read re-measure every instance on that cluster."""
+    from app.services.snapshots import fleet_sizes
+
     seen: list[tuple[str, ...]] = []
+    written: dict = {}
+    sizes_key = f"{fleet_sizes.SIZES_KEY_PREFIX}nuc2"
+    stored = {"default": {"ct-scheduled": {"at": 1}, "ct-other": {"at": 1}}}
     manager = SimpleNamespace(
         invalidate_resource_cache=lambda *kinds: seen.append(kinds),
+        get=lambda namespace, key: stored if key == sizes_key else None,
+        set=lambda namespace, key, value, ttl=None: written.update({key: value}),
     )
     monkeypatch.setattr(schedule_runner, "get_cache_manager", lambda: manager)
 
-    schedule_runner._invalidate_snapshot_views()
+    schedule_runner._invalidate_snapshot_views(_SCHEDULE)
 
     assert seen == [("snapshots_fleet", "storage_pool_resources")]
+    assert written == {sizes_key: {"default": {"ct-other": {"at": 1}}}}
 
 
 def test_scheduled_snapshot_cache_failure_never_escapes(monkeypatch) -> None:
@@ -490,4 +503,4 @@ def test_scheduled_snapshot_cache_failure_never_escapes(monkeypatch) -> None:
     )
     monkeypatch.setattr(schedule_runner, "get_cache_manager", lambda: manager)
 
-    schedule_runner._invalidate_snapshot_views()
+    schedule_runner._invalidate_snapshot_views(_SCHEDULE)

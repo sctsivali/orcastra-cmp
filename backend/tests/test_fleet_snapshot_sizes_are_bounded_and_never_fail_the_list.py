@@ -29,8 +29,8 @@ def _reads(client):
 
 
 def _read(svc, path="/snapshots", **kwargs):
-    """One read on a fresh client. Note that _client sweeps every `snapshots_fleet:*` key,
-    the sizes map included, so a test about the cache holds one client across its reads."""
+    """One read on a fresh client. Note that _client empties the list cache and the sizes map,
+    so a test about the cache holds one client across its reads."""
     client = _client(svc, **kwargs)
     try:
         return _get(client, path)
@@ -149,11 +149,12 @@ def test_the_fleet_holder_cap_yields_partial_with_counts(monkeypatch):
     assert _reads(theirs) == []
 
 
-def test_sizes_are_read_through_a_cache_and_swept_by_a_mutation():
-    """Ablation: skip the write-back and every fleet read re-measures every holder; drop the
-    `snapshots_fleet:` prefix from the sizes key and a delete leaves the old size on screen
-    for ten minutes."""
+def test_sizes_are_read_through_a_cache_that_a_list_clear_leaves_alone():
+    """Ablation: skip the write-back and every fleet read re-measures every holder; put the
+    sizes key back under `snapshots_fleet:` and any list clear anywhere (a snapshot on another
+    cluster, an instance start) re-measures the whole fleet again."""
     from app.core.cache import get_cache_manager
+    from app.services.snapshots import fleet_sizes
 
     cluster = _cluster([(PROJECT, INSTANCE)])
     client = _client(service(cluster))
@@ -170,9 +171,16 @@ def test_sizes_are_read_through_a_cache_and_swept_by_a_mutation():
         assert len(_reads(cluster)) == 1, "the sizes map answered, no per-instance read"
 
         get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+        get_cache_manager().invalidate_instance_cache()
         third = _get(client)
         assert third["items"][0]["size"] == MEASURED_SIZE
-        assert len(_reads(cluster)) == 2, "a mutation sweep drops the sizes map"
+        assert len(_reads(cluster)) == 1, "a list clear leaves the sizes map"
+
+        fleet_sizes.forget_holder(get_cache_manager(), HOST, PROJECT, INSTANCE)
+        _drop_list_cache()
+        fourth = _get(client)
+        assert fourth["items"][0]["size"] == MEASURED_SIZE
+        assert len(_reads(cluster)) == 2, "a forgotten holder is measured again"
 
         forced = _get(client, "/snapshots?fresh=true")
         assert forced["size_measurement"] == "measured"
@@ -180,6 +188,54 @@ def test_sizes_are_read_through_a_cache_and_swept_by_a_mutation():
         assert len(_reads(cluster)) == 3, "a forced refresh re-measures even with a warm map"
     finally:
         client._cleanup()
+
+
+def test_a_snapshot_write_forgets_only_its_own_holder():
+    """Ablation: forget the host's whole map and a snapshot on one instance re-measures every
+    instance on that cluster; forget nothing and the written instance keeps its old sizes."""
+    from app.core.cache import get_cache_manager
+    from app.services.snapshots import fleet_sizes
+
+    cluster = _cluster([(PROJECT, INSTANCE), (PROJECT, SECOND_INSTANCE)])
+    client = _client(service(cluster))
+    try:
+        _get(client)
+        assert len(_reads(cluster)) == 2
+
+        fleet_sizes.forget_holder(get_cache_manager(), HOST, PROJECT, SECOND_INSTANCE)
+        _drop_list_cache()
+        _get(client)
+    finally:
+        client._cleanup()
+
+    reads = _reads(cluster)
+    assert len(reads) == 3
+    assert reads[-1][3] == SECOND_INSTANCE, "only the written instance is read again"
+
+
+def test_a_snapshot_taken_again_under_an_old_name_is_a_miss():
+    """Ablation: match cached sizes by name alone and a snapshot deleted and taken again under
+    the same name (or on an instance created again under its old name) shows the old size."""
+    cluster = _cluster([(PROJECT, INSTANCE)])
+    listed = cluster.api.instances.all_projects_listing[0]["snapshots"][0]
+    listed["created_at"] = "2026-09-08T00:00:00Z"
+    cluster.node.snapshots_by_instance[(PROJECT, INSTANCE)][0]["created_at"] = "2026-09-08T00:00:00Z"
+    client = _client(service(cluster))
+    try:
+        _get(client)
+        assert len(_reads(cluster)) == 1
+
+        listed["created_at"] = "2026-09-09T00:00:00Z"
+        cluster.node.snapshots_by_instance[(PROJECT, INSTANCE)] = [
+            dict(SNAP, size=40, created_at="2026-09-09T00:00:00Z")
+        ]
+        _drop_list_cache()
+        body = _get(client)
+    finally:
+        client._cleanup()
+
+    assert len(_reads(cluster)) == 2, "a different created_at is a different snapshot"
+    assert body["items"][0]["size"] == 40
 
 
 def test_only_visible_holders_are_measured():
@@ -295,3 +351,25 @@ def test_the_narrowed_read_shares_the_size_phase(path):
     assert body["size_measurement"] == "measured"
     assert body["items"][0]["size"] == MEASURED_SIZE
     assert len(_reads(cluster)) == 1
+
+
+def test_a_deregistered_cluster_takes_its_size_map_with_it():
+    """Ablation: leave the map out of invalidate_cluster_cache and an id deregistered and
+    registered again (possibly by another organization) is served the old cluster's sizes
+    for up to SIZES_TTL."""
+    from app.core.cache import get_cache_manager
+    from app.services.snapshots import fleet_sizes
+
+    cache = get_cache_manager()
+    mine = f"{fleet_sizes.SIZES_KEY_PREFIX}{HOST}"
+    other = f"{fleet_sizes.SIZES_KEY_PREFIX}{OTHER_HOST}"
+    entry = {PROJECT: {INSTANCE: {"at": time.time(), "sizes": {}, "created": {}}}}
+    cache.set("api_responses", mine, entry, ttl=60)
+    cache.set("api_responses", other, entry, ttl=60)
+    try:
+        cache.invalidate_cluster_cache(HOST)
+        assert cache.get("api_responses", mine) is None
+        assert cache.get("api_responses", other) == entry, "another cluster's map is left alone"
+    finally:
+        cache.delete("api_responses", mine)
+        cache.delete("api_responses", other)
