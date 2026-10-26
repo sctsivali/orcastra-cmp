@@ -54,4 +54,4 @@ async def list_kernel_advisories(
         raise
     except Exception as exc:
         logger.error("Could not build kernel advisories: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not read host kernels") from exc
+        raise HTTPException(status_code=500, detail="Could not read the cluster members' kernels") from exc

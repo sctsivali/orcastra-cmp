@@ -593,5 +593,5 @@ def test_a_capacity_read_failure_keeps_its_pre_post_transport_mapping():
     )
 
     assert response.status_code == 503, response.text
-    assert response.json()["detail"] == "Could not reach the LXD host"
+    assert response.json()["detail"] == "Could not reach the cluster"
     assert not [row for row in node.recorded if row[0] == "create_snapshot"]

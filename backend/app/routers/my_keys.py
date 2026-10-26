@@ -967,7 +967,7 @@ async def cleanup_orphaned_groups(
                             logger.error(f"Failed to delete orphaned group: {error_msg}")
                 
             except Exception as e:
-                error_msg = f"Failed to process node {node}: {str(e)}"
+                error_msg = f"Failed to process cluster {node}: {str(e)}"
                 errors.append(error_msg)
                 logger.error(error_msg)
         

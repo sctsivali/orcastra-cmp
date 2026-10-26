@@ -51,7 +51,7 @@ def lxd_http_error(exc: Exception, noun: str, name: str) -> HTTPException:
     if any(t in low for t in _CONFLICT):
         return HTTPException(status_code=409, detail=f"{noun} '{name}' already exists")
     if any(t in low for t in _UNREACHABLE):
-        return HTTPException(status_code=503, detail="Could not reach the LXD host")
+        return HTTPException(status_code=503, detail="Could not reach the cluster")
     if any(t in low for t in _IN_USE):
         return HTTPException(status_code=409, detail=sanitize_error(msg))
     # Remaining LXD errors are user-actionable validation failures.

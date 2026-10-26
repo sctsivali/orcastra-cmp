@@ -453,7 +453,7 @@ async def get_all_system_warnings(
                                 "display_name": display_name,
                                 "warning_type": "node_offline",
                                 "severity": "critical",
-                                "message": error_msg or "Node is not reachable",
+                                "message": error_msg or "Cluster is not reachable",
                                 "endpoint": endpoint,
                                 "checked_at": datetime.utcnow().isoformat(),
                             })

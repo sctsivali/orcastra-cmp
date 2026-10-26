@@ -284,7 +284,7 @@ class ResourceManager:
             # whatever get_client returned, so a breaker-tripped cluster arrives here as a
             # None dereference, which is expected operational noise rather than a fault.
             logger.warning(f"Error getting resources for {node_name}: {e}")
-            raise LXDOperationError(f"Failed to get node resources: {str(e)}")
+            raise LXDOperationError(f"Failed to get cluster resources: {str(e)}")
     
     def check_node_status(
         self,
