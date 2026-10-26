@@ -98,3 +98,23 @@ def test_a_sweep_no_cluster_answered_writes_no_point(monkeypatch):
     _dashboard(monkeypatch, cache, _Silent(cache, advance=False))
 
     assert _stored_points(cache) == 0, "an all-zero point reads as an idle fleet"
+
+
+def test_a_tenant_sweep_writes_no_host_point(monkeypatch):
+    # A point carries each cluster's memory, storage and GPU (monitoring_history.build_point).
+    # A tenant may not read host figures and GET /history refuses it, so its sweep stores none:
+    # data at rest that would come back if that gate were ever loosened.
+    monkeypatch.setattr(monitoring, "_last_history_store_times", {})
+    cache = _GenerationCache()
+    monkeypatch.setattr(monitoring, "get_cache_manager", lambda: cache)
+    monkeypatch.setattr(monitoring, "get_scope_cache_key", _scoped)
+    monkeypatch.setattr(monitoring, "get_node_metadata_store", lambda: _MetadataStore())
+    monkeypatch.setattr(monitoring, "tenant_acl_active", lambda: True)
+    monkeypatch.setattr(monitoring, "caller_tier", lambda: "tenant")
+
+    seen = asyncio.run(monitoring.get_monitoring_dashboard(
+        lxd_service=_DashboardService(cache, advance=False), fresh=True
+    ))
+
+    assert _stored_points(cache) == 0
+    assert seen.total_cpu is None

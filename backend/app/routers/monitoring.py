@@ -463,8 +463,8 @@ async def get_monitoring_dashboard(
         )
         
         # Store metrics in history for charts (append to rolling buffer).
-        # Each org/tenant ACL gets its own history stream so charts render
-        # without exposing global/background collector data.
+        # Each org scope gets its own history stream so charts render without exposing
+        # global/background collector data; a tenant scope writes none (see below).
         # note: not when no cluster answered. That dashboard is all zeros, the same misreading
         # the cache below refuses to keep, and as a point it drew the fleet idling at zero.
         # note: the slot id differs from the previous string store's, so a release still writing
@@ -472,8 +472,12 @@ async def get_monitoring_dashboard(
         history_key = _monitoring_history_key(scope_key)
         history_started = time.monotonic()
         history_written = False
+        # note: never for a tenant scope. A point carries each host's memory, storage and GPU,
+        # which a tenant may not read, and GET /history refuses it anyway (owner decision
+        # 2026-10-26); writing them would only keep host figures at rest under its key.
         if (
             connected_nodes
+            and not tenant_acl_active()
             and _resource_generation(cache, _MONITORING_CACHE_KIND) == monitoring_generation
             and claim_history_slot(
                 cache, f"points:{history_key}", now=time.time(), local=_last_history_store_times
