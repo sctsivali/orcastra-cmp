@@ -329,3 +329,44 @@ def test_a_cached_profile_list_reaches_a_tenant_without_the_host_side(monkeypatc
     assert profile["devices"] == (TENANT_VM_DEVICES if tier == "tenant" else VM_DEVICES)
     assert body["profiles"][0]["config"] == VM_CONFIG, "the cached body is never redacted in place"
 
+
+
+@pytest.mark.parametrize("tier", ["partner", "tenant"])
+def test_a_cluster_row_reaches_a_tenant_without_hypervisor_metadata(monkeypatch, tier):
+    # The hypervisor family, whether it is clustered, its certificate's name and the raw status
+    # error (which can carry the endpoint) all describe the hypervisor. /nodes/availability and
+    # /regions already withhold the family, and no tenant view reads any of them.
+    from app.routers import cluster_registration
+    from app.routers.cluster_registration import get_cert_manager
+
+    manager = CacheManager(redis_url=None)
+    monkeypatch.setattr(cache_mod, "get_cache_manager", lambda: manager)
+    app = FastAPI()
+    app.include_router(cluster_registration.router)
+    app.dependency_overrides[get_cert_manager] = lambda: object()
+    app.dependency_overrides[get_current_user] = lambda: None
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    app.dependency_overrides[require_tenant()] = lambda: None
+    client = TestClient(app, raise_server_exceptions=False)
+    row = ClusterInfo(
+        cluster_id=HOST, display_name=HOST, endpoint=ENDPOINT, status="error",
+        cluster_type="Incus", clustered=True, certificate_common_name="orcastra-shared-cluster",
+        error_message=f"Could not connect to {ENDPOINT}: connection refused",
+    ).model_dump()
+    body = {"clusters": [row], "total": 1}
+
+    def read():
+        manager.set("api_responses", get_scope_cache_key("clusters:list:all:e1"), body, ttl=60)
+        return client.get("/clusters")
+
+    response = _as(tier, read)
+
+    assert response.status_code == 200, response.text[:200]
+    seen = response.json()["clusters"][0]
+    hidden = ("endpoint", "cluster_type", "clustered", "certificate_common_name", "error_message")
+    if tier == "tenant":
+        assert {field: seen[field] for field in hidden} == dict.fromkeys(hidden)
+        assert (seen["cluster_id"], seen["display_name"], seen["status"]) == (HOST, HOST, "error")
+    else:
+        assert {field: seen[field] for field in hidden} == {field: row[field] for field in hidden}
+    assert body["clusters"][0]["cluster_type"] == "Incus", "the cached row was edited"

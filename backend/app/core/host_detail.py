@@ -109,8 +109,20 @@ def metrics_for_tier(metrics: Model, tier: Tier) -> Model:
 
 
 def cluster_for_tier(cluster: Model, tier: Tier) -> Model:
-    """A registered cluster: no LXD endpoint for a Tenant."""
-    return _without(cluster, tier, endpoint=None)
+    """A registered cluster as a Tenant may read it: its name, status and place.
+
+    The endpoint, the hypervisor family, whether it is clustered, the certificate's name and the
+    raw status error all describe the hypervisor; the error can carry the endpoint itself.
+    """
+    return _without(
+        cluster,
+        tier,
+        endpoint=None,
+        cluster_type=None,
+        clustered=None,
+        certificate_common_name=None,
+        error_message=None,
+    )
 
 
 def cluster_list_for_tier(response: Model, tier: Tier) -> Model:
