@@ -428,7 +428,7 @@ def test_a_cached_volume_list_reaches_a_tenant_with_size_and_snapshots_only(monk
         "total": 1,
         "volumes": [{
             "name": "web-1", "type": "container", "pool": "default", "config": dict(VOLUME_CONFIG),
-            "used_by": [], "node": HOST, "location": MEMBER,
+            "used_by": [], "node": HOST, "location": MEMBER, "description": "nvme mirror, rack 2",
         }],
         "nodes": [HOST],
     }
@@ -446,7 +446,71 @@ def test_a_cached_volume_list_reaches_a_tenant_with_size_and_snapshots_only(monk
     if tier == "tenant":
         assert volume["config"] == {"size": "10GiB", "snapshots.expiry": "7d", "snapshots.schedule": "@daily"}
         assert volume["location"] is None
+        assert volume["description"] == "", "a volume's description is the operator's note"
     else:
         assert (volume["config"], volume["location"]) == (VOLUME_CONFIG, MEMBER)
     assert volume["name"] == "web-1" and volume["pool"] == "default"
     assert body["volumes"][0]["location"] == MEMBER, "the cached row was edited"
+
+
+
+def test_a_tenant_reference_names_no_cluster_member():
+    # LXD appends ?target=<member> to a volume or image reference on a clustered pool, so a
+    # used_by list would name the member the location field no longer does.
+    class Volume(host_detail.BaseModel):
+        name: str
+        config: dict = {}
+        location: str | None = MEMBER
+        description: str = ""
+        used_by: list = []
+
+    refs = [
+        f"/1.0/storage-pools/local/volumes/custom/data?project=p&target={MEMBER}",
+        f"/1.0/images/abc?target={MEMBER}&project=p",
+        "/1.0/instances/web-1?project=p",
+    ]
+    volume = Volume(name="data", used_by=list(refs))
+
+    shown = host_detail.volume_for_tier(volume, "tenant")
+
+    assert shown.used_by == [
+        "/1.0/storage-pools/local/volumes/custom/data?project=p",
+        "/1.0/images/abc?project=p",
+        "/1.0/instances/web-1?project=p",
+    ]
+    assert MEMBER not in " ".join(host_detail.pool_for_tier(volume, "tenant").used_by)
+    assert host_detail.volume_for_tier(volume, "partner").used_by == refs
+    assert volume.used_by == refs, "input untouched"
+
+
+def test_the_volume_detail_ignores_a_tenant_member_probe(monkeypatch):
+    # A per-member pool answers only from the member that holds the volume, so honouring a
+    # tenant's ?location= turned 200 against 404 into a way to find the member.
+    seen = {}
+
+    class _Node:
+        def get(self, params=None):
+            seen["params"] = params
+            return type("R", (), {"json": lambda self: {"metadata": {"name": "data", "used_by": ["/1.0/instances/web-1?project=default"]}}})()
+
+    monkeypatch.setattr(volumes_module, "verify_cluster_access", lambda host: None)
+    monkeypatch.setattr(volumes_module, "project_is_visible", lambda host, project: True)
+    monkeypatch.setattr(volumes_module, "filter_visible_lxd_references", lambda host, refs: refs)
+
+    async def client_for(_service, _host):
+        return object()
+
+    monkeypatch.setattr(volumes_module, "client_for", client_for)
+    monkeypatch.setattr(volumes_module, "require_client", lambda client, host: client)
+    monkeypatch.setattr(volumes_module, "_volume_node", lambda *args: _Node())
+    import asyncio
+
+    for tier, expected in (("tenant", None), ("partner", MEMBER)):
+        monkeypatch.setattr(volumes_module, "caller_tier", lambda tier=tier: tier)
+        seen.clear()
+        asyncio.run(volumes_module.get_storage_volume(
+            volume_type="custom", volume_name="data", host=HOST, pool="local", project=None,
+            location=MEMBER, lxd_service=None,
+        ))
+        target = (seen["params"] or {}).get("target")
+        assert target == expected, f"{tier} sent target={target!r}"

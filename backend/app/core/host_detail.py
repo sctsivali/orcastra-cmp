@@ -15,6 +15,7 @@ under `org_scope_dependency`, or an unset scope reads as Admin; a ratchet test p
 """
 
 import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any, Mapping, Optional, TypeVar
 
 from pydantic import BaseModel
@@ -130,6 +131,19 @@ def cluster_list_for_tier(response: Model, tier: Tier) -> Model:
     return response.model_copy(update={"clusters": rows})
 
 
+def without_member_target(reference: str) -> str:
+    """A used_by reference without LXD's `target`, the cluster member it appends on a clustered pool."""
+    parts = urlsplit(reference)
+    if not parts.query:
+        return reference
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "target"]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def _tenant_used_by(model: Model) -> list:
+    return [without_member_target(str(reference)) for reference in getattr(model, "used_by", None) or []]
+
+
 def pool_for_tier(pool: Model, tier: Tier) -> Model:
     """A storage pool as a Tenant may read it: its name and what uses it.
 
@@ -140,7 +154,10 @@ def pool_for_tier(pool: Model, tier: Tier) -> Model:
     if sees_host_detail(tier):
         return pool
     # note: the description is the operator's note about the pool and often names its backend.
-    return pool.model_copy(update={"config": {}, "driver": None, "status": None, "description": ""})
+    return pool.model_copy(update={
+        "config": {}, "driver": None, "status": None, "description": "",
+        "used_by": _tenant_used_by(pool),
+    })
 
 
 # Volume config a Tenant may read: the size and the snapshot settings it can act on. Every other
@@ -164,6 +181,9 @@ def volume_for_tier(volume: Model, tier: Tier) -> Model:
             if key in TENANT_VOLUME_CONFIG_KEYS or key.startswith(TENANT_VOLUME_CONFIG_PREFIXES)
         },
         "location": None,
+        # note: a volume is created by a Partner, so its description is the operator's note.
+        "description": "",
+        "used_by": _tenant_used_by(volume),
     })
 
 

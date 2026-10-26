@@ -356,6 +356,11 @@ async def get_storage_volume(
     verify_cluster_access(host)
     if not project_is_visible(host, project or DEFAULT_PROJECT):
         raise HTTPException(status_code=403, detail="Access denied to this project")
+    if caller_tier() == "tenant":
+        # important: a per-member pool answers only from the member holding the volume, so a
+        # Tenant's ?location= would turn 200 against 404 into a way to find the member. An
+        # untargeted read reaches the holder when the name is unique.
+        location = None
     try:
         client = require_client(await client_for(lxd_service, host), host)
         row = _volume_node(client, pool, volume_type, volume_name).get(
