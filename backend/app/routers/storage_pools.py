@@ -91,10 +91,10 @@ class StoragePoolInfo(BaseModel):
     """Storage pool information."""
     name: str = Field(..., description="Pool name")
     description: str = Field("", description="Pool description")
-    driver: str = Field(..., description="Storage driver (zfs, dir, btrfs, etc)")
-    config: Dict[str, str] = Field(default_factory=dict, description="Pool configuration")
+    driver: Optional[str] = Field(..., description="Storage driver (zfs, dir, btrfs, etc); null for a Tenant")
+    config: Dict[str, str] = Field(default_factory=dict, description="Pool configuration; empty for a Tenant")
     used_by: List[str] = Field(default_factory=list, description="Resources using this pool")
-    status: str = Field("", description="Pool status")
+    status: Optional[str] = Field("", description="Pool status; null for a Tenant")
     node: str = Field("", description="Cluster where the pool is defined")
 
 
@@ -303,6 +303,10 @@ async def list_storage_pools(
 async def get_all_storage_pool_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+
+    # important: a pool's whole size and usage count every party's volumes. Partner and above,
+    # as the monitoring dashboard's pools (owner decision 2026-10-26).
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get resources for all storage pools on all nodes."""
     cache = get_cache_manager()
@@ -635,6 +639,10 @@ async def delete_storage_pool(
 async def get_all_storage_pool_resources_legacy_path(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+
+    # important: a pool's whole size and usage count every party's volumes. Partner and above,
+    # as the monitoring dashboard's pools (owner decision 2026-10-26).
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get storage pool resources for all pools."""
     cache = get_cache_manager()
@@ -675,6 +683,7 @@ async def get_storage_pool_resources(
     pool_name: str,
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get storage pool resources."""
     verify_cluster_access(host)

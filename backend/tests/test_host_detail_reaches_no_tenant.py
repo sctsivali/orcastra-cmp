@@ -141,17 +141,20 @@ def test_the_policy_returns_copies_and_never_mutates(tier):
         assert shown_vm is vm and shown_metrics is metrics
 
 
-def test_a_tenant_pool_keeps_only_its_size_settings():
+def test_a_tenant_pool_keeps_only_its_name():
+    # Owner decision 2026-10-26: no size, driver or state; it used to keep the size settings.
     class Pool(host_detail.BaseModel):
         name: str
         config: dict
+        driver: str | None = "zfs"
+        status: str | None = "Created"
 
     pool = Pool(name="p", config=dict(POOL_CONFIG))
 
     shown = host_detail.pool_for_tier(pool, "tenant")
 
-    assert shown.config == {"size": "100GiB"}
-    assert pool.config == POOL_CONFIG
+    assert (shown.name, shown.config, shown.driver, shown.status) == ("p", {}, None, None)
+    assert pool.config == POOL_CONFIG and pool.driver == "zfs"
     assert host_detail.pool_for_tier(pool, "partner") is pool
 
 
@@ -240,8 +243,13 @@ def test_a_cached_pool_list_reaches_a_tenant_without_its_backing_path(monkeypatc
     response = _as(tier, read)
 
     assert response.status_code == 200, response.text[:200]
-    config = response.json()["pools"][0]["config"]
-    assert config == ({"size": "100GiB"} if tier == "tenant" else POOL_CONFIG)
+    pool = response.json()["pools"][0]
+    # Owner decision 2026-10-26: a tenant reads a pool's name and what uses it, not its size,
+    # driver or state; a pool is shared by every party on the cluster.
+    if tier == "tenant":
+        assert (pool["config"], pool["driver"], pool["status"]) == ({}, None, None)
+    else:
+        assert (pool["config"], pool["driver"]) == (POOL_CONFIG, "zfs")
 
 
 HOST_DETAIL_MODELS = {
@@ -370,3 +378,24 @@ def test_a_cluster_row_reaches_a_tenant_without_hypervisor_metadata(monkeypatch,
     else:
         assert {field: seen[field] for field in hidden} == {field: row[field] for field in hidden}
     assert body["clusters"][0]["cluster_type"] == "Incus", "the cached row was edited"
+
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/storage/pools/resources-all", "/storage/pools-resources", "/storage/pools/default/resources?host=nuc2"],
+)
+def test_pool_capacity_is_refused_to_a_tenant(path):
+    # The whole pool's size and usage count every party's volumes, the figure the monitoring
+    # dashboard also withholds from a tenant (owner decision 2026-10-26).
+    from app.core.auth import AuthenticatedUser
+
+    app = FastAPI()
+    app.include_router(pools_module.router)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        user_id="t", email="t@example.com", groups=["role_tenant"]
+    )
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    app.dependency_overrides[get_lxd_service] = lambda: object()
+    response = TestClient(app, raise_server_exceptions=False).get(path)
+    assert response.status_code == 403, response.text[:200]

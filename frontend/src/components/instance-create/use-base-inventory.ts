@@ -122,7 +122,7 @@ export function useBaseCreateInventory({
   const poolOptions = (
     ((poolsQuery.data as unknown as StoragePoolListResponse | undefined)?.pools ??
       []) as StoragePoolInfo[]
-  ).map((pool) => ({ value: pool.name, label: `${pool.name} (${pool.driver})` }));
+  ).map((pool) => ({ value: pool.name, label: pool.driver ? `${pool.name} (${pool.driver})` : pool.name }));
   const poolState = derivePickerState({
     gated: !host,
     isLoading: poolsQuery.isLoading,

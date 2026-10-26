@@ -31,6 +31,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { useStoragePools } from "@/hooks/use-lxd";
+import { usePermissions } from "@/hooks/use-permissions";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -42,12 +43,17 @@ import { storagePoolStatusDisplay } from "@/lib/resource-status";
 interface PoolInfo {
   name: string;
   description: string;
-  driver: string;
+  driver: string | null;
   config: Record<string, string>;
   used_by: string[];
-  status: string;
+  status: string | null;
   node?: string;
 }
+
+// note: a pool is shared by every party on its cluster, so its driver, state and capacity are
+// the provider's, not a Tenant's (owner decision 2026-10-26). The backend sends a Tenant none
+// of them and refuses it the capacity read; these fields and their columns are operator-only.
+const OPERATOR_POOL_FIELDS = ["driver", "status", "utilisation"];
 
 // note: /storage/pools and /storage/pools/resources-all are two calls merged by useStoragePools,
 // so usage reaches the page on a blob keyed "{node}-{name}" rather than on the pool. A sort
@@ -126,6 +132,7 @@ const POOLS = defineTable<PoolRow>()({
 
 function StoragePoolsContent() {
   const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useStoragePools();
+  const { isPartner } = usePermissions();
   const pools = (data as any)?.pools || [];
   const poolResources = (data as any)?.resources || {};
   
@@ -151,8 +158,11 @@ function StoragePoolsContent() {
   // The column appears once any node is known, the facet once there are two to choose
   // between. The thresholds differ on purpose: one option filters nothing.
   const availableFields = useMemo(
-    () => (nodes.length > 0 ? POOLS.facetFields : POOLS.facetFields.filter((f) => f !== "node")),
-    [nodes.length],
+    () =>
+      POOLS.facetFields.filter(
+        (f) => (nodes.length > 0 || f !== "node") && (isPartner || !OPERATOR_POOL_FIELDS.includes(f)),
+      ),
+    [nodes.length, isPartner],
   );
 
   // One dialog for the page, opened from either cell. See components/used-by.
@@ -216,7 +226,7 @@ function StoragePoolsContent() {
             Storage Pools
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage hypervisor storage pools
+            {isPartner ? "Manage hypervisor storage pools" : "Storage pools your instances use"}
           </p>
         </div>
         <RefreshButton
@@ -246,12 +256,18 @@ function StoragePoolsContent() {
             <TableHeader>
               <TableRow>
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Driver" field="driver" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {isPartner && (
+                  <SortableTableHead label="Driver" field="driver" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
                 {nodes.length > 0 && (
                   <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
-                <SortableTableHead label="Size (Used / Total)" field="utilisation" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {isPartner && (
+                  <>
+                    <SortableTableHead label="Size (Used / Total)" field="utilisation" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  </>
+                )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
@@ -259,7 +275,7 @@ function StoragePoolsContent() {
             <TableBody>
               {paginatedPools.length === 0 ? (
                 <TableEmptyRow
-                  colSpan={nodes.length > 0 ? 7 : 6}
+                  colSpan={(nodes.length > 0 ? 7 : 6) - (isPartner ? 0 : 3)}
                   icon={Database}
                   title="No storage pools found"
                   description={
@@ -276,38 +292,44 @@ function StoragePoolsContent() {
                   return (
                     <TableRow key={`${poolKey}-${idx}`}>
                       <TableCell className="font-medium">{pool.name}</TableCell>
-                      <TableCell>
-                        {formatLabel(pool.driver)}
-                      </TableCell>
+                      {isPartner && (
+                        <TableCell>
+                          {formatLabel(pool.driver ?? "")}
+                        </TableCell>
+                      )}
                       {nodes.length > 0 && (
                         <TableCell><NodeLink clusterId={pool.node} /></TableCell>
                       )}
-                      <TableCell>
-                        <PoolCapacityCell
-                          capacity={pool.capacity}
-                          poolName={pool.name}
-                          onOpen={() => usedBy.openPanel(poolSubject(pool, poolResources), "capacity")}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={status.tone}>
-                          {status.label}
-                        </Badge>
-                      </TableCell>
+                      {isPartner && (
+                        <>
+                          <TableCell>
+                            <PoolCapacityCell
+                              capacity={pool.capacity}
+                              poolName={pool.name}
+                              onOpen={() => usedBy.openPanel(poolSubject(pool, poolResources, isPartner), "capacity")}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={status.tone}>
+                              {status.label}
+                            </Badge>
+                          </TableCell>
+                        </>
+                      )}
                       <TableCell>
                         <UsedByCell
                           usedBy={pool.used_by}
                           noun="volumes"
                           subjectName={pool.name}
                           emptyLabel="No volumes"
-                          onOpen={() => usedBy.openUsage(poolSubject(pool, poolResources))}
+                          onOpen={() => usedBy.openUsage(poolSubject(pool, poolResources, isPartner))}
                         />
                       </TableCell>
                       <TableCell>
                         <ProjectsCell
                           usedBy={pool.used_by}
                           subjectName={pool.name}
-                          onOpen={() => usedBy.openProjects(poolSubject(pool, poolResources))}
+                          onOpen={() => usedBy.openProjects(poolSubject(pool, poolResources, isPartner))}
                         />
                       </TableCell>
                     </TableRow>
@@ -354,7 +376,11 @@ export default function StoragePoolsPage() {
 // /storage/pools/resources-all. Only space.used and space.total were ever displayed, so the
 // whole inodes dict was paid for on every page load and thrown away. A pool can sit at 20% on
 // bytes and be completely full on inodes, and until now the UI could not say so.
-function poolSubject(pool: StoragePoolInfo, resources: Record<string, any>): UsedBySubject {
+function poolSubject(
+  pool: StoragePoolInfo,
+  resources: Record<string, any>,
+  showsHostDetail: boolean,
+): UsedBySubject {
   const config = pool.config ?? {};
   const usage = resources?.[`${pool.node}-${pool.name}`] ?? {};
   return {
@@ -364,13 +390,19 @@ function poolSubject(pool: StoragePoolInfo, resources: Record<string, any>): Use
     description: pool.description || undefined,
     usedBy: pool.used_by ?? [],
     facts: [
-      { label: "Driver", value: formatLabel(pool.driver) },
-      { label: "Status", value: storagePoolStatusDisplay(pool.status).label },
+      ...(showsHostDetail
+        ? [
+            { label: "Driver", value: formatLabel(pool.driver ?? "") },
+            { label: "Status", value: storagePoolStatusDisplay(pool.status).label },
+          ]
+        : []),
       { label: "Cluster", value: <NodeLink clusterId={pool.node} /> },
     ],
-    panels: [
-      { id: "capacity", label: "Capacity", kind: "capacity", space: usage.space, inodes: usage.inodes },
-      { id: "config", label: "Configuration", kind: "config", entries: config },
-    ],
+    panels: showsHostDetail
+      ? [
+          { id: "capacity", label: "Capacity", kind: "capacity", space: usage.space, inodes: usage.inodes },
+          { id: "config", label: "Configuration", kind: "config", entries: config },
+        ]
+      : [],
   };
 }

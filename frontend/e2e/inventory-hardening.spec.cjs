@@ -76,7 +76,7 @@ test("tenant: overview shows assigned cluster information without rename or tag 
   await expectCleanInventoryHarness(state);
 });
 
-for (const role of ["admin", "partner", "tenant"]) {
+for (const role of ["admin", "partner"]) {
   test(`${role}: storage capacity distinguishes zero, missing, fractional, and invalid readings`, async ({ page, context }, testInfo) => {
     await authenticate(context, role);
     const state = await installInventoryHardeningFixtures(page, role);
@@ -102,3 +102,28 @@ for (const role of ["admin", "partner", "tenant"]) {
     await expectCleanInventoryHarness(state);
   });
 }
+
+// A pool is shared by every party on its cluster, so its driver, state and capacity are the
+// provider's (owner decision 2026-10-26). A Tenant sees which pools exist and what uses them,
+// and its page never asks for the capacity read the backend refuses it.
+test("tenant: storage pools list names and usage, no driver, status or capacity", async ({ page, context }) => {
+  await authenticate(context, "tenant");
+  const state = await installInventoryHardeningFixtures(page, "tenant");
+  await page.goto("/inventory/storage-pools");
+  await expect(page.getByRole("heading", { name: "Storage Pools", exact: true })).toBeVisible();
+  await expect(page.getByText("Storage pools your instances use")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "healthy", exact: true })).toBeVisible();
+  const head = page.locator("main thead");
+  await expect(head).toContainText("Used By");
+  for (const header of ["Driver", "Size (Used / Total)", "Status"]) {
+    await expect(head, `${header} is operator detail`).not.toContainText(header);
+  }
+  await expect(page.locator("main")).not.toContainText(/Usage unavailable|capacity breakdown|NaN|undefined/);
+  await page.waitForTimeout(1_000);
+  expect(
+    state.requests.filter((entry) => entry.path === "/storage/pools/resources-all"),
+    "a tenant never asks for pool capacity",
+  ).toEqual([]);
+  await expectNoHorizontalOverflow(page);
+  await expectCleanInventoryHarness(state);
+});

@@ -180,7 +180,7 @@ export function buildPrefetchMap(
       queryClient.prefetchQuery({ queryKey: queryKeys.networksFor(actorScope), queryFn: ({ signal }) => api.networks.list(undefined, undefined, { signal }), staleTime: 120_000 });
     },
     "/inventory/storage-pools": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.storagePoolsFor(actorScope), queryFn: ({ signal }) => readStoragePools(undefined, { signal }), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.storagePoolsFor(actorScope), queryFn: ({ signal }) => readStoragePools(undefined, { signal }, canViewNodeInventory), staleTime: 120_000 });
     },
     "/inventory/storage-volumes": () => {
       queryClient.prefetchQuery({ queryKey: queryKeys.storageVolumesFor(actorScope), queryFn: ({ signal }) => api.storageVolumes.list(undefined, undefined, { signal }), staleTime: 120_000 });

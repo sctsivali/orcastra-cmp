@@ -22,8 +22,6 @@ from pydantic import BaseModel
 from app.core.task_scope import Tier
 
 HOST_DETAIL_TIERS = frozenset({"admin", "partner"})
-# Pool config a Tenant may read: sizes, never a device, a path or a remote pool name.
-TENANT_POOL_CONFIG_KEYS = frozenset({"size", "volume.size"})
 # Instance and profile config a Tenant may read: limits, the image's identity, boot and snapshot
 # settings, the base image and the instance's own MAC addresses. Everything else is dropped: raw.*,
 # idmap and other volatile host state describe the host, and cloud-init, user.* and environment can
@@ -132,15 +130,16 @@ def cluster_list_for_tier(response: Model, tier: Tier) -> Model:
     return response.model_copy(update={"clusters": rows})
 
 
-def tenant_pool_config(config: Mapping[str, Any]) -> dict:
-    return {key: value for key, value in config.items() if key in TENANT_POOL_CONFIG_KEYS}
-
-
 def pool_for_tier(pool: Model, tier: Tier) -> Model:
-    """A storage pool: only its size settings for a Tenant, never `source` or a remote name."""
+    """A storage pool as a Tenant may read it: its name and what uses it.
+
+    A pool is shared by every party on the cluster, so its config (size, source, remote names),
+    driver and state describe the provider's storage, not the Tenant's (owner decision
+    2026-10-26). The capacity routes refuse a Tenant for the same reason.
+    """
     if sees_host_detail(tier):
         return pool
-    return pool.model_copy(update={"config": tenant_pool_config(getattr(pool, "config") or {})})
+    return pool.model_copy(update={"config": {}, "driver": None, "status": None})
 
 
 def pool_list_for_tier(response: Model, tier: Tier) -> Model:

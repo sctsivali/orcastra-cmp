@@ -1081,18 +1081,26 @@ export function useStoragePoolList(
 }
 
 /** The storage pool list with its capacity, as the pools page reads it and the sidebar warms it. */
-export async function readStoragePools(host: string | undefined, read: ReadOptions) {
+export async function readStoragePools(
+  host: string | undefined,
+  read: ReadOptions,
+  includeCapacity: boolean,
+) {
   // important: the capacity read is secondary and must not be able to fail the list. It
   // fans out to every cluster, so it is the likelier of the two to time out, and losing it
   // used to blank the whole page under "No storage pools found" while the list itself had
   // answered. An operator reading that would look for pools that were never gone.
   // `capacityFailed` is what lets the surface say which of the two happened, instead of
   // rendering an absent reading the same way as a reading of nothing.
+  // note: a Tenant is refused the capacity read (a pool's size counts every party's volumes,
+  // owner decision 2026-10-26), so it is not asked rather than failed on every load.
   const [poolsData, resourcesData] = await Promise.all([
     api.storagePools.list(host, read) as Promise<Record<string, unknown>>,
-    (api.storagePools.getResourcesAll(read) as Promise<Record<string, unknown> | null>)
-      .then((value) => ({ ok: true as const, value }))
-      .catch(() => ({ ok: false as const, value: null })),
+    includeCapacity
+      ? (api.storagePools.getResourcesAll(read) as Promise<Record<string, unknown> | null>)
+          .then((value) => ({ ok: true as const, value }))
+          .catch(() => ({ ok: false as const, value: null }))
+      : Promise.resolve({ ok: true as const, value: null }),
   ]);
   const merged = {
     ...poolsData,
@@ -1108,11 +1116,12 @@ export function useStoragePools(
   opts?: { enabled?: boolean; requestEpoch?: number },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const { isPartner } = usePermissions();
   const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     enabled: isAuthenticated && (opts?.enabled ?? true),
     queryKey: queryKeys.storagePoolsFor(scopeKey, host, opts?.requestEpoch),
-    queryFn: (read) => readStoragePools(host, read),
+    queryFn: (read) => readStoragePools(host, read, isPartner),
     // Always enabled - fetches all pools when host is undefined
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.

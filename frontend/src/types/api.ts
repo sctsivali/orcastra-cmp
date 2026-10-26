@@ -1078,10 +1078,11 @@ export interface NetworkACLCreateRequest {
 export interface StoragePoolInfo {
   name: string;
   description: string;
-  driver: string;
+  /** Null for a Tenant, with `status`, and `config` empty: a pool is shared storage. */
+  driver: string | null;
   config: Record<string, string>;
   used_by: string[];
-  status: string;
+  status: string | null;
   node?: string;
 }
 
