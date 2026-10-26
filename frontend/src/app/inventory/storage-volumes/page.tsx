@@ -47,7 +47,7 @@ interface VolumeInfo {
   /** The project that holds the volume. `used_by` answers who consumes it. */
   project?: string;
   /** The cluster member that holds it; empty on a shared pool or a single host. */
-  location?: string;
+  location?: string | null;
 }
 
 const VOLUMES = defineTable<VolumeInfo>()({

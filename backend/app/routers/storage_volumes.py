@@ -27,6 +27,8 @@ from app.services.lxd_service import (
     require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.host_detail import volume_for_tier, volume_list_for_tier
+from app.core.task_scope import caller_tier
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import (
     org_scope_dependency,
@@ -104,9 +106,9 @@ class StorageVolumeInfo(BaseModel):
     node: str = Field("", description="Cluster where the volume is defined")
     content_type: str = Field("", description="Content type")
     project: str = Field(DEFAULT_PROJECT, description="Project that holds the volume")
-    location: str = Field(
+    location: Optional[str] = Field(
         "",
-        description="Cluster member that holds the volume; empty for a shared pool or a single host",
+        description="Cluster member that holds the volume; empty for a shared pool or a single host, null for a Tenant",
     )
 
 
@@ -321,7 +323,7 @@ async def list_storage_volumes(
             generation=lambda: get_resource_list_generation(cache, "storage_volumes"),
             label="storage volumes list",
         )
-        return served.as_model(StorageVolumeListResponse)
+        return volume_list_for_tier(served.as_model(StorageVolumeListResponse), caller_tier())
     except HTTPException:
         raise
     except Exception as e:
@@ -364,7 +366,7 @@ async def get_storage_volume(
             raise HTTPException(status_code=403, detail="Access denied to this storage volume")
         
         loc = row.get("location") or ""
-        return StorageVolumeInfo(
+        return volume_for_tier(StorageVolumeInfo(
             name=row.get("name") or volume_name,
             type=row.get("type") or volume_type,
             pool=pool,
@@ -375,7 +377,7 @@ async def get_storage_volume(
             node=host,
             project=row.get("project") or project or DEFAULT_PROJECT,
             location="" if loc == "none" else loc,
-        )
+        ), caller_tier())
     except HTTPException:
         # broad handler below converts it into a 500
         # important: let require_client's 503 through. Without this the

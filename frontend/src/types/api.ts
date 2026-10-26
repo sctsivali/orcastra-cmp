@@ -1115,8 +1115,8 @@ export interface StorageVolumeInfo {
   node?: string;
   /** The LXD project that holds the volume. */
   project?: string;
-  /** Cluster member that holds it; empty for a shared pool or a single host. */
-  location?: string;
+  /** Cluster member that holds it; empty for a shared pool or a single host, null for a Tenant. */
+  location?: string | null;
 }
 
 export interface StorageVolumeListResponse extends FanoutReachability {

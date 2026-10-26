@@ -24,6 +24,7 @@ from app.models.instance_metrics import InstanceMetrics
 from app.models.schemas import ClusterInfo, VMInfo, VMStatus
 from app.routers import instances as instances_module
 from app.routers import storage_pools as pools_module
+from app.routers import storage_volumes as volumes_module
 from app.routers import vms as vms_module
 from app.services.lxd_service import get_lxd_service
 from app.core.cache_envelope import unwrap
@@ -106,7 +107,7 @@ class _Service:
 def _client(monkeypatch, *routers):
     manager = CacheManager(redis_url=None)
     monkeypatch.setattr(cache_mod, "get_cache_manager", lambda: manager)
-    for module in (instances_module, vms_module, pools_module):
+    for module in (instances_module, vms_module, pools_module, volumes_module):
         monkeypatch.setattr(module, "get_cache_manager", lambda: manager, raising=False)
     for module in (instances_module, vms_module):
         monkeypatch.setattr(module, "verify_cluster_access", lambda host: None)
@@ -261,6 +262,7 @@ def test_a_cached_pool_list_reaches_a_tenant_without_its_backing_path(monkeypatc
 HOST_DETAIL_MODELS = {
     "VMInfo", "VMListResponse", "InstanceMetrics", "ClusterInfo", "ClusterListResponse",
     "StoragePoolInfo", "StoragePoolListResponse", "ProfileListResponse", "ProfileDetail",
+    "StorageVolumeInfo", "StorageVolumeListResponse",
 }
 
 
@@ -296,7 +298,8 @@ def test_every_route_returning_host_detail_applies_the_tier_policy():
             assert "org_scope_dependency" in source.split("def ", 1)[0] or (
                 "Depends(org_scope_dependency)" in source
             ), f"{path.name} must run org_scope_dependency, or an unset scope reads as Admin"
-    assert len(checked) == 12, checked
+    # 14 since the two storage volume routes joined (owner decision 2026-10-26)
+    assert len(checked) == 14, checked
 
 
 def test_a_tenant_device_keeps_its_name_and_loses_the_host_side():
@@ -405,3 +408,45 @@ def test_pool_capacity_is_refused_to_a_tenant(path):
     app.dependency_overrides[get_lxd_service] = lambda: object()
     response = TestClient(app, raise_server_exceptions=False).get(path)
     assert response.status_code == 403, response.text[:200]
+
+
+
+VOLUME_CONFIG = {
+    "size": "10GiB", "snapshots.expiry": "7d", "snapshots.schedule": "@daily",
+    "zfs.blocksize": "16KiB", "block.filesystem": "ext4", "block.mount_options": "discard",
+    "volatile.uuid": "abc", "security.shifted": "true",
+}
+
+
+@pytest.mark.parametrize("tier", ["partner", "tenant"])
+def test_a_cached_volume_list_reaches_a_tenant_with_size_and_snapshots_only(monkeypatch, tier):
+    # Owner decision 2026-10-26: a tenant reads its volumes' size and snapshot settings. The
+    # other keys name the pool's backend (zfs.*, block.*) and location names the cluster member,
+    # which vm_for_tier already withholds for an instance.
+    client, manager = _client(monkeypatch, volumes_module.router)
+    body = {
+        "total": 1,
+        "volumes": [{
+            "name": "web-1", "type": "container", "pool": "default", "config": dict(VOLUME_CONFIG),
+            "used_by": [], "node": HOST, "location": MEMBER,
+        }],
+        "nodes": [HOST],
+    }
+
+    def read():
+        manager.set(
+            "api_responses", get_scope_cache_key("storage_volumes:list:e1:host=None:pool=None"), body, ttl=60
+        )
+        return client.get("/storage/volumes")
+
+    response = _as(tier, read)
+
+    assert response.status_code == 200, response.text[:200]
+    volume = response.json()["volumes"][0]
+    if tier == "tenant":
+        assert volume["config"] == {"size": "10GiB", "snapshots.expiry": "7d", "snapshots.schedule": "@daily"}
+        assert volume["location"] is None
+    else:
+        assert (volume["config"], volume["location"]) == (VOLUME_CONFIG, MEMBER)
+    assert volume["name"] == "web-1" and volume["pool"] == "default"
+    assert body["volumes"][0]["location"] == MEMBER, "the cached row was edited"

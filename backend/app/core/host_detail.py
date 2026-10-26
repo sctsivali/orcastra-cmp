@@ -143,6 +143,37 @@ def pool_for_tier(pool: Model, tier: Tier) -> Model:
     return pool.model_copy(update={"config": {}, "driver": None, "status": None, "description": ""})
 
 
+# Volume config a Tenant may read: the size and the snapshot settings it can act on. Every other
+# key names the pool's backend (zfs.*, block.*, lvm.*) or volatile host state.
+TENANT_VOLUME_CONFIG_KEYS = frozenset({"size"})
+TENANT_VOLUME_CONFIG_PREFIXES = ("snapshots.",)
+
+
+def volume_for_tier(volume: Model, tier: Tier) -> Model:
+    """A storage volume as a Tenant may read it (owner decision 2026-10-26).
+
+    Its size and snapshot settings stay; `location` is the cluster member that holds it, which
+    `vm_for_tier` already withholds for an instance.
+    """
+    if sees_host_detail(tier):
+        return volume
+    config = getattr(volume, "config") or {}
+    return volume.model_copy(update={
+        "config": {
+            key: value for key, value in config.items()
+            if key in TENANT_VOLUME_CONFIG_KEYS or key.startswith(TENANT_VOLUME_CONFIG_PREFIXES)
+        },
+        "location": None,
+    })
+
+
+def volume_list_for_tier(response: Model, tier: Tier) -> Model:
+    if sees_host_detail(tier):
+        return response
+    rows = [volume_for_tier(volume, tier) for volume in getattr(response, "volumes")]
+    return response.model_copy(update={"volumes": rows})
+
+
 def pool_list_for_tier(response: Model, tier: Tier) -> Model:
     if sees_host_detail(tier):
         return response
