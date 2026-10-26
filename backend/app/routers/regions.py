@@ -35,7 +35,9 @@ from app.services.lxd.node_resources import aggregate_microcloud_resources
 from app.services.lxd.storage_model import PoolReading, summarise_cluster_storage
 
 logger = logging.getLogger(__name__)
+from app.core.auth import AuthenticatedUser
 from app.core.dependencies import require_tenant
+from app.core.rbac import Permission, has_permission
 from app.services.lxd.hardware import (
     cpu_model_from_sockets,
     cpu_vendor_from_sockets,
@@ -129,26 +131,16 @@ def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> Exten
     )
 
 
-@router.get(
-    "",
-    response_model=RegionsOverviewResponse,
-    summary="Get regions overview",
-    description="""
-    Get an overview of all registered nodes grouped by geographic region.
-    
-    Returns:
-    - List of regions with aggregated hardware stats
-    - Total counts across all regions
-    - Per-node hardware details within each region
-    
-    **Caching:** Results are cached for 120 seconds for performance.
-    """
-)
-async def get_regions_overview(
-    lxd_service: LXDService = Depends(get_lxd_service),
+async def build_regions_overview(
+    lxd_service: LXDService,
     fresh: bool = False,
-):
-    """Get regions overview with aggregated hardware data. Clusters are queried in parallel."""
+) -> RegionsOverviewResponse:
+    """The regions overview for the caller's org scope, before any role projection.
+
+    Clusters are queried in parallel. The body is cached per scope and ACL, and the cache
+    prewarm builds it with no caller at all, so nothing here may depend on the caller's role:
+    the routes below project it for each caller.
+    """
     cache = get_cache_manager()
     settings = get_settings()
     
@@ -559,23 +551,89 @@ async def get_regions_overview(
         release_lock(_lock_key)
 
 
+def _can_read_hardware(user: AuthenticatedUser) -> bool:
+    # important: the line GET /nodes draws. Hardware inventory and the hypervisor family are
+    # Partner and above; a Tenant reads places, cluster names and status, and its own instance
+    # counts, which the build already narrowed to its ACL.
+    return has_permission(user, Permission.CLUSTER_READ)
+
+
+def _region_without_hardware(region: RegionSummary) -> RegionSummary:
+    return region.model_copy(
+        update={
+            "hardware": None,
+            "nodes": [
+                node.model_copy(update={"hardware": None, "node_type": None})
+                for node in region.nodes
+            ],
+        }
+    )
+
+
+def _overview_for_caller(
+    response: RegionsOverviewResponse, user: AuthenticatedUser
+) -> RegionsOverviewResponse:
+    """The overview as this caller may read it.
+
+    important: new models, never an edit of the one passed in. That body is the cached entry,
+    and a Tenant whose ACL is not enforced shares its key with a Partner on the same clusters.
+    """
+    if _can_read_hardware(user):
+        return response
+    return response.model_copy(
+        update={
+            "regions": [_region_without_hardware(region) for region in response.regions],
+            "total_cpu": None,
+            "total_memory": None,
+            "total_storage": None,
+            "total_gpu": None,
+            "total_gpu_cards": None,
+            "total_gpu_integrated": None,
+        }
+    )
+
+
+@router.get(
+    "",
+    response_model=RegionsOverviewResponse,
+    summary="Get regions overview",
+    description="""
+    Get an overview of all registered clusters grouped by geographic region.
+
+    Returns:
+    - List of regions with their clusters, status and instance counts
+    - Total counts across all regions
+    - Aggregated hardware per region and per cluster, for Partners and Administrators.
+      For a Tenant the hardware fields, the hardware totals and the hypervisor type are null.
+
+    **Caching:** Results are cached for 120 seconds for performance.
+    """
+)
+async def get_regions_overview(
+    lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
+    user: AuthenticatedUser = Depends(require_tenant()),
+):
+    """Get the regions overview, projected for the caller's role."""
+    return _overview_for_caller(await build_regions_overview(lxd_service, fresh), user)
+
 
 @router.get(
     "/{region_id}",
     response_model=RegionSummary,
     summary="Get region details",
-    description="Get detailed information about a specific region."
+    description="Get one region. Hardware fields and the hypervisor type are null for a Tenant."
 )
 async def get_region_details(
     region_id: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    user: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get details for a specific region."""
-    # Get full overview and filter
-    overview = await get_regions_overview(lxd_service)
-    
+    overview = await build_regions_overview(lxd_service)
+
     for region in overview.regions:
         if region.region_id == region_id:
-            return region
-    
+            return region if _can_read_hardware(user) else _region_without_hardware(region)
+
     raise HTTPException(status_code=404, detail=f"Region '{region_id}' not found")

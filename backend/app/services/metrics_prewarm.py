@@ -170,8 +170,10 @@ class CachePrewarm:
     async def _fetch_regions(self):
         """Fetch regions overview for cache warming."""
         try:
-            from app.routers.regions import get_regions_overview
-            result = await get_regions_overview(lxd_service=self._lxd_service)
+            # important: the builder, not the route. The route projects for a caller, and
+            # this shared entry has none.
+            from app.routers.regions import build_regions_overview
+            result = await build_regions_overview(lxd_service=self._lxd_service)
             # result is a dict or Pydantic model
             if hasattr(result, 'model_dump'):
                 return result.model_dump()

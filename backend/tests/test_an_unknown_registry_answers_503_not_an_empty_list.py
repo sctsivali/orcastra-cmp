@@ -132,7 +132,7 @@ def _regions(service, monkeypatch):
     ))
     monkeypatch.setattr(vault_client, "get_vault_client", lambda addr, token: object())
     monkeypatch.setattr(lxd_cert_manager, "LXDCertificateManager", lambda vault_client, clusters_path: service.cert_manager)
-    return asyncio.run(regions.get_regions_overview(lxd_service=service, fresh=True))
+    return asyncio.run(regions.build_regions_overview(lxd_service=service, fresh=True))
 
 
 def _clusters(service):

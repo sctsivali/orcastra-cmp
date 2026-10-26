@@ -60,7 +60,7 @@ TOLERATES_NONE = {
     ("permissions.py", "_fetch_identities_for_node"),
     ("permissions.py", "_fetch_groups_for_node"),
     ("storage_volumes.py", "_fetch_volumes_for_node"),
-    ("regions.py", "get_regions_overview"),
+    ("regions.py", "build_regions_overview"),
     ("regions.py", "_process_cluster"),
     # Session bookkeeping. These count or tear down console sessions across the fleet; one
     # unreachable cluster must not fail the sweep for the others.

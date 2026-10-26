@@ -1392,7 +1392,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                 )
 
         # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
-        # routers/vms.py list_vms, routers/regions.py get_regions_overview.
+        # routers/vms.py list_vms, routers/regions.py build_regions_overview.
         # note: no instances:list. That prewarm wrote a key GET /instances never reads.
         # note: no storage_pool_resources and no nodes:availability. Both are warmed through
         # their own handler or resolver, which writes the entry with its own TTL and fence.

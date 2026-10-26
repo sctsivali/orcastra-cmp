@@ -2014,8 +2014,10 @@ class RegionNodeInfo(BaseModel):
     cluster_id: str
     display_name: str
     status: ClusterStatus
-    node_type: Optional[str] = None
-    hardware: ExtendedHardwareInfo
+    node_type: Optional[str] = Field(None, description="Hypervisor family; None for a Tenant")
+    hardware: Optional[ExtendedHardwareInfo] = Field(
+        None, description="None for a Tenant: hardware inventory needs cluster:read"
+    )
 
 
 class RegionSummary(BaseModel):
@@ -2038,7 +2040,9 @@ class RegionSummary(BaseModel):
     instance_running: int = Field(0, description="Running instances")
     
     # Hardware summary
-    hardware: ExtendedHardwareInfo
+    hardware: Optional[ExtendedHardwareInfo] = Field(
+        None, description="None for a Tenant: hardware inventory needs cluster:read"
+    )
     
     # Node details
     nodes: List[RegionNodeInfo] = Field(default_factory=list)
@@ -2049,12 +2053,13 @@ class RegionsOverviewResponse(BaseModel):
     regions: List[RegionSummary] = Field(default_factory=list)
     total_nodes: int = Field(0)
     total_instances: int = Field(0)
-    total_cpu: int = Field(0)
-    total_memory: int = Field(0)
-    total_storage: int = Field(0)
-    total_gpu: int = Field(0)
-    total_gpu_cards: int = Field(0)
-    total_gpu_integrated: int = Field(0)
+    # note: the hardware totals are None for a Tenant, not 0. Zero would claim an empty fleet.
+    total_cpu: Optional[int] = Field(0)
+    total_memory: Optional[int] = Field(0)
+    total_storage: Optional[int] = Field(0)
+    total_gpu: Optional[int] = Field(0)
+    total_gpu_cards: Optional[int] = Field(0)
+    total_gpu_integrated: Optional[int] = Field(0)
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
 
