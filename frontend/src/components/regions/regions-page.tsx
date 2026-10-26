@@ -97,12 +97,19 @@ function fleetHardware(data: RegionsOverviewResponse) {
   };
 }
 
+// Hardware the backend could not read (an offline cluster, a failed read) arrives as null for
+// an operator too. Saying so beats the profile of zeros it used to be, which stated a size.
+const HARDWARE_NOT_READ = "Hardware not read";
+
 function RegionCard({
   region,
+  showsHardware,
   isExpanded,
   onToggle,
   onViewOnMap }: {
   region: RegionSummary;
+  /** False for a Tenant, who is sent no hardware at all. */
+  showsHardware: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   onViewOnMap: () => void;
@@ -168,10 +175,12 @@ function RegionCard({
             {/* Quick stats: hardware for a Partner or Administrator, the caller's own
                 instances for a Tenant, who is sent no hardware. */}
             <div className="mt-3 pt-3 border-t">
-              {region.hardware ? (
+              {!showsHardware ? (
+                <InstanceCounts region={region} />
+              ) : region.hardware ? (
                 <HardwareSummary hardware={region.hardware} compact />
               ) : (
-                <InstanceCounts region={region} />
+                <p className="text-xs text-muted-foreground">{HARDWARE_NOT_READ}</p>
               )}
             </div>
           </CardHeader>
@@ -179,10 +188,10 @@ function RegionCard({
         
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-4">
-            {region.hardware && (
+            {showsHardware && (
               <>
                 <InstanceCounts region={region} />
-                <HardwareSummary hardware={region.hardware} />
+                {region.hardware && <HardwareSummary hardware={region.hardware} />}
               </>
             )}
             
@@ -206,7 +215,7 @@ function RegionCard({
                         </Badge>
                       )}
                     </div>
-                    {node.hardware && (
+                    {node.hardware ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span>{node.hardware.cpu_total} hardware threads</span>
                         <span>•</span>
@@ -218,6 +227,10 @@ function RegionCard({
                           </>
                         )}
                       </div>
+                    ) : (
+                      showsHardware && (
+                        <span className="text-xs text-muted-foreground">{HARDWARE_NOT_READ}</span>
+                      )
                     )}
                   </div>
                 ))}
@@ -445,6 +458,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
                 <RegionCard
                   key={region.region_id}
                   region={region}
+                  showsHardware={fleet !== null}
                   isExpanded={expandedRegions.has(region.region_id)}
                   onToggle={() => toggleRegion(region.region_id)}
                   onViewOnMap={() => handleViewOnMap(region.region_id)}

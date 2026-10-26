@@ -108,3 +108,24 @@ test("partner: Regions keeps the fleet hardware tiles and the per-cluster figure
   await expect(card).toContainText("microcloud");
   await expectCleanHarness(api);
 });
+
+test("partner: a cluster whose hardware was not read says so instead of showing zeros", async ({ page }) => {
+  const offline = {
+    ...jakarta(null, "lxd"),
+    region_id: "id-3674", region_name: "Kota Tangerang Selatan", city: "Tangerang Selatan",
+    province: "Banten", latitude: -6.2886, longitude: 106.7179, instance_count: 0, instance_running: 0,
+    nodes: [{ cluster_id: "blitz001", display_name: "BSD Lab", status: "offline", node_type: null, hardware: null }],
+  };
+  const api = await openRegions(page, "partner", { ...PARTNER_BODY, regions: [PARTNER_BODY.regions[0], offline], total_nodes: 2 });
+
+  const card = page.locator("#region-card-id-3674");
+  await expect(card).toContainText("Hardware not read");
+  await card.locator("[aria-expanded]").first().click();
+  await expect(card).toContainText("BSD Lab");
+  await expect(card).toContainText("0 instances");
+  await expect(card).not.toContainText("hardware threads");
+  await expect(card).not.toContainText(/\b0 B\b/);
+  // the region that was read keeps its figures
+  await expect(page.locator("#region-card-id-3174")).toContainText("64 hardware threads");
+  await expectCleanHarness(api);
+});

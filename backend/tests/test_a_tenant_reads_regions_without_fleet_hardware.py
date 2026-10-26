@@ -202,7 +202,7 @@ class _SpyCache(CacheManager):
         return super().set(namespace, key, value, ttl, *args, **kwargs)
 
 
-def _build_one_cluster(monkeypatch, *, resources, listing):
+def _build_one_cluster(monkeypatch, *, resources, listing, online=True):
     cache = _SpyCache()
     monkeypatch.setattr(regions, "get_cache_manager", lambda: cache)
     monkeypatch.setattr(regions, "get_settings", lambda: SimpleNamespace(
@@ -214,18 +214,24 @@ def _build_one_cluster(monkeypatch, *, resources, listing):
         "country_name": "Indonesia", "city": "Jakarta", "latitude": -6.2, "longitude": 106.8,
         "continent": "AS",
     }
+    def no_certificate(cluster_id):
+        raise RuntimeError("no certificate for an offline cluster")
+
     cert_manager = SimpleNamespace(
         list_clusters=lambda use_cache=True: ["nuc2"],
         get_cluster_info=lambda cluster_id: {
             "metadata": {"display_name": "NUC 2", "location": location}
         },
+        get_cluster_certificate=no_certificate,
     )
     monkeypatch.setattr(vault_client, "get_vault_client", lambda addr, token: object())
     monkeypatch.setattr(
         lxd_cert_manager, "LXDCertificateManager", lambda vault_client, clusters_path: cert_manager
     )
     client = SimpleNamespace(storage_pools=SimpleNamespace(all=lambda: []))
-    service = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda cluster_id: client))
+    service = SimpleNamespace(connection_manager=SimpleNamespace(
+        get_client=lambda cluster_id: client if online else None
+    ))
     monkeypatch.setattr(regions, "resolve_cluster_type", lambda stored, live: "lxd")
     monkeypatch.setattr(regions, "resolve_clustered", lambda stored, live: False)
     monkeypatch.setattr(regions, "read_resources", resources)
@@ -272,3 +278,33 @@ def test_a_clean_read_is_counted_and_cached(monkeypatch):
     body, cached = _build_one_cluster(monkeypatch, resources=_resources_ok, listing=_two_instances)
     assert (body.regions[0].instance_count, body.regions[0].instance_running) == (2, 1)
     assert len(cached) == 1
+
+
+# --- Hardware the build could not read is null for every role, never a profile of zeros. An
+# offline cluster used to show "0 hardware threads, 0 B" to an operator, which states a size.
+
+
+def test_an_offline_cluster_has_no_hardware_rather_than_zeros(monkeypatch):
+    body, _ = _build_one_cluster(
+        monkeypatch, resources=_resources_ok, listing=_two_instances, online=False
+    )
+    node = body.regions[0].nodes[0]
+    assert node.status == "offline"
+    assert node.hardware is None
+    assert body.regions[0].hardware is None, "a region with nothing read has no hardware"
+    assert body.total_cpu == 0
+
+
+def test_a_failed_hardware_read_is_null_not_zero(monkeypatch):
+    body, _ = _build_one_cluster(monkeypatch, resources=_resources_fail, listing=_two_instances)
+    assert body.regions[0].nodes[0].status == "online"
+    assert body.regions[0].nodes[0].hardware is None
+    assert body.regions[0].hardware is None
+
+
+def test_a_region_sums_only_the_clusters_it_read():
+    read = ExtendedHardwareInfo(cpu_total=8, memory_total=16, storage_total=100)
+    summed = regions.aggregate_hardware_info([read])
+    assert (summed.cpu_total, summed.memory_total, summed.storage_total) == (8, 16, 100)
+    assert regions.region_hardware([read, None]).cpu_total == 8
+    assert regions.region_hardware([None, None]) is None

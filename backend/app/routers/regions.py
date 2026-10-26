@@ -64,6 +64,18 @@ router = APIRouter(
 # code. The disk classifier gained a fix on the way: it used to branch on a `rotational`
 # key LXD does not emit, so every SATA disk was reported as an SSD.
 
+def region_hardware(
+    nodes_hardware: List[Optional[ExtendedHardwareInfo]],
+) -> Optional[ExtendedHardwareInfo]:
+    """A region's hardware from the clusters whose hardware was read, or None when none was.
+
+    A cluster that was offline or whose read failed contributes nothing rather than zeros, so a
+    region of such clusters says it was not read instead of claiming an empty rack.
+    """
+    read = [hardware for hardware in nodes_hardware if hardware is not None]
+    return aggregate_hardware_info(read) if read else None
+
+
 def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> ExtendedHardwareInfo:
     """Aggregate hardware info from multiple nodes into a summary."""
     if not nodes_hardware:
@@ -214,9 +226,9 @@ async def build_regions_overview(
                 tenant_acl = get_tenant_acl()
 
                 # important: a cluster that answered but whose resource read failed is reported
-                # ONLINE with an all-zero hardware profile, and its zeros are then summed into
-                # the fleet totals. Caching that pins a silently shrunken fleet for the full
-                # 120s. Recording the failure here lets the write below decline, the same way
+                # ONLINE with no hardware, so the fleet totals leave it out. Caching that pins a
+                # silently shrunken fleet for the full 120s. Recording the failure here lets the
+                # write below decline, the same way
                 # the monitoring dashboard declines to cache a no-cluster-answered body.
                 # note: set.add from the thread pool is safe under the GIL.
                 degraded_clusters: Set[str] = set()
@@ -244,7 +256,9 @@ async def build_regions_overview(
                         # Stored value only; resolved against the live client further down,
                         # once one is in hand. None means not determined yet, not LXD.
                         node_type = metadata.get("type")
-                        node_hardware = ExtendedHardwareInfo()
+                        # note: None until a resource read succeeds. An offline cluster or a
+                        # failed read is "not read", not a profile of zeros.
+                        node_hardware: Optional[ExtendedHardwareInfo] = None
                         instance_count = 0
                         instance_running = 0
                 
@@ -490,7 +504,7 @@ async def build_regions_overview(
                             facility_name=region_data.get("facility_name"),
                             facility_provider=region_data.get("facility_provider"),
                             node_count=0, instance_count=0, instance_running=0,
-                            hardware=ExtendedHardwareInfo(), nodes=[],
+                            hardware=None, nodes=[],
                         )
             
                     region = regions_map[region_id]
@@ -501,16 +515,18 @@ async def build_regions_overview(
             
                     total_nodes += 1
                     total_instances += instance_count
-                    total_cpu += node_info.hardware.cpu_total
-                    total_memory += node_info.hardware.memory_total
-                    total_storage += node_info.hardware.storage_total
-                    total_gpu += node_info.hardware.gpu_total
-                    total_gpu_cards += node_info.hardware.gpu_cards_total
-                    total_gpu_integrated += node_info.hardware.gpu_integrated_total
+                    hardware = node_info.hardware
+                    if hardware is not None:
+                        total_cpu += hardware.cpu_total
+                        total_memory += hardware.memory_total
+                        total_storage += hardware.storage_total
+                        total_gpu += hardware.gpu_total
+                        total_gpu_cards += hardware.gpu_cards_total
+                        total_gpu_integrated += hardware.gpu_integrated_total
         
                 # aggregate hardware per region
                 for region in regions_map.values():
-                    region.hardware = aggregate_hardware_info([n.hardware for n in region.nodes])
+                    region.hardware = region_hardware([n.hardware for n in region.nodes])
         
                 response = RegionsOverviewResponse(
                     regions=list(regions_map.values()),

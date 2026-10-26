@@ -2016,7 +2016,9 @@ class RegionNodeInfo(BaseModel):
     status: ClusterStatus
     node_type: Optional[str] = Field(None, description="Hypervisor family; None for a Tenant")
     hardware: Optional[ExtendedHardwareInfo] = Field(
-        None, description="None for a Tenant: hardware inventory needs cluster:read"
+        None,
+        description="None when it was not read (offline or a failed read), and always for a "
+        "Tenant: hardware inventory needs cluster:read",
     )
 
 
@@ -2041,7 +2043,9 @@ class RegionSummary(BaseModel):
     
     # Hardware summary
     hardware: Optional[ExtendedHardwareInfo] = Field(
-        None, description="None for a Tenant: hardware inventory needs cluster:read"
+        None,
+        description="Sum over the clusters whose hardware was read; None when none was, and "
+        "always for a Tenant",
     )
     
     # Node details
