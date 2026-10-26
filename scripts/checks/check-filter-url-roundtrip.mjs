@@ -10,19 +10,11 @@
 //
 // Run: node scripts/checks/check-filter-url-roundtrip.mjs [repo-root]
 
-import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { compileStandalone } from './standalone-ts.mjs';
 
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const frontend = join(root, 'frontend');
-const out = mkdtempSync(join(tmpdir(), 'filter-url-'));
-// note: tsc emits ESM, and node treats a bare .js in a directory with no package.json as
-// CommonJS. Without this the import fails with "Unexpected token 'export'".
-writeFileSync(join(out, 'package.json'), '{"type":"module"}');
 
 let failures = 0;
 let checks = 0;
@@ -39,82 +31,7 @@ function eq(name, got, want) {
   check(name, JSON.stringify(got) === JSON.stringify(want), `${JSON.stringify(got)} != ${JSON.stringify(want)}`);
 }
 
-// important: `npx tsc` is not the TypeScript compiler. `tsc` is a separate, unrelated
-// package on npm, and npx fetches it whenever the workspace has no local binary. That is
-// exactly the Structural guards job, which is checkout plus setup-node with no install by
-// design, so this step failed with "This is not the tsc command you are looking for" on
-// every run from ef847d1 onward. It passed locally the whole time because
-// frontend/node_modules/.bin/tsc exists there.
-//
-// Scope of that outage, read off the runs rather than inferred: the steps before this one
-// all executed and passed every time, so no other guard was skipped while this was the last
-// step. From c49df53, when a step was appended after it, exactly one check is taken down
-// with the job. The cost was that THIS guard never ran in CI at all, not that it silenced
-// its neighbours.
-//
-// The fallback is pinned to the major the app declares (package.json asks for ^5.3.3). An
-// unpinned `npx -p typescript` fetches whatever is newest, which today resolves to 7.0.2,
-// and the first attempt at this fix failed in CI on error TS5112 while passing locally on
-// the repo's 5.9. The run log records the error and not the version, so the exact major CI
-// pulled is not evidenced, only that it was newer than 5.9 and raises TS5112. Compile the
-// guard with the same major the product compiles with, or the guard is testing a different
-// compiler than the one that ships the code.
-const localTsc = resolve(frontend, 'node_modules', '.bin', 'tsc');
-const localTypeScript = resolve(frontend, 'node_modules', 'typescript', 'lib', 'typescript.js');
-const [cmd, leadingArgs] = existsSync(localTsc)
-  ? [localTsc, []]
-  : ['npx', ['-p', 'typescript@5', 'tsc']];
-
-// important: compile from the temp directory, not from frontend/. TS5112 rejects naming a
-// file on the command line while a tsconfig.json sits in the working directory, and
-// frontend/ has one. `--ignoreConfig`, which the error text suggests, is not an option on
-// 5.x (TS5023), so moving the file is the fix that works on the pinned major. Copying the
-// source out also makes "standalone" literal: if the codec ever grows an alias or a runtime
-// import, it fails here rather than silently resolving through the app's config.
-copyFileSync(resolve(frontend, 'src', 'lib', 'filter-url.ts'), join(out, 'filter-url.ts'));
-
-try {
-  if (existsSync(localTypeScript)) {
-    // Some hardened runners allow the current Node process but deny child-process creation.
-    // Use the same installed compiler in-process so the guard still performs a real strict
-    // typecheck and emit. CI checkouts without dependencies retain the pinned npx fallback.
-    const require = createRequire(import.meta.url);
-    const ts = require(localTypeScript);
-    const source = join(out, 'filter-url.ts');
-    const options = {
-      module: ts.ModuleKind.ESNext,
-      target: ts.ScriptTarget.ES2020,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      strict: true,
-      outDir: out,
-    };
-    const program = ts.createProgram([source], options);
-    const emit = program.emit();
-    const diagnostics = [...ts.getPreEmitDiagnostics(program), ...emit.diagnostics];
-    if (diagnostics.length > 0) {
-      throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-        getCanonicalFileName: (file) => file,
-        getCurrentDirectory: () => out,
-        getNewLine: () => '\n',
-      }));
-    }
-  } else {
-    execFileSync(
-      cmd,
-      [...leadingArgs, 'filter-url.ts', '--outDir', '.', '--module', 'esnext', '--target', 'es2020',
-       '--moduleResolution', 'bundler', '--strict'],
-      { cwd: out, stdio: 'pipe' },
-    );
-  }
-} catch (error) {
-  console.error('filter-url codec failed to compile standalone:');
-  console.error(error.stdout?.toString() || error.message);
-  console.error('\nThe codec must stay alias-free with no runtime imports so this guard can run it.');
-  rmSync(out, { recursive: true, force: true });
-  process.exit(1);
-}
-
-const codec = await import(pathToFileURL(resolve(out, 'filter-url.js')).href);
+const { module: codec, cleanup } = await compileStandalone(root, 'filter-url.ts', 'filter-url');
 const {
   serialiseRange, parseRange, serialiseDate, parseDate, serialiseText, parseText,
   serialiseFacet, parseFacet,
@@ -256,9 +173,9 @@ for (const wire of ['n:2..8', 'd:last7d', 't:lxdbr']) {
 
 if (failures) {
   console.error(`\nfilter url codec: ${failures} of ${checks} checks failed`);
-  rmSync(out, { recursive: true, force: true });
+  cleanup();
   process.exit(1);
 }
 
-rmSync(out, { recursive: true, force: true });
+cleanup();
 console.log(`filter url codec: ${checks} round-trip and predicate checks pass`);
