@@ -1540,7 +1540,7 @@ class SystemWarningsResponse(BaseModel):
 class ClusterMonitoringMetrics(BaseModel):
     """Monitoring metrics for a single registered Cluster."""
     node_name: str = Field(..., description="Registered Cluster identifier")
-    node_type: str = Field("lxd", description="Cluster implementation type (lxd or microcloud)")
+    node_type: Optional[str] = Field("lxd", description="Cluster implementation type (lxd or microcloud)")
     is_online: bool = Field(..., description="Whether the Cluster is online")
     cluster_status: Optional[str] = Field(None, description="Cluster status, a ClusterStatus value. This endpoint derives it from a reachability probe, so it emits online, not_authorized or offline; pending and error are reserved for the registration flow")
     status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
@@ -1554,12 +1554,12 @@ class ClusterMonitoringMetrics(BaseModel):
     )
     
     # CPU Metrics
-    cpu_total: int = Field(0, description="Hardware threads")
-    cpu_used: int = Field(0, description="vCPUs allocated to running instances; may exceed cpu_total")
-    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the Cluster is over-committed")
-    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
-    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total")
-    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
+    cpu_total: Optional[int] = Field(0, description="Hardware threads")
+    cpu_used: Optional[int] = Field(0, description="vCPUs allocated to running instances; may exceed cpu_total")
+    cpu_usage_percent: Optional[float] = Field(0.0, description="Allocation as a percentage of threads; above 100 the Cluster is over-committed")
+    cpu_allocated: Optional[int] = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: Optional[float] = Field(0.0, description="cpu_allocated / cpu_total")
+    cpu_overcommitted: Optional[bool] = Field(False, description="True when cpu_allocated exceeds cpu_total")
     cpu_busy_threads: Optional[float] = Field(
         None,
         description=(
@@ -1579,23 +1579,23 @@ class ClusterMonitoringMetrics(BaseModel):
     )
     
     # Memory Metrics
-    memory_total_bytes: int = Field(0, description="Total memory in bytes")
-    memory_used_bytes: int = Field(0, description="Used memory in bytes")
-    memory_usage_percent: float = Field(0.0, description="Memory usage percentage")
+    memory_total_bytes: Optional[int] = Field(0, description="Total memory in bytes")
+    memory_used_bytes: Optional[int] = Field(0, description="Used memory in bytes")
+    memory_usage_percent: Optional[float] = Field(0.0, description="Memory usage percentage")
     
     # Storage Metrics
-    storage_total_bytes: int = Field(0, description="Total storage in bytes")
-    storage_used_bytes: int = Field(0, description="Used storage in bytes")
-    storage_usage_percent: float = Field(0.0, description="Storage usage percentage")
+    storage_total_bytes: Optional[int] = Field(0, description="Total storage in bytes")
+    storage_used_bytes: Optional[int] = Field(0, description="Used storage in bytes")
+    storage_usage_percent: Optional[float] = Field(0.0, description="Storage usage percentage")
     
     # GPU Metrics
-    gpu_total: int = Field(0, description="Compute GPUs on this Cluster")
-    gpu_used: int = Field(0, description="Compute GPUs allocated to running instances")
-    gpu_available: int = Field(0, description="Compute GPUs free on this Cluster")
-    gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
-    gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not capacity")
+    gpu_total: Optional[int] = Field(0, description="Compute GPUs on this Cluster")
+    gpu_used: Optional[int] = Field(0, description="Compute GPUs allocated to running instances")
+    gpu_available: Optional[int] = Field(0, description="Compute GPUs free on this Cluster")
+    gpu_cards_total: Optional[int] = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    gpu_integrated_total: Optional[int] = Field(0, description="Integrated graphics cards: attachable, not capacity")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
-    gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
+    gpu_utilization_supported: Optional[bool] = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
     
     # Instance counts
     instance_count: int = Field(0, description="Total instances on this Cluster")
@@ -1722,12 +1722,12 @@ class MonitoringDashboardResponse(BaseModel):
     vm_count: int = Field(0, description="Virtual machine count")
     
     # Aggregated Resource Metrics
-    total_cpu: int = Field(0, description="Total hardware threads across all Clusters")
-    used_cpu: int = Field(0, description="vCPUs allocated across all Clusters")
-    cpu_usage_percent: float = Field(0.0, description="CPU allocation percentage")
+    total_cpu: Optional[int] = Field(0, description="Total hardware threads across all Clusters")
+    used_cpu: Optional[int] = Field(0, description="vCPUs allocated across all Clusters")
+    cpu_usage_percent: Optional[float] = Field(0.0, description="CPU allocation percentage")
     
     # CPU utilisation (from the instances' own counters)
-    realtime_cpu_percent: float = Field(
+    realtime_cpu_percent: Optional[float] = Field(
         0.0, description="Deprecated alias of cpu_busy_percent, 0.0 while it is None"
     )
     cpu_busy_threads: Optional[float] = Field(
@@ -1742,33 +1742,33 @@ class MonitoringDashboardResponse(BaseModel):
     cpu_reporting_instances: int = Field(
         0, description="Running instances whose CPU reading went into cpu_busy_threads"
     )
-    cpu_reporting_threads: int = Field(
+    cpu_reporting_threads: Optional[int] = Field(
         0, description="Hardware threads of the Clusters that reported: the cpu_busy_percent denominator"
     )
     
-    total_memory_bytes: int = Field(0, description="Total memory across all Clusters")
-    used_memory_bytes: int = Field(0, description="Used memory bytes")
-    memory_usage_percent: float = Field(0.0, description="Overall memory usage percentage")
+    total_memory_bytes: Optional[int] = Field(0, description="Total memory across all Clusters")
+    used_memory_bytes: Optional[int] = Field(0, description="Used memory bytes")
+    memory_usage_percent: Optional[float] = Field(0.0, description="Overall memory usage percentage")
     
     # Real-time memory usage (from instance metrics)
-    realtime_memory_bytes: int = Field(
+    realtime_memory_bytes: Optional[int] = Field(
         0,
         description=(
             "Deprecated: the sum of running instances' memory figures, cache included where the "
             "metrics did not answer. Use used_memory_bytes"
         ),
     )
-    realtime_memory_percent: float = Field(
+    realtime_memory_percent: Optional[float] = Field(
         0.0, description="Deprecated: realtime_memory_bytes over total memory. Use memory_usage_percent"
     )
     
-    total_storage_bytes: int = Field(0, description="Total storage across all Clusters")
-    used_storage_bytes: int = Field(0, description="Used storage bytes")
-    storage_usage_percent: float = Field(0.0, description="Overall storage usage percentage")
+    total_storage_bytes: Optional[int] = Field(0, description="Total storage across all Clusters")
+    used_storage_bytes: Optional[int] = Field(0, description="Used storage bytes")
+    storage_usage_percent: Optional[float] = Field(0.0, description="Overall storage usage percentage")
     
-    total_gpu: int = Field(0, description="Total compute GPUs across connected Clusters")
-    total_gpu_cards: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
-    used_gpu: int = Field(0, description="Used GPUs")
+    total_gpu: Optional[int] = Field(0, description="Total compute GPUs across connected Clusters")
+    total_gpu_cards: Optional[int] = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    used_gpu: Optional[int] = Field(0, description="Used GPUs")
     
     # Detailed Per-Node Metrics
     nodes: List[ClusterMonitoringMetrics] = Field(default_factory=list, description="Per-Cluster metrics")

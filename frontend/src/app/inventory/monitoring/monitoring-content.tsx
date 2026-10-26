@@ -610,10 +610,11 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
 }
 
 export default function MonitoringContent() {
-  // important: this page has no role gate, deliberately: a tenant is entitled to watch the
-  // load on the nodes their own instances run on. What it must not carry for them is operator
-  // content, which here is the alarm card (every tile links to a partner-gated page) and
-  // status_message (the backend exception verbatim, see monitoring.py building it from str(e)).
+  // important: this page has no role gate, but a Tenant reads only its own instances and the
+  // clusters' status (owner decision 2026-10-26). The backend sends it every host figure as null
+  // (core/host_detail.py monitoring_dashboard_for_tier) and refuses it the host history, so the
+  // utilization gauges, the history charts and the warnings tile are operator content here,
+  // along with status_message (the backend exception verbatim, see monitoring.py).
   const { isPartner } = usePermissions();
   const { scopeKey: actorScope } = useActorQueryScope();
   const queryClient = useQueryClient();
@@ -722,7 +723,7 @@ export default function MonitoringContent() {
     isLoading: liveHistoryLoading,
     isFetching: liveHistoryFetching,
     refetch: refetchHistory,
-  } = useMonitoringHistory(timeRange, !isPaused);
+  } = useMonitoringHistory(timeRange, !isPaused && isPartner);
 
   // Warnings share the monitoring pause contract. Manual refresh below still bypasses the
   // disabled observer for Partner/Admin, while Tenant never calls the privileged endpoints.
@@ -818,8 +819,9 @@ export default function MonitoringContent() {
   const refreshMonitoring = useCallback(async () => {
     const results = await Promise.allSettled([
       refreshDashboard(),
-      refetchHistory({ throwOnError: true }),
-      ...(isPartner ? [refreshWarnings(), refreshSystemWarnings()] : []),
+      ...(isPartner
+        ? [refetchHistory({ throwOnError: true }), refreshWarnings(), refreshSystemWarnings()]
+        : []),
     ]);
     if (isPaused && activeActorScopeRef.current === actorScope) {
       const previous =
@@ -1177,26 +1179,29 @@ export default function MonitoringContent() {
         online_nodes: dashboardData.online_nodes,
         inactive_nodes: dashboardData.inactive_nodes,
         total_nodes: dashboardData.total_nodes,
-        cpu_usage_percent: singleNode?.cpu_usage_percent ?? dashboardData.cpu_usage_percent,
+        // note: the ?? 0 below never reaches a screen. A Tenant's host figures are null and
+        // hostVisible is false, so every section that shows them is not rendered.
+        hostVisible: dashboardData.total_cpu !== null,
+        cpu_usage_percent: singleNode?.cpu_usage_percent ?? dashboardData.cpu_usage_percent ?? 0,
         cpu_reading: {
           status: dashboardData.cpu_status ?? "unavailable",
           busyPercent: dashboardData.cpu_busy_percent ?? null,
           busyThreads: dashboardData.cpu_busy_threads ?? null,
-          threads: dashboardData.cpu_reporting_threads ?? dashboardData.total_cpu,
+          threads: dashboardData.cpu_reporting_threads ?? dashboardData.total_cpu ?? 0,
           reportingInstances: dashboardData.cpu_reporting_instances ?? 0,
           runningInstances: dashboardData.running_instances,
         } as CpuUsageReading,
-        memory_usage_percent: dashboardData.memory_usage_percent,
-        storage_usage_percent: dashboardData.storage_usage_percent,
-        total_cpu: dashboardData.total_cpu,
-        used_cpu: dashboardData.used_cpu,
-        total_memory_bytes: dashboardData.total_memory_bytes,
-        used_memory_bytes: dashboardData.used_memory_bytes,
-        total_storage_bytes: dashboardData.total_storage_bytes,
-        used_storage_bytes: dashboardData.used_storage_bytes,
-        total_gpu: dashboardData.total_gpu,
-        total_gpu_cards: dashboardData.total_gpu_cards,
-        used_gpu: dashboardData.used_gpu,
+        memory_usage_percent: dashboardData.memory_usage_percent ?? 0,
+        storage_usage_percent: dashboardData.storage_usage_percent ?? 0,
+        total_cpu: dashboardData.total_cpu ?? 0,
+        used_cpu: dashboardData.used_cpu ?? 0,
+        total_memory_bytes: dashboardData.total_memory_bytes ?? 0,
+        used_memory_bytes: dashboardData.used_memory_bytes ?? 0,
+        total_storage_bytes: dashboardData.total_storage_bytes ?? 0,
+        used_storage_bytes: dashboardData.used_storage_bytes ?? 0,
+        total_gpu: dashboardData.total_gpu ?? 0,
+        total_gpu_cards: dashboardData.total_gpu_cards ?? 0,
+        used_gpu: dashboardData.used_gpu ?? 0,
         warnings: dashboardData.warnings,
         cluster_status: singleNode?.cluster_status,
         status_message: singleNode?.status_message,
@@ -1217,6 +1222,7 @@ export default function MonitoringContent() {
       online_nodes: node.is_online ? 1 : 0,
       inactive_nodes: node.is_online ? 0 : 1,
       total_nodes: 1,
+      hostVisible: node.cpu_total !== null,
       cpu_usage_percent: node.cpu_usage_percent || 0,
       cpu_reading: {
         status: node.is_online ? node.cpu_status ?? "unavailable" : "unavailable",
@@ -1235,7 +1241,7 @@ export default function MonitoringContent() {
       total_storage_bytes: node.storage_total_bytes || 0,
       used_storage_bytes: node.storage_used_bytes || 0,
       total_gpu: node.gpu_total || 0,
-      total_gpu_cards: node.gpu_cards_total,
+      total_gpu_cards: node.gpu_cards_total ?? undefined,
       used_gpu: node.gpu_used || 0,
       warnings: dashboardData.warnings, // Keep global warnings
       // Status message for troubleshooting when metrics are 0
@@ -1527,7 +1533,9 @@ export default function MonitoringContent() {
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Monitoring</h1>
           <p className="text-muted-foreground">
-            Resource metrics across all clusters
+            {isPartner
+              ? "Resource metrics across all clusters"
+              : "Your instances and the status of the clusters they run on"}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1569,7 +1577,7 @@ export default function MonitoringContent() {
 
       {/* Overview Stats - use filteredStats for node-filtered view */}
       {filteredStats && (
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-2 gap-4 ${isPartner ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <MetricCard
           title="Total Instances"
           value={filteredStats.total_instances}
@@ -1587,17 +1595,19 @@ export default function MonitoringContent() {
           subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All clusters healthy"}
           trend={filteredStats.inactive_nodes > 0 ? "down" : "neutral"}
         />
-        <MetricCard
-          title="Warnings"
-          value={filteredStats.warnings?.total || 0}
-          subtitle={filteredStats.warnings?.critical ? `${filteredStats.warnings.critical} critical` : "No critical issues"}
-          trend={(filteredStats.warnings?.critical || 0) > 0 ? "up" : "neutral"}
-        />
+        {isPartner && (
+          <MetricCard
+            title="Warnings"
+            value={filteredStats.warnings?.total || 0}
+            subtitle={filteredStats.warnings?.critical ? `${filteredStats.warnings.critical} critical` : "No critical issues"}
+            trend={(filteredStats.warnings?.critical || 0) > 0 ? "up" : "neutral"}
+          />
+        )}
       </div>
       )}
 
       {/* Resource Utilization Gauges */}
-      {filteredStats && (
+      {filteredStats?.hostVisible && (
       <Card>
         <CardHeader>
           <div>
@@ -1657,7 +1667,8 @@ export default function MonitoringContent() {
       </Card>
       )}
 
-      {/* Live Charts */}
+      {/* Live Charts: the hosts' load over time, operator content (see the note above). */}
+      {isPartner && (
       <Card>
         <CardHeader>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -2304,6 +2315,7 @@ export default function MonitoringContent() {
           </Tabs>
         </CardContent>
       </Card>
+      )}
 
       {/* Instance Distribution & Top Consumers */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -2515,7 +2527,9 @@ export default function MonitoringContent() {
             Cluster Status
           </CardTitle>
           <CardDescription>
-            Detailed metrics for each connected cluster
+            {isPartner
+              ? "Detailed metrics for each connected cluster"
+              : "Status of each cluster and your instances on it"}
           </CardDescription>
         </CardHeader>
         <CardContent>

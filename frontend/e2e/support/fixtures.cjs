@@ -392,7 +392,7 @@ async function installApiFixtures(page, role, options = {}) {
         total_rules: 1,
       };
     } else if (path === "/monitoring/dashboard") {
-      body = monitoringDashboard();
+      body = typeof options.monitoringDashboard === "function" ? options.monitoringDashboard() : monitoringDashboard();
     } else if (path === "/monitoring/history") {
       if (url.searchParams.has("points")) state.unexpected.push(entry);
       body = monitoringHistory(url.searchParams.get("window"));

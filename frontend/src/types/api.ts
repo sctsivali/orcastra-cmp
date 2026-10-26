@@ -1617,32 +1617,33 @@ export interface SystemOverview {
 // ========== Monitoring Dashboard Types ==========
 
 export interface ClusterMonitoringMetrics {
+  // note: the host figures below are null for a Tenant (owner decision 2026-10-26).
   node_name: string;
-  node_type: string;
+  node_type: string | null;
   is_online: boolean;
   cluster_status?: string; // online, pending_trust, offline, error
   status_message?: string; // Status message for troubleshooting
   /** This collection ran out of time on the Cluster; its figures are partial until the next one. */
   collection_timed_out?: boolean;
-  cpu_total: number;
-  cpu_used: number;
-  cpu_usage_percent: number;
-  cpu_allocated?: number;
-  cpu_allocation_ratio?: number;
-  cpu_overcommitted?: boolean;
-  memory_total_bytes: number;
-  memory_used_bytes: number;
-  memory_usage_percent: number;
-  storage_total_bytes: number;
-  storage_used_bytes: number;
-  storage_usage_percent: number;
-  gpu_total: number;
-  gpu_used: number;
-  gpu_available?: number;
-  gpu_cards_total?: number;
-  gpu_integrated_total?: number;
+  cpu_total: number | null;
+  cpu_used: number | null;
+  cpu_usage_percent: number | null;
+  cpu_allocated?: number | null;
+  cpu_allocation_ratio?: number | null;
+  cpu_overcommitted?: boolean | null;
+  memory_total_bytes: number | null;
+  memory_used_bytes: number | null;
+  memory_usage_percent: number | null;
+  storage_total_bytes: number | null;
+  storage_used_bytes: number | null;
+  storage_usage_percent: number | null;
+  gpu_total: number | null;
+  gpu_used: number | null;
+  gpu_available?: number | null;
+  gpu_cards_total?: number | null;
+  gpu_integrated_total?: number | null;
   gpu_models?: string[];
-  gpu_utilization_supported?: boolean;
+  gpu_utilization_supported?: boolean | null;
   instance_count: number;
   running_instances: number;
   container_count?: number;
@@ -1730,6 +1731,7 @@ export interface MetricsHistoryPoint {
 }
 
 export interface MonitoringDashboardResponse {
+  // note: the host figures below are null for a Tenant (owner decision 2026-10-26).
   timestamp: string;
   
   // Cluster Overview
@@ -1746,35 +1748,35 @@ export interface MonitoringDashboardResponse {
   vm_count: number;
   
   // Aggregated Resources (Allocation)
-  total_cpu: number;
-  used_cpu: number;
-  cpu_usage_percent: number;
+  total_cpu: number | null;
+  used_cpu: number | null;
+  cpu_usage_percent: number | null;
   
   /** Deprecated alias of cpu_busy_percent (0 while that is null). */
-  realtime_cpu_percent: number;
+  realtime_cpu_percent: number | null;
   /** Hardware threads busy running instances, across the Clusters that reported. */
   cpu_busy_threads?: number | null;
   cpu_busy_percent?: number | null;
   cpu_status?: InstanceRateStatus;
   cpu_reporting_instances?: number;
   /** Hardware threads of the Clusters that reported: the cpu_busy_percent denominator. */
-  cpu_reporting_threads?: number;
+  cpu_reporting_threads?: number | null;
   
-  total_memory_bytes: number;
-  used_memory_bytes: number;
-  memory_usage_percent: number;
+  total_memory_bytes: number | null;
+  used_memory_bytes: number | null;
+  memory_usage_percent: number | null;
   
   // Real-time memory usage from running instances
-  realtime_memory_bytes: number;
-  realtime_memory_percent: number;
+  realtime_memory_bytes: number | null;
+  realtime_memory_percent: number | null;
   
-  total_storage_bytes: number;
-  used_storage_bytes: number;
-  storage_usage_percent: number;
+  total_storage_bytes: number | null;
+  used_storage_bytes: number | null;
+  storage_usage_percent: number | null;
   
-  total_gpu: number;
-  total_gpu_cards?: number;
-  used_gpu: number;
+  total_gpu: number | null;
+  total_gpu_cards?: number | null;
+  used_gpu: number | null;
   
   // Detailed Metrics
   nodes: ClusterMonitoringMetrics[];

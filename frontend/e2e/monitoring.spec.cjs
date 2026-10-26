@@ -253,3 +253,58 @@ test("stopped Top Consumer checks once, then only at the slow cadence", async ({
   await capture(page, testInfo, "monitoring-stopped-instance-metrics");
   await expectCleanHarness(api);
 });
+
+// A Tenant monitors its own instances and the clusters' status only (owner decision
+// 2026-10-26). The backend sends every host figure as null and refuses it the host history, so
+// the page shows no utilization gauge, no history chart, no warnings tile and no host figure on
+// a cluster card, and never asks for the history.
+test("tenant: Monitoring shows its instances and cluster status, no host figure", async ({ page }) => {
+  const { monitoringDashboard } = require("./support/api-fixture-data.cjs");
+  const HOST_FIGURES = [
+    "total_cpu", "used_cpu", "cpu_usage_percent", "realtime_cpu_percent", "cpu_busy_threads",
+    "cpu_busy_percent", "cpu_reporting_threads", "total_memory_bytes", "used_memory_bytes",
+    "memory_usage_percent", "realtime_memory_bytes", "realtime_memory_percent",
+    "total_storage_bytes", "used_storage_bytes", "storage_usage_percent", "total_gpu",
+    "total_gpu_cards", "used_gpu",
+  ];
+  const KEPT = new Set([
+    "node_name", "is_online", "cluster_status", "collection_timed_out", "cpu_reporting_instances",
+    "instance_count", "running_instances", "container_count", "vm_count",
+  ]);
+  const tenantBody = () => {
+    const full = monitoringDashboard();
+    const body = { ...full, cpu_status: "unavailable", storage_pools: [], warnings: null };
+    for (const field of HOST_FIGURES) body[field] = null;
+    body.nodes = full.nodes.map((node) => {
+      const row = { cpu_status: "unavailable", gpu_models: [] };
+      for (const [key, value] of Object.entries(node)) {
+        if (KEPT.has(key)) row[key] = value;
+        else if (!(key in row)) row[key] = null;
+      }
+      return row;
+    });
+    return body;
+  };
+
+  await authenticate(page.context(), "tenant");
+  const api = await installApiFixtures(page, "tenant", { monitoringDashboard: tenantBody });
+  await page.goto("/inventory/monitoring");
+  const main = page.getByRole("main");
+  await expect(main.getByText("Total Instances")).toBeVisible();
+  await expect(main.getByText("Clusters Online")).toBeVisible();
+  await expect(main.getByText("Cluster Status")).toBeVisible();
+  await expect(main).toContainText("Your instances and the status of the clusters they run on");
+  await expect(main).toContainText("Status of each cluster and your instances on it");
+
+  for (const absent of ["Resource Utilization", "Resource Metrics", "Warnings"]) {
+    await expect(main.getByText(absent, { exact: true })).toHaveCount(0);
+  }
+  await expect(main).not.toContainText(/hardware threads|vCPU Allocation|GiB \/|NaN|undefined/);
+  await expect(main.getByText("Running", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Refresh monitoring" }).click();
+  await page.waitForTimeout(1_500);
+  expect(countRequests(api, "/monitoring/history"), "a tenant never asks for the host history").toBe(0);
+  await expectNoHorizontalOverflow(page);
+  await expectCleanHarness(api);
+});

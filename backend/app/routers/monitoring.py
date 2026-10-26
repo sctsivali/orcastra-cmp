@@ -53,7 +53,9 @@ from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
 from app.core.node_metadata import get_node_metadata_store
 from app.models.cluster_status import ClusterStatus, derive_status
-from app.core.dependencies import require_tenant
+from app.core.dependencies import AuthenticatedUser, require_partner, require_tenant
+from app.core.host_detail import monitoring_dashboard_for_tier
+from app.core.task_scope import caller_tier
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 from app.core.tenant_visibility import tenant_acl_active
 from app.core import swr
@@ -534,7 +536,9 @@ async def get_monitoring_dashboard(
             generation=lambda: _resource_generation(cache, _MONITORING_CACHE_KIND),
             label="monitoring dashboard",
         )
-        return served.as_model(MonitoringDashboardResponse)
+        return monitoring_dashboard_for_tier(
+            served.as_model(MonitoringDashboardResponse), caller_tier()
+        )
 
     # note: nothing to unwind on the error paths. A failed rebuild writes nothing and the next
     # arrival takes the ordinary miss path.
@@ -558,6 +562,9 @@ async def get_node_metrics(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+    # important: one cluster's hardware and load. Partner and above, as GET /nodes; a Tenant
+    # monitors its instances, not the hosts (owner decision 2026-10-26).
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get detailed metrics for a specific registered Cluster. Cached for 30 seconds."""
     verify_cluster_access(node_name)
@@ -704,6 +711,9 @@ async def get_metrics_history(
         Query(ge=1, le=8640, description="Legacy: the last N points, whatever span they cover"),
     ] = None,
     lxd_service: LXDService = Depends(get_lxd_service),
+    # important: the series are the hosts' load, which counts every other party's instances.
+    # Partner and above; a Tenant monitors its own instances (owner decision 2026-10-26).
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """
     Get historical metrics for graphing.

@@ -165,3 +165,50 @@ def profile_list_for_tier(response: Model, tier: Tier) -> Model:
         return response
     rows = [profile_for_tier(profile, tier) for profile in getattr(response, "profiles")]
     return response.model_copy(update={"profiles": rows})
+
+
+# What a Tenant keeps of one cluster on the monitoring dashboard: whether it answers and how many
+# of the Tenant's own instances run there. Owner decision 2026-10-26: a Tenant monitors its
+# instances and the clusters' status, not the hosts, whose load counts every other party's
+# instances too.
+TENANT_CLUSTER_MONITORING_FIELDS = frozenset({
+    "node_name", "is_online", "cluster_status", "collection_timed_out", "cpu_reporting_instances",
+    "instance_count", "running_instances", "container_count", "vm_count",
+})
+
+# Fleet figures the dashboard derives from the hosts' capacity and load.
+FLEET_HOST_FIGURES = (
+    "total_cpu", "used_cpu", "cpu_usage_percent", "realtime_cpu_percent", "cpu_busy_threads",
+    "cpu_busy_percent", "cpu_reporting_threads", "total_memory_bytes", "used_memory_bytes",
+    "memory_usage_percent", "realtime_memory_bytes", "realtime_memory_percent",
+    "total_storage_bytes", "used_storage_bytes", "storage_usage_percent", "total_gpu",
+    "total_gpu_cards", "used_gpu",
+)
+
+
+def cluster_monitoring_for_tenant(node: Model) -> Model:
+    """One cluster's monitoring row with every host figure null, not zero."""
+    update: dict = {
+        field: None for field in type(node).model_fields if field not in TENANT_CLUSTER_MONITORING_FIELDS
+    }
+    update.update(cpu_status="unavailable", gpu_models=[])
+    return node.model_copy(update=update)
+
+
+def monitoring_dashboard_for_tier(response: Model, tier: Tier) -> Model:
+    """The monitoring dashboard as this tier may read it.
+
+    A Tenant keeps cluster counts and status, its own instance counts and its own instances'
+    usage; the hosts' capacity and load, storage pools, cluster warnings and the raw status error
+    are withheld. Null rather than 0, so a client cannot read an idle or empty fleet into them.
+    """
+    if sees_host_detail(tier):
+        return response
+    update: dict = dict.fromkeys(FLEET_HOST_FIGURES)
+    update.update(
+        cpu_status="unavailable",
+        storage_pools=[],
+        warnings=None,
+        nodes=[cluster_monitoring_for_tenant(node) for node in getattr(response, "nodes")],
+    )
+    return response.model_copy(update=update)
