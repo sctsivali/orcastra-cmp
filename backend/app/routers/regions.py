@@ -332,31 +332,6 @@ async def build_regions_overview(
                                     storage_total = region_storage.total
                                     storage_used = region_storage.used
                             
-                                    try:
-                                        # recursion=1: the attribute reads below are
-                                        # one HTTP request each at pylxd's default.
-                                        # every project: the pooled client is bound to default, and the ACL check just below
-                                        # reads instance.project, which a default-scoped
-                                        # listing never carries.
-                                        instances, _ = list_instance_records(client)
-                                        visible_instances = [
-                                            instance for instance in instances
-                                            if tenant_acl_has_permission(
-                                                tenant_acl,
-                                                cluster_id,
-                                                getattr(instance, "project", "default") or "default",
-                                                instance.name,
-                                                "view",
-                                            )
-                                        ]
-                                        instance_count = len(visible_instances)
-                                        instance_running = sum(
-                                            1 for instance in visible_instances
-                                            if instance.status == "Running"
-                                        )
-                                    except Exception:
-                                        pass
-                            
                                     network_info = resources.get("network", {})
                                     network_cards = network_info.get("cards", [])
                                     network_interfaces = [
@@ -421,6 +396,34 @@ async def build_regions_overview(
                                     )
                                 except Exception as e:
                                     logger.warning(f"Could not get resources for {cluster_id}: {e}")
+                                    degraded_clusters.add(cluster_id)
+
+                                # important: outside the resources read, so a cluster whose
+                                # hardware read failed still reports its instances. These counts
+                                # are the only figures a Tenant is sent, so a listing that failed
+                                # keeps the body out of the cache rather than pinning a zero.
+                                try:
+                                    # every project: the pooled client is bound to default, and
+                                    # the ACL check just below reads instance.project, which a
+                                    # default-scoped listing never carries.
+                                    instances, _ = list_instance_records(client)
+                                    visible_instances = [
+                                        instance for instance in instances
+                                        if tenant_acl_has_permission(
+                                            tenant_acl,
+                                            cluster_id,
+                                            getattr(instance, "project", "default") or "default",
+                                            instance.name,
+                                            "view",
+                                        )
+                                    ]
+                                    instance_count = len(visible_instances)
+                                    instance_running = sum(
+                                        1 for instance in visible_instances
+                                        if instance.status == "Running"
+                                    )
+                                except Exception as e:
+                                    logger.warning("Could not list instances on %s: %s", cluster_id, e)
                                     degraded_clusters.add(cluster_id)
                             else:
                                 status = ClusterStatus.OFFLINE
@@ -576,7 +579,7 @@ def _overview_for_caller(
     """The overview as this caller may read it.
 
     important: new models, never an edit of the one passed in. That body is the cached entry,
-    and a Tenant whose ACL is not enforced shares its key with a Partner on the same clusters.
+    stored unprojected so the prewarm, which has no caller, can write it too.
     """
     if _can_read_hardware(user):
         return response
