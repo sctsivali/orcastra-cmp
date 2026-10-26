@@ -139,7 +139,9 @@ export function InstanceResourcesPanel({
         {memory && memory.total > 0 && !memory.unlimited ? (
           <ProgressBar value={memory.percent} color={barFor(memory.percent, "bg-green-500")} />
         ) : null}
-        {memory && memory.available !== null ? (
+        {/* note: without a memory limit "available" is the host's free memory, not this
+            instance's headroom, so it is left out. */}
+        {memory && memory.available !== null && !memory.unlimited ? (
           <div className="mt-1 text-gray-500">
             {formatMemory(memory.available)} available
             {memory.cache !== null ? `, ${formatMemory(memory.cache)} page cache` : ""}

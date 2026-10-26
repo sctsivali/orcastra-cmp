@@ -90,3 +90,12 @@ def test_instance_metrics_say_whether_the_limits_are_set(monkeypatch, kind, expa
     monkeypatch.setattr(metrics_module, "find_instance_in_projects", lambda *_a, **_k: (instance, "default"))
     metrics = read_instance_metrics(object(), "cluster-a", "fixture", "default")
     assert (metrics.cpu_limit_set, metrics.memory_limit_set) == expected
+
+
+def test_a_local_config_alone_does_not_claim_an_unset_limit(monkeypatch):
+    # With no expanded_config the reading falls back to the local config, where a profile's limit
+    # is absent; absent is then unknown, not unset.
+    instance = _instance("container", None)
+    monkeypatch.setattr(metrics_module, "find_instance_in_projects", lambda *_a, **_k: (instance, "default"))
+    metrics = read_instance_metrics(object(), "cluster-a", "fixture", "default")
+    assert (metrics.cpu_limit_set, metrics.memory_limit_set) == (None, None)

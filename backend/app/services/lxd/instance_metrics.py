@@ -330,8 +330,11 @@ def read_instance_metrics(
 
         config = getattr(instance, "config", None) or {}
         expanded = getattr(instance, "expanded_config", None) or config
+        # note: the local config alone misses a profile's limits, so an absent key is unknown.
         metrics.cpu_limit_set, metrics.memory_limit_set = limits_set(
-            getattr(instance, "type", None), expanded
+            getattr(instance, "type", None),
+            expanded,
+            complete=bool(getattr(instance, "expanded_config", None)),
         )
         last_used_at = getattr(instance, "last_used_at", None)
         identity, sample, agent = build_state_sample(
