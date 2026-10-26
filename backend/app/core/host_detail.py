@@ -102,8 +102,8 @@ def vm_list_for_tier(response: Model, tier: Tier) -> Model:
 
 
 def metrics_for_tier(metrics: Model, tier: Tier) -> Model:
-    """An instance's live sample: no host process id for a Tenant."""
-    return _without(metrics, tier, pid=None)
+    """An instance's live sample: no host process id or root pool driver for a Tenant."""
+    return _without(metrics, tier, pid=None, disk_io_storage_driver=None)
 
 
 def cluster_for_tier(cluster: Model, tier: Tier) -> Model:
@@ -139,7 +139,8 @@ def pool_for_tier(pool: Model, tier: Tier) -> Model:
     """
     if sees_host_detail(tier):
         return pool
-    return pool.model_copy(update={"config": {}, "driver": None, "status": None})
+    # note: the description is the operator's note about the pool and often names its backend.
+    return pool.model_copy(update={"config": {}, "driver": None, "status": None, "description": ""})
 
 
 def pool_list_for_tier(response: Model, tier: Tier) -> Model:

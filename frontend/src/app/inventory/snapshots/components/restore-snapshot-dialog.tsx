@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useSnapshotRestorePlan } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { SnapshotInfo } from "@/types/api";
 
 import { snapshotScope } from "./snapshot-format";
@@ -86,6 +86,9 @@ export function RestoreSnapshotDialog({
     open,
   );
   const safetySupported = plan.data?.safety_snapshot_supported !== false;
+  // note: a Tenant's plan carries no storage driver (the pool is the provider's storage, owner
+  // decision 2026-10-26), so the copy names the driver only when it was sent.
+  const storage = plan.data?.storage_driver ? `${formatLabel(plan.data.storage_driver)} storage` : "this instance's storage";
   const restorable = plan.data?.restorable !== false;
   const planChecking = plan.isFetching && !plan.data;
   const takeSafety = safety && safetySupported;
@@ -192,7 +195,7 @@ export function RestoreSnapshotDialog({
               <p className="text-xs text-muted-foreground">
                 {safetySupported
                   ? "Captures the current state before rolling back, so this restore can itself be undone. It expires on its own like any operator snapshot."
-                  : "Not available on ZFS storage: a safety snapshot would be newer than the one restored, and ZFS can only roll back to the newest. This restore cannot be undone."}
+                  : `Not available on ${storage}: a safety snapshot would be newer than the one restored, and this storage can only roll back to the newest. This restore cannot be undone.`}
               </p>
             </div>
           </div>

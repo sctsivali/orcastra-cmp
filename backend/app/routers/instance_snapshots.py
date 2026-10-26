@@ -25,6 +25,7 @@ from typing import Annotated, Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pylxd.exceptions import LXDAPIException
 
+from app.core.task_scope import caller_tier
 from app.core.cache import get_cache_manager
 from app.core.config import get_settings
 from app.core.dependencies import (
@@ -298,7 +299,11 @@ def _gate_restore_plan(
     project: str,
 ) -> None:
     """Refuse, before the safety copy is written, a restore the storage cannot perform."""
-    plan = restore_plan.plan_restore(driver, existing, snapshot_name)
+    # note: the refusal reaches the caller, so a Tenant's withholds the pool's driver; the audit
+    # below is the operator's record and keeps it.
+    plan = restore_plan.plan_restore(
+        driver, existing, snapshot_name, name_driver=caller_tier() != "tenant"
+    )
     refusal: Optional[Dict[str, str]] = None
     if not plan.restorable:
         refusal = {"error": "restore_needs_newest_snapshot", "message": plan.reason or ""}
@@ -315,7 +320,7 @@ def _gate_restore_plan(
         error_message=refusal["error"],
         details={
             "snapshot": snapshot_name,
-            "storage_driver": plan.storage_driver,
+            "storage_driver": driver,
             "newer_snapshots": plan.newer_snapshots,
         },
     )

@@ -8,6 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
+from app.core.task_scope import caller_tier
 from app.core.error_sanitizer import sanitize_error
 from app.core.lxd_errors import lxd_http_error
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
@@ -64,7 +65,10 @@ async def read_restore_plan(
         raise HTTPException(
             status_code=404, detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}."
         )
-    plan = restore_plan.plan_restore(driver, existing, snapshot_name)
+    # note: a Tenant's plan withholds the pool's driver (owner decision 2026-10-26).
+    plan = restore_plan.plan_restore(
+        driver, existing, snapshot_name, name_driver=caller_tier() != "tenant"
+    )
     return SnapshotRestorePlanResponse(
         storage_driver=plan.storage_driver,
         restorable=plan.restorable,

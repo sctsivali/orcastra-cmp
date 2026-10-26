@@ -125,7 +125,9 @@ def _client(monkeypatch, *routers):
 
 @pytest.mark.parametrize("tier", ["admin", "partner", "tenant"])
 def test_the_policy_returns_copies_and_never_mutates(tier):
-    vm, metrics = _vm(), InstanceMetrics(instance_name=NAME, host=HOST, status=VMStatus.RUNNING, pid=7)
+    vm, metrics = _vm(), InstanceMetrics(
+        instance_name=NAME, host=HOST, status=VMStatus.RUNNING, pid=7, disk_io_storage_driver="zfs"
+    )
 
     shown_vm = host_detail.vm_for_tier(vm, tier)
     shown_metrics = host_detail.metrics_for_tier(metrics, tier)
@@ -134,6 +136,8 @@ def test_the_policy_returns_copies_and_never_mutates(tier):
     assert vm.config == VM_CONFIG and vm.expanded_devices == VM_DEVICES, "input untouched"
     if tier == "tenant":
         assert (shown_vm.host_endpoint, shown_vm.location, shown_metrics.pid) == (None, None, None)
+        # the root pool's driver is the provider's storage (owner decision 2026-10-26)
+        assert shown_metrics.disk_io_storage_driver is None and metrics.disk_io_storage_driver == "zfs"
         assert shown_vm.config == TENANT_VM_CONFIG and shown_vm.expanded_devices == TENANT_VM_DEVICES
         assert shown_vm.devices == {"eth0": TENANT_VM_DEVICES["eth0"]}
         assert shown_vm is not vm and shown_metrics is not metrics
@@ -148,12 +152,14 @@ def test_a_tenant_pool_keeps_only_its_name():
         config: dict
         driver: str | None = "zfs"
         status: str | None = "Created"
+        description: str = ""
 
-    pool = Pool(name="p", config=dict(POOL_CONFIG))
+    pool = Pool(name="p", config=dict(POOL_CONFIG), description="10 TiB NVMe ZFS mirror")
 
     shown = host_detail.pool_for_tier(pool, "tenant")
 
     assert (shown.name, shown.config, shown.driver, shown.status) == ("p", {}, None, None)
+    assert shown.description == "", "an operator's note about the pool often names its backend"
     assert pool.config == POOL_CONFIG and pool.driver == "zfs"
     assert host_detail.pool_for_tier(pool, "partner") is pool
 

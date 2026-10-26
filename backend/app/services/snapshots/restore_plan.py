@@ -73,11 +73,22 @@ def read_root_pool_driver(client: Any, instance_name: str, project: str) -> Opti
 
 
 def plan_restore(
-    storage_driver: Optional[str], snapshots: List[Dict[str, Any]], target: str
+    storage_driver: Optional[str],
+    snapshots: List[Dict[str, Any]],
+    target: str,
+    *,
+    name_driver: bool = True,
 ) -> RestorePlan:
-    """Decide from the driver and the instance's snapshots, in LXD's listing order."""
+    """Decide from the driver and the instance's snapshots, in LXD's listing order.
+
+    `name_driver` False is a Tenant's plan: the same decision, with the driver withheld and the
+    reason worded without it. The pool's driver is the provider's storage (owner decision
+    2026-10-26).
+    """
+    shown_driver = storage_driver if name_driver else None
+    storage = "This instance is on ZFS storage, which" if name_driver else "This instance's storage"
     if storage_driver not in ROLLBACK_TO_NEWEST_ONLY:
-        return RestorePlan(storage_driver=storage_driver, safety_snapshot_supported=True, restorable=True)
+        return RestorePlan(storage_driver=shown_driver, safety_snapshot_supported=True, restorable=True)
 
     names = [str(row.get("name")) for row in snapshots]
     position = names.index(target) if target in names else -1
@@ -96,23 +107,23 @@ def plan_restore(
     if newer:
         listed = ", ".join(newer[:5]) + (f" and {len(newer) - 5} more" if len(newer) > 5 else "")
         reason = (
-            f"This instance is on ZFS storage, which can only roll back to its newest snapshot. "
+            f"{storage} can only roll back to its newest snapshot. "
             f"{target} has {len(newer)} newer snapshot{'s' if len(newer) != 1 else ''} ({listed}). "
             f"Delete {'them' if len(newer) != 1 else 'it'} first to restore {target}."
         )
         return RestorePlan(
-            storage_driver=storage_driver,
+            storage_driver=shown_driver,
             safety_snapshot_supported=False,
             restorable=False,
             newer_snapshots=newer,
             reason=reason,
         )
     return RestorePlan(
-        storage_driver=storage_driver,
+        storage_driver=shown_driver,
         safety_snapshot_supported=False,
         restorable=True,
         reason=(
-            "This instance is on ZFS storage, which can only roll back to its newest snapshot, so "
-            "no safety snapshot can be kept through the restore."
+            f"{storage} can only roll back to its newest snapshot, so no safety snapshot can be "
+            "kept through the restore."
         ),
     )

@@ -200,3 +200,43 @@ def test_a_caller_without_snapshot_access_cannot_read_the_plan(monkeypatch):
     )
     assert response.status_code == 403, response.text
     assert node.recorded == [], "the cluster was asked before the gate"
+
+
+def test_a_tenant_plan_does_not_name_the_storage_driver():
+    # The pool's driver is the provider's storage (owner decision 2026-10-26): a tenant learns
+    # what it may do, not which backend makes it so.
+    blocked = plan_restore("zfs", ROWS, OLD, name_driver=False)
+    newest = plan_restore("zfs", ROWS, NEW, name_driver=False)
+    for plan in (blocked, newest):
+        assert plan.storage_driver is None
+        assert "zfs" not in (plan.reason or "").lower()
+        assert "only roll back to its newest snapshot" in plan.reason
+    assert not blocked.restorable and NEW in blocked.reason
+    assert newest.restorable and not newest.safety_snapshot_supported
+    # an operator's plan still names it
+    assert "ZFS" in plan_restore("zfs", ROWS, OLD).reason
+
+
+@pytest.mark.parametrize("tier, driver", [("tenant", None), ("partner", "zfs"), ("admin", "zfs")])
+def test_the_plan_route_withholds_the_driver_from_a_tenant(monkeypatch, tier, driver):
+    import asyncio
+
+    from app.routers import instance_snapshot_follow as follow
+
+    async def client(_service, _host):
+        return object()
+
+    async def blocking(fn, *_args, label):
+        return ROWS if label == "snapshots.list" else "zfs"
+
+    monkeypatch.setattr(follow, "_enforce_snapshot_access", lambda _host, project, _name: project)
+    monkeypatch.setattr(follow, "_validated_target", lambda name: name)
+    monkeypatch.setattr(follow, "_client", client)
+    monkeypatch.setattr(follow, "_blocking", blocking)
+    monkeypatch.setattr(follow, "caller_tier", lambda: tier)
+
+    plan = asyncio.run(follow.read_restore_plan(
+        instance_name="web", snapshot_name=OLD, host="nuc2", project="default", lxd_service=None,
+    ))
+    assert plan.storage_driver == driver
+    assert ("ZFS" in plan.reason) == (driver is not None)
