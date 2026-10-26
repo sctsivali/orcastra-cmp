@@ -233,7 +233,7 @@ jobs:
       # Profile in the user menu is derived from the IdP end-session URL each deployment sets.
       # A wrong derivation sends a partner's users to another IdP and nothing errors.
       - name: IdP account settings link
-        run: node scripts/checks/check-idp-account-url.mjs .
+        run: node scripts/checks/check-idp-urls.mjs .
       # A same-path URL write from an interaction (a facet, a tab, a picker) must be a history
       # write, not a navigation: on Next 15.5 a params-only router.replace can take the
       # aliased-prefetch path and scroll the page to the top under the open popover.

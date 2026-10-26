@@ -1,5 +1,6 @@
 import { signOut } from "next-auth/react";
 import { IDP_LOGOUT_URL } from "@/lib/identity-provider";
+import { idpEndSessionUrl } from "@/lib/idp-urls";
 
 /**
  * Sign out of the dashboard and of the SSO session behind it.
@@ -9,6 +10,15 @@ import { IDP_LOGOUT_URL } from "@/lib/identity-provider";
  */
 export async function federatedSignOut(): Promise<void> {
   await signOut({ redirect: false });
-  const postLogoutRedirect = encodeURIComponent(`${window.location.origin}/auth/signin`);
-  window.location.href = `${IDP_LOGOUT_URL}?post_logout_redirect_uri=${postLogoutRedirect}`;
+  const signInPage = `${window.location.origin}/auth/signin`;
+  const endSession = idpEndSessionUrl(IDP_LOGOUT_URL, signInPage);
+  if (!endSession) {
+    // important: without a usable end-session URL only the console session ends. The IdP session
+    // stays, so the next sign-in on this browser may not ask for a password. Landing on the
+    // sign-in page beats navigating to the unreplaced build placeholder, which is a dead host.
+    console.warn(
+      "[sign-out] NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL is not a usable URL; only the console session was ended"
+    );
+  }
+  window.location.href = endSession ?? signInPage;
 }

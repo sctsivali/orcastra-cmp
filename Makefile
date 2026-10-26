@@ -339,7 +339,7 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@echo "$(COLOR_GREEN)Checking filter URL round trip...$(COLOR_RESET)"
 	@node scripts/checks/check-filter-url-roundtrip.mjs
 	@echo "$(COLOR_GREEN)Checking IdP account settings link...$(COLOR_RESET)"
-	@node scripts/checks/check-idp-account-url.mjs
+	@node scripts/checks/check-idp-urls.mjs
 	@echo "$(COLOR_GREEN)Checking URL writes...$(COLOR_RESET)"
 	@node scripts/checks/check-url-writes.mjs
 	@echo "$(COLOR_GREEN)Checking inventory links...$(COLOR_RESET)"

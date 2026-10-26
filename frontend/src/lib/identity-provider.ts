@@ -1,4 +1,4 @@
-import { idpAccountSettingsUrl } from "@/lib/idp-account-url";
+import { idpAccountSettingsUrl } from "@/lib/idp-urls";
 
 /**
  * The Authentik end-session endpoint of this deployment. The image is built with a placeholder
