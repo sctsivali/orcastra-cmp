@@ -86,7 +86,7 @@ const CHIP_HEIGHT = 22;
  * The marker for a region that is a whole country: its ISO code on the status colour, and the
  * cluster count when there is more than one.
  *
- * A pill rather than the round pin, so it does not read as a point on the ground. The shaded
+ * A square chip rather than the round pin, so it does not read as a point on the ground. The shaded
  * outline is what says where; the chip is the part a click, a keyboard and a phone-sized finger
  * can always reach, including on a country too small to see at world zoom (Singapore, Monaco).
  */
@@ -106,7 +106,7 @@ export function createCountryChip(region: RegionSummary): L.DivIcon {
         align-items: center;
         justify-content: center;
         gap: 5px;
-        border-radius: 9999px;
+        border-radius: 4px;
         background-color: hsl(var(${token}));
         color: hsl(var(${token}-foreground));
         border: 2px solid hsl(var(--background));

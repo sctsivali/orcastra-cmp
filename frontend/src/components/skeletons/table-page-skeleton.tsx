@@ -25,7 +25,7 @@ export function TablePageSkeleton({ rows = 10 }: TablePageSkeletonProps) {
               <Skeleton className="h-4 w-4" />
               <Skeleton className="h-4 w-40" />
               <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-5 w-16 rounded-full" />
+              <Skeleton className="h-5 w-16 rounded" />
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-4 w-20 ml-auto" />
             </div>

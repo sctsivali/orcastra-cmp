@@ -135,10 +135,16 @@
 }
 
 /* Leaflet makes every marker focusable; without a visible ring a keyboard user cannot tell which
-   region Enter will select. */
+   region Enter will select. The ring follows the marker's shape: round around the pin, and around
+   the square country chip the chip's 4px corner plus the 2px offset, so the corners stay concentric. */
 .leaflet-marker-icon.country-chip:focus-visible,
 .leaflet-marker-icon.custom-marker:focus-visible {
   outline: 2px solid hsl(var(--ring));
   outline-offset: 2px;
+}
+.leaflet-marker-icon.custom-marker:focus-visible {
   border-radius: 9999px;
+}
+.leaflet-marker-icon.country-chip:focus-visible {
+  border-radius: 6px;
 }

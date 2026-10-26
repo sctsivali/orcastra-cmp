@@ -132,7 +132,7 @@ export function ProjectChipList({
                   onFocus={() => setFocusIndex(index)}
                   onKeyDown={(event) => onKeyDown(event, index)}
                   onClick={() => removeAt(index)}
-                  className="rounded-sm p-0.5 hover:bg-background/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                  className="rounded p-0.5 hover:bg-background/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                 >
                   <X aria-hidden="true" className="h-3 w-3" />
                 </button>

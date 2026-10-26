@@ -67,7 +67,7 @@ function LoadingSkeleton() {
                     <Skeleton className="h-3 w-40" />
                   </div>
                 </div>
-                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-20 rounded" />
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Skeleton className="h-4 w-28" />

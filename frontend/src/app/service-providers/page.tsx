@@ -12,7 +12,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { ExternalLink, Check } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 interface ServiceProvider {
@@ -133,9 +132,7 @@ export default function ServiceProvidersPage() {
                         key={cert}
                         className="flex items-center gap-2 p-3 rounded-lg border bg-muted/50"
                       >
-                        <Badge variant="outline" className="h-6 w-6 p-0 flex items-center justify-center">
-                          ✓
-                        </Badge>
+                        <Check className="h-4 w-4 shrink-0 text-status-online" aria-hidden="true" />
                         <span className="text-sm font-medium">{cert}</span>
                       </div>
                     ))}

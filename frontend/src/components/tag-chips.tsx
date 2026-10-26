@@ -50,7 +50,7 @@ export function TagBadge({ tag, onRemove, showCategory = false, size = "default"
             e.stopPropagation();
             onRemove();
           }}
-          className="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="ml-0.5 rounded p-0.5 transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X className="h-3 w-3" aria-hidden="true" />
         </button>

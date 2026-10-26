@@ -1828,7 +1828,7 @@ export default function MonitoringContent() {
                       key={nodeName}
                       variant={visibleNodes[nodeName] ? "default" : "outline"}
                       size="sm"
-                      className="h-5 sm:h-6 px-1.5 sm:px-2 text-[10px] sm:text-xs"
+                      className="h-5 sm:h-6 rounded px-1.5 sm:px-2 text-[10px] sm:text-xs"
                       style={{
                         backgroundColor: visibleNodes[nodeName] ? NODE_COLORS[idx % NODE_COLORS.length] : undefined,
                         borderColor: NODE_COLORS[idx % NODE_COLORS.length],
@@ -1955,7 +1955,7 @@ export default function MonitoringContent() {
                       key={nodeName}
                       variant={visibleNodes[nodeName] ? "default" : "outline"}
                       size="sm"
-                      className="h-5 sm:h-6 px-1.5 sm:px-2 text-[10px] sm:text-xs"
+                      className="h-5 sm:h-6 rounded px-1.5 sm:px-2 text-[10px] sm:text-xs"
                       style={{
                         backgroundColor: visibleNodes[nodeName] ? NODE_COLORS[idx % NODE_COLORS.length] : undefined,
                         borderColor: NODE_COLORS[idx % NODE_COLORS.length],
@@ -2080,7 +2080,7 @@ export default function MonitoringContent() {
                       key={nodeName}
                       variant={visibleNodes[nodeName] ? "default" : "outline"}
                       size="sm"
-                      className="h-5 sm:h-6 px-1.5 sm:px-2 text-[10px] sm:text-xs"
+                      className="h-5 sm:h-6 rounded px-1.5 sm:px-2 text-[10px] sm:text-xs"
                       style={{
                         backgroundColor: visibleNodes[nodeName] ? NODE_COLORS[idx % NODE_COLORS.length] : undefined,
                         borderColor: NODE_COLORS[idx % NODE_COLORS.length],

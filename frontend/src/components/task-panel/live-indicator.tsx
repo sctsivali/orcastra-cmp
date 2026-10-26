@@ -114,7 +114,7 @@ export function LiveIndicator({ feed, apiDown = false, disconnected = 0 }: {
           aria-label={tooltip}
           tabIndex={0}
           data-live-state={state}
-          className="inline-flex shrink-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex shrink-0 items-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {/* The strip has no room for a word on a phone: the chip pushed the refresh and
               expand controls off screen at 390px. Below md the state is a toned icon. */}

@@ -51,7 +51,7 @@ export function ActiveFilterChips({
                    screen reader user nothing about what it removes. */
                 aria-label={`Remove filter ${chip.columnLabel} ${chip.valueLabel}`}
                 onClick={() => onRemove(chip.id)}
-                className="rounded-sm p-0.5 hover:bg-background/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="rounded p-0.5 hover:bg-background/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X aria-hidden="true" className="h-3 w-3" />
               </button>

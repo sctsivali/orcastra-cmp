@@ -1495,7 +1495,7 @@ function InstanceCreateFormContent() {
                         <button
                           type="button"
                           onClick={() => removeTag(tag)}
-                          className="rounded-full hover:bg-muted-foreground/20"
+                          className="rounded hover:bg-muted-foreground/20"
                           aria-label={`Remove tag ${tag}`}
                         >
                           <X className="h-3 w-3" />
