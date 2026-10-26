@@ -87,6 +87,20 @@ container when Docker is available (`CI_LOCAL_POSTGRES=skip` to opt out). It tes
 tree rather than a commit, so commit first if you want the result CI would see. Commit messages are
 linted against the branch's upstream; set `CI_LOCAL_BASE=<remote>/<branch>` if it has none.
 
+## Versioning
+
+The project follows [Semantic Versioning](https://semver.org/):
+
+- MAJOR (x.0.0): breaking changes incompatible with previous versions
+- MINOR (0.x.0): new features with backward compatibility
+- PATCH (0.0.x): bug fixes without new features
+- RC (x.x.x-RCn): release candidate for testing before a stable release
+
+The version is set by `APP_VERSION` in `.env` and by `version` in `frontend/package.json`.
+`make version-sync` propagates it to the other files, but its script (`scripts/sync_version.py`)
+is not committed, so in a fresh clone set both by hand. The release badge in `README.md` is
+updated by hand when a release is published.
+
 ## Security Reports
 
 Do not report vulnerabilities in public issues.
