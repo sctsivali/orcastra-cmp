@@ -169,7 +169,8 @@ export function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
  * the browser of every operator who later opened this page.
  */
 export function createPopupContent(region: RegionSummary): string {
-  const cardsTotal = region.hardware.gpu_cards_total ?? region.hardware.gpu_total;
+  // note: null for a Tenant, which is sent places and its own instances but no hardware.
+  const hardware = region.hardware;
 
   const row = (label: string, value: string | number) =>
     `<div style="display: flex; justify-content: space-between; gap: 12px;">
@@ -177,11 +178,17 @@ export function createPopupContent(region: RegionSummary): string {
          <span style="font-weight: 500;">${escapeHtml(String(value))}</span>
        </div>`;
 
+  const cardsTotal = hardware ? (hardware.gpu_cards_total ?? hardware.gpu_total) : 0;
   const gpuSection =
-    region.hardware.gpu_total > 0
-      ? row("Compute GPUs", region.hardware.gpu_total) +
-        (cardsTotal > region.hardware.gpu_total ? row("Cards detected", cardsTotal) : "")
+    hardware && hardware.gpu_total > 0
+      ? row("Compute GPUs", hardware.gpu_total) +
+        (cardsTotal > hardware.gpu_total ? row("Cards detected", cardsTotal) : "")
       : "";
+  const hardwareSection = hardware
+    ? row("Hardware threads", hardware.cpu_total) +
+      row("Memory", formatMemory(hardware.memory_total)) +
+      gpuSection
+    : "";
 
   const facilityLabel = region.facility_provider
     ? `${region.facility_name} (${region.facility_provider})`
@@ -207,9 +214,7 @@ export function createPopupContent(region: RegionSummary): string {
       <div style="font-size: 12px; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; color: hsl(var(--foreground));">
         ${row("Clusters", region.node_count)}
         ${row("Instances", region.instance_count)}
-        ${row("Hardware threads", region.hardware.cpu_total)}
-        ${row("Memory", formatMemory(region.hardware.memory_total))}
-        ${gpuSection}
+        ${hardwareSection}
       </div>
     </div>
   `;

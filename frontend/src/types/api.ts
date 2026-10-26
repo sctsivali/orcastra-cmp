@@ -2629,16 +2629,17 @@ export interface RegionSummary {
   instance_count: number;
   instance_running: number;
   
-  // Hardware summary (aggregated from all nodes)
-  hardware: ExtendedHardwareInfo;
+  // Hardware summary (aggregated from all clusters). Null for a Tenant: hardware inventory is
+  // Partner and above, the same line GET /nodes draws.
+  hardware: ExtendedHardwareInfo | null;
   
-  // Node details
+  // Cluster details
   nodes: Array<{
     cluster_id: string;
     display_name: string;
     status: ClusterStatus;
-    node_type?: string;
-    hardware: ExtendedHardwareInfo;
+    node_type?: string | null;
+    hardware: ExtendedHardwareInfo | null;
   }>;
 }
 
@@ -2646,12 +2647,13 @@ export interface RegionsOverviewResponse {
   regions: RegionSummary[];
   total_nodes: number;
   total_instances: number;
-  total_cpu: number;
-  total_memory: number;
-  total_storage: number;
-  total_gpu: number;
-  total_gpu_cards?: number;
-  total_gpu_integrated?: number;
+  // The hardware totals are null for a Tenant, never 0.
+  total_cpu: number | null;
+  total_memory: number | null;
+  total_storage: number | null;
+  total_gpu: number | null;
+  total_gpu_cards?: number | null;
+  total_gpu_integrated?: number | null;
 }
 
 // Cluster location update

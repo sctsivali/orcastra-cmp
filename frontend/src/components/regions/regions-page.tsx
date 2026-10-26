@@ -31,14 +31,71 @@ import {
   MapPin,
   Activity,
   Box,
-  Building2 } from "lucide-react";
+  Building2,
+  type LucideIcon } from "lucide-react";
 import { useRegionsOverview } from "@/hooks/use-lxd";
 import { HardwareSummary } from "./regions-hardware-summary";
 import { BasemapConfig } from "@/lib/map-basemap";
 import { RegionsMapCard } from "./regions-map-card";
 import { REGIONS } from "./regions-table-config";
-import { RegionSummary } from "@/types/api";
+import { RegionSummary, RegionsOverviewResponse } from "@/types/api";
 import { isWholeCountry, placeDetail } from "@/lib/regions/place";
+
+function InstanceCounts({ region }: { region: RegionSummary }) {
+  return (
+    <div className="flex items-center gap-4 text-sm">
+      <div className="flex items-center gap-1.5">
+        <Box className="h-4 w-4 text-foreground" aria-hidden />
+        <span>{region.instance_count === 1 ? "1 instance" : `${region.instance_count} instances`}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Activity className="h-4 w-4 text-foreground" aria-hidden />
+        <span>{region.instance_running} running</span>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  note }: {
+  icon: LucideIcon;
+  label: string;
+  value: React.ReactNode;
+  note?: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardContent className="pt-4">
+        <div className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-muted-foreground" aria-hidden />
+          <span className="text-sm text-muted-foreground">{label}</span>
+        </div>
+        <p className="text-2xl font-bold mt-1">{value}</p>
+        {note && <p className="text-xs text-muted-foreground mt-0.5">{note}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+// The fleet's hardware totals, or null when the caller may not read them. The backend sends
+// null rather than 0 to a Tenant (routers/regions.py): hardware inventory is Partner and
+// above, the same line GET /nodes draws, and a zero would claim an empty fleet.
+function fleetHardware(data: RegionsOverviewResponse) {
+  const { total_cpu, total_memory, total_storage, total_gpu } = data;
+  if (total_cpu == null || total_memory == null || total_storage == null || total_gpu == null) {
+    return null;
+  }
+  return {
+    cpu: total_cpu,
+    memory: total_memory,
+    storage: total_storage,
+    gpu: total_gpu,
+    gpuCards: data.total_gpu_cards ?? total_gpu,
+  };
+}
 
 function RegionCard({
   region,
@@ -108,29 +165,26 @@ function RegionCard({
               </div>
             </div>
             
-            {/* Quick stats */}
+            {/* Quick stats: hardware for a Partner or Administrator, the caller's own
+                instances for a Tenant, who is sent no hardware. */}
             <div className="mt-3 pt-3 border-t">
-              <HardwareSummary hardware={region.hardware} compact />
+              {region.hardware ? (
+                <HardwareSummary hardware={region.hardware} compact />
+              ) : (
+                <InstanceCounts region={region} />
+              )}
             </div>
           </CardHeader>
         </CollapsibleTrigger>
         
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-4">
-            {/* Instance stats */}
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5">
-                <Box className="h-4 w-4 text-foreground" />
-                <span>{region.instance_count} instances</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Activity className="h-4 w-4 text-foreground" />
-                <span>{region.instance_running} running</span>
-              </div>
-            </div>
-            
-            {/* Detailed hardware */}
-            <HardwareSummary hardware={region.hardware} />
+            {region.hardware && (
+              <>
+                <InstanceCounts region={region} />
+                <HardwareSummary hardware={region.hardware} />
+              </>
+            )}
             
             {/* Registered clusters */}
             <div className="space-y-2">
@@ -152,17 +206,19 @@ function RegionCard({
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{node.hardware.cpu_total} hardware threads</span>
-                      <span>•</span>
-                      <span>{formatMemory(node.hardware.memory_total)}</span>
-                      {node.hardware.gpu_total > 0 && (
-                        <>
-                          <span>•</span>
-                          <span>{node.hardware.gpu_total} GPU</span>
-                        </>
-                      )}
-                    </div>
+                    {node.hardware && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>{node.hardware.cpu_total} hardware threads</span>
+                        <span>•</span>
+                        <span>{formatMemory(node.hardware.memory_total)}</span>
+                        {node.hardware.gpu_total > 0 && (
+                          <>
+                            <span>•</span>
+                            <span>{node.hardware.gpu_total} GPU</span>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -194,6 +250,11 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
     onFilterChange: resetPage,
   });
   const filteredRegions = filters.filteredRows;
+  const fleet = data ? fleetHardware(data) : null;
+  const runningInstances = (data?.regions ?? []).reduce(
+    (sum, region) => sum + region.instance_running,
+    0
+  );
 
   // Clamped on read rather than corrected in an effect: an effect would paint one wrong frame
   // first and then snap the operator back a page mid-task.
@@ -302,67 +363,27 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
       </div>
 
       {/* Global stats */}
-      {data && (
+      {data && fleet && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          <Card>
-            <CardContent className="pt-4">
-              <div className="flex items-center gap-2">
-                <Globe className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Regions</span>
-              </div>
-              <p className="text-2xl font-bold mt-1">{data.regions.length}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="flex items-center gap-2">
-                <Server className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Clusters</span>
-              </div>
-              <p className="text-2xl font-bold mt-1">{data.total_nodes}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="flex items-center gap-2">
-                <Cpu className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Hardware Threads</span>
-              </div>
-              <p className="text-2xl font-bold mt-1">{data.total_cpu}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="flex items-center gap-2">
-                <MemoryStick className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Memory</span>
-              </div>
-              <p className="text-2xl font-bold mt-1">{formatMemory(data.total_memory)}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="flex items-center gap-2">
-                <HardDrive className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Storage</span>
-              </div>
-              <p className="text-2xl font-bold mt-1">{formatBytes(data.total_storage)}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Compute GPUs</span>
-              </div>
-              <p className="text-2xl font-bold mt-1">{data.total_gpu}</p>
-              {(data.total_gpu_cards ?? 0) > data.total_gpu && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {data.total_gpu_cards} cards detected
-                </p>
-              )}
-            </CardContent>
-          </Card>
+          <StatTile icon={Globe} label="Regions" value={data.regions.length} />
+          <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
+          <StatTile icon={Cpu} label="Hardware Threads" value={fleet.cpu} />
+          <StatTile icon={MemoryStick} label="Memory" value={formatMemory(fleet.memory)} />
+          <StatTile icon={HardDrive} label="Storage" value={formatBytes(fleet.storage)} />
+          <StatTile
+            icon={Sparkles}
+            label="Compute GPUs"
+            value={fleet.gpu}
+            note={fleet.gpuCards > fleet.gpu ? `${fleet.gpuCards} cards detected` : undefined}
+          />
+        </div>
+      )}
+      {data && !fleet && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatTile icon={Globe} label="Regions" value={data.regions.length} />
+          <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
+          <StatTile icon={Box} label="Instances" value={data.total_instances} />
+          <StatTile icon={Activity} label="Running" value={runningInstances} />
         </div>
       )}
 
