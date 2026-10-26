@@ -88,6 +88,10 @@ export interface InstanceMetrics {
   /** Sections omitted or incomplete in this sample. Empty or zero can still be valid data. */
   unavailable_sections: InstanceMetricSection[];
   timestamp: string;
+  /** Whether the instance's own config caps it. False: the vCPU and memory figures are the
+   *  host's size, not a limit. Absent or null: not known. */
+  cpu_limit_set?: boolean | null;
+  memory_limit_set?: boolean | null;
 }
 
 // VM Information
@@ -1678,6 +1682,10 @@ export interface InstanceMonitoringSummary {
   network_tx_bytes: number;
   network_rx_bytes_per_sec?: number | null;
   network_tx_bytes_per_sec?: number | null;
+  /** Whether the instance's own config caps it. False: the vCPU and memory figures are the
+   *  host's size, not a limit. Absent or null: not known. */
+  cpu_limit_set?: boolean | null;
+  memory_limit_set?: boolean | null;
 }
 
 export interface StoragePoolMetrics {

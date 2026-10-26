@@ -308,3 +308,53 @@ test("tenant: Monitoring shows its instances and cluster status, no host figure"
   await expectNoHorizontalOverflow(page);
   await expectCleanHarness(api);
 });
+
+// A container without limits.cpu or limits.memory is measured against its host, so "of 64
+// vCPUs" and "/ 62 GiB" read as an allocation the instance was never given. The readings say
+// whether the limits are set, and every surface says "no limit" instead.
+test("an instance without limits says so instead of showing the host's size", async ({ page }) => {
+  const { instanceMetrics, monitoringDashboard } = require("./support/api-fixture-data.cjs");
+  const gib = 1024 ** 3;
+  const unlimitedDashboard = () => {
+    const body = monitoringDashboard();
+    const mark = (row) => ({ ...row, cpu_vcpus: 64, cpu_limit_set: false, memory_limit_set: false });
+    return {
+      ...body,
+      consumers: (body.consumers || []).map(mark),
+      top_cpu_consumers: (body.top_cpu_consumers || []).map(mark),
+      top_memory_consumers: (body.top_memory_consumers || []).map(mark),
+    };
+  };
+  const unlimitedMetrics = (call, status) => ({
+    ...instanceMetrics(call === 1 ? 2 : call, status),
+    cpu_effective_vcpus: 64,
+    cpu_busy_vcpus: 0.9,
+    cpu_usage_percent: 1.4,
+    memory_used_bytes: 2 * gib,
+    memory_total_bytes: 62 * gib,
+    memory_usage_percent: 3.2,
+    cpu_limit_set: false,
+    memory_limit_set: false,
+  });
+
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", {
+    monitoringDashboard: unlimitedDashboard,
+    instanceMetrics: unlimitedMetrics,
+  });
+  await page.goto("/inventory/monitoring");
+  const consumer = page.getByRole("button", {
+    name: "Open resource details for tenant-owned-vm on cluster-a in project tenant-a",
+  });
+  await expect(consumer).toBeVisible();
+  await expect(consumer).toContainText("no CPU limit");
+  await expect(consumer).not.toContainText(/of 64 vCPUs/);
+
+  await consumer.click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("tab", { name: "Metrics" }).click();
+  await expect(dialog.getByText(/vCPUs busy · no CPU limit/)).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByText(/2(\.00)? GiB used, no memory limit set/)).toBeVisible();
+  await expect(dialog).not.toContainText(/of 64 vCPUs|62(\.00)? GiB/);
+  await expectCleanHarness(api);
+});

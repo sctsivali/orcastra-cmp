@@ -1637,6 +1637,10 @@ class InstanceMonitoringSummary(BaseModel):
         ),
     )
     memory_limit_bytes: int = Field(0, description="Memory limit in bytes")
+    # note: whether the instance's own config caps it. False means cpu_vcpus and
+    # memory_limit_bytes are the host's size, not a limit; None means not known.
+    cpu_limit_set: Optional[bool] = Field(None, description="Whether limits.cpu caps this instance")
+    memory_limit_set: Optional[bool] = Field(None, description="Whether limits.memory caps this instance")
     disk_usage_bytes: int = Field(0, description="Total disk usage in bytes")
     network_rx_bytes: int = Field(0, description="Network bytes received since the instance started")
     network_tx_bytes: int = Field(0, description="Network bytes sent since the instance started")

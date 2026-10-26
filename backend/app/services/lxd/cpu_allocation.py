@@ -15,13 +15,35 @@ one core.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 # A CPU id above this is not a CPU set, it is a value built to make the parser allocate.
 _MAX_CPU_ID = 65535
+
+
+def limits_set(
+    instance_type: Optional[str], config: Mapping[str, Any], *, complete: bool = True
+) -> Tuple[Optional[bool], Optional[bool]]:
+    """Whether an instance's own config caps its CPU and its memory.
+
+    A virtual machine's size is its cap, so both are True. A container without `limits.cpu` is
+    measured against its host's threads and LXD reports its memory against the host's, so those
+    figures are the host's size, not a limit the instance was given. `complete` is False when
+    `config` is the local config alone and a profile could still set the key: an absent key is
+    then unknown (None) rather than unset.
+    """
+    if instance_type == "virtual-machine":
+        return True, True
+
+    def known(present: bool) -> Optional[bool]:
+        return True if present else (False if complete else None)
+
+    cpu = parse_cpu_limit(config.get("limits.cpu"), default=0) > 0
+    memory = bool(str(config.get("limits.memory") or "").strip())
+    return known(cpu), known(memory)
 
 
 def parse_cpu_limit(value: object, default: int = 1) -> int:

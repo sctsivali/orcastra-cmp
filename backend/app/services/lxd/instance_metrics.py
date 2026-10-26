@@ -27,7 +27,7 @@ from app.core.rate_sampler import RateReading, RateSampler, Sample, SamplerPolic
 from app.models.instance_metrics import GuestAgentStatus, InstanceMetrics
 from app.core.member_names import is_member_name, is_standalone_location
 
-from .cpu_allocation import effective_vcpus
+from .cpu_allocation import effective_vcpus, limits_set
 from .exceptions import LXDConnectionError, LXDOperationError
 from .container_disk_io import container_disk_io_measured
 from .metrics_scrape import ProjectScrape, instance_scrape
@@ -330,6 +330,9 @@ def read_instance_metrics(
 
         config = getattr(instance, "config", None) or {}
         expanded = getattr(instance, "expanded_config", None) or config
+        metrics.cpu_limit_set, metrics.memory_limit_set = limits_set(
+            getattr(instance, "type", None), expanded
+        )
         last_used_at = getattr(instance, "last_used_at", None)
         identity, sample, agent = build_state_sample(
             cluster=host,

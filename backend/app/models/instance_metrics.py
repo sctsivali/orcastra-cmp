@@ -38,6 +38,10 @@ class InstanceMetrics(BaseModel):
     sample_window_seconds: Optional[float] = Field(
         None, description="Length of the window behind the CPU and network rates"
     )
+    # note: whether the instance's own config caps it. False means cpu_effective_vcpus and
+    # memory_total_bytes are the host's size, not a limit; None means not known.
+    cpu_limit_set: Optional[bool] = Field(None, description="Whether limits.cpu caps this instance")
+    memory_limit_set: Optional[bool] = Field(None, description="Whether limits.memory caps this instance")
     memory_used_bytes: int = Field(0, description="Memory currently used in bytes")
     memory_total_bytes: int = Field(0, description="Total memory available in bytes")
     memory_usage_percent: float = Field(0.0, description="Memory usage percentage")

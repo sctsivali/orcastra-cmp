@@ -24,7 +24,7 @@ from app.core.blocking import run_blocking
 from app.core.rate_sampler import RateReading, Sample
 from app.models.schemas import ClusterMonitoringMetrics, InstanceMonitoringSummary, VMInfo
 from app.core.member_names import is_standalone_location
-from app.services.lxd.cpu_allocation import effective_vcpus
+from app.services.lxd.cpu_allocation import effective_vcpus, limits_set
 from app.services.lxd.instance_metrics import STATE_SAMPLER, build_state_sample
 from app.services.lxd.instance_metrics_sections import state_mapping
 
@@ -316,6 +316,13 @@ def select_consumers(
 
 def summary(usage: InstanceUsage) -> InstanceMonitoringSummary:
     vm = usage.vm
+    if vm.effective_limits_known:
+        cpu_set, memory_set = limits_set(
+            vm.type,
+            {"limits.cpu": vm.effective_cpu_limit, "limits.memory": vm.effective_memory_limit},
+        )
+    else:
+        cpu_set, memory_set = limits_set(vm.type, vm.config or {}, complete=False)
     return InstanceMonitoringSummary(
         name=vm.name,
         host=vm.host,
@@ -329,6 +336,8 @@ def summary(usage: InstanceUsage) -> InstanceMonitoringSummary:
         memory_usage_bytes=usage.memory_bytes,
         memory_includes_cache=usage.memory_includes_cache,
         memory_limit_bytes=usage.memory_limit_bytes,
+        cpu_limit_set=cpu_set,
+        memory_limit_set=memory_set,
         disk_usage_bytes=usage.disk_bytes,
         network_rx_bytes=usage.rx_total,
         network_tx_bytes=usage.tx_total,

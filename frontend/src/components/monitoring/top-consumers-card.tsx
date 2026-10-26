@@ -207,9 +207,11 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
               : `${formatVcpuAmount(busy ?? 0)} vCPUs`}
           </p>
           <p className="text-xs text-muted-foreground tabular-nums">
-            {busy !== null && busy !== undefined && vcpus
-              ? `${formatVcpuAmount(busy)} of ${formatVcpuCount(vcpus)} busy`
-              : "CPU Usage"}
+            {busy !== null && busy !== undefined && instance.cpu_limit_set === false
+              ? `${formatVcpuAmount(busy)} vCPUs busy · no CPU limit`
+              : busy !== null && busy !== undefined && vcpus
+                ? `${formatVcpuAmount(busy)} of ${formatVcpuCount(vcpus)} busy`
+                : "CPU Usage"}
           </p>
         </>
       );

@@ -65,7 +65,12 @@ export function CpuCard({ metrics }: { metrics: InstanceMetrics }) {
             total={100}
             value={`${reading.percent.toFixed(1)}%`}
           />
-          {reading.busy !== null && reading.vcpus ? (
+          {reading.busy !== null && reading.unlimited ? (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {formatVcpuAmount(reading.busy)} vCPUs busy · no CPU limit
+              {window ? ` · ${window}` : ""}
+            </p>
+          ) : reading.busy !== null && reading.vcpus ? (
             <p className="text-xs text-muted-foreground tabular-nums">
               {formatVcpuAmount(reading.busy)} of {formatVcpuCount(reading.vcpus)} busy
               {window ? ` · ${window}` : ""}
@@ -84,7 +89,7 @@ export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
       <CardHeading icon={Activity} title="Memory" />
       {!reading ? (
         <p className="text-sm text-muted-foreground">Memory usage was not reported by the cluster.</p>
-      ) : reading.total > 0 ? (
+      ) : reading.total > 0 && !reading.unlimited ? (
         <>
           {/* important: UsageMeter, not Progress. Progress paints the product accent and ships
               no accessible name, so a bar announced only "progress bar, 92 percent". */}
@@ -113,7 +118,7 @@ export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
         </>
       ) : (
         <p className="text-sm font-medium tabular-nums">
-          {formatMemory(reading.used)} used, no limit reported
+          {formatMemory(reading.used)} used, {reading.unlimited ? "no memory limit set" : "no limit reported"}
         </p>
       )}
     </Card>

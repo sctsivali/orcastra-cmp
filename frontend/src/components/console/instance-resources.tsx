@@ -60,8 +60,12 @@ export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics })
       <div className="flex items-center gap-1 text-xs">
         <Activity className="h-3 w-3 text-green-400" aria-hidden="true" />
         <span className="sr-only">Memory</span>
-        <span className={cn("font-mono", memory ? toneFor(memory.percent) : "text-gray-500")}>
-          {memory && memory.total > 0 ? quota(formatMemoryQuota(memory.used, memory.total, 1)) : "n/a"}
+        <span className={cn("font-mono", memory && !memory.unlimited ? toneFor(memory.percent) : "text-gray-500")}>
+          {memory && memory.unlimited
+            ? `${formatMemory(memory.used)}, no limit`
+            : memory && memory.total > 0
+              ? quota(formatMemoryQuota(memory.used, memory.total, 1))
+              : "n/a"}
         </span>
       </div>
 
@@ -107,9 +111,11 @@ export function InstanceResourcesPanel({
           </span>
           <span className={cn("font-mono", cpu.tone)}>
             {cpu.text}
-            {cpuState.state === "ready" && cpuState.busy !== null && cpuState.vcpus
-              ? ` (${formatVcpuAmount(cpuState.busy)} of ${formatVcpuCount(cpuState.vcpus)})`
-              : ""}
+            {cpuState.state === "ready" && cpuState.busy !== null && cpuState.unlimited
+              ? ` (${formatVcpuAmount(cpuState.busy)} vCPUs, no limit)`
+              : cpuState.state === "ready" && cpuState.busy !== null && cpuState.vcpus
+                ? ` (${formatVcpuAmount(cpuState.busy)} of ${formatVcpuCount(cpuState.vcpus)})`
+                : ""}
           </span>
         </div>
         {cpu.percent !== null ? (
@@ -123,12 +129,14 @@ export function InstanceResourcesPanel({
             <Activity className="h-3 w-3 text-green-400" aria-hidden="true" /> Memory
           </span>
           <span className="text-gray-300 font-mono">
-            {memory && memory.total > 0
-              ? `${quota(formatMemoryQuota(memory.used, memory.total, 2))} (${memory.percent.toFixed(0)}%)`
-              : "n/a"}
+            {memory && memory.unlimited
+              ? `${formatMemory(memory.used)} used, no limit`
+              : memory && memory.total > 0
+                ? `${quota(formatMemoryQuota(memory.used, memory.total, 2))} (${memory.percent.toFixed(0)}%)`
+                : "n/a"}
           </span>
         </div>
-        {memory && memory.total > 0 ? (
+        {memory && memory.total > 0 && !memory.unlimited ? (
           <ProgressBar value={memory.percent} color={barFor(memory.percent, "bg-green-500")} />
         ) : null}
         {memory && memory.available !== null ? (

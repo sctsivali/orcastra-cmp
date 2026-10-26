@@ -7,7 +7,8 @@ import type { InstanceMetrics } from "@/types/api";
  * so the bar printed "0.0%" while the dialog said the second sample had not arrived.
  */
 export type CpuReading =
-  | { state: "ready"; percent: number; busy: number | null; vcpus: number | null }
+  // `unlimited`: no limits.cpu, so `vcpus` and the percent are measured against the host
+  | { state: "ready"; percent: number; busy: number | null; vcpus: number | null; unlimited: boolean }
   | { state: "calculating" }
   | { state: "unavailable"; busy: number | null };
 
@@ -20,6 +21,7 @@ export function cpuReading(metrics: InstanceMetrics): CpuReading {
       percent: Math.min(Math.max(metrics.cpu_usage_percent ?? 0, 0), 100),
       busy: metrics.cpu_busy_vcpus ?? null,
       vcpus: metrics.cpu_effective_vcpus ?? null,
+      unlimited: metrics.cpu_limit_set === false,
     };
   }
   return { state: "unavailable", busy: metrics.cpu_busy_vcpus ?? null };
@@ -33,6 +35,8 @@ export interface MemoryReading {
   cache: number | null;
   /** Used still counts page cache the guest can reclaim, so it overstates pressure. */
   includesCache: boolean;
+  /** No limits.memory: `total` is the host's memory, not a ceiling this instance was given. */
+  unlimited: boolean;
 }
 
 export function memoryReading(metrics: InstanceMetrics): MemoryReading | null {
@@ -44,6 +48,7 @@ export function memoryReading(metrics: InstanceMetrics): MemoryReading | null {
     available: metrics.memory_available_bytes ?? null,
     cache: metrics.memory_cache_bytes ?? null,
     includesCache: metrics.memory_includes_cache !== false,
+    unlimited: metrics.memory_limit_set === false,
   };
 }
 

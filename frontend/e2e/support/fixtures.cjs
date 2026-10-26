@@ -440,7 +440,9 @@ async function installApiFixtures(page, role, options = {}) {
         headers = { "Retry-After": "30" };
         body = { detail: "Request budget reached" };
       } else {
-        body = instanceMetrics(call, state.instanceStatus);
+        body = typeof options.instanceMetrics === "function"
+          ? options.instanceMetrics(call, state.instanceStatus)
+          : instanceMetrics(call, state.instanceStatus);
       }
     } else {
       state.unexpected.push(entry);
