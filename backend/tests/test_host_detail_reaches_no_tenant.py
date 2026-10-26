@@ -454,9 +454,11 @@ def test_a_cached_volume_list_reaches_a_tenant_with_size_and_snapshots_only(monk
 
 
 
-def test_a_tenant_reference_names_no_cluster_member():
+def test_a_tenant_reads_only_instance_references_and_no_cluster_member():
     # LXD appends ?target=<member> to a volume or image reference on a clustered pool, so a
-    # used_by list would name the member the location field no longer does.
+    # used_by list would name the member the location field no longer does. And a reference that
+    # names no instance passes on any rule in its project, so it named other parties' custom
+    # volumes and images: a tenant keeps instance references only (owner decision 2026-10-26).
     class Volume(host_detail.BaseModel):
         name: str
         config: dict = {}
@@ -468,15 +470,16 @@ def test_a_tenant_reference_names_no_cluster_member():
         f"/1.0/storage-pools/local/volumes/custom/data?project=p&target={MEMBER}",
         f"/1.0/images/abc?target={MEMBER}&project=p",
         "/1.0/instances/web-1?project=p",
+        f"/1.0/storage-pools/local/volumes/container/web-1?project=p&target={MEMBER}",
+        "/1.0/profiles/default?project=p",
     ]
     volume = Volume(name="data", used_by=list(refs))
 
     shown = host_detail.volume_for_tier(volume, "tenant")
 
     assert shown.used_by == [
-        "/1.0/storage-pools/local/volumes/custom/data?project=p",
-        "/1.0/images/abc?project=p",
         "/1.0/instances/web-1?project=p",
+        "/1.0/storage-pools/local/volumes/container/web-1?project=p",
     ]
     assert MEMBER not in " ".join(host_detail.pool_for_tier(volume, "tenant").used_by)
     assert host_detail.volume_for_tier(volume, "partner").used_by == refs

@@ -77,10 +77,13 @@ def _call(used_by, acl: Optional[dict]):
         org_scope._allowed_clusters_var.reset(allowed_token)
 
 
-def test_tenant_sees_only_its_own_project_references() -> None:
+def test_tenant_sees_only_its_own_instance_references() -> None:
     result = _call([ALPHA_REF, BETA_REF, ALPHA_VOL, BETA_VOL], TENANT_ACL)
-    assert set(result.used_by) == {ALPHA_REF, ALPHA_VOL}
-    # The point of the bug: the other project's names must not appear at all.
+    # Owner decision 2026-10-26: a tenant keeps references to its instances only. A custom
+    # volume reference names no instance, so it passed on any rule in its project and named other
+    # parties' volumes; it is withheld even under a project-wide grant like this one.
+    assert set(result.used_by) == {ALPHA_REF}
+    # The point of the original bug: the other project's names must not appear at all.
     assert not any("beta" in reference for reference in result.used_by)
 
 

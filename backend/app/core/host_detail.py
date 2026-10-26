@@ -21,6 +21,7 @@ from typing import Any, Mapping, Optional, TypeVar
 from pydantic import BaseModel
 
 from app.core.task_scope import Tier
+from app.core.tenant_visibility import parse_lxd_reference
 
 HOST_DETAIL_TIERS = frozenset({"admin", "partner"})
 # Instance and profile config a Tenant may read: limits, the image's identity, boot and snapshot
@@ -141,7 +142,14 @@ def without_member_target(reference: str) -> str:
 
 
 def _tenant_used_by(model: Model) -> list:
-    return [without_member_target(str(reference)) for reference in getattr(model, "used_by", None) or []]
+    # note: references to an instance or its root volume only, which the route already narrowed
+    # to the Tenant's ACL. Any other reference passes on any rule in its project, so it named
+    # other parties' custom volumes and images (owner decision 2026-10-26).
+    return [
+        without_member_target(reference)
+        for reference in (str(ref) for ref in getattr(model, "used_by", None) or [])
+        if parse_lxd_reference(reference)[1] is not None
+    ]
 
 
 def pool_for_tier(pool: Model, tier: Tier) -> Model:
