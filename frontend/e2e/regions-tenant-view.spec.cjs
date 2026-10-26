@@ -129,3 +129,21 @@ test("partner: a cluster whose hardware was not read says so instead of showing 
   await expect(page.locator("#region-card-id-3174")).toContainText("64 hardware threads");
   await expectCleanHarness(api);
 });
+
+test("partner: fleet tiles say Not read when no cluster's hardware was read", async ({ page }) => {
+  const unread = {
+    ...jakarta(null, "lxd"),
+    nodes: [{ cluster_id: "nuc2", display_name: "NUC 2", status: "offline", node_type: "lxd", hardware: null }],
+  };
+  const body = {
+    regions: [unread], total_nodes: 1, total_instances: 0,
+    total_cpu: 0, total_memory: 0, total_storage: 0, total_gpu: 0, total_gpu_cards: 0, total_gpu_integrated: 0,
+  };
+  const api = await openRegions(page, "partner", body);
+  for (const label of ["Hardware Threads", "Memory", "Storage", "Compute GPUs"]) {
+    await expect(tile(page, label).first()).toBeVisible();
+  }
+  await expect(page.locator("main").getByText("Not read", { exact: true })).toHaveCount(4);
+  await expect(page.locator("main")).not.toContainText(/\b0 B\b/);
+  await expectCleanHarness(api);
+});

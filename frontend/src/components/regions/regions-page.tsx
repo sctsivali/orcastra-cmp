@@ -100,6 +100,7 @@ function fleetHardware(data: RegionsOverviewResponse) {
 // Hardware the backend could not read (an offline cluster, a failed read) arrives as null for
 // an operator too. Saying so beats the profile of zeros it used to be, which stated a size.
 const HARDWARE_NOT_READ = "Hardware not read";
+const NOT_READ = "Not read";
 
 function RegionCard({
   region,
@@ -264,6 +265,10 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   });
   const filteredRegions = filters.filteredRows;
   const fleet = data ? fleetHardware(data) : null;
+  // note: the fleet totals sum the clusters whose hardware was read. When none was, they are 0
+  // by arithmetic, not by measurement, so the tiles say so rather than show an empty fleet.
+  const nothingRead =
+    Boolean(data?.regions.length) && (data?.regions ?? []).every((region) => region.hardware === null);
   const runningInstances = (data?.regions ?? []).reduce(
     (sum, region) => sum + region.instance_running,
     0
@@ -380,14 +385,14 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatTile icon={Globe} label="Regions" value={data.regions.length} />
           <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
-          <StatTile icon={Cpu} label="Hardware Threads" value={fleet.cpu} />
-          <StatTile icon={MemoryStick} label="Memory" value={formatMemory(fleet.memory)} />
-          <StatTile icon={HardDrive} label="Storage" value={formatBytes(fleet.storage)} />
+          <StatTile icon={Cpu} label="Hardware Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
+          <StatTile icon={MemoryStick} label="Memory" value={nothingRead ? NOT_READ : formatMemory(fleet.memory)} />
+          <StatTile icon={HardDrive} label="Storage" value={nothingRead ? NOT_READ : formatBytes(fleet.storage)} />
           <StatTile
             icon={Sparkles}
             label="Compute GPUs"
-            value={fleet.gpu}
-            note={fleet.gpuCards > fleet.gpu ? `${fleet.gpuCards} cards detected` : undefined}
+            value={nothingRead ? NOT_READ : fleet.gpu}
+            note={!nothingRead && fleet.gpuCards > fleet.gpu ? `${fleet.gpuCards} cards detected` : undefined}
           />
         </div>
       )}
