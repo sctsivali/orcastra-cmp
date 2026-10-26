@@ -1,8 +1,5 @@
 import { signOut } from "next-auth/react";
-
-// Authentik end_session endpoint for federated logout
-// Uses environment variable to avoid hardcoded URLs
-const AUTHENTIK_LOGOUT_URL = process.env.NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL || "";
+import { IDP_LOGOUT_URL } from "@/lib/identity-provider";
 
 /**
  * Sign out of the dashboard and of the SSO session behind it.
@@ -13,5 +10,5 @@ const AUTHENTIK_LOGOUT_URL = process.env.NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL || "";
 export async function federatedSignOut(): Promise<void> {
   await signOut({ redirect: false });
   const postLogoutRedirect = encodeURIComponent(`${window.location.origin}/auth/signin`);
-  window.location.href = `${AUTHENTIK_LOGOUT_URL}?post_logout_redirect_uri=${postLogoutRedirect}`;
+  window.location.href = `${IDP_LOGOUT_URL}?post_logout_redirect_uri=${postLogoutRedirect}`;
 }

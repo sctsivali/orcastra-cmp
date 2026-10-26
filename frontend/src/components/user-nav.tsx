@@ -3,7 +3,7 @@
 /**
  * User Navigation Component
  *
- * Displays user avatar, name, and provides sign-out functionality.
+ * Displays user avatar, name, a link to the identity provider's account settings, and sign-out.
  * Shows when user is authenticated.
  */
 
@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, User, Shield, Loader2 } from "lucide-react";
+import { ExternalLink, LogOut, User, Shield, Loader2 } from "lucide-react";
+import { IDP_ACCOUNT_SETTINGS_URL } from "@/lib/identity-provider";
 import { federatedSignOut } from "@/lib/sign-out";
 
 export function UserNav() {
@@ -66,6 +67,7 @@ export function UserNav() {
           variant="ghost"
           className="relative h-9 w-9 rounded-full"
           disabled={isSigningOut}
+          aria-label="Account menu"
         >
           {isSigningOut ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -110,11 +112,29 @@ export function UserNav() {
 
         <DropdownMenuSeparator />
 
-        <DropdownMenuItem className="cursor-pointer" disabled>
-          <User className="mr-2 h-4 w-4" />
-          <span>Profile</span>
-          <span className="ml-auto text-xs text-muted-foreground">Soon</span>
-        </DropdownMenuItem>
+        {/* note: the account lives on the identity provider, so Profile leaves the app in a new
+            tab and the console stays where the user was. noreferrer keeps the console URL out of
+            the IdP's logs and noopener stops the new tab reaching back into this one. */}
+        {IDP_ACCOUNT_SETTINGS_URL ? (
+          <DropdownMenuItem className="cursor-pointer" asChild>
+            <a
+              href={IDP_ACCOUNT_SETTINGS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Profile, opens in a new tab"
+            >
+              <User className="mr-2 h-4 w-4" />
+              <span>Profile</span>
+              <ExternalLink className="ml-auto h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" />
+            </a>
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem disabled>
+            <User className="mr-2 h-4 w-4" />
+            <span>Profile</span>
+            <span className="ml-auto text-xs text-muted-foreground">Unavailable</span>
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuSeparator />
 
