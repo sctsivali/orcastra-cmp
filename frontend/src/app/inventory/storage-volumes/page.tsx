@@ -89,7 +89,9 @@ const VOLUMES = defineTable<VolumeInfo>()({
     },
     {
       field: "location",
-      label: "Location",
+      // note: LXD's volume.location is the member holding a local volume, empty when the pool
+      // is shared. "Location" means geography everywhere else in the console.
+      label: "Cluster Member",
       sort: (v) => v.location ?? "",
       facet: (v) => v.location ?? "",
       facetSpec: { emptyLabel: "(shared)" },
@@ -244,7 +246,7 @@ function StorageVolumesContent() {
                   <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 {locations.length > 0 && (
-                  <SortableTableHead label="Location" field="location" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Cluster Member" field="location" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />

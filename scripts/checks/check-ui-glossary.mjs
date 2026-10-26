@@ -49,6 +49,8 @@ const forbidden = [
   [/>\s*Nodes?\s*</g, 'use "Cluster" in operator text'],
   [/\bOrg:/g, 'spell the authorization concept as "Organization"'],
   [/\bNode ID:/g, 'call a registered endpoint identifier "Cluster ID"'],
+  [/\b(?:[Tt]his|[Yy]our) node\b/g, 'call a registered endpoint a "cluster", or a machine in one a "member"'],
+  [/\bregistering the node\b/gi, 'call a registered endpoint a "cluster"'],
 ];
 
 const requiredContracts = [
@@ -146,6 +148,12 @@ const backendGlossaryFiles = [
   "backend/app/routers/nodes.py",
   "backend/app/services/lxd/node_resources.py",
   "backend/app/services/lxd/resources.py",
+  // Their detail and warning messages reach the console verbatim through lib/api.ts.
+  "backend/app/core/lxd_errors.py",
+  "backend/app/routers/lxd_warnings.py",
+  "backend/app/routers/cert_manager.py",
+  "backend/app/routers/my_keys.py",
+  "backend/app/routers/security_advisories.py",
 ];
 
 const backendForbidden = [
@@ -154,6 +162,10 @@ const backendForbidden = [
   [/\bex;,/g, 'write "for example" in operator-facing API descriptions'],
   [/\.1f\}\s+GB\b/g, "a 1024-derived Memory display must use GiB"],
   [/\bdef\s+format_bytes\s*\(/g, "do not restore a private ambiguous byte formatter"],
+  [/\bNode is not reachable\b/g, 'a registered endpoint is a "Cluster" in operator messages'],
+  [/\bFailed to (?:get node resources|process node)\b/g, 'a registered endpoint is a "cluster" in operator messages'],
+  [/\bCould not reach the LXD host\b/g, 'say "cluster": the endpoint may be Incus, and it may be several machines'],
+  [/\bCould not read host kernels\b/g, 'the kernels belong to cluster members'],
 ];
 
 const failures = [];

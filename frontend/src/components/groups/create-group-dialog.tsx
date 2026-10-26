@@ -397,7 +397,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                   </TooltipTrigger>
                   <TooltipContent className="max-w-xs">
                     <p className="text-xs">
-                      Select resources from your node and set permission levels. 
+                      Select resources from the target cluster and set permission levels. 
                       Resources are automatically fetched from {formData.node}.
                     </p>
                   </TooltipContent>

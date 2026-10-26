@@ -146,7 +146,7 @@ export default function ServerPage() {
             Server Information
           </h1>
           <p className="text-muted-foreground mt-2">
-            View hypervisor server details and configuration
+            The hypervisor API, environment and server configuration reported by each cluster
           </p>
         </div>
         <RefreshButton
@@ -204,7 +204,7 @@ export default function ServerPage() {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-sm">Hypervisor API Version:</span>
+                    <span className="text-sm">API Version:</span>
                     <Badge variant="outline">{server.node_type} {server.api_version}</Badge>
                   </div>
                   <div className="flex justify-between">

@@ -198,8 +198,8 @@ function ClustersContent() {
         toast({
           title: "Certificate Regenerated",
           description: response.pending_cert_id
-            ? "The current certificate stays active. Run the command on your hypervisor server, then verify."
-            : "Copy and run the command on your hypervisor server to add trust" });
+            ? "The current certificate stays active. Run the command on the cluster (any one member is enough), then verify."
+            : "Copy and run the command on the cluster (any one member is enough) to add trust" });
       }
     } catch (error: any) {
       toast({
@@ -467,7 +467,7 @@ function ClustersContent() {
                             disabled={checkingAuth === cluster.cluster_id}
                             title={
                               cluster.status === ClusterStatus.NOT_AUTHORIZED
-                                ? "Check Authentication after adding trust on the host"
+                                ? "Check Authentication after adding trust on the cluster"
                                 : "Check Authentication"
                             }
                           >
@@ -545,7 +545,7 @@ function ClustersContent() {
               this dashboard. Only the connection settings, certificates, and metadata stored in the dashboard will be deleted,
               and the dashboard removes its own trust entries from the cluster when it can reach it.
               <span className="block mt-2 text-muted-foreground text-xs">
-                Note: Your actual instances, VMs, containers, and data on the hypervisor server will NOT be affected.
+                Note: Your actual instances, VMs, containers, and data on the cluster will NOT be affected.
               </span>
             </DialogDescription>
           </DialogHeader>

@@ -367,7 +367,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                 <p className="text-xs text-destructive">{uplinkError}</p>
               ) : node && uplinkOptions.length === 0 ? (
                 <p className="text-xs text-destructive">
-                  This node has no managed bridge or physical network to uplink through.
+                  This cluster has no managed bridge or physical network to uplink through.
                   Create one in the default project first.
                 </p>
               ) : (

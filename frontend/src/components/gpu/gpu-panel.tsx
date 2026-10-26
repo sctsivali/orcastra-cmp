@@ -19,18 +19,27 @@ interface GpuPanelProps {
   dense?: boolean;
   /** The instance list behind the allocation could not be read; show the allocation as unknown. */
   allocationUnknown?: boolean;
+  /** Whose cards these are, for the copy: a whole cluster, or one member of it. */
+  scope?: "cluster" | "member";
   className?: string;
 }
 
 /**
- * The whole GPU surface for one node or cluster member.
+ * The whole GPU surface for one cluster or cluster member.
  *
  * important: the card list is gated on how many cards exist, never on gpu_total. Gating on
  * the compute count is what made a display-only node say "No GPU cards detected on this node"
  * while the API was returning two cards.
  */
-export function GpuPanel({ src, dense = false, allocationUnknown = false, className }: GpuPanelProps) {
+export function GpuPanel({
+  src,
+  dense = false,
+  allocationUnknown = false,
+  scope = "cluster",
+  className,
+}: GpuPanelProps) {
   const summary = summarizeGpus(src);
+  const scopeNoun = scope === "member" ? "member" : "cluster";
   const cards = sortGpuCards(src.gpu_cards ?? []);
 
   if (!summary.hasCards) {
@@ -38,7 +47,7 @@ export function GpuPanel({ src, dense = false, allocationUnknown = false, classN
       <EmptyState
         icon={Sparkles}
         title={GPU_EMPTY_TITLE}
-        description="This cluster reports no GPU or display card."
+        description={`This ${scopeNoun} reports no GPU or display card.`}
       />
     );
   }
@@ -59,7 +68,9 @@ export function GpuPanel({ src, dense = false, allocationUnknown = false, classN
 
       {cards.length > 0 && (
         <div className="space-y-3 border-t pt-4">
-          <h3 className="text-sm font-semibold">Cards on This Cluster ({summary.cardsTotal})</h3>
+          <h3 className="text-sm font-semibold">
+            Cards on This {scope === "member" ? "Member" : "Cluster"} ({summary.cardsTotal})
+          </h3>
           {cards.map((card) => (
             <GpuCardDetails key={card.id ?? card.index} card={card} dense={dense} />
           ))}

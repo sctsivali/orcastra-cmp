@@ -43,7 +43,7 @@ export function MigrationStageRecovery({
         <AlertDescription>
           {plan.scope === "project"
             ? "The workloads move one at a time and keep their identity, so no second copy is kept. If one cannot move, the ones already moved go back to their original member. To undo a finished relocation, plan another one back."
-            : "Member relocation moves the same instance to another server, so no second copy is kept. To undo it, plan another relocation back to the original member."}
+            : "Member relocation moves the same instance to another member, so no second copy is kept. To undo it, plan another relocation back to the original member."}
         </AlertDescription>
       </Alert>
     );

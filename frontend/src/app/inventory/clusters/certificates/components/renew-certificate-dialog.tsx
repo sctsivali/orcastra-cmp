@@ -110,7 +110,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
         setStep("trust");
         toast({
           title: "Manual Trust Required",
-          description: "Please run the CLI command on your hypervisor server.",
+          description: "Run the trust command on the cluster (any one member is enough).",
         });
       }
     } catch (error) {
@@ -247,7 +247,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
             <Alert>
               <Terminal className="h-4 w-4" />
               <AlertDescription>
-                Run the following command on your hypervisor server to add trust for the new certificate.
+                Run the following command on the cluster (any one member is enough) to add trust for the new certificate.
               </AlertDescription>
             </Alert>
 

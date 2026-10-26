@@ -126,7 +126,7 @@ export function MigrationStagePreflight({ plan }: { plan: MigrationPlan }) {
           <AlertTitle>{plan.scope === "project" ? "The instances keep their identity" : "The instance keeps its identity"}</AlertTitle>
           <AlertDescription>
             Member relocation moves the same {plan.scope === "project" ? "instances" : "instance"} to
-            another server of the cluster. Names, project, tags, and access rules do not change.
+            another member of the cluster. Names, project, tags, and access rules do not change.
           </AlertDescription>
         </Alert>
       )}

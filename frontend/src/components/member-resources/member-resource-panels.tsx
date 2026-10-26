@@ -226,7 +226,7 @@ export function MemberResourcePanels({
           <CardDescription>{GPU_UTILIZATION_NOTE}</CardDescription>
         </CardHeader>
         <CardContent>
-          <GpuPanel src={resources} dense allocationUnknown={instancesLost} />
+          <GpuPanel src={resources} dense allocationUnknown={instancesLost} scope="member" />
         </CardContent>
       </Card>
 

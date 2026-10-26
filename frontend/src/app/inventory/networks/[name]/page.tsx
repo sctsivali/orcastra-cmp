@@ -26,7 +26,7 @@ function NetworkDetailContent() {
         <div className="space-y-4">
           <BackLink href="/inventory/networks" label="Networks" />
           <div className="text-sm text-muted-foreground">
-            Missing host parameter.
+            No cluster was given for this network. Open it from the Networks list.
           </div>
         </div>
       )}

@@ -127,7 +127,7 @@ export function RegionsMapCard({
             {unplaceableCount === 1
               ? "1 region has no location data and is not shown on the map."
               : `${unplaceableCount} regions have no location data and are not shown on the map.`}{" "}
-            Set a location when registering the node, or from the cluster detail page.
+            Set a location when registering the cluster, or with the location button on the Clusters page.
           </p>
         )}
 

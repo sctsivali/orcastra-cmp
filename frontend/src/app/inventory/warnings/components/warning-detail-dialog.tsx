@@ -106,7 +106,7 @@ export function WarningDetailDialog({
               <DetailField label="Reason" value={record.message} span="full" />
             </DetailGrid>
           </DetailSection>
-          <DetailSection title="Host">
+          <DetailSection title="Member Kernel">
             <DetailGrid cols={3}>
               <DetailField label="Cluster Member" value={record.member} />
               <DetailField label="Kernel" value={record.kernel_version} mono />
@@ -127,8 +127,8 @@ export function WarningDetailDialog({
           </DetailSection>
           {record.check_command ? (
             <DetailSection
-              title="Check On The Host"
-              description="Run on the member to confirm. A fixed kernel only counts once the host has rebooted into it."
+              title="Check On The Member"
+              description="Run on the member to confirm. A fixed kernel only counts once the member has rebooted into it."
             >
               <CodeBlock value={record.check_command} copyLabel="Check command" />
             </DetailSection>

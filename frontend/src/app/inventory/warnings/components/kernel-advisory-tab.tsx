@@ -109,7 +109,7 @@ function KernelAdvisoryTable({
             Cluster members whose running kernel is affected by a known kernel CVE, or could not be confirmed as patched
           </CardDescription>
         </div>
-        <UnreachableNodesBanner noun="host kernels" nodes={unread} />
+        <UnreachableNodesBanner noun="member kernels" nodes={unread} />
         <TableToolbar filters={filters} noun="kernel CVE findings" />
       </CardHeader>
       <CardContent className="p-0 md:p-6 md:pt-0">

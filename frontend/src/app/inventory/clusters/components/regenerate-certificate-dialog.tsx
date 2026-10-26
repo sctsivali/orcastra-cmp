@@ -90,7 +90,7 @@ export function RegenerateCertificateDialog({
         }
         toast({
           title: "Not Trusted Yet",
-          description: "The cluster does not trust the new certificate yet. Run the command on your hypervisor server first.",
+          description: "The cluster does not trust the new certificate yet. Run the command on the cluster first (any one member is enough).",
           variant: "destructive",
         });
       } catch (error) {
@@ -128,7 +128,7 @@ export function RegenerateCertificateDialog({
               <Alert>
                 <Terminal className="h-4 w-4" />
                 <AlertDescription className="space-y-3">
-                  <p className="text-sm font-medium">Run this command on your hypervisor server:</p>
+                  <p className="text-sm font-medium">Run this command on the cluster (any one member is enough):</p>
                   {issued.cli_command && (
                     <CodeBlock
                       value={issued.cli_command}

@@ -40,7 +40,7 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Server Version" value={node.server_version || EMPTY} />
+          <Field label="Hypervisor Version" value={node.server_version || EMPTY} />
           <Field label="API Version" value={node.api_version || EMPTY} />
           {/* auth mode and the storage driver are the operator's picture of the hypervisor, not
               the tenant's picture of where their instance runs */}
@@ -50,7 +50,7 @@ export function NodeSystemPanel({ node }: { node: NodeStatus }) {
           <Field label="Kernel" value={String(env?.kernel_version || EMPTY)} />
           {/* note: never through formatLabel. It title-cases raw enums and turns x86_64 into "X86 64". */}
           <Field label="Architecture" value={String(env?.kernel_architecture || EMPTY)} />
-          <Field label="Clustered" value={env?.server_clustered ? "Yes" : "No"} />
+          <Field label="Clustering" value={env?.server_clustered ? "Clustered" : "Standalone server"} />
           {isPartner ? <Field label="Storage Backend" value={String(env?.storage || EMPTY)} /> : null}
           <Field label="Firewall" value={String(env?.firewall || EMPTY)} />
         </div>

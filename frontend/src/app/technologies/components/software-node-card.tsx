@@ -54,7 +54,7 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
       <CardContent className="space-y-5">
         <DetailSection title="Platform">
           <DetailGrid cols={3}>
-            <DetailField label="Hypervisor" value={node.server_version || undefined} mono />
+            <DetailField label="Hypervisor Version" value={node.server_version || undefined} mono />
             <DetailField label="API Version" value={node.api_version || undefined} mono />
             <DetailField label="Project" value={env?.project || undefined} />
             <DetailField label="Server Name" value={env?.server_name || undefined} />

@@ -232,12 +232,12 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
         {node.connected && node.server_version && (
           <div className="mt-3 flex flex-wrap gap-2 md:gap-4 text-xs text-muted-foreground items-center">
             <span>
-              <span className="font-medium">Version:</span>{" "}
+              <span className="font-medium">Hypervisor Version:</span>{" "}
               {node.server_version}
             </span>
             {node.api_version && (
               <span>
-                <span className="font-medium">Hypervisor API:</span> {node.api_version}
+                <span className="font-medium">API Version:</span> {node.api_version}
               </span>
             )}
             {/* Version checker supports the current hypervisor families. Partner+ only: it

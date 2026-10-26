@@ -56,7 +56,7 @@ const MEMBERS = defineTable<any>()({
   // has no Node column, so there is nothing to collide with, and this pins that.
   reservedParams: ["node"],
   columns: [
-    { field: "server_name", label: "Server Name", sort: (m) => m.server_name, search: (m) => m.server_name, filter: fromSort("text") },
+    { field: "server_name", label: "Cluster Member", sort: (m) => m.server_name, search: (m) => m.server_name, filter: fromSort("text") },
     { field: "url", label: "URL", sort: (m) => m.url, search: (m) => m.url, filter: fromSort("text") },
     {
       field: "roles",
@@ -245,7 +245,7 @@ function ClusterMembersContent() {
             // node-picker-status-coverage.spec.ts opens this control before deciding whether
             // there is anything to assert. A disabled control turns "nothing to choose" into a
             // dead end the operator cannot confirm by looking.
-            emptyText="No cluster with clustering enabled is available"
+            emptyText="No cluster with members is available"
             options={clusters.map((cluster: any) => {
               const meta = clusterStatusMeta(cluster.status);
               return {
@@ -279,11 +279,13 @@ function ClusterMembersContent() {
             <div>
               <CardTitle>Member Overview</CardTitle>
               <CardDescription>
-                {unreachable
-                  ? "Cluster did not answer"
-                  : isClustered
-                    ? "Members in this cluster"
-                    : "Clustering is not enabled"}
+                {!node
+                  ? "No cluster selected"
+                  : unreachable
+                    ? "Cluster did not answer"
+                    : isClustered
+                      ? "Members in this cluster"
+                      : "Standalone server, no members"}
               </CardDescription>
             </div>
             {/* important: no node means nothing to refresh. React Query's refetch() runs the
@@ -313,8 +315,8 @@ function ClusterMembersContent() {
             clusters.length === 0 ? (
               <EmptyState
                 icon={ShieldAlert}
-                title="No cluster here is known to be clustered"
-                description="A cluster is listed once it has authenticated and reported its clustering state. Clusters still waiting on their trust handshake are not offered here."
+                title="No clusters with members"
+                description="Only a cluster running in clustered mode has members. A standalone server has none, and a cluster still waiting on its trust handshake has not reported its mode yet."
                 action={
                   <Button asChild variant="outline" size="sm">
                     <IntentLink href="/inventory/clusters">Go to clusters</IntentLink>
@@ -337,8 +339,8 @@ function ClusterMembersContent() {
           ) : !isClustered ? (
             <EmptyState
               icon={Server}
-              title="Clustering is not enabled"
-              description="This cluster does not have hypervisor clustering enabled"
+              title="Standalone server"
+              description="This cluster runs on one server, so it has no members to list."
             />
           ) : members.length === 0 ? (
             <EmptyState

@@ -508,7 +508,7 @@ function ActiveSessionsTab() {
             <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
               <span className="text-foreground">
-                Showing sessions from one server only. The shared session view is
+                Showing sessions from one dashboard server only. The shared session view is
                 unavailable, so this list may be incomplete. Your connections are unaffected.
               </span>
             </div>

@@ -68,7 +68,7 @@ export function KernelAdvisoryMembers({
 
   return (
     <div className="space-y-4">
-      <UnreachableNodesBanner noun="host kernels" nodes={unreachable} reasons={reasons} />
+      <UnreachableNodesBanner noun="member kernels" nodes={unreachable} reasons={reasons} />
       <DetailSection title="Cluster Members">
         {unlisted.length > 0 && (
           <p className="text-sm text-muted-foreground">
@@ -109,8 +109,8 @@ export function KernelAdvisoryMembers({
       </DetailSection>
       {commands.length > 0 && (
         <DetailSection
-          title="Check On The Host"
-          description="Run on the member to confirm. A fixed kernel only counts once the host has rebooted into it."
+          title="Check On The Member"
+          description="Run on the member to confirm. A fixed kernel only counts once the member has rebooted into it."
         >
           <div className="space-y-2">
             {commands.map((command) => (

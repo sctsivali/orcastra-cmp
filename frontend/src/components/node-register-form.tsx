@@ -152,7 +152,7 @@ export function NodeRegisterForm() {
       } else {
         toast({
           title: "Not Authenticated",
-          description: response.message || "Certificate not yet trusted by the cluster endpoint. Please run the trust command first.",
+          description: response.message || "Certificate not yet trusted by the cluster. Please run the trust command first.",
           variant: "destructive",
         });
       }
@@ -162,7 +162,7 @@ export function NodeRegisterForm() {
       toast({
         title: isTimeout ? "Connection Timed Out" : "Check Failed",
         description: isTimeout
-          ? "The cluster did not respond in time. Please verify the trust certificate command has been executed on the cluster endpoint, then try again."
+          ? "The cluster did not respond in time. Please verify the trust certificate command has been executed on the cluster, then try again."
           : (error.message || "Failed to check authentication"),
         variant: "destructive",
       });
@@ -299,7 +299,7 @@ export function NodeRegisterForm() {
               <Alert>
                 <Terminal className="h-4 w-4" />
                 <AlertDescription className="space-y-3">
-                  <p className="text-sm font-medium">Run this command on your hypervisor server:</p>
+                  <p className="text-sm font-medium">Run this command on the cluster (any one member is enough):</p>
                   
                   {/* Dynamic CLI Command based on detected type */}
                   {(() => {

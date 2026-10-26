@@ -687,7 +687,7 @@ function CreateKeyDialog({
               {formData.auth_level === "standard" ? (
                 <p>Project-level access: manage instances and resources within the selected project only.</p>
               ) : (
-                <p>Server-level access: full administrative control across all projects and server configurations.</p>
+                <p>Cluster-level access: full administrative control across all projects and the cluster&apos;s server configuration.</p>
               )}
             </div>
           </div>
