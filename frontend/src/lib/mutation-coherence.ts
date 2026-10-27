@@ -313,7 +313,16 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   "organization.preferences": {
     completion: "response",
     queryFamilies: ["organizations"],
-    apiCalls: ["api.organizations.updatePreferences", "api.organizations.deletePreferences", "api.organizations.desktopControl.set"],
+    apiCalls: [
+      "api.organizations.updatePreferences", "api.organizations.deletePreferences",
+      "api.organizations.setProvider", "api.organizations.desktopControl.set",
+    ],
+  },
+  // The deployment default sits under every organization without branding of its own.
+  "branding.deployment": {
+    completion: "response",
+    queryFamilies: ["organizations", "personalization"],
+    apiCalls: ["brandingAPI.updateDeployment", "brandingAPI.deleteDeployment"],
   },
   "organization.write": {
     completion: "response",
@@ -338,7 +347,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   "personalization.write": {
     completion: "response",
     queryFamilies: ["personalization"],
-    apiCalls: ["personalizationAPI.update", "personalizationAPI.delete"],
+    apiCalls: ["personalizationAPI.update"],
   },
   "tenant-access.write": {
     completion: "response",

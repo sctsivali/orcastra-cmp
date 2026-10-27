@@ -156,22 +156,44 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
   lastModified: null,
 };
 
-// Context type for the provider
+/**
+ * The app-wide context: the branding this account sees (resolved on the server from its
+ * organization, that organization's provider and the deployment default) with the account's own
+ * theme choice over it. Branding is edited through BrandingEditorContextType, never here.
+ */
 export interface PersonalizationContextType {
+  settings: PersonalizationSettings;
+  /** Persist this account's own theme choice. */
+  updateTheme: (theme: ThemePreference) => void;
+  /** Drop the account's own choice so the organization's default theme applies. */
+  clearTheme: () => void;
+  /** Whether the theme in `settings` is the account's own choice rather than its organization's. */
+  themeIsPersonal: boolean;
+  /** The theme the organization (or deployment) sets, which applies when the account chose none. */
+  organizationTheme: ThemePreference;
+  /** Show branding at once (the editor's preview of the organization the sidebar renders). */
+  applySettingsOptimistically: (settings: PersonalizationSettings) => void;
+  refreshSettings: () => Promise<void>;
+  isLoading: boolean;
+  isSaving: boolean;
+}
+
+/** What the branding editor (components/personalization-settings.tsx) edits: one organization's or the deployment's row. */
+export interface BrandingEditorContextType {
   settings: PersonalizationSettings;
   updateLogo: (logo: Partial<LogoSettings>) => void;
   updateBackground: (background: Partial<BackgroundSettings>) => void;
   updateBranding: (branding: Partial<BrandingSettings>) => void;
   updateColors: (colors: Partial<ColorSettings>) => void;
-  updateTheme: (theme: ThemePreference) => void;
+  /** The default theme for everyone this branding applies to; each account can still choose its own. */
+  updateDefaultTheme: (theme: ThemePreference) => void;
   resetToDefaults: () => void;
+  /** What the reset button says: it removes this row, so it names what shows instead. */
+  resetLabel: string;
   undoSettings: () => void;
   redoSettings: () => void;
   canUndo: boolean;
   canRedo: boolean;
-  /** Force-apply settings without API save (for org-level instant preview) */
-  applySettingsOptimistically: (settings: PersonalizationSettings) => void;
-  refreshSettings: () => Promise<void>;  // Force refresh from API
   isLoading: boolean;
   isSaving: boolean;
 }

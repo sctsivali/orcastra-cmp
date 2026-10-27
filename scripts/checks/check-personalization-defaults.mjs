@@ -49,7 +49,7 @@ const offenders = [];
 const fail = (msg) => offenders.push(msg);
 
 // ---------------------------------------------------------------------------------------
-// Colour maths. Same rounding as hexToHSL in the provider, on purpose: a guard that rounds
+// Colour maths. Same rounding as hexToHSL in frontend/src/lib/color.ts, on purpose: a guard that rounds
 // differently from the code reports drift that does not exist.
 // ---------------------------------------------------------------------------------------
 

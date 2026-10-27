@@ -795,7 +795,6 @@ for (const contract of [
     path: "frontend/src/components/personalization/use-personalization-mutations.ts",
     markers: [
       "personalizationAPI.update",
-      "personalizationAPI.delete",
       'reconcileMutationImpact(queryClient, "personalization.write")',
       "captureActorMutationFence(scopeKey)",
       "dispatchActorMutation(",
@@ -836,14 +835,15 @@ const personalizationProvider = readFileSync(
   join(root, "frontend/src/components/personalization/use-personalization-mutations.ts"),
   "utf8",
 );
+// The personal row holds only the theme now, so the one write is saveToAPI (no delete path).
 const personalizationSaveStart = personalizationProvider.indexOf("const saveToAPI");
-const personalizationDeleteStart = personalizationProvider.indexOf("const deleteFromAPI");
+const personalizationSaveEnd = personalizationProvider.indexOf("const persistTheme");
 const personalizationSaveScope = personalizationProvider.slice(
   personalizationSaveStart,
-  personalizationDeleteStart,
+  personalizationSaveEnd,
 );
-if (personalizationSaveStart < 0 || personalizationDeleteStart <= personalizationSaveStart) {
-  failures.push("personalization-provider save/delete scopes could not be inspected");
+if (personalizationSaveStart < 0 || personalizationSaveEnd <= personalizationSaveStart) {
+  failures.push("personalization-provider save scope could not be inspected");
 } else if (/for\s*\(/.test(personalizationSaveScope)) {
   failures.push("personalizationAPI.update must not be retried in a loop");
 }

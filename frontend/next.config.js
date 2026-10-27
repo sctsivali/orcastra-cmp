@@ -22,7 +22,9 @@ const nextConfig = {
     // important: safe only because no page fetches on the server. Every app/**/page.tsx is a
     // client component or a thin shim around one, so the cached payload is chrome and never
     // cluster data, and React Query stays the single freshness authority (lib/query-config.ts).
-    // If data fetching ever moves into a server component, revisit this.
+    // The one server read is the public deployment branding (lib/server/public-branding.ts):
+    // the same for every viewer and itself cached for 60 s, so reusing it here changes nothing.
+    // If any other data fetching moves into a server component, revisit this.
     staleTimes: {
       dynamic: 30,
       static: 180,

@@ -3,10 +3,13 @@
 import * as React from "react";
 import { onAuthActorChanged } from "@/lib/api";
 import { captureActorMutationFence, isActorMutationFenceCurrent } from "@/lib/actor-mutation-fence";
-import { DEFAULT_PERSONALIZATION, type PersonalizationSettings } from "@/types/personalization";
+import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type ThemePreference } from "@/types/personalization";
 import { readOrgPreferences, readOrgVersion, readPersonalPreferences, sameOrgVersion, type OrgPreferencesVersion } from "./preferences";
 
 type SettingsRef = React.MutableRefObject<PersonalizationSettings | null>;
+
+/** Whose theme is on screen: the account's own choice, or its organization's default. */
+export type ThemeOrigin = { personal: boolean; organizationTheme: ThemePreference };
 
 interface SyncOptions {
   userId: string | null;
@@ -14,18 +17,21 @@ interface SyncOptions {
   accessToken?: string;
   authenticated: boolean;
   sessionLoading: boolean;
-  orgBacked: boolean;
   personalRowRef: SettingsRef;
   lastLocalEditRef: React.MutableRefObject<number>;
   setSettings: React.Dispatch<React.SetStateAction<PersonalizationSettings>>;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setThemeOrigin: React.Dispatch<React.SetStateAction<ThemeOrigin>>;
 }
 
 const ORG_PREF_POLL_INTERVAL_MS = 45_000;
 
+// note: every account reads the same two endpoints. An Administrator without the partner role used
+// to read its personal row as its whole branding; the server now answers my-preferences with the
+// deployment default for it, and the personal row holds only the theme for everyone.
 export function usePersonalizationSync({
-  userId, scopeKey, accessToken, authenticated, sessionLoading, orgBacked,
-  personalRowRef, lastLocalEditRef, setSettings, setIsLoading,
+  userId, scopeKey, accessToken, authenticated, sessionLoading,
+  personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
 }: SyncOptions) {
   const appliedVersionRef = React.useRef<OrgPreferencesVersion | null>(null);
   const requestRevisionRef = React.useRef(0);
@@ -47,14 +53,6 @@ export function usePersonalizationSync({
     const isCurrent = () => currentScopeRef.current === scopeKey && requestRevisionRef.current === revision && isActorMutationFenceCurrent(actorFence);
     const canApply = () => isCurrent() && lastLocalEditRef.current === localEdit;
 
-    if (!orgBacked) {
-      const personal = await readPersonalPreferences(accessTokenRef.current, isCurrent);
-      if (!personal.ok || !canApply()) return false;
-      personalRowRef.current = personal.value;
-      setSettings(personal.value);
-      return true;
-    }
-
     const [organization, personal] = await Promise.all([
       readOrgPreferences(accessTokenRef.current, isCurrent),
       readPersonalPreferences(accessTokenRef.current, isCurrent),
@@ -66,13 +64,15 @@ export function usePersonalizationSync({
     if (!current.ok || !sameOrgVersion(organization.value, current.value) || !canApply()) return false;
     if (expectedVersion && !sameOrgVersion(expectedVersion, current.value)) return false;
     const base = organization.value.settings;
+    const personalTheme = Boolean(personal.value.lastModified);
     personalRowRef.current = personal.value;
-    setSettings({ ...base, theme: personal.value.lastModified ? personal.value.theme : base.theme });
+    setSettings({ ...base, theme: personalTheme ? personal.value.theme : base.theme });
+    setThemeOrigin({ personal: personalTheme, organizationTheme: base.theme });
     // The baseline is advanced only after a complete, fenced payload read has been applied.
     // A null updated_at is a valid baseline, so the organization's first save triggers refresh.
     appliedVersionRef.current = current.value;
     return true;
-  }, [userId, authenticated, scopeKey, orgBacked, lastLocalEditRef, personalRowRef, setSettings]);
+  }, [userId, authenticated, scopeKey, lastLocalEditRef, personalRowRef, setSettings, setThemeOrigin]);
 
   React.useEffect(() => onAuthActorChanged(() => {
     requestRevisionRef.current += 1;
@@ -100,10 +100,10 @@ export function usePersonalizationSync({
       if (!retired && currentScopeRef.current === scopeKey) setIsLoading(false);
     });
     return () => { retired = true; requestRevisionRef.current += 1; };
-  }, [sessionLoading, authenticated, userId, scopeKey, orgBacked, refreshSettings, personalRowRef, setIsLoading, setSettings]);
+  }, [sessionLoading, authenticated, userId, scopeKey, refreshSettings, personalRowRef, setIsLoading, setSettings]);
 
   React.useEffect(() => {
-    if (!authenticated || !userId || !orgBacked) return;
+    if (!authenticated || !userId) return;
     let retired = false;
     const check = async () => {
       if (retired || checkInFlightRef.current) return;
@@ -129,7 +129,7 @@ export function usePersonalizationSync({
       clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [authenticated, userId, scopeKey, orgBacked, refreshSettings]);
+  }, [authenticated, userId, scopeKey, refreshSettings]);
 
   return { refreshSettings: React.useCallback(async () => { await refreshSettings(); }, [refreshSettings]) };
 }

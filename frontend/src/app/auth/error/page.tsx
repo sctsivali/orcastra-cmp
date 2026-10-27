@@ -19,6 +19,7 @@ import {
 import { AlertTriangle, ArrowLeft, LogIn, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { recallReturnPath } from "@/lib/auth-return";
+import { AuthBrandMark } from "@/components/branding/auth-brand-mark";
 
 // Error details mapping
 const errorDetails: Record<string, { title: string; description: string }> = {
@@ -80,7 +81,9 @@ function ErrorContent() {
   }, []);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-6 bg-gradient-to-br from-background via-background to-muted/20 p-4">
+      {/* The error has its own icon below; the deployment's logo is shown only when one is set. */}
+      <AuthBrandMark withoutLogo="nothing" />
       <Card className="w-full max-w-md shadow-xl border-border/50">
         <CardHeader className="text-center space-y-4">
           {/* Error Icon */}

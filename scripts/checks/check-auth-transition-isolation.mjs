@@ -211,7 +211,7 @@ const beforeRetiredPreference = calls.length;
 assert.deepEqual(
   await actorMutationFence.dispatchActorMutation(
     stalePreferenceFence,
-    () => personalizationAPI.update({ branding: { appName: "A private" } }, "test-token-pref-a"),
+    () => personalizationAPI.update({ theme: "light" }, "test-token-pref-a"),
   ),
   { retired: true },
 );
@@ -225,11 +225,11 @@ const beforeAbaPreference = calls.length;
 assert.deepEqual(
   await actorMutationFence.dispatchActorMutation(
     abaPreferenceFence,
-    () => personalizationAPI.delete("test-token-pref-a2"),
+    () => personalizationAPI.update({ theme: null }, "test-token-pref-a2"),
   ),
   { retired: true },
 );
-assert.equal(calls.length, beforeAbaPreference, "an A -> B -> A preference delete was revived");
+assert.equal(calls.length, beforeAbaPreference, "an A -> B -> A theme clear was revived");
 
 const currentPreferenceFence = actorMutationFence.captureActorMutationFence("actor-pref-a");
 api.setAccessToken("test-token-pref-a4", "actor-pref-a");
@@ -622,12 +622,13 @@ const structuralChecks = [
     "break-glass submit does not re-check its actor epoch and prompt after awaited reconciliation",
   ],
   [
-    /onAuthActorChanged\(\(\) => \{[\s\S]{0,160}clearPendingSave\(\)/.test(
-      personalizationProvider,
-    ) &&
-      (personalizationProvider.match(/captureActorMutationFence\(scopeKey\)/g)?.length ?? 0) >= 3 &&
-      (personalizationProvider.match(/dispatchActorMutation\(/g)?.length ?? 0) >= 2 &&
-      (personalizationProvider.match(/isActorMutationFenceCurrent\(actorFence\)/g)?.length ?? 0) >= 4,
+    // The one personal write is the theme (no debounce, so nothing pending to clear): it is
+    // fenced before the optimistic update, dispatched through the fence, and re-checked after
+    // the await before it touches saving state or toasts.
+    /onAuthActorChanged\(\(\) => setIsSaving\(false\)\)/.test(personalizationProvider) &&
+      (personalizationProvider.match(/captureActorMutationFence\(scopeKey\)/g)?.length ?? 0) >= 2 &&
+      (personalizationProvider.match(/dispatchActorMutation\(/g)?.length ?? 0) >= 1 &&
+      (personalizationProvider.match(/isActorMutationFenceCurrent\(actorFence\)/g)?.length ?? 0) >= 3,
     "personalization writes are not retired before dispatch and after actor-boundary awaits",
   ],
 ];

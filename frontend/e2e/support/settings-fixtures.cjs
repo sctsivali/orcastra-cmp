@@ -57,8 +57,8 @@ async function installSettingsFixtures(page, role, options = {}) {
     }
     if (path === "/user-preferences") return route.fulfill({ json: state.personal });
     if (path === "/organizations/my-preferences/version") {
-      const { organization_id, updated_at } = state.organization;
-      return route.fulfill({ json: { organization_id, updated_at } });
+      const { organization_id, updated_at, version = null } = state.organization;
+      return route.fulfill({ json: { organization_id, updated_at, version } });
     }
     if (path === "/organizations/my-preferences") {
       state.orgReads += 1;

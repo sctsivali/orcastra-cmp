@@ -22,7 +22,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, LogIn, ShieldCheck, AlertCircle } from "lucide-react";
+import { Loader2, LogIn, AlertCircle } from "lucide-react";
+import { AuthBrandMark, BUILT_IN_NAME, useAuthFooterText } from "@/components/branding/auth-brand-mark";
+import { usePublicBranding } from "@/components/branding/public-branding-context";
 import { safeCallbackPath } from "@/lib/auth-redirect";
 import { forgetReturnPath, recallReturnPath, rememberReturnPath } from "@/lib/auth-return";
 
@@ -66,6 +68,8 @@ function markAutoSignIn(): void {
 }
 
 function SignInContent() {
+  const branding = usePublicBranding();
+  const footerText = useAuthFooterText();
   const searchParams = useSearchParams();
   const error = searchParams.get("error");
   const requested = searchParams.get("callbackUrl");
@@ -113,14 +117,11 @@ function SignInContent() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-4">
       <Card className="w-full max-w-md shadow-xl border-border/50">
         <CardHeader className="text-center space-y-4">
-          {/* Logo */}
-          <div className="mx-auto w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center">
-            <ShieldCheck className="w-8 h-8 text-primary" />
-          </div>
+          <AuthBrandMark />
 
           <div>
             <CardTitle className="text-2xl font-bold">
-              Orcastra CMP
+              {branding?.app_name ?? BUILT_IN_NAME}
             </CardTitle>
             <CardDescription className="mt-2">
               Sign in with your organization account to continue
@@ -176,10 +177,11 @@ function SignInContent() {
           )}
 
           {/* Footer */}
-          <div className="text-center text-xs text-muted-foreground">
+          <div className="space-y-1 text-center text-xs text-muted-foreground">
             <p>
               Contact your administrator if you need access
             </p>
+            {footerText && <p>{footerText}</p>}
           </div>
         </CardContent>
       </Card>

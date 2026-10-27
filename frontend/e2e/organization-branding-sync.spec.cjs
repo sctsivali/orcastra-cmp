@@ -2,10 +2,14 @@ const { test, expect } = require("@playwright/test");
 const { authenticate, capture, expectNoHorizontalOverflow } = require("./support/fixtures.cjs");
 const { installSettingsFixtures, wakePreferenceSync, expectCleanSettingsHarness } = require("./support/settings-fixtures.cjs");
 
-function branding(organization_id, revision, name, accentColor = "#1e40af") {
+// The server's version token covers every layer under the account; any change moves it.
+function branding(organization_id, revision, name, accentColor = "#1e40af", { subject = "organization" } = {}) {
   return {
     organization_id,
     updated_at: revision,
+    version: `${organization_id}:${revision}:${name}`,
+    source: subject === "deployment" ? "deployment" : "organization",
+    subject,
     settings: {
       branding: { appName: name, footerText: `${name} footer` },
       colors: { accentColor, sidebarBgColor: "#1e293b" },
@@ -77,14 +81,30 @@ test("a response from an old organization is ignored when membership changes dur
   await expectCleanSettingsHarness(api);
 });
 
-test("Admin without Partner continues to use personal branding", async ({ page }) => {
+// An Administrator without the partner role used to read its personal row as its whole branding.
+// The server now answers my-preferences with the deployment default for it, and a personal row
+// carries only the theme, so branding left in an old personal row is ignored.
+test("an Administrator without Partner sees the deployment default, not a personal copy", async ({ page }) => {
   await authenticate(page.context(), "admin");
   const api = await installSettingsFixtures(page, "admin", { personal: { branding: { appName: "QA admin", footerText: "QA admin footer" } } });
-  api.organization = branding(17, "2026-09-30T12:00:00Z", "Unused QA organization");
+  api.organization = branding(0, "2026-09-30T12:00:00Z", "QA deployment", "#1e40af", { subject: "deployment" });
   await page.goto("/settings");
-  await expect(page.getByText("QA admin footer", { exact: true })).toBeVisible();
-  expect(api.orgReads).toBe(0);
-  expect(api.requests.filter(({ path }) => path.startsWith("/organizations/my-preferences"))).toEqual([]);
+  await expect(page.getByText("QA deployment footer", { exact: true })).toBeVisible();
+  await expect(page.getByText("QA admin footer", { exact: true })).toHaveCount(0);
+  expect(api.orgReads).toBeGreaterThan(0);
+  await expectCleanSettingsHarness(api);
+});
+
+test("a change that keeps the timestamp but moves the version is applied", async ({ page }) => {
+  await authenticate(page.context(), "tenant");
+  const api = await installSettingsFixtures(page, "tenant");
+  api.organization = branding(17, "2026-09-30T12:00:00Z", "Seller look");
+  await page.goto("/settings");
+  await expect(page.getByText("Seller look footer", { exact: true })).toBeVisible();
+  // A reset of the buyer's own row, or a new provider, can leave an older row on top.
+  api.organization = branding(17, "2026-09-30T12:00:00Z", "Provider look", "#0f766e");
+  await wakePreferenceSync(page);
+  await expect(page.getByText("Provider look footer", { exact: true })).toBeVisible();
   await expectCleanSettingsHarness(api);
 });
 

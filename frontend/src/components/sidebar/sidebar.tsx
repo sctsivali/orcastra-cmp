@@ -34,7 +34,7 @@ export function Sidebar({ className }: SidebarProps) {
     setSidebarOpen,
   } = useLayout();
   const { theme, setTheme } = useTheme();
-  const { settings } = usePersonalization();
+  const { settings, themeIsPersonal, clearTheme } = usePersonalization();
   const currentLogo = useCurrentLogo(theme);
   const { isAdmin, isPartner, isTenant } = usePermissions();
   const pathname = usePathname();
@@ -196,6 +196,8 @@ export function Sidebar({ className }: SidebarProps) {
             settingsActive={activeHref === "/settings"}
             theme={theme}
             setTheme={setTheme}
+            themeIsPersonal={themeIsPersonal}
+            onDefaultTheme={clearTheme}
             ctx={ctx}
           />
         </div>

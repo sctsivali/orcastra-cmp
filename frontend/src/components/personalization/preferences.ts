@@ -1,6 +1,9 @@
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings } from "@/types/personalization";
 
-export type OrgPreferencesVersion = { organization_id: number; updated_at: string | null };
+// `version` is the server's token over every layer under the account (its organization, that
+// organization's provider, the deployment default) and the link between them. A timestamp alone
+// misses a reset or a provider change that leaves an older row on top.
+export type OrgPreferencesVersion = { organization_id: number; updated_at: string | null; version: string | null };
 export type OrgPreferences = OrgPreferencesVersion & { settings: PersonalizationSettings };
 export type PreferenceRead<T> = { ok: true; value: T } | { ok: false };
 
@@ -17,7 +20,7 @@ export function mergeWithDefaults(data: Partial<PersonalizationSettings>): Perso
 }
 
 export function sameOrgVersion(a: OrgPreferencesVersion | null, b: OrgPreferencesVersion): boolean {
-  return a !== null && a.organization_id === b.organization_id && a.updated_at === b.updated_at;
+  return a !== null && a.organization_id === b.organization_id && a.updated_at === b.updated_at && a.version === b.version;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,7 +30,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseOrgVersion(value: unknown): OrgPreferencesVersion | null {
   if (!isRecord(value) || !Number.isSafeInteger(value.organization_id) || (value.organization_id as number) < 0) return null;
   if (value.updated_at !== null && typeof value.updated_at !== "string") return null;
-  return { organization_id: value.organization_id as number, updated_at: value.updated_at };
+  const version = typeof value.version === "string" ? value.version : null;
+  return { organization_id: value.organization_id as number, updated_at: value.updated_at, version };
 }
 
 async function readPreferences(

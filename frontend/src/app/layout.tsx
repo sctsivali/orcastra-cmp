@@ -13,20 +13,32 @@ import {
 } from "@/lib/personalization-cookie";
 import { DOCK_COOKIE, parseDockCookie } from "@/lib/dock-cookie";
 import { readHydratableSession } from "@/auth-session";
+import { getPublicBranding } from "@/lib/server/public-branding";
 
-export const metadata: Metadata = {
-  title: "Orcastra CMP",
-  description: "Open Reliable Cloud Access and Orchestration. Orcastra CMP manages virtualized infrastructure, containers, and cloud resources across distributed clusters.",
-  keywords: ["cmp", "infrastructure", "operations", "dashboard", "virtualization", "containers", "cloud"],
-  icons: {
-    icon: [
-      { url: "/favicon-light.ico", media: "(prefers-color-scheme: light)" },
-      { url: "/favicon-dark.ico", media: "(prefers-color-scheme: dark)" },
-    ],
-    shortcut: "/favicon.ico",
-    apple: "/favicon.ico",
-  },
+const DEFAULT_TITLE = "Orcastra CMP";
+const DEFAULT_ICONS: Metadata["icons"] = {
+  icon: [
+    { url: "/favicon-light.ico", media: "(prefers-color-scheme: light)" },
+    { url: "/favicon-dark.ico", media: "(prefers-color-scheme: dark)" },
+  ],
+  shortcut: "/favicon.ico",
+  apple: "/favicon.ico",
 };
+
+// The tab title and icon before sign-in come from the deployment default branding an
+// Administrator set (Settings > Personalization > Deployment Default). Signed in, an account's
+// organization branding takes over (components/branding/document-branding.tsx).
+export async function generateMetadata(): Promise<Metadata> {
+  const branding = await getPublicBranding();
+  return {
+    title: branding?.app_name ?? DEFAULT_TITLE,
+    description: "Open Reliable Cloud Access and Orchestration. Orcastra CMP manages virtualized infrastructure, containers, and cloud resources across distributed clusters.",
+    keywords: ["cmp", "infrastructure", "operations", "dashboard", "virtualization", "containers", "cloud"],
+    icons: branding?.favicon
+      ? { icon: branding.favicon, shortcut: branding.favicon, apple: branding.favicon }
+      : DEFAULT_ICONS,
+  };
+}
 
 // The colour the browser paints its own chrome with: the mobile address bar, the pull-to-refresh
 // overshoot and the PWA splash. Without it those stay the UA default and frame a #14111c page in
@@ -82,7 +94,7 @@ const personalizationInitScript = `
       if (!/^[0-9a-fA-F]{6}$/.test(v)) return null;
       return [parseInt(v.substr(0,2),16)/255, parseInt(v.substr(2,2),16)/255, parseInt(v.substr(4,2),16)/255];
     };
-    // Same rounding as hexToHSL in components/personalization-provider.tsx, so the pre-paint
+    // Same rounding as hexToHSL in lib/color.ts, so the pre-paint
     // value and the hydrated value are identical rather than merely close.
     var hsl = function(c){
       var mx = Math.max(c[0],c[1],c[2]), mn = Math.min(c[0],c[1],c[2]), l = (mx+mn)/2, hh = 0, ss = 0;
@@ -153,10 +165,7 @@ export default async function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {/* Prevent personalization flash: apply CSS custom properties before paint */}
         <script dangerouslySetInnerHTML={{ __html: personalizationInitScript }} />
-        {/* Dynamic favicon based on system color scheme */}
-        <link rel="icon" href="/favicon-light.ico" type="image/x-icon" media="(prefers-color-scheme: light)" />
-        <link rel="icon" href="/favicon-dark.ico" type="image/x-icon" media="(prefers-color-scheme: dark)" />
-        <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
+        {/* The favicon links come from generateMetadata above, once; they used to be written here too. */}
       </head>
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}

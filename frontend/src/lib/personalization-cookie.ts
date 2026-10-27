@@ -76,3 +76,13 @@ export function parsePersonalizationHint(
     return null;
   }
 }
+
+/**
+ * Forget the hint on sign-out. It paints before any script reads the session, so on a shared
+ * browser it would show the last account's organization colours on the sign-in page and on the
+ * next account's first paint.
+ */
+export function clearPersonalizationHint(): void {
+  if (typeof document === "undefined") return;
+  document.cookie = `${PERSONALIZATION_COOKIE}=;path=/;max-age=0;SameSite=Lax`;
+}

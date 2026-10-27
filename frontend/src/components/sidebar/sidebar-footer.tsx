@@ -6,6 +6,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  Building2,
   Bug,
   MessagesSquare,
   ExternalLink,
@@ -17,6 +18,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,9 @@ interface SidebarFooterProps {
   settingsActive: boolean;
   theme: Theme;
   setTheme: (theme: Theme) => void;
+  /** Whether `theme` is this account's own choice rather than its organization's default. */
+  themeIsPersonal: boolean;
+  onDefaultTheme: () => void;
   ctx: NavRenderContext;
 }
 interface SupportLink {
@@ -94,6 +99,8 @@ export function SidebarFooter({
   settingsActive,
   theme,
   setTheme,
+  themeIsPersonal,
+  onDefaultTheme,
   ctx,
 }: SidebarFooterProps) {
   const { setSidebarOpen } = useLayout();
@@ -121,22 +128,31 @@ export function SidebarFooter({
     [bugReportHref]
   );
 
+  // A check marks the account's own choice; "Default Theme" is checked while the organization's
+  // (or the deployment's) default applies, so picking the same theme there is a real change.
+  const chosen = (value: Theme) => themeIsPersonal && theme === value;
   const themeMenu = (
-    <DropdownMenuContent align="start" side="top" className="w-48">
+    <DropdownMenuContent align="start" side="top" className="w-52">
       <DropdownMenuItem onClick={() => setTheme("light")}>
         <Sun className="mr-2 h-4 w-4" />
         Light Mode
-        {theme === "light" && <span className="ml-auto">✓</span>}
+        {chosen("light") && <span className="ml-auto">✓</span>}
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => setTheme("dark")}>
         <Moon className="mr-2 h-4 w-4" />
         Dark Mode
-        {theme === "dark" && <span className="ml-auto">✓</span>}
+        {chosen("dark") && <span className="ml-auto">✓</span>}
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => setTheme("system")}>
         <Monitor className="mr-2 h-4 w-4" />
         System
-        {theme === "system" && <span className="ml-auto">✓</span>}
+        {chosen("system") && <span className="ml-auto">✓</span>}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onClick={onDefaultTheme}>
+        <Building2 className="mr-2 h-4 w-4" />
+        Default Theme
+        {!themeIsPersonal && <span className="ml-auto">✓</span>}
       </DropdownMenuItem>
     </DropdownMenuContent>
   );

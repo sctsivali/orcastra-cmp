@@ -2532,6 +2532,7 @@ export const integrationsAPI = {
 
 // Regions API
 import { RegionsOverviewResponse, RegionSummary } from "@/types/api";
+import type { MyBranding, MyBrandingVersion, OrgBranding } from "@/types/branding";
 
 const regionsAPI = {
   getOverview: async (opts: ReadOptions = {}) => {
@@ -2881,28 +2882,27 @@ export const api = {
         `/organizations/${orgId}/clusters/${encodeURIComponent(clusterId)}`,
         { method: "DELETE" }
       ),
-    // org-level personalization
+    // org-level branding: the organization's own row, what it inherits, and who it inherits from
     getPreferences: (orgId: string) =>
-      fetchAPI<{ organization_id: number; settings: Record<string, any>; updated_by?: string }>(
-        `/organizations/${orgId}/preferences`
-      ),
-    updatePreferences: (orgId: string, settings: Record<string, any>) =>
-      fetchAPI<{ organization_id: number; settings: Record<string, any>; updated_by?: string }>(
+      fetchAPI<OrgBranding>(`/organizations/${orgId}/preferences`),
+    updatePreferences: (orgId: string, settings: Record<string, unknown>) =>
+      fetchAPI<OrgBranding>(
         `/organizations/${orgId}/preferences`,
         { method: "PUT", body: JSON.stringify({ settings }) }
       ),
     deletePreferences: (orgId: string) =>
-      fetchAPI<{ message: string }>(`/organizations/${orgId}/preferences`, {
+      fetchAPI<void>(`/organizations/${orgId}/preferences`, {
         method: "DELETE",
       }),
+    setProvider: (orgId: string, providerOrganizationId: number | null) =>
+      fetchAPI<OrgBranding>(`/organizations/${orgId}/provider`, {
+        method: "PUT",
+        body: JSON.stringify({ provider_organization_id: providerOrganizationId }),
+      }),
     getMyOrgPreferences: () =>
-      fetchAPI<{ organization_id: number; settings: Record<string, any>; updated_by?: string; updated_at?: string }>(
-        `/organizations/my-preferences`
-      ),
+      fetchAPI<MyBranding>(`/organizations/my-preferences`),
     getMyOrgPreferencesVersion: () =>
-      fetchAPI<{ organization_id: number; updated_at: string | null }>(
-        `/organizations/my-preferences/version`
-      ),
+      fetchAPI<MyBrandingVersion>(`/organizations/my-preferences/version`),
   },
 
   // ── User Groups (Admin) ──

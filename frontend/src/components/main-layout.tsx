@@ -14,6 +14,7 @@ import { TaskPanel } from "@/components/task-panel";
 import { AccessBlockedNotice } from "@/components/access-blocked-notice";
 import { VaultNotice } from "@/components/vault-notice";
 import { TenantTermNotice } from "@/components/tenant-term-notice";
+import { DocumentBranding } from "@/components/branding/document-branding";
 import { useAccessGate } from "@/hooks/use-access-gate";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTerminalStore } from "@/lib/terminal-store";
@@ -95,6 +96,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="relative flex min-h-[100dvh]">
+      <DocumentBranding />
       {/* Hide sidebar/header on full-page terminal/console views */}
       {!isFullPageTerminalOrConsole && <Sidebar />}
       <div

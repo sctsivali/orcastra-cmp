@@ -283,9 +283,9 @@ async function installApiFixtures(page, role, options = {}) {
     if (path === "/user-preferences") {
       body = {};
     } else if (path === "/organizations/my-preferences") {
-      body = { organization_id: 0, settings: {}, updated_at: null };
+      body = { organization_id: 0, settings: {}, updated_at: null, version: "e2e-built-in", source: "default", subject: "deployment" };
     } else if (path === "/organizations/my-preferences/version") {
-      body = { organization_id: 0, updated_at: null };
+      body = { organization_id: 0, updated_at: null, version: "e2e-built-in" };
     } else if (path === "/system/settings") {
       body = {
         read_only_mode: options.readOnly === true,

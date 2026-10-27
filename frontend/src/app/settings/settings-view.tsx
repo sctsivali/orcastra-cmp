@@ -9,12 +9,10 @@ import { ChevronRight, Activity, Settings2, Palette, Shield, Users } from "lucid
 import { DesktopControlSettings } from "@/components/desktop-control-settings";
 import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
 import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
-import { PersonalizationSettings } from "@/components/personalization-settings";
 import { IntegrationsSettings } from "@/components/integrations-settings";
 import { SyncedOrganizationsPanel } from "@/components/integrations/synced-organizations-panel";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
-import { Role } from "@/types/rbac";
 import { LoadingLottie } from "@/components/loading-lottie";
 import { CacheSettings } from "./components/cache-settings";
 import { useSettingsNotice } from "./components/settings-notice";
@@ -23,8 +21,7 @@ import { settingsTabPath, type SettingsTab } from "./settings-tabs";
 export function SettingsView({ tab }: { tab: SettingsTab }) {
   const { navigate } = useNavigationProgress();
   const { showRestrictedNotice, dismissNotice } = useSettingsNotice();
-  const { isAdmin, isPartner, roles, isLoading } = usePermissions();
-  const managesOrganizationBranding = roles.includes(Role.PARTNER);
+  const { isAdmin, isPartner, isLoading } = usePermissions();
   const denied = !isLoading && tab !== "general" && !isPartner;
 
   useEffect(() => {
@@ -174,14 +171,11 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         </TabsContent>
         )}
 
-        {/* Personalization Tab - Partner role edits org branding, admin-only edits personal prefs */}
+        {/* Personalization Tab - a Partner edits its organizations' branding; an Administrator also
+            edits the deployment default, which is what it sees itself (backend services/branding/). */}
         {isPartner && (
         <TabsContent value="personalization">
-          {managesOrganizationBranding ? (
-            <OrgPersonalizationSettings />
-          ) : (
-            <PersonalizationSettings />
-          )}
+          <OrgPersonalizationSettings />
         </TabsContent>
         )}
 

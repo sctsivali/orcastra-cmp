@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Image from "next/image";
-import { usePersonalization } from "./personalization-provider";
+import { useBrandingEditor } from "./branding/branding-editor-context";
 import { useTheme } from "./theme-provider";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,9 @@ import {
   THEME_PRESETS,
   SIDEBAR_BG_PRESETS,
   DEFAULT_PERSONALIZATION,
+  type ThemePreference,
 } from "@/types/personalization";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getAccessToken } from "@/lib/api";
 import { personalizationAPI } from "@/lib/personalization-api";
 import { formatMemory } from "@/lib/utils";
@@ -56,6 +58,8 @@ import {
 // Binary limits: 500 KiB for logos, 2 MiB for backgrounds.
 const MAX_LOGO_SIZE = 500 * 1024;
 const MAX_BACKGROUND_SIZE = 2 * 1024 * 1024;
+// The server refuses a favicon over 64 KiB (backend services/branding/validation.py).
+const MAX_FAVICON_SIZE = 64 * 1024;
 const MAX_IMAGE_URL_LENGTH = 2048;
 
 // Convert file to base64
@@ -84,6 +88,7 @@ function ImageUploader({
   onRemove,
   maxSize,
   accept = "image/png,image/jpeg,image/svg+xml,image/webp",
+  formats = "PNG, JPG, SVG, WebP",
 }: {
   label: string;
   description: string;
@@ -93,6 +98,7 @@ function ImageUploader({
   onRemove: () => void;
   maxSize: number;
   accept?: string;
+  formats?: string;
 }) {
   const [error, setError] = React.useState<string | null>(null);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -323,7 +329,7 @@ function ImageUploader({
                 Drag & drop or click to upload
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Maximum {maxSizeLabel} • PNG, JPG, SVG, WebP
+                Maximum {maxSizeLabel} • {formats}
               </p>
             </div>
           </div>
@@ -391,7 +397,7 @@ function SliderControl({
 
 // Preview Dialog
 function PreviewDialog({ children }: { children: React.ReactNode }) {
-  const { settings } = usePersonalization();
+  const { settings } = useBrandingEditor();
   const { theme } = useTheme();
   
   const logoSrc = theme === "light" 
@@ -477,7 +483,7 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
 
 // Main PersonalizationSettings component
 export function PersonalizationSettings() {
-  const { settings, updateLogo, updateBackground, updateBranding, updateColors, resetToDefaults, undoSettings, redoSettings, canUndo, canRedo, isLoading } = usePersonalization();
+  const { settings, updateLogo, updateBackground, updateBranding, updateColors, updateDefaultTheme, resetToDefaults, resetLabel, undoSettings, redoSettings, canUndo, canRedo, isLoading } = useBrandingEditor();
   const { theme } = useTheme();
   const [resetConfirm, setResetConfirm] = React.useState(false);
 
@@ -547,7 +553,7 @@ export function PersonalizationSettings() {
                 onClick={() => setResetConfirm(true)}
               >
                 <RotateCcw className="h-4 w-4" />
-                Reset to Defaults
+                {resetLabel}
               </Button>
             </>
           )}
@@ -592,6 +598,18 @@ export function PersonalizationSettings() {
               onUpload={(base64) => updateLogo({ darkModeLogo: base64 })}
               onRemove={() => updateLogo({ darkModeLogo: null })}
               maxSize={MAX_LOGO_SIZE}
+            />
+
+            <ImageUploader
+              label="Favicon"
+              description="Browser tab icon. A square image reads best at 16 and 32 pixels."
+              currentImage={settings.logo.favicon}
+              defaultImage="/favicon.ico"
+              onUpload={(base64) => updateLogo({ favicon: base64 })}
+              onRemove={() => updateLogo({ favicon: null })}
+              maxSize={MAX_FAVICON_SIZE}
+              accept="image/png,image/svg+xml,image/x-icon,image/vnd.microsoft.icon"
+              formats="PNG, SVG, ICO"
             />
 
             <div className="pt-2 border-t">
@@ -707,6 +725,26 @@ export function PersonalizationSettings() {
               />
               <p className="text-xs text-muted-foreground">
                 Description text shown on the landing page hero section
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="defaultTheme">Default Theme</Label>
+              <Select
+                value={settings.theme}
+                onValueChange={(value) => updateDefaultTheme(value as ThemePreference)}
+              >
+                <SelectTrigger id="defaultTheme" className="w-full sm:w-[220px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="system">System</SelectItem>
+                  <SelectItem value="light">Light</SelectItem>
+                  <SelectItem value="dark">Dark</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                The theme for everyone this branding applies to. Each person can still pick their own from the sidebar.
               </p>
             </div>
           </CardContent>

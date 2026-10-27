@@ -3,10 +3,11 @@
 import * as React from "react";
 import { useSession } from "next-auth/react";
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings, type PersonalizationContextType } from "@/types/personalization";
-import { Role, resolveRoles, hasMappedRole } from "@/types/rbac";
+import { hasMappedRole } from "@/types/rbac";
+import { hexToHSL } from "@/lib/color";
 import { PERSONALIZATION_COOKIE, parsePersonalizationHint, toPersonalizationHint } from "@/lib/personalization-cookie";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { usePersonalizationSync } from "./personalization/use-personalization-sync";
+import { usePersonalizationSync, type ThemeOrigin } from "./personalization/use-personalization-sync";
 import { usePersonalizationMutations } from "./personalization/use-personalization-mutations";
 
 // The two sidebar text pairs autoTextColor picks between, and the alpha tiers that go with
@@ -66,14 +67,12 @@ export function PersonalizationProvider({ children, initialSettings }: {
   const [isLoading, setIsLoading] = React.useState(true);
   const personalRowRef = React.useRef<PersonalizationSettings | null>(null);
   const lastLocalEditRef = React.useRef(0);
-  const groups = session?.user?.groups ?? [];
-  const roles = resolveRoles(groups);
-  const orgBacked = !(roles.includes(Role.ADMIN) && !roles.includes(Role.PARTNER));
-  const orgBackedRef = React.useRef(orgBacked);
-  orgBackedRef.current = orgBacked;
+  const [themeOrigin, setThemeOrigin] = React.useState<ThemeOrigin>({
+    personal: false,
+    organizationTheme: DEFAULT_PERSONALIZATION.theme,
+  });
   const actor = {
     userId: session?.user?.id ?? null,
-    userEmail: session?.user?.email ?? undefined,
     accessToken: accessToken ?? undefined,
     scopeKey,
   };
@@ -84,12 +83,19 @@ export function PersonalizationProvider({ children, initialSettings }: {
     ...actor,
     authenticated: isAuthenticated && mayRead,
     sessionLoading: status === "loading" && !session,
-    orgBacked, personalRowRef, lastLocalEditRef, setSettings, setIsLoading,
+    personalRowRef, lastLocalEditRef, setSettings, setIsLoading, setThemeOrigin,
   });
   const mutations = usePersonalizationMutations({
-    ...actor, settings, setSettings, personalRowRef, orgBackedRef, lastLocalEditRef,
+    ...actor, setSettings, themeOrigin, setThemeOrigin, lastLocalEditRef,
   });
-  const value: PersonalizationContextType = { settings, ...mutations, refreshSettings, isLoading };
+  const value: PersonalizationContextType = {
+    settings,
+    ...mutations,
+    themeIsPersonal: themeOrigin.personal,
+    organizationTheme: themeOrigin.organizationTheme,
+    refreshSettings,
+    isLoading,
+  };
 
   // Apply CSS custom properties for colors
   React.useEffect(() => {
@@ -154,36 +160,6 @@ export function PersonalizationProvider({ children, initialSettings }: {
 // ============================================
 // Helper Functions
 // ============================================
-
-/**
- * Convert hex color to HSL
- */
-function hexToHSL(hex: string): { h: number; s: number; l: number } | null {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!result) return null;
-  
-  const r = parseInt(result[1], 16) / 255;
-  const g = parseInt(result[2], 16) / 255;
-  const b = parseInt(result[3], 16) / 255;
-  
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  let h = 0;
-  let s = 0;
-  const l = (max + min) / 2;
-  
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
-      case g: h = ((b - r) / d + 2) / 6; break;
-      case b: h = ((r - g) / d + 4) / 6; break;
-    }
-  }
-  
-  return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
-}
 
 /**
  * Calculate relative luminance for WCAG contrast

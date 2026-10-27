@@ -1,6 +1,7 @@
 import { signOut } from "next-auth/react";
 import { IDP_LOGOUT_URL } from "@/lib/identity-provider";
 import { idpEndSessionUrl } from "@/lib/idp-urls";
+import { clearPersonalizationHint } from "@/lib/personalization-cookie";
 
 /**
  * Sign out of the dashboard and of the SSO session behind it.
@@ -10,6 +11,7 @@ import { idpEndSessionUrl } from "@/lib/idp-urls";
  */
 export async function federatedSignOut(): Promise<void> {
   await signOut({ redirect: false });
+  clearPersonalizationHint();
   const signInPage = `${window.location.origin}/auth/signin`;
   const endSession = idpEndSessionUrl(IDP_LOGOUT_URL, signInPage);
   if (!endSession) {
