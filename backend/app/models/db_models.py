@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, event, func, select, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
-from sqlalchemy.orm import Session, relationship
+from sqlalchemy.orm import Session, backref, relationship
 from app.core.database import Base
 
 
@@ -479,7 +479,11 @@ class OrganizationPreferences(Base):
     )
 
     # Relationships
-    organization = relationship("Organization", backref="preferences", uselist=False)
+    # important: passive_deletes on every backref to a NOT NULL organization_id whose foreign key
+    # cascades. Without it, deleting the organization makes the ORM null the column first, the
+    # database refuses, and the delete answers 409 (tests/test_an_organization_with_branding_or_
+    # policies_can_be_deleted.py).
+    organization = relationship("Organization", backref=backref("preferences", passive_deletes=True), uselist=False)
 
     def __repr__(self) -> str:
         return f"<OrganizationPreferences(org={self.organization_id})>"
@@ -537,7 +541,7 @@ class TenantAccessPolicy(Base):
     term_phase_recorded = Column(String(16), nullable=True)
 
     # Relationships
-    organization = relationship("Organization", backref="access_policies")
+    organization = relationship("Organization", backref=backref("access_policies", passive_deletes=True))
     rules = relationship(
         "TenantPolicyRule",
         back_populates="policy",
@@ -858,7 +862,9 @@ class DesktopControlPolicy(Base):
         nullable=False,
     )
 
-    organization = relationship("Organization", backref="desktop_control_policy", uselist=False)
+    organization = relationship(
+        "Organization", backref=backref("desktop_control_policy", passive_deletes=True), uselist=False
+    )
 
     def __repr__(self) -> str:
         return (

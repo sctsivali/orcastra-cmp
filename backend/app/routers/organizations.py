@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import get_cache_manager
 from app.core.database import get_db
 from app.core.dependencies import (
     AuthenticatedUser,
@@ -313,6 +314,11 @@ async def delete_organization(
             ) from exc
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    # The organization's tenant policies, members and bindings went with it.
+    try:
+        get_cache_manager().invalidate_after_access_change()
+    except Exception as exc:  # noqa: BLE001 - the delete stands; scoped keys already hash the ACL
+        logger.warning("Cache invalidation after deleting organization %s failed: %s", org_id, exc)
 
 
 # ---------------------------------------------------------------------------
