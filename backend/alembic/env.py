@@ -31,6 +31,7 @@ from app.models import project_delete_models  # noqa: F401
 from app.models import snapshot_schedule_models  # noqa: F401
 from app.models import task_journal_models  # noqa: F401
 from app.models import trust_cleanup_models  # noqa: F401
+from app.models import tenant_rule_models  # noqa: F401
 
 # Alembic Config object
 config = context.config

@@ -186,6 +186,14 @@ class Settings(BaseSettings):
         alias="TENANT_TERM_ENFORCEMENT_ENABLED",
         description="Enforce the term dates OrcaHub records on a tenant access policy.",
     )
+    # How often one worker looks for access rules that name a project or instance which is gone
+    # (services/tenant_rule_audit.py). Report only. 0 turns the loop off.
+    tenant_rule_audit_interval_seconds: int = Field(
+        default=900,
+        ge=0,
+        alias="TENANT_RULE_AUDIT_INTERVAL_SECONDS",
+        description="Seconds between orphan access rule audits; 0 disables.",
+    )
 
     # Tenant snapshot rights, gated separately from the flag above.
     # The "snapshot" permission has been in the vocabulary and pushed by OrcaHub for a long time

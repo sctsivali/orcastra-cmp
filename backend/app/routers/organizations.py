@@ -21,7 +21,8 @@ from app.core.dependencies import (
     require_partner,
     require_tenant,
 )
-from app.core.rbac import resolve_roles, get_highest_role
+from app.core.rbac import Role, resolve_roles, get_highest_role
+from app.core import org_scope
 from app.core.org_scope import get_owned_clusters_ignoring_admin, verify_cluster_access
 from app.services.organization_service import OrganizationService
 from app.services.shared_cluster_audit import (
@@ -162,15 +163,19 @@ def _get_user_role(user: AuthenticatedUser) -> str:
     return get_highest_role(roles).value
 
 
-def _org_to_response(org, caller_email: Optional[str] = None) -> OrgResponse:
-    """Convert ORM Organization to response model."""
+def _org_to_response(org, caller_email: Optional[str] = None, *, tenant: bool = False) -> OrgResponse:
+    """Convert ORM Organization to response model.
+
+    A tenant is not told who created the organization: on an OrcaHub buyer organization that is
+    the seller's key minter, an address the buyer has no business with.
+    """
     members = org.members or []
     return OrgResponse(
         id=org.id,
         name=org.name,
         slug=org.slug,
         description=org.description,
-        created_by=org.created_by,
+        created_by="" if tenant else org.created_by,
         is_active=org.is_active,
         member_count=len(members),
         cluster_count=len(org.clusters) if org.clusters else 0,
@@ -223,7 +228,8 @@ async def list_organizations(
     svc = OrganizationService(db)
     role = _get_user_role(user)
     orgs = await svc.list_organizations(user_email=user.email, user_role=role)
-    return [_org_to_response(org, user.email) for org in orgs]
+    tenant = role == Role.TENANT.value
+    return [_org_to_response(org, user.email, tenant=tenant) for org in orgs]
 
 
 @router.get(
@@ -298,7 +304,7 @@ async def get_organization(
     org = await svc.get_organization(org_id)
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return _org_to_response(org, user.email)
+    return _org_to_response(org, user.email, tenant=role == Role.TENANT.value)
 
 
 @router.post("/", response_model=OrgResponse, status_code=status.HTTP_201_CREATED)
@@ -393,6 +399,11 @@ async def list_members(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
     members = await svc.list_members(org_id)
+    if role == Role.TENANT.value:
+        # important: a tenant reads its own membership only. The full roster named every other
+        # buyer and the seller's staff on an OrcaHub organization.
+        caller = (user.email or "").lower()
+        members = [m for m in members if (m.user_email or "").lower() == caller]
     return [MemberResponse.model_validate(m) for m in members]
 
 
@@ -483,6 +494,18 @@ async def list_cluster_bindings(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
     clusters = await svc.list_clusters(org_id)
+    if role == Role.TENANT.value:
+        # important: a tenant sees only the bindings its own grants reach, the same scope every
+        # scoped route enforces, and not who registered them. A binding whose sale ended (or that
+        # serves another buyer) named a cluster the tenant can no longer use.
+        allowed = await org_scope.get_user_allowed_clusters(user, db)
+        acl, _grants, _visible = await org_scope.get_tenant_scope(user, db)
+        scope = org_scope._narrow_by_tenant_acl(allowed, acl) or set()
+        return [
+            ClusterBindingResponse(id=c.id, organization_id=c.organization_id, cluster_id=c.cluster_id, registered_by=None)
+            for c in clusters
+            if c.cluster_id in scope
+        ]
     return [ClusterBindingResponse.model_validate(c) for c in clusters]
 
 

@@ -99,6 +99,27 @@ def sqlite_session(*models: Type[Any]) -> AsyncSessionFacade:
     return AsyncSessionFacade(Session(engine, expire_on_commit=False))
 
 
+def with_json_tables(db: "AsyncSessionFacade", *models: Type[Any]) -> "AsyncSessionFacade":
+    """Add tables whose Postgres JSONB columns SQLite cannot render, with those columns as JSON."""
+    from sqlalchemy import JSON, MetaData
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    copy = MetaData()
+    pending = [model.__table__ for model in models]
+    while pending:
+        source = pending.pop()
+        if source.name in copy.tables:
+            continue
+        table = source.to_metadata(copy)
+        for column in table.columns:
+            if isinstance(column.type, JSONB):
+                column.type = JSON()
+        # A foreign key needs its target in the same metadata; existing tables are skipped below.
+        pending.extend(fk.column.table for fk in source.foreign_keys)
+    copy.create_all(db.sync.get_bind(), checkfirst=True)
+    return db
+
+
 def installation_rows(db: "AsyncSessionFacade", *claims: tuple) -> "AsyncSessionFacade":
     """The two key columns of extension_installations, one (api_key_id, previous_api_key_id) row each.
 

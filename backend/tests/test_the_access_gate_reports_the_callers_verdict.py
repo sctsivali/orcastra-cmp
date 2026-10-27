@@ -10,11 +10,13 @@ import asyncio
 from typing import Optional
 
 import pytest
+
 from fastapi import Response
 from sqlalchemy import JSON, MetaData
 
 from app.core import org_scope
 from app.core.auth import AuthenticatedUser
+from app.core.org_scope import TenantPolicyGrant
 from app.models.db_models import (
     Organization,
     OrganizationCluster,
@@ -77,13 +79,20 @@ def _tenant_verdict_and_scope(monkeypatch: pytest.MonkeyPatch, allowed, acl, gra
     return _verdict(user), asyncio.run(enforced())
 
 
+def _grant(cluster: str, instance: str = "*") -> TenantPolicyGrant:
+    return TenantPolicyGrant(
+        organization_id=1, policy_name="p", cluster_id=cluster, project_name="default",
+        instance_name=instance, permissions=frozenset({"view"}),
+    )
+
+
 @pytest.mark.parametrize(
     "allowed,acl,grants,blocked",
     [
         ({"nuc1", "nuc2"}, {}, [], True),
         (set(), {}, [], True),
-        ({"nuc1"}, {"nuc9": {("default", "*"): {"view"}}}, ["g"], True),
-        ({"nuc1", "nuc2"}, {"nuc1": {("default", "*"): {"view"}}}, ["g1", "g2"], False),
+        ({"nuc1"}, {"nuc9": {("default", "*"): {"view"}}}, [_grant("nuc9")], True),
+        ({"nuc1", "nuc2"}, {"nuc1": {("default", "*"): {"view"}}}, [_grant("nuc1"), _grant("nuc1", "web")], False),
     ],
 )
 def test_a_tenant_verdict_matches_the_enforced_scope(monkeypatch, allowed, acl, grants, blocked) -> None:

@@ -520,6 +520,21 @@ async def lifespan(app: FastAPI):
     except Exception as term_err:
         logger.error("Could not start the tenant term sweeper: %s", term_err, exc_info=True)
 
+    # Tenant rule audit: one worker (Redis lease) reports access rules naming a project or instance
+    # that is gone. Report only; a partner removes a rule from Tenant Access.
+    try:
+        from app.core.database import async_session_maker
+        from app.services.tenant_rule_audit import start_tenant_rule_audit
+
+        start_tenant_rule_audit(
+            async_session_maker,
+            lambda cluster_id: get_lxd_service().connection_manager.get_client(cluster_id),
+            float(settings.tenant_rule_audit_interval_seconds),
+        )
+        logger.info("Tenant rule audit started (%ss)", settings.tenant_rule_audit_interval_seconds)
+    except Exception as audit_err:
+        logger.error("Could not start the tenant rule audit: %s", audit_err, exc_info=True)
+
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
     # disk every HOST_HEALTH_INTERVAL_SECONDS. Its own try, for the reason the block above gives.
     try:
@@ -717,6 +732,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.tenant_term_sweeper import stop_tenant_term_sweeper
         await stop_tenant_term_sweeper()
+    except Exception:
+        pass
+    try:
+        from app.services.tenant_rule_audit import stop_tenant_rule_audit
+        await stop_tenant_rule_audit()
     except Exception:
         pass
     try:
@@ -1112,6 +1132,8 @@ Ensure your client certificates are properly configured.
     # Tenant Access Policy Router (ACL system)
     from app.routers.tenant_access import router as tenant_access_router
     app.include_router(tenant_access_router, prefix=settings.api_prefix)
+    from app.routers.tenant_rule_orphans import router as tenant_rule_orphans_router
+    app.include_router(tenant_rule_orphans_router, prefix=settings.api_prefix)
     
     # Archive Router (Log compression & compliance archive)
     if settings.opensearch_archive_enabled:

@@ -25,7 +25,8 @@ from app.models.db_models import Organization
 from app.routers import integrations
 from app.routers.integrations import SyncDataRequest
 from app.services.add_on_credential_edits import ROTATE_DETAIL
-from tests._sqlite_session import org_tables, sqlite_session
+from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
+from tests._sqlite_session import org_tables, sqlite_session, with_json_tables
 from tests.test_a_capability_grant_leaves_a_record import _RecordingLogger
 
 KEY = "oak_" + "a" * 32
@@ -119,7 +120,7 @@ def _orgs(*rows: tuple) -> Any:
     """Organization rows, (slug, owner key, partner email or None), on SQLite."""
     from app.models.db_models import Organization as Org, OrganizationMember
 
-    db = sqlite_session(*org_tables())
+    db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
     for slug, key_id, partner in rows:
         db.add(Org(name=slug.title(), slug=slug, source="orcahub", external_id=f"ext-{slug}", api_key_id=key_id,
                    created_by="system", is_active=True))
@@ -457,7 +458,7 @@ async def _seller_with_buyers(*, minter_partners: Any = None, home_partners: tup
     """
     from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
 
-    db = sqlite_session(*org_tables())
+    db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
     db.add_all([
         Org(id=1, name="Acme", slug="acme", source="orcahub", external_id="ext-acme", api_key_id=KEY,
             created_by="system", is_active=True),
@@ -544,7 +545,7 @@ async def test_a_buyer_left_alone_on_the_key_lends_its_founder_nothing(world, mo
 
     monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
     _stored(world, created_by="someone-who-left@example.test")
-    db = sqlite_session(*org_tables())
+    db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
     db.add(Org(id=2, name="Buyer", slug="buyer", source="orcahub", external_id="ext-buyer", api_key_id=KEY,
                created_by="system", is_active=True))
     await db.commit()
@@ -574,7 +575,7 @@ async def test_a_minter_who_left_the_seller_cannot_rotate_through_the_buyers_it_
 
     monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
     _stored(world, created_by=OWNER.email)
-    db = sqlite_session(*org_tables())
+    db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
     db.add(Org(id=1, name="Acme", slug="acme", source="orcahub", external_id="ext-acme", api_key_id=KEY,
                created_by="system", is_active=True))
     db.add(Org(id=2, name="Buyer", slug="buyer", source="orcahub", external_id="ext-buyer", api_key_id=KEY,
@@ -640,12 +641,16 @@ async def test_a_buyer_that_is_the_oldest_synced_organization_lends_nothing_once
 
     Only the proof of a sale names the home (cluster_parties.home_partner_keys), and the buyer's
     binding is one provisioning made, so the minter who left and partners that buyer gets nothing.
+
+    The buyer holds no live access rule on c1, so since 2026-10-27 its provisioning binding no longer
+    puts c1 in the founder's scope at all (org_scope._query_owned_clusters): the key is out of reach
+    and reads as not found, one step earlier than the 403 this used to stop at.
     """
     from app.models.db_models import Organization as Org, OrganizationCluster, OrganizationMember
 
     monkeypatch.setattr(integrations, "_authorize_api_key", REAL_AUTHORIZE)
     _stored(world, created_by=OWNER.email)
-    db = sqlite_session(*org_tables())
+    db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
     db.add_all([
         Org(id=1, name="M Co", slug="m-co", source="orcahub", external_id="ext-mco", api_key_id=KEY,
             created_by="system", is_active=True),
@@ -662,7 +667,7 @@ async def test_a_buyer_that_is_the_oldest_synced_organization_lends_nothing_once
     await db.commit()
     with pytest.raises(HTTPException) as caught:
         await _rotate_in_scope(OWNER, db)
-    assert caught.value.status_code == 403
+    assert caught.value.status_code == 404
     assert world["vault"].writes == [] and await _valid(world["old"])
 
 
@@ -706,7 +711,7 @@ async def test_ownership_that_cannot_be_read_rotates_nothing(world, partner_scop
 # note: the organizations the key owns stay with it, which is the reason rotation exists
 
 async def test_rotation_keeps_the_id_and_the_organizations_it_owns(world) -> None:
-    db = sqlite_session(*org_tables())
+    db = with_json_tables(sqlite_session(*org_tables()), TenantAccessPolicy, TenantPolicyRule)
     db.add(Organization(name="Own", slug="own", source="orcahub", external_id="ext-own", api_key_id=KEY,
                         created_by="system", is_active=True))
     await db.commit()

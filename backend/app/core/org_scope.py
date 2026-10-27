@@ -635,8 +635,34 @@ async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
     unbound (organization_id NULL), so an inner join / top-level is_active filter would
     drop the very rows the registered_by branch is meant to surface.
     """
-    from app.models.db_models import Organization, OrganizationMember, OrganizationCluster
+    from app.models.db_models import (
+        Organization,
+        OrganizationCluster,
+        OrganizationMember,
+        TenantAccessPolicy,
+        TenantPolicyRule,
+    )
 
+    # important: a binding provisioning wrote for a sale (registered_by NULL on an OrcaHub
+    # organization) exists only because a buyer bought something on that cluster. A buyer founder
+    # holding role_partner reached the cluster through it for as long as the binding stood, after
+    # the sale itself had ended. Such a binding now counts only while the organization still has a
+    # live access rule on that cluster. Bindings someone registered, local organizations and the
+    # organization's creator are unaffected.
+    sale_still_live = (
+        select(TenantPolicyRule.id)
+        .join(TenantAccessPolicy, TenantAccessPolicy.id == TenantPolicyRule.policy_id)
+        .where(
+            TenantAccessPolicy.organization_id == Organization.id,
+            TenantPolicyRule.cluster_id == OrganizationCluster.cluster_id,
+            or_(
+                not get_settings().tenant_term_enforcement_enabled,
+                TenantAccessPolicy.access_ends_at.is_(None),
+                TenantAccessPolicy.access_ends_at > datetime.now(timezone.utc),
+            ),
+        )
+        .exists()
+    )
     stmt = (
         select(OrganizationCluster.cluster_id)
         .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
@@ -651,6 +677,12 @@ async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
                     or_(
                         OrganizationMember.user_email == user_email,
                         Organization.created_by == user_email,
+                    ),
+                    or_(
+                        OrganizationCluster.registered_by.is_not(None),
+                        Organization.source != "orcahub",
+                        Organization.created_by == user_email,
+                        sale_still_live,
                     ),
                 ),
                 OrganizationCluster.registered_by == user_email,
