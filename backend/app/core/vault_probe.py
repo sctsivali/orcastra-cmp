@@ -35,11 +35,51 @@ _TIMEOUT = (2.0, 3.0)
 
 
 @dataclass(frozen=True)
+class SealFacts:
+    """The parts of `sys/seal-status` an Administrator may see. Every field is public in Vault itself
+    (the endpoint is unauthenticated); none of them is key material."""
+    seal_type: Optional[str] = None
+    threshold: Optional[int] = None
+    shares: Optional[int] = None
+    progress: Optional[int] = None
+    # The current unseal attempt's id; empty while no key has been entered. Not a secret: it is what
+    # lets several key holders tell they are adding to the same attempt.
+    nonce: str = ""
+    version: Optional[str] = None
+    storage_type: Optional[str] = None
+    recovery_seal: Optional[bool] = None
+
+
+@dataclass(frozen=True)
 class SealProbe:
     state: ProbeState
     checked_at: float
     # A class name and a short reason, scrubbed of any address; None when Vault answered ok.
     reason: Optional[str] = None
+    facts: Optional[SealFacts] = None
+
+
+def _int(value) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _str(value) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
+def facts_from(body: dict) -> SealFacts:
+    """The admin-safe subset of a `sys/seal-status` (or `sys/unseal`) answer."""
+    recovery = body.get("recovery_seal")
+    return SealFacts(
+        seal_type=_str(body.get("type")),
+        threshold=_int(body.get("t")),
+        shares=_int(body.get("n")),
+        progress=_int(body.get("progress")),
+        nonce=body.get("nonce") if isinstance(body.get("nonce"), str) else "",
+        version=_str(body.get("version")),
+        storage_type=_str(body.get("storage_type")),
+        recovery_seal=recovery if isinstance(recovery, bool) else None,
+    )
 
 
 _lock = threading.Lock()
@@ -60,11 +100,12 @@ def _ask(addr: str) -> SealProbe:
         return SealProbe("unreachable", now, "seal-status answered a body that is not JSON")
     if not isinstance(body, dict) or not isinstance(body.get("sealed"), bool):
         return SealProbe("unreachable", now, "seal-status answered an unexpected body")
+    facts = facts_from(body)
     if body.get("initialized") is False:
-        return SealProbe("uninitialized", now, "Vault reports it is not initialized")
+        return SealProbe("uninitialized", now, "Vault reports it is not initialized", facts)
     if body["sealed"]:
-        return SealProbe("sealed", now, "Vault reports it is sealed")
-    return SealProbe("ok", now)
+        return SealProbe("sealed", now, "Vault reports it is sealed", facts)
+    return SealProbe("ok", now, None, facts)
 
 
 def seal_probe(force: bool = False) -> SealProbe:
@@ -101,6 +142,33 @@ def peek() -> Optional[SealProbe]:
     Vault. Reading one reference is atomic, and the value is an immutable dataclass.
     """
     return _last
+
+
+def ask_now() -> SealProbe:
+    """Vault's answer right now, bypassing the cache, and kept for later callers.
+
+    For the unseal route, which must compare the attempt it is adding to with the one Vault holds;
+    a two-second-old nonce could belong to an attempt someone else has since reset. Blocking.
+    """
+    settings = get_settings()
+    if not settings.vault_enabled or not settings.vault_addr:
+        return SealProbe("not_configured", time.time(), "Vault integration is not enabled")
+    probe = replace(_ask(settings.vault_addr), checked_at=time.time())
+    record(probe)
+    return probe
+
+
+def record(probe: SealProbe) -> None:
+    """Keep an answer Vault gave outside seal_probe (the unseal call returns the same status).
+
+    note: per process. Another worker keeps its own answer for at most PROBE_TTL_SECONDS, which is why
+    the console re-reads the status with `fresh` after an unseal instead of trusting one poll.
+    """
+    global _last
+    with _lock:
+        if _last is None or _last.state != probe.state:
+            logger.info("Vault seal probe: %s (recorded)", probe.state)
+        _last = probe
 
 
 def reset() -> None:

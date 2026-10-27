@@ -94,6 +94,7 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
     502: {
         "snapshot_outcome_unknown": "Check this instance's snapshots before trying again.",
         "snapshot_terminal_failure": "The cluster did not complete the snapshot.",
+        "vault_error": "Vault refused the unseal request.",
     },
     503: {
         "authority_unavailable": "Current access could not be verified. Retry shortly.",
@@ -103,6 +104,11 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "vault_unavailable": (
             "Cluster data cannot be read because the secret store (Vault) is sealed or unavailable."
         ),
+        # Host Health's unseal (routers/host_health.py): the dialog tells "nothing was sent" apart
+        # from "sent, not confirmed", so the operator knows whether to check progress first.
+        "vault_unreachable": "Vault did not answer. Check the progress before entering the key again.",
+        "vault_unconfirmed": "Vault did not confirm the request. Check the progress before entering the key again.",
+        "unseal_busy": "Another unseal request is still being processed. Try again in a moment.",
     },
 }
 

@@ -176,6 +176,13 @@ def _collect_host_filesystems() -> List[HostFilesystem]:
     return filesystems
 
 
+def host_filesystems() -> List[HostFilesystem]:
+    """The host's filesystems as the container sees them; [] without psutil. Host Health reads it."""
+    if psutil is None:
+        return []
+    return _collect_host_filesystems()
+
+
 def _host_cpu_info(sample: Optional[Tuple[float, float]]) -> CPUInfo:
     logical = psutil.cpu_count(logical=True) or 1
     physical = psutil.cpu_count(logical=False) or logical

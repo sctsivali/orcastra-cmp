@@ -1,0 +1,313 @@
+# HELP fluentbit_uptime Number of seconds that Fluent Bit has been running.
+# TYPE fluentbit_uptime counter
+fluentbit_uptime{hostname="fluent-bit"} 4111410
+# HELP fluentbit_logger_logs_total Total number of logs
+# TYPE fluentbit_logger_logs_total counter
+fluentbit_logger_logs_total{message_type="error"} 12479046
+fluentbit_logger_logs_total{message_type="warn"} 0
+fluentbit_logger_logs_total{message_type="info"} 0
+fluentbit_logger_logs_total{message_type="debug"} 0
+fluentbit_logger_logs_total{message_type="trace"} 0
+# HELP fluentbit_routing_logs_drop_records_total Total log records dropped during routing
+# TYPE fluentbit_routing_logs_drop_records_total counter
+fluentbit_routing_logs_drop_records_total{input="tail.0",output="unmatched"} 44408
+# HELP fluentbit_routing_logs_drop_bytes_total Total bytes dropped during routing (logs)
+# TYPE fluentbit_routing_logs_drop_bytes_total counter
+fluentbit_routing_logs_drop_bytes_total{input="tail.0",output="unmatched"} 28202238
+# HELP fluentbit_input_bytes_total Number of input bytes.
+# TYPE fluentbit_input_bytes_total counter
+fluentbit_input_bytes_total{name="tail.0"} 25505424
+fluentbit_input_bytes_total{name="forward.1"} 0
+fluentbit_input_bytes_total{name="storage_backlog.2"} 0
+fluentbit_input_bytes_total{name="emit_access"} 1628172
+fluentbit_input_bytes_total{name="emit_audit"} 10005161
+fluentbit_input_bytes_total{name="emit_app"} 5691065
+fluentbit_input_bytes_total{name="emit_app_fallback"} 5691065
+fluentbit_input_bytes_total{name="emit_fwd_access"} 0
+fluentbit_input_bytes_total{name="emit_fwd_audit"} 0
+fluentbit_input_bytes_total{name="emit_fwd_app"} 0
+# HELP fluentbit_input_records_total Number of input records.
+# TYPE fluentbit_input_records_total counter
+fluentbit_input_records_total{name="tail.0"} 44408
+fluentbit_input_records_total{name="forward.1"} 0
+fluentbit_input_records_total{name="storage_backlog.2"} 0
+fluentbit_input_records_total{name="emit_access"} 2134
+fluentbit_input_records_total{name="emit_audit"} 9274
+fluentbit_input_records_total{name="emit_app"} 9632
+fluentbit_input_records_total{name="emit_app_fallback"} 9632
+fluentbit_input_records_total{name="emit_fwd_access"} 0
+fluentbit_input_records_total{name="emit_fwd_audit"} 0
+fluentbit_input_records_total{name="emit_fwd_app"} 0
+# HELP fluentbit_input_ring_buffer_writes_total Number of ring buffer writes.
+# TYPE fluentbit_input_ring_buffer_writes_total counter
+fluentbit_input_ring_buffer_writes_total{name="tail.0"} 0
+fluentbit_input_ring_buffer_writes_total{name="forward.1"} 0
+fluentbit_input_ring_buffer_writes_total{name="storage_backlog.2"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_access"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_audit"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_app"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_app_fallback"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_fwd_access"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_fwd_audit"} 0
+fluentbit_input_ring_buffer_writes_total{name="emit_fwd_app"} 0
+# HELP fluentbit_input_ring_buffer_retries_total Number of ring buffer retries.
+# TYPE fluentbit_input_ring_buffer_retries_total counter
+fluentbit_input_ring_buffer_retries_total{name="tail.0"} 0
+fluentbit_input_ring_buffer_retries_total{name="forward.1"} 0
+fluentbit_input_ring_buffer_retries_total{name="storage_backlog.2"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_access"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_audit"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_app"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_app_fallback"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_fwd_access"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_fwd_audit"} 0
+fluentbit_input_ring_buffer_retries_total{name="emit_fwd_app"} 0
+# HELP fluentbit_input_ring_buffer_retry_failures_total Number of ring buffer retry failures.
+# TYPE fluentbit_input_ring_buffer_retry_failures_total counter
+fluentbit_input_ring_buffer_retry_failures_total{name="tail.0"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="forward.1"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="storage_backlog.2"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_access"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_audit"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_app"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_app_fallback"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_fwd_access"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_fwd_audit"} 0
+fluentbit_input_ring_buffer_retry_failures_total{name="emit_fwd_app"} 0
+# HELP fluentbit_input_files_opened_total Total number of opened files
+# TYPE fluentbit_input_files_opened_total counter
+fluentbit_input_files_opened_total{name="tail.0"} 2957
+# HELP fluentbit_input_files_closed_total Total number of closed files
+# TYPE fluentbit_input_files_closed_total counter
+fluentbit_input_files_closed_total{name="tail.0"} 2945
+# HELP fluentbit_filter_records_total Total number of new records processed.
+# TYPE fluentbit_filter_records_total counter
+fluentbit_filter_records_total{name="nest.0"} 44408
+fluentbit_filter_records_total{name="modify.1"} 44408
+fluentbit_filter_records_total{name="rewrite_tag.2"} 44408
+fluentbit_filter_records_total{name="rewrite_tag.3"} 44408
+fluentbit_filter_records_total{name="rewrite_tag.4"} 44408
+fluentbit_filter_records_total{name="rewrite_tag.5"} 44408
+fluentbit_filter_records_total{name="rewrite_tag.6"} 0
+fluentbit_filter_records_total{name="rewrite_tag.7"} 0
+fluentbit_filter_records_total{name="rewrite_tag.8"} 0
+# HELP fluentbit_filter_bytes_total Total number of new bytes processed.
+# TYPE fluentbit_filter_bytes_total counter
+fluentbit_filter_bytes_total{name="nest.0"} 25297516
+fluentbit_filter_bytes_total{name="modify.1"} 28202238
+fluentbit_filter_bytes_total{name="rewrite_tag.2"} 1950813
+fluentbit_filter_bytes_total{name="rewrite_tag.3"} 13920703
+fluentbit_filter_bytes_total{name="rewrite_tag.4"} 12859518
+fluentbit_filter_bytes_total{name="rewrite_tag.5"} 12859518
+fluentbit_filter_bytes_total{name="rewrite_tag.6"} 0
+fluentbit_filter_bytes_total{name="rewrite_tag.7"} 0
+fluentbit_filter_bytes_total{name="rewrite_tag.8"} 0
+# HELP fluentbit_filter_add_records_total Total number of new added records.
+# TYPE fluentbit_filter_add_records_total counter
+fluentbit_filter_add_records_total{name="nest.0"} 0
+fluentbit_filter_add_records_total{name="modify.1"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.2"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.3"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.4"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.5"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.6"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.7"} 0
+fluentbit_filter_add_records_total{name="rewrite_tag.8"} 0
+# HELP fluentbit_filter_drop_records_total Total number of dropped records.
+# TYPE fluentbit_filter_drop_records_total counter
+fluentbit_filter_drop_records_total{name="nest.0"} 0
+fluentbit_filter_drop_records_total{name="modify.1"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.2"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.3"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.4"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.5"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.6"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.7"} 0
+fluentbit_filter_drop_records_total{name="rewrite_tag.8"} 0
+# HELP fluentbit_filter_drop_bytes_total Total number of dropped bytes.
+# TYPE fluentbit_filter_drop_bytes_total counter
+fluentbit_filter_drop_bytes_total{name="nest.0"} 0
+fluentbit_filter_drop_bytes_total{name="modify.1"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.2"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.3"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.4"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.5"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.6"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.7"} 0
+fluentbit_filter_drop_bytes_total{name="rewrite_tag.8"} 0
+# HELP fluentbit_filter_emit_records_total Total number of emitted records
+# TYPE fluentbit_filter_emit_records_total counter
+fluentbit_filter_emit_records_total{name="rewrite_tag.2"} 2134
+fluentbit_filter_emit_records_total{name="rewrite_tag.3"} 9274
+fluentbit_filter_emit_records_total{name="rewrite_tag.4"} 9632
+fluentbit_filter_emit_records_total{name="rewrite_tag.5"} 9632
+# HELP fluentbit_output_proc_records_total Number of processed output records.
+# TYPE fluentbit_output_proc_records_total counter
+fluentbit_output_proc_records_total{name="opensearch.0"} 0
+fluentbit_output_proc_records_total{name="opensearch.1"} 0
+fluentbit_output_proc_records_total{name="opensearch.2"} 0
+# HELP fluentbit_output_proc_bytes_total Number of processed output bytes.
+# TYPE fluentbit_output_proc_bytes_total counter
+fluentbit_output_proc_bytes_total{name="opensearch.0"} 0
+fluentbit_output_proc_bytes_total{name="opensearch.1"} 0
+fluentbit_output_proc_bytes_total{name="opensearch.2"} 0
+# HELP fluentbit_output_errors_total Number of output errors.
+# TYPE fluentbit_output_errors_total counter
+fluentbit_output_errors_total{name="opensearch.0"} 0
+fluentbit_output_errors_total{name="opensearch.1"} 0
+fluentbit_output_errors_total{name="opensearch.2"} 0
+# HELP fluentbit_output_retries_total Number of output retries.
+# TYPE fluentbit_output_retries_total counter
+fluentbit_output_retries_total{name="opensearch.0"} 2991687
+fluentbit_output_retries_total{name="opensearch.1"} 2955402
+fluentbit_output_retries_total{name="opensearch.2"} 6531829
+# HELP fluentbit_output_retries_failed_total Number of abandoned batches because the maximum number of re-tries was reached.
+# TYPE fluentbit_output_retries_failed_total counter
+fluentbit_output_retries_failed_total{name="opensearch.0"} 0
+fluentbit_output_retries_failed_total{name="opensearch.1"} 0
+fluentbit_output_retries_failed_total{name="opensearch.2"} 0
+# HELP fluentbit_output_dropped_records_total Number of dropped records.
+# TYPE fluentbit_output_dropped_records_total counter
+fluentbit_output_dropped_records_total{name="opensearch.0"} 0
+fluentbit_output_dropped_records_total{name="opensearch.1"} 0
+fluentbit_output_dropped_records_total{name="opensearch.2"} 0
+# HELP fluentbit_output_retried_records_total Number of retried records.
+# TYPE fluentbit_output_retried_records_total counter
+fluentbit_output_retried_records_total{name="opensearch.0"} 8679283
+fluentbit_output_retried_records_total{name="opensearch.1"} 37711380
+fluentbit_output_retried_records_total{name="opensearch.2"} 78207887
+# HELP fluentbit_process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE fluentbit_process_start_time_seconds gauge
+fluentbit_process_start_time_seconds{hostname="fluent-bit"} 1788957979
+# HELP fluentbit_build_info Build version information.
+# TYPE fluentbit_build_info gauge
+fluentbit_build_info{hostname="fluent-bit",version="4.2.2",os="linux"} 1788957979
+# HELP fluentbit_hot_reloaded_times Collect the count of hot reloaded times.
+# TYPE fluentbit_hot_reloaded_times gauge
+fluentbit_hot_reloaded_times{hostname="fluent-bit"} 0
+# HELP fluentbit_storage_chunks Total number of chunks in the storage layer.
+# TYPE fluentbit_storage_chunks gauge
+fluentbit_storage_chunks 3071
+# HELP fluentbit_storage_mem_chunks Total number of memory chunks.
+# TYPE fluentbit_storage_mem_chunks gauge
+fluentbit_storage_mem_chunks 3071
+# HELP fluentbit_storage_fs_chunks Total number of filesystem chunks.
+# TYPE fluentbit_storage_fs_chunks gauge
+fluentbit_storage_fs_chunks 0
+# HELP fluentbit_storage_fs_chunks_up Total number of filesystem chunks up in memory.
+# TYPE fluentbit_storage_fs_chunks_up gauge
+fluentbit_storage_fs_chunks_up 0
+# HELP fluentbit_storage_fs_chunks_down Total number of filesystem chunks down.
+# TYPE fluentbit_storage_fs_chunks_down gauge
+fluentbit_storage_fs_chunks_down 0
+# HELP fluentbit_input_ingestion_paused Is the input paused or not?
+# TYPE fluentbit_input_ingestion_paused gauge
+fluentbit_input_ingestion_paused{name="tail.0"} 1
+fluentbit_input_ingestion_paused{name="forward.1"} 0
+fluentbit_input_ingestion_paused{name="storage_backlog.2"} 0
+fluentbit_input_ingestion_paused{name="emit_access"} 0
+fluentbit_input_ingestion_paused{name="emit_audit"} 1
+fluentbit_input_ingestion_paused{name="emit_app"} 0
+fluentbit_input_ingestion_paused{name="emit_app_fallback"} 0
+fluentbit_input_ingestion_paused{name="emit_fwd_access"} 0
+fluentbit_input_ingestion_paused{name="emit_fwd_audit"} 0
+fluentbit_input_ingestion_paused{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_overlimit Is the input memory usage overlimit ?.
+# TYPE fluentbit_input_storage_overlimit gauge
+fluentbit_input_storage_overlimit{name="tail.0"} 0
+fluentbit_input_storage_overlimit{name="forward.1"} 0
+fluentbit_input_storage_overlimit{name="storage_backlog.2"} 0
+fluentbit_input_storage_overlimit{name="emit_access"} 0
+fluentbit_input_storage_overlimit{name="emit_audit"} 1
+fluentbit_input_storage_overlimit{name="emit_app"} 0
+fluentbit_input_storage_overlimit{name="emit_app_fallback"} 0
+fluentbit_input_storage_overlimit{name="emit_fwd_access"} 0
+fluentbit_input_storage_overlimit{name="emit_fwd_audit"} 0
+fluentbit_input_storage_overlimit{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_memory_bytes Memory bytes used by the chunks.
+# TYPE fluentbit_input_storage_memory_bytes gauge
+fluentbit_input_storage_memory_bytes{name="tail.0"} 0
+fluentbit_input_storage_memory_bytes{name="forward.1"} 0
+fluentbit_input_storage_memory_bytes{name="storage_backlog.2"} 0
+fluentbit_input_storage_memory_bytes{name="emit_access"} 1628172
+fluentbit_input_storage_memory_bytes{name="emit_audit"} 10005161
+fluentbit_input_storage_memory_bytes{name="emit_app"} 5691065
+fluentbit_input_storage_memory_bytes{name="emit_app_fallback"} 5691065
+fluentbit_input_storage_memory_bytes{name="emit_fwd_access"} 0
+fluentbit_input_storage_memory_bytes{name="emit_fwd_audit"} 0
+fluentbit_input_storage_memory_bytes{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_chunks Total number of chunks.
+# TYPE fluentbit_input_storage_chunks gauge
+fluentbit_input_storage_chunks{name="tail.0"} 0
+fluentbit_input_storage_chunks{name="forward.1"} 0
+fluentbit_input_storage_chunks{name="storage_backlog.2"} 0
+fluentbit_input_storage_chunks{name="emit_access"} 736
+fluentbit_input_storage_chunks{name="emit_audit"} 727
+fluentbit_input_storage_chunks{name="emit_app"} 804
+fluentbit_input_storage_chunks{name="emit_app_fallback"} 804
+fluentbit_input_storage_chunks{name="emit_fwd_access"} 0
+fluentbit_input_storage_chunks{name="emit_fwd_audit"} 0
+fluentbit_input_storage_chunks{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_chunks_up Total number of chunks up in memory.
+# TYPE fluentbit_input_storage_chunks_up gauge
+fluentbit_input_storage_chunks_up{name="tail.0"} 0
+fluentbit_input_storage_chunks_up{name="forward.1"} 0
+fluentbit_input_storage_chunks_up{name="storage_backlog.2"} 0
+fluentbit_input_storage_chunks_up{name="emit_access"} 736
+fluentbit_input_storage_chunks_up{name="emit_audit"} 727
+fluentbit_input_storage_chunks_up{name="emit_app"} 804
+fluentbit_input_storage_chunks_up{name="emit_app_fallback"} 804
+fluentbit_input_storage_chunks_up{name="emit_fwd_access"} 0
+fluentbit_input_storage_chunks_up{name="emit_fwd_audit"} 0
+fluentbit_input_storage_chunks_up{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_chunks_down Total number of chunks down.
+# TYPE fluentbit_input_storage_chunks_down gauge
+fluentbit_input_storage_chunks_down{name="tail.0"} 0
+fluentbit_input_storage_chunks_down{name="forward.1"} 0
+fluentbit_input_storage_chunks_down{name="storage_backlog.2"} 0
+fluentbit_input_storage_chunks_down{name="emit_access"} 0
+fluentbit_input_storage_chunks_down{name="emit_audit"} 0
+fluentbit_input_storage_chunks_down{name="emit_app"} 0
+fluentbit_input_storage_chunks_down{name="emit_app_fallback"} 0
+fluentbit_input_storage_chunks_down{name="emit_fwd_access"} 0
+fluentbit_input_storage_chunks_down{name="emit_fwd_audit"} 0
+fluentbit_input_storage_chunks_down{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_chunks_busy Total number of chunks in a busy state.
+# TYPE fluentbit_input_storage_chunks_busy gauge
+fluentbit_input_storage_chunks_busy{name="tail.0"} 0
+fluentbit_input_storage_chunks_busy{name="forward.1"} 0
+fluentbit_input_storage_chunks_busy{name="storage_backlog.2"} 0
+fluentbit_input_storage_chunks_busy{name="emit_access"} 736
+fluentbit_input_storage_chunks_busy{name="emit_audit"} 727
+fluentbit_input_storage_chunks_busy{name="emit_app"} 804
+fluentbit_input_storage_chunks_busy{name="emit_app_fallback"} 804
+fluentbit_input_storage_chunks_busy{name="emit_fwd_access"} 0
+fluentbit_input_storage_chunks_busy{name="emit_fwd_audit"} 0
+fluentbit_input_storage_chunks_busy{name="emit_fwd_app"} 0
+# HELP fluentbit_input_storage_chunks_busy_bytes Total number of bytes used by chunks in a busy state.
+# TYPE fluentbit_input_storage_chunks_busy_bytes gauge
+fluentbit_input_storage_chunks_busy_bytes{name="tail.0"} 0
+fluentbit_input_storage_chunks_busy_bytes{name="forward.1"} 0
+fluentbit_input_storage_chunks_busy_bytes{name="storage_backlog.2"} 0
+fluentbit_input_storage_chunks_busy_bytes{name="emit_access"} 1628172
+fluentbit_input_storage_chunks_busy_bytes{name="emit_audit"} 10005161
+fluentbit_input_storage_chunks_busy_bytes{name="emit_app"} 5691065
+fluentbit_input_storage_chunks_busy_bytes{name="emit_app_fallback"} 5691065
+fluentbit_input_storage_chunks_busy_bytes{name="emit_fwd_access"} 0
+fluentbit_input_storage_chunks_busy_bytes{name="emit_fwd_audit"} 0
+fluentbit_input_storage_chunks_busy_bytes{name="emit_fwd_app"} 0
+# HELP fluentbit_output_upstream_total_connections Total Connection count.
+# TYPE fluentbit_output_upstream_total_connections gauge
+fluentbit_output_upstream_total_connections{name="opensearch.0"} 7
+fluentbit_output_upstream_total_connections{name="opensearch.1"} 3
+fluentbit_output_upstream_total_connections{name="opensearch.2"} 14
+# HELP fluentbit_output_upstream_busy_connections Busy Connection count.
+# TYPE fluentbit_output_upstream_busy_connections gauge
+fluentbit_output_upstream_busy_connections{name="opensearch.0"} -2991714
+fluentbit_output_upstream_busy_connections{name="opensearch.1"} -2955418
+fluentbit_output_upstream_busy_connections{name="opensearch.2"} -6531912
+# HELP fluentbit_output_chunk_available_capacity_percent Available chunk capacity (percent)
+# TYPE fluentbit_output_chunk_available_capacity_percent gauge
+fluentbit_output_chunk_available_capacity_percent{name="opensearch.0"} 99.918591399999997
+fluentbit_output_chunk_available_capacity_percent{name="opensearch.1"} 99.874935487500011
+fluentbit_output_chunk_available_capacity_percent{name="opensearch.2"} 99.715446749999998

@@ -179,6 +179,12 @@ ACTION_CATEGORIES = {
     "vault.kv.put": EventCategory.VAULT,
     "vault.kv.list": EventCategory.VAULT,
     "vault.health.check": EventCategory.VAULT,
+    # Unsealing from Host Health. The share itself is never part of any record.
+    "vault.unseal.submit": EventCategory.VAULT,
+    "vault.unseal.reset": EventCategory.VAULT,
+    "vault.unsealed": EventCategory.VAULT,
+    # A dashboard dependency (Vault, logging, IdP, Postgres, Redis, disk) changed state.
+    "host_health.transition": EventCategory.ADMIN,
 
     # LXD service-layer operations (distinct from router-layer actions)
     "lxd.instance.create": EventCategory.LXD_INFRA,
@@ -222,6 +228,10 @@ ACTION_CATEGORIES = {
 
 # High severity actions
 HIGH_SEVERITY_ACTIONS = {
+    # Each brings Vault one step closer to releasing every secret it holds.
+    "vault.unseal.submit",
+    "vault.unseal.reset",
+    "vault.unsealed",
     "cluster.register",
     "cluster.delete",
     # Both change who the cluster trusts: a regenerate cuts the dashboard off until trust is added,

@@ -54,6 +54,7 @@ from app.routers import (
 )
 from app.routers.terminal import router as terminal_router
 from app.routers.system import router as system_router
+from app.routers.host_health import router as host_health_router
 from app.routers.cluster_registration import router as cluster_registration_router
 from app.services.lxd_service import (
     get_lxd_service,
@@ -508,6 +509,16 @@ async def lifespan(app: FastAPI):
     except Exception as sweeper_err:
         logger.error("Could not start the project delete sweeper: %s", sweeper_err, exc_info=True)
 
+    # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
+    # disk every HOST_HEALTH_INTERVAL_SECONDS. Its own try, for the reason the block above gives.
+    try:
+        from app.services.host_health import start_host_health_loop
+
+        start_host_health_loop()
+        logger.info("Host Health collector started (%ss)", settings.host_health_interval_seconds)
+    except Exception as host_health_err:
+        logger.error("Could not start the Host Health collector: %s", host_health_err, exc_info=True)
+
     # The task journal follower (one worker, elected on a Postgres advisory lock) and the prune
     # loop (every worker, one wins each pass). Its own try, for the reason the block above gives.
     try:
@@ -685,6 +696,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.project_delete_sweeper import stop_project_delete_sweeper
         await stop_project_delete_sweeper()
+    except Exception:
+        pass
+    try:
+        from app.services.host_health import stop_host_health_loop
+        await stop_host_health_loop()
     except Exception:
         pass
     try:
@@ -877,6 +893,7 @@ Ensure your client certificates are properly configured.
     app.include_router(projects_router, prefix=settings.api_prefix)
     app.include_router(tags_router, prefix=settings.api_prefix)
     app.include_router(system_router, prefix=settings.api_prefix)
+    app.include_router(host_health_router, prefix=settings.api_prefix)
     
     # LXD Feature Routers
     app.include_router(instances_router, prefix=settings.api_prefix)

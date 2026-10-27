@@ -73,6 +73,10 @@ for _desc, _action in DESCRIPTION_TO_ACTION.items():
 ACTION_DESCRIPTIONS.update(
     {
         "image.upload.import": "Importing uploaded image",
+        "vault.unseal.submit": "Submitting a Vault unseal key",
+        "vault.unseal.reset": "Resetting the Vault unseal attempt",
+        "vault.unsealed": "Unsealing Vault",
+        "host_health.transition": "Host health changed",
         "storage.iso.upload.import": "Importing uploaded ISO",
         "network.acl.create": "Creating network ACL",
         "network.acl.delete": "Deleting network ACL",

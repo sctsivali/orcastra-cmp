@@ -29,19 +29,21 @@ ROLE_GROUPS = ["role_admin", "role_partner", "role_tenant"]
 INTEGRATION_ROLE_GROUPS = frozenset({"role_partner", "role_tenant"})
 
 
+def api_base(raw_url: str) -> str:
+    """AUTHENTIK_API_URL as the v3 API root: a bare domain gets /api/v3 appended."""
+    url = (raw_url or "").rstrip("/")
+    if url and not url.endswith("/api/v3"):
+        url = f"{url}/api/v3"
+    return url
+
+
 class AuthentikSyncService:
     """Push user-group changes to Authentik via Admin API v3."""
 
     def __init__(self):
         settings = get_settings()
-        raw_url = (settings.authentik_api_url or "").rstrip("/")
         self.token = settings.authentik_api_token
-
-        # auto-append /api/v3 if user gave bare domain
-        if raw_url and not raw_url.endswith("/api/v3"):
-            raw_url = f"{raw_url}/api/v3"
-
-        self.api_url = raw_url
+        self.api_url = api_base(settings.authentik_api_url)
         self.enabled = bool(self.api_url and self.token)
 
         if not self.enabled:

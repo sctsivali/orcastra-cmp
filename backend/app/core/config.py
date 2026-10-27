@@ -638,7 +638,37 @@ class Settings(BaseSettings):
         alias="VAULT_CERT_TTL",
         description="Default TTL for generated certificates (720h = 30 days). Must stay <= the pki_int/lxd role max_ttl (8760h = 1 year) or Vault rejects issuance."
     )
-    
+    vault_unseal_ui_enabled: bool = Field(
+        default=True,
+        alias="VAULT_UNSEAL_UI_ENABLED",
+        description=(
+            "Let an Administrator submit Vault unseal key shares from Host Health. The shares pass "
+            "through the backend to Vault's sys/unseal and are never stored or logged. Set false to "
+            "keep unsealing on the Vault host only."
+        )
+    )
+
+    # Host Health: the dashboard's own dependencies (Vault, logging, IdP, Postgres, Redis, disk)
+    host_health_interval_seconds: int = Field(
+        default=30,
+        ge=10,
+        le=600,
+        alias="HOST_HEALTH_INTERVAL_SECONDS",
+        description="How often one worker re-checks the dashboard's dependencies"
+    )
+    host_health_log_stall_seconds: int = Field(
+        default=180,
+        ge=60,
+        le=1800,
+        alias="HOST_HEALTH_LOG_STALL_SECONDS",
+        description="How long Fluent Bit may retry without delivering one record before logging is reported down"
+    )
+    fluent_bit_metrics_url: str = Field(
+        default="http://fluent-bit:2020",
+        alias="FLUENT_BIT_METRICS_URL",
+        description="Fluent Bit HTTP server (HTTP_Server On) read for delivery metrics; empty disables the logging check"
+    )
+
     # OpenSearch Archive Configuration
     opensearch_archive_enabled: bool = Field(
         default=False,
