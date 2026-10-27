@@ -297,6 +297,18 @@ async function installApiFixtures(page, role, options = {}) {
     } else if (path === "/system/vault-status") {
       // The shell's Vault notice reads this on every page (issue #15); a healthy Vault shows nothing.
       body = { state: "ok", checked_at: Date.now() / 1000, registry_source: "vault" };
+    } else if (path === "/system/host-health") {
+      // An Administrator's sidebar counts the dashboard's dependencies needing attention on every
+      // page (Host Health, 2026-10-27); a healthy report shows no count.
+      body = {
+        checks: [],
+        overall: "ok",
+        attention: 0,
+        collected_at: Date.now() / 1000,
+        source: "cached",
+        store: "shared",
+        interval_seconds: 30,
+      };
     } else if (path === "/me/access") {
       // Asked only by a Tenant session (issue #17), which a fixture actor can become mid-test by
       // a downgrade; the fixture Tenant has access.

@@ -15,6 +15,8 @@ const INITIAL_ALLOWED_PATHS = new Set([
   "/system/settings",
   // The shell's Vault notice (issue #15), read on every page like /system/settings.
   "/system/vault-status",
+  // Asked by an Administrator's sidebar count only; other roles never send it.
+  "/system/host-health",
 ]);
 const OPTIONAL_CREATE_PATHS = [
   "/images/remote",
