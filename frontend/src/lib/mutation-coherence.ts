@@ -412,6 +412,7 @@ export const MUTATION_CALL_EXCEPTIONS = {
   "api.isoUploads.create": "non-terminal streaming upload stage",
   "api.isoUploads.patchChunk": "non-terminal streaming upload stage",
   "api.isoUploads.abort": "streaming upload cancellation",
+  "consoleActionsAPI.record": "audit-only record of a console toolbar action; changes no state a query shows",
 } as const;
 
 export interface ReconcileMutationOptions {

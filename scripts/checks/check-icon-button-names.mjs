@@ -58,7 +58,8 @@ const src = join(root, 'frontend', 'src');
 // both prefixes, so an unnamed arrow was the entire way out for anyone who could not see it.
 // Lowered 46 -> 45 when the certificate row's cancel-renewal control was named. It sat beside a
 // Verify button on the same row and discarded a pending certificate, so "button" was not enough.
-const BASELINE = 45;
+// Lowered 45 -> 44 when the console toolbar's power buttons were named (2026-10-27).
+const BASELINE = 44;
 
 // Empty since the dead components/vm-table.tsx was deleted; kept so a future dead file has a
 // documented place to go rather than a baseline bump.

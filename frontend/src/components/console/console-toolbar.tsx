@@ -83,6 +83,12 @@ interface ConsoleToolbarProps {
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
   onReconnect?: () => void; // Manual reconnect button
+  /** Whether the caller may start, stop, restart or rebuild (tenant grants); false disables them. */
+  canOperate?: boolean;
+  /** Why power controls are disabled, for example a paid term that ended. */
+  operateReason?: string;
+  /** The graphical console's guest actions (ConsoleActions), shown on the Graphics tab. */
+  guestActions?: React.ReactNode;
 }
 
 type OperationType = 'start' | 'stop' | 'restart';
@@ -131,6 +137,9 @@ export function ConsoleToolbar({
   zoom = 100,
   onZoomChange,
   onReconnect,
+  canOperate = true,
+  operateReason,
+  guestActions,
 }: ConsoleToolbarProps) {
   const updateInstanceStatus = useConsoleStore(s => s.updateInstanceStatus);
   const executePowerAction = useInstancePowerAction();
@@ -267,6 +276,7 @@ export function ConsoleToolbar({
     }
   }, [onZoomChange]);
 
+  const powerReason = operateReason ?? "You do not have permission to change this instance's power state";
   const isRunning = instanceStatus === 'Running';
   const isStopped = instanceStatus === 'Stopped';
   const isFrozen = instanceStatus === 'Frozen';
@@ -289,9 +299,10 @@ export function ConsoleToolbar({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
-                disabled={isRunning || isTransitioning || loading !== null || isFrozen}
+                disabled={!canOperate || isRunning || isTransitioning || loading !== null || isFrozen}
                 onClick={() => handleOperation('start')}
-                onTouchEnd={(e) => { e.preventDefault(); if (!isRunning && !isTransitioning && loading === null) handleOperation('start'); }}
+                onTouchEnd={(e) => { e.preventDefault(); if (canOperate && !isRunning && !isTransitioning && loading === null) handleOperation('start'); }}
+                aria-label="Start instance"
               >
                 {loading === 'start' ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -300,7 +311,7 @@ export function ConsoleToolbar({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{isFrozen ? "Frozen by billing policy" : "Start Instance"}</TooltipContent>
+            <TooltipContent>{!canOperate ? powerReason : isFrozen ? "Frozen by billing policy" : "Start Instance"}</TooltipContent>
           </Tooltip>
 
           {/* Stop */}
@@ -310,9 +321,10 @@ export function ConsoleToolbar({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
-                disabled={isStopped || isTransitioning || loading !== null}
+                disabled={!canOperate || isStopped || isTransitioning || loading !== null}
                 onClick={() => handleOperation('stop')}
-                onTouchEnd={(e) => { e.preventDefault(); if (!isStopped && !isTransitioning && loading === null) handleOperation('stop'); }}
+                onTouchEnd={(e) => { e.preventDefault(); if (canOperate && !isStopped && !isTransitioning && loading === null) handleOperation('stop'); }}
+                aria-label="Stop instance"
               >
                 {loading === 'stop' ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -321,7 +333,7 @@ export function ConsoleToolbar({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Stop Instance</TooltipContent>
+            <TooltipContent>{canOperate ? "Stop Instance" : powerReason}</TooltipContent>
           </Tooltip>
 
           {/* Restart */}
@@ -331,9 +343,10 @@ export function ConsoleToolbar({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
-                disabled={!isRunning || isTransitioning || loading !== null}
+                disabled={!canOperate || !isRunning || isTransitioning || loading !== null}
                 onClick={() => handleOperation('restart')}
-                onTouchEnd={(e) => { e.preventDefault(); if (isRunning && !isTransitioning && loading === null) handleOperation('restart'); }}
+                onTouchEnd={(e) => { e.preventDefault(); if (canOperate && isRunning && !isTransitioning && loading === null) handleOperation('restart'); }}
+                aria-label="Restart instance"
               >
                 {loading === 'restart' ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -342,7 +355,7 @@ export function ConsoleToolbar({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Restart Instance</TooltipContent>
+            <TooltipContent>{canOperate ? "Restart Instance" : powerReason}</TooltipContent>
           </Tooltip>
 
           {/* Rebuild (reinstall root disk) */}
@@ -352,14 +365,15 @@ export function ConsoleToolbar({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
-                disabled={isTransitioning || loading !== null}
+                disabled={!canOperate || isTransitioning || loading !== null}
                 onClick={() => setRebuildOpen(true)}
-                onTouchEnd={(e) => { e.preventDefault(); if (!isTransitioning && loading === null) setRebuildOpen(true); }}
+                onTouchEnd={(e) => { e.preventDefault(); if (canOperate && !isTransitioning && loading === null) setRebuildOpen(true); }}
+                aria-label="Rebuild instance"
               >
                 <RefreshCw className="h-4 w-4 text-amber-500" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Rebuild Instance (reinstall root disk)</TooltipContent>
+            <TooltipContent>{canOperate ? "Rebuild Instance (reinstall root disk)" : powerReason}</TooltipContent>
           </Tooltip>
         </div>
 
@@ -471,6 +485,14 @@ export function ConsoleToolbar({
               <TooltipContent>Zoom In</TooltipContent>
             </Tooltip>
           </div>
+        )}
+
+        {/* Send keys, screenshot, full screen, fit (Graphics tab) */}
+        {guestActions && (
+          <>
+            <div className="w-px h-5 bg-border mx-1" />
+            <div className="flex items-center gap-0.5">{guestActions}</div>
+          </>
         )}
 
         {/* BIOS Boot Keys (for VMs) - positioned before Reconnect */}

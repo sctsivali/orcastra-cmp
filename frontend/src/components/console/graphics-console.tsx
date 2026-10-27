@@ -38,6 +38,7 @@ export interface GraphicsConsoleHandle {
   sendKeyCode: (keyCode: number) => boolean;
   pasteText: (text: string) => Promise<void>;
   getSpiceConnection: () => any;
+  getCanvas: () => HTMLCanvasElement | null;
   screenshot: () => string | null;
   reconnect: () => void;
   disconnect: () => void;
@@ -52,6 +53,8 @@ interface SpiceConnection {
 // WebSocket URL builder - uses NEXT_PUBLIC_API_URL so connections
 // work through reverse proxies / tunnels (not just localhost:4050)
 import { mintFailureMessage, spiceSocketUrls } from "@/lib/ws-url";
+import { COMBO_BY_ID, KEY_CODES, characterKey } from "@/lib/spice/keys";
+import { sendCombo, type SpiceInputConnection } from "@/lib/spice/input";
 
 // Correct script loading order for spice-html5
 // Based on spice-html5-rails.js manifest
@@ -738,169 +741,44 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         const canvas = screen?.querySelector('canvas');
         if (canvas) (canvas as HTMLCanvasElement).focus();
       },
+      // important: the vendored global sendCtrlAltDel assigns an undeclared `sc` and throws, so
+      // Ctrl+Alt+Del never reached a guest. Combinations go as scancodes (lib/spice/input.ts).
       sendCtrlAltDel: () => {
-        const sc = spiceConnectionRef.current;
-        if (typeof (window as any).sendCtrlAltDel === 'function') {
-          (window as any).sendCtrlAltDel(sc);
-        }
+        void sendCombo(spiceConnectionRef.current as SpiceInputConnection | null, COMBO_BY_ID["ctrl-alt-del"]);
       },
       sendKeys: (keys: string) => {
-        // For Ctrl+Alt+Del, use the special function
         if (keys.toLowerCase() === 'ctrl+alt+del') {
-          const sc = spiceConnectionRef.current;
-          if (typeof (window as any).sendCtrlAltDel === 'function') {
-            (window as any).sendCtrlAltDel(sc);
-          }
+          void sendCombo(spiceConnectionRef.current as SpiceInputConnection | null, COMBO_BY_ID["ctrl-alt-del"]);
           return;
         }
-        
-        // Complete map of key names to JavaScript keyCodes for SPICE scancode mapping
-        // This includes special keys, function keys, and character keyCodes
-        const keyCodeMap: Record<string, number> = {
-          // Special keys
-          'Escape': 27, 'Esc': 27,
-          'Enter': 13, 'Tab': 9, 'Backspace': 8, 'Space': 32, ' ': 32,
-          'Delete': 46, 'Del': 46, 'Insert': 45, 'Ins': 45,
-          'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34,
-          'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
-          'Shift': 16, 'Control': 17, 'Ctrl': 17, 'Alt': 18, 'Meta': 91,
-          'CapsLock': 20, 'NumLock': 144, 'ScrollLock': 145,
-          'PrintScreen': 44, 'Pause': 19,
-          // Function keys
-          'F1': 112, 'F2': 113, 'F3': 114, 'F4': 115,
-          'F5': 116, 'F6': 117, 'F7': 118, 'F8': 119,
-          'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
-          // Punctuation and symbols (using DOM keyCodes that SPICE understands)
-          ';': 186, ':': 186, // semicolon (needs shift for colon)
-          '=': 187, '+': 187, // equals (needs shift for plus)
-          ',': 188, '<': 188, // comma (needs shift for less-than)
-          '-': 189, '_': 189, // minus (needs shift for underscore)
-          '.': 190, '>': 190, // period (needs shift for greater-than)
-          '/': 191, '?': 191, // slash (needs shift for question)
-          '`': 192, '~': 192, // backtick (needs shift for tilde)
-          '[': 219, '{': 219, // left bracket (needs shift for brace)
-          '\\': 220, '|': 220, // backslash (needs shift for pipe)
-          ']': 221, '}': 221, // right bracket (needs shift for brace)
-          "'": 222, '"': 222, // quote (needs shift for double-quote)
-        };
-        
-        // Characters that need shift to be typed
-        const shiftChars = new Set(['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?', '~']);
-        
-        // Number keys with shift for symbols
-        const numShiftMap: Record<string, number> = {
-          '!': 49, '@': 50, '#': 51, '$': 52, '%': 53, 
-          '^': 54, '&': 55, '*': 56, '(': 57, ')': 48,
-        };
-        
-        // If it's a named key, send via SPICE channel
-        if (keyCodeMap[keys]) {
-          sendSpiceKey(keyCodeMap[keys]);
+        // A named key (Escape, F2, Delete...) goes as one key press.
+        if (KEY_CODES[keys] && keys.length > 1) {
+          sendSpiceKey(KEY_CODES[keys]);
           return;
         }
-        
-        // For regular characters, send each one
+        // Otherwise type the characters, with Shift where the US layout needs it.
         for (const char of keys) {
-          let keyCode: number;
-          let needsShift = false;
-          
-          // Check if it's a shift+number symbol
-          if (numShiftMap[char]) {
-            keyCode = numShiftMap[char];
-            needsShift = true;
-          }
-          // Check if it's in keyCodeMap (punctuation)
-          else if (keyCodeMap[char]) {
-            keyCode = keyCodeMap[char];
-            needsShift = shiftChars.has(char);
-          }
-          // Letter keys
-          else if (/[a-zA-Z]/.test(char)) {
-            keyCode = char.toUpperCase().charCodeAt(0);
-            needsShift = char === char.toUpperCase() && char !== char.toLowerCase();
-          }
-          // Number keys
-          else if (/[0-9]/.test(char)) {
-            keyCode = char.charCodeAt(0);
-          }
-          // Fallback
-          else {
-            keyCode = char.toUpperCase().charCodeAt(0);
-          }
-          
-          // Send with shift if needed
-          if (needsShift) {
-            sendSpiceKey(16, true, false); // Shift down
-          }
-          sendSpiceKey(keyCode);
-          if (needsShift) {
-            sendSpiceKey(16, false, true); // Shift up
-          }
+          const typed = characterKey(char) ?? { keyCode: char.toUpperCase().charCodeAt(0), shift: false };
+          if (typed.shift) sendSpiceKey(16, true, false);
+          sendSpiceKey(typed.keyCode);
+          if (typed.shift) sendSpiceKey(16, false, true);
         }
       },
       // Send a key with explicit modifiers (Ctrl, Alt, Shift, Meta)
       sendKeyWithModifiers: (key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => {
-        // Map key names to JavaScript keyCodes
-        const keyCodeMap: Record<string, number> = {
-          // Special keys
-          'Escape': 27, 'Esc': 27,
-          'Enter': 13, 'Tab': 9, 'Backspace': 8, 'Space': 32, ' ': 32,
-          'Delete': 46, 'Del': 46, 'Insert': 45, 'Ins': 45,
-          'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34,
-          'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
-          'Shift': 16, 'Control': 17, 'Ctrl': 17, 'Alt': 18, 'Meta': 91,
-          'CapsLock': 20, 'NumLock': 144, 'ScrollLock': 145,
-          'PrintScreen': 44, 'Pause': 19,
-          // Function keys
-          'F1': 112, 'F2': 113, 'F3': 114, 'F4': 115,
-          'F5': 116, 'F6': 117, 'F7': 118, 'F8': 119,
-          'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
-          // Punctuation
-          ';': 186, ':': 186, '=': 187, '+': 187, ',': 188, '<': 188,
-          '-': 189, '_': 189, '.': 190, '>': 190, '/': 191, '?': 191,
-          '`': 192, '~': 192, '[': 219, '{': 219, '\\': 220, '|': 220,
-          ']': 221, '}': 221, "'": 222, '"': 222,
-        };
-        
-        // Symbols that require shift on US keyboard layout
-        const shiftSymbols = new Set(['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?', '~']);
-        
-        // Number key shift map
-        const numShiftMap: Record<string, number> = {
-          '!': 49, '@': 50, '#': 51, '$': 52, '%': 53,
-          '^': 54, '&': 55, '*': 56, '(': 57, ')': 48,
-        };
-        
-        // Determine keyCode and if shift is needed for this character
-        let keyCode: number;
-        let needsShift = modifiers?.shift || false;
-        
-        if (numShiftMap[key]) {
-          keyCode = numShiftMap[key];
-          needsShift = true;
-        } else if (keyCodeMap[key]) {
-          keyCode = keyCodeMap[key];
-          // Check if this symbol needs shift
-          if (shiftSymbols.has(key)) needsShift = true;
-        } else if (/[a-zA-Z]/.test(key) && key.length === 1) {
-          keyCode = key.toUpperCase().charCodeAt(0);
-          // Check if uppercase letter (needs shift)
-          if (key === key.toUpperCase() && key !== key.toLowerCase()) needsShift = true;
-        } else if (/[0-9]/.test(key)) {
-          keyCode = key.charCodeAt(0);
-        } else {
-          keyCode = key.toUpperCase().charCodeAt(0);
-        }
-        
+        const named = key.length > 1 ? KEY_CODES[key] : undefined;
+        const typed = named !== undefined ? { keyCode: named, shift: false } : characterKey(key);
+        const keyCode = typed?.keyCode ?? key.toUpperCase().charCodeAt(0);
+        const needsShift = Boolean(modifiers?.shift || typed?.shift);
+
         // Press modifier keys
         if (needsShift) sendSpiceKey(16, true, false);  // Shift down
         if (modifiers?.ctrl) sendSpiceKey(17, true, false);   // Ctrl down
         if (modifiers?.alt) sendSpiceKey(18, true, false);    // Alt down
         if (modifiers?.meta) sendSpiceKey(91, true, false);   // Meta/Win down
-        
-        // Send the key
+
         sendSpiceKey(keyCode);
-        
+
         // Release modifier keys (reverse order)
         if (modifiers?.meta) sendSpiceKey(91, false, true);   // Meta/Win up
         if (modifiers?.alt) sendSpiceKey(18, false, true);    // Alt up
@@ -912,67 +790,17 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         return sendSpiceKey(keyCode);
       },
       pasteText: async (text: string) => {
-        // Complete keyCode mapping for all printable ASCII characters
-        const charToKeyCode: Record<string, { keyCode: number; shift: boolean }> = {
-          // Numbers (no shift)
-          '0': { keyCode: 48, shift: false }, '1': { keyCode: 49, shift: false },
-          '2': { keyCode: 50, shift: false }, '3': { keyCode: 51, shift: false },
-          '4': { keyCode: 52, shift: false }, '5': { keyCode: 53, shift: false },
-          '6': { keyCode: 54, shift: false }, '7': { keyCode: 55, shift: false },
-          '8': { keyCode: 56, shift: false }, '9': { keyCode: 57, shift: false },
-          // Shifted number row symbols
-          ')': { keyCode: 48, shift: true }, '!': { keyCode: 49, shift: true },
-          '@': { keyCode: 50, shift: true }, '#': { keyCode: 51, shift: true },
-          '$': { keyCode: 52, shift: true }, '%': { keyCode: 53, shift: true },
-          '^': { keyCode: 54, shift: true }, '&': { keyCode: 55, shift: true },
-          '*': { keyCode: 56, shift: true }, '(': { keyCode: 57, shift: true },
-          // Punctuation keys
-          ';': { keyCode: 186, shift: false }, ':': { keyCode: 186, shift: true },
-          '=': { keyCode: 187, shift: false }, '+': { keyCode: 187, shift: true },
-          ',': { keyCode: 188, shift: false }, '<': { keyCode: 188, shift: true },
-          '-': { keyCode: 189, shift: false }, '_': { keyCode: 189, shift: true },
-          '.': { keyCode: 190, shift: false }, '>': { keyCode: 190, shift: true },
-          '/': { keyCode: 191, shift: false }, '?': { keyCode: 191, shift: true },
-          '`': { keyCode: 192, shift: false }, '~': { keyCode: 192, shift: true },
-          '[': { keyCode: 219, shift: false }, '{': { keyCode: 219, shift: true },
-          '\\': { keyCode: 220, shift: false }, '|': { keyCode: 220, shift: true },
-          ']': { keyCode: 221, shift: false }, '}': { keyCode: 221, shift: true },
-          "'": { keyCode: 222, shift: false }, '"': { keyCode: 222, shift: true },
-          // Whitespace
-          ' ': { keyCode: 32, shift: false },
-          '\t': { keyCode: 9, shift: false },
-          '\n': { keyCode: 13, shift: false },
-          '\r': { keyCode: 13, shift: false },
-        };
-        
-        // Generate letter mappings (a-z, A-Z)
-        for (let i = 0; i < 26; i++) {
-          const lower = String.fromCharCode(97 + i); // a-z
-          const upper = String.fromCharCode(65 + i); // A-Z
-          const keyCode = 65 + i; // A=65, B=66, etc.
-          charToKeyCode[lower] = { keyCode, shift: false };
-          charToKeyCode[upper] = { keyCode, shift: true };
-        }
-        
-        // Paste text by sending keys via SPICE input channel
+        // Paste text by typing it via the SPICE input channel
         for (let i = 0; i < text.length; i++) {
           const char = text[i];
-          const mapping = charToKeyCode[char];
-          
+          const mapping = characterKey(char);
           if (mapping) {
-            if (mapping.shift) {
-              sendSpiceKey(16, true, false); // Shift down
-            }
+            if (mapping.shift) sendSpiceKey(16, true, false); // Shift down
             sendSpiceKey(mapping.keyCode);
-            if (mapping.shift) {
-              sendSpiceKey(16, false, true); // Shift up
-            }
+            if (mapping.shift) sendSpiceKey(16, false, true); // Shift up
           } else {
-            // For unmapped characters, try using charCode directly
-            // This may not work for all characters but is a fallback
             console.warn(`[pasteText] No mapping for character: '${char}' (code: ${char.charCodeAt(0)})`);
           }
-          
           // Small delay between characters for reliability
           if (i < text.length - 1) {
             await new Promise(r => setTimeout(r, 15));
@@ -981,6 +809,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       },
       // Get the spice connection reference for direct access
       getSpiceConnection: () => spiceConnectionRef.current,
+      getCanvas: () => document.getElementById(screenId)?.querySelector('canvas') ?? null,
       screenshot: () => {
         const screen = document.getElementById(screenId);
         const canvas = screen?.querySelector('canvas');

@@ -89,6 +89,10 @@ import { OnScreenKeyboard } from "@/components/console/on-screen-keyboard";
 import { OnScreenCursor } from "@/components/console/on-screen-cursor";
 import { ClipboardManager } from "@/components/console/clipboard-manager";
 import { ConsoleResourceBar } from "@/components/console/resource-bar";
+import { ConsoleActions } from "@/components/console/console-actions";
+import { useTenantAccess } from "@/hooks/use-tenant-access";
+import { COMBO_BY_ID, KEY_CODES, characterKey } from "@/lib/spice/keys";
+import { sendCombo } from "@/lib/spice/input";
 import "@xterm/xterm/css/xterm.css";
 import { TERMINAL_THEME } from "@/lib/terminal-theme";
 
@@ -248,6 +252,25 @@ function ConsoleContent() {
 
   const screenId = `spice-screen-${params.id}`;
   const scale = zoom / 100;
+  const { hasPermission, termReadOnlyReason } = useTenantAccess();
+  const getSpiceConnection = useCallback(() => spiceRef.current ?? null, []);
+  const getGraphicsCanvas = useCallback(
+    () => document.getElementById(`spice-screen-${params.id}`)?.querySelector("canvas") ?? null,
+    [params.id],
+  );
+  // The page is the console, so full screen takes the whole document and keeps the header on screen.
+  const getFullscreenTarget = useCallback(() => document.documentElement, []);
+  const focusGraphicsCanvas = useCallback(() => {
+    setTimeout(() => getGraphicsCanvas()?.focus(), 10);
+  }, [getGraphicsCanvas]);
+  // The largest zoom step that shows the whole guest display in the space below the header.
+  const fitToWindow = useCallback(() => {
+    const area = graphicsRef.current;
+    const canvas = getGraphicsCanvas();
+    if (!area || !canvas || !canvas.width || !canvas.height) return;
+    const ratio = Math.min(area.clientWidth / canvas.width, area.clientHeight / canvas.height);
+    setZoom(Math.max(50, Math.min(200, Math.floor((ratio * 100) / 10) * 10)));
+  }, [getGraphicsCanvas]);
   
   // BIOS boot key options - now with keyCodes for SPICE
   const BIOS_KEYS = [
@@ -666,12 +689,15 @@ function ConsoleContent() {
     { errorTitle: "Reconnect failed" },
   );
 
-  // Send Ctrl+Alt+Del
+  // Send Ctrl+Alt+Del. important: SpiceMainConn has no sendCtrlAltDel method, so the old
+  // `spiceRef.current?.sendCtrlAltDel` check was always false and nothing was sent. Scancodes go
+  // through lib/spice/input.ts like every other combination.
   const sendCtrlAltDel = useCallback(() => {
-    if (spiceRef.current?.sendCtrlAltDel) {
-      spiceRef.current.sendCtrlAltDel();
-      toast({ title: "Sent Ctrl+Alt+Del" });
-    }
+    void sendCombo(spiceRef.current, COMBO_BY_ID["ctrl-alt-del"]).then((sent) => {
+      toast(sent
+        ? { title: "Sent Ctrl+Alt+Del" }
+        : { title: "Keys not sent", description: "The console is not connected yet.", variant: "destructive" });
+    });
   }, []);
 
   // BIOS key spam - send key 15 times via SPICE input channel
@@ -697,22 +723,6 @@ function ConsoleContent() {
 
   // Handle virtual keyboard key press
   const handleVirtualKeyPress = useCallback((key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => {
-    // Map key names to JavaScript keyCodes (used by SPICE scancode mapping)
-    const keyCodeMap: Record<string, number> = {
-      'Escape': 27, 'Esc': 27,
-      'F1': 112, 'F2': 113, 'F3': 114, 'F4': 115,
-      'F5': 116, 'F6': 117, 'F7': 118, 'F8': 119,
-      'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
-      'Delete': 46, 'Del': 46,
-      'Insert': 45,
-      'Home': 36, 'End': 35,
-      'PageUp': 33, 'PageDown': 34,
-      'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
-      'Enter': 13, 'Tab': 9, 'Backspace': 8, 'Space': 32,
-      'Shift': 16, 'Control': 17, 'Ctrl': 17, 'Alt': 18,
-      'CapsLock': 20, 'NumLock': 144, 'ScrollLock': 145,
-    };
-    
     // Handle special keys for terminal (xterm escape sequences)
     const specialKeyMap: Record<string, string> = {
       'Enter': '\r',
@@ -778,21 +788,21 @@ function ConsoleContent() {
         return;
       }
       
-      // Handle modifier keys
+      // Handle modifier keys (Win included: the on-screen keyboard used to drop it)
       if (modifiers?.shift) sendSpiceKey(16, true, false); // Shift down
       if (modifiers?.ctrl) sendSpiceKey(17, true, false);  // Ctrl down
       if (modifiers?.alt) sendSpiceKey(18, true, false);   // Alt down
+      if (modifiers?.meta) sendSpiceKey(91, true, false);  // Win down
       
       // Send the key
-      if (keyCodeMap[key]) {
-        sendSpiceKey(keyCodeMap[key]);
+      if (key.length > 1 && KEY_CODES[key]) {
+        sendSpiceKey(KEY_CODES[key]);
       } else if (key.length === 1) {
-        // For regular characters, get keyCode from uppercase char
-        const keyCode = key.toUpperCase().charCodeAt(0);
-        sendSpiceKey(keyCode);
+        sendSpiceKey(characterKey(key)?.keyCode ?? key.toUpperCase().charCodeAt(0));
       }
       
       // Release modifier keys
+      if (modifiers?.meta) sendSpiceKey(91, false, true);  // Win up
       if (modifiers?.alt) sendSpiceKey(18, false, true);   // Alt up
       if (modifiers?.ctrl) sendSpiceKey(17, false, true);  // Ctrl up
       if (modifiers?.shift) sendSpiceKey(16, false, true); // Shift up
@@ -1007,7 +1017,12 @@ function ConsoleContent() {
   const isTransitioning = ["Starting", "Stopping", "Restarting"].includes(instanceStatus);
   const showStart = isStopped || instanceStatus === "Unknown" || instanceStatus === "Error";
   const showRestartStop = isRunning || instanceStatus === "Unknown" || instanceStatus === "Error";
-  const isOperationDisabled = isTransitioning || operationLoading !== null;
+  // Tenant grants: power controls need operate, the guest actions need console.
+  const canOperate = hasPermission(host, project, instanceName, "operate");
+  const operateReason = termReadOnlyReason(host, project, instanceName)
+    ?? "You do not have permission to change this instance's power state";
+  const canUseConsole = hasPermission(host, project, instanceName, "console");
+  const isOperationDisabled = isTransitioning || operationLoading !== null || !canOperate;
 
   const currentStatus = activeTab === "text" ? textStatus : graphicsStatus;
 
@@ -1484,7 +1499,7 @@ function ConsoleContent() {
                       )}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Start Instance</TooltipContent>
+                  <TooltipContent>{canOperate ? "Start Instance" : operateReason}</TooltipContent>
                 </Tooltip>
               )}
 
@@ -1509,7 +1524,7 @@ function ConsoleContent() {
                         )}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>Restart Instance</TooltipContent>
+                    <TooltipContent>{canOperate ? "Restart Instance" : operateReason}</TooltipContent>
                   </Tooltip>
 
                   <Tooltip>
@@ -1531,7 +1546,7 @@ function ConsoleContent() {
                         )}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>Stop Instance</TooltipContent>
+                    <TooltipContent>{canOperate ? "Stop Instance" : operateReason}</TooltipContent>
                   </Tooltip>
                 </>
               )}
@@ -1659,6 +1674,21 @@ function ConsoleContent() {
                 </TooltipTrigger>
                 <TooltipContent>Search (Ctrl+Shift+F)</TooltipContent>
               </Tooltip>
+            )}
+
+            {/* Send keys, screenshot, full screen, fit (shared with the console window) */}
+            {isVM && activeTab === "graphics" && (
+              <ConsoleActions
+                instanceName={instanceName}
+                host={host}
+                project={project}
+                getConnection={getSpiceConnection}
+                getCanvas={getGraphicsCanvas}
+                getFullscreenTarget={getFullscreenTarget}
+                onFitToWindow={fitToWindow}
+                canUseConsole={canUseConsole}
+                onAfterSend={focusGraphicsCanvas}
+              />
             )}
 
             {/* BIOS Boot Keys (for VMs) */}

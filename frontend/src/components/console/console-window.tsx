@@ -45,6 +45,8 @@ import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { tasksAPI } from "@/lib/tasks-api";
 import { ConsoleTabs } from "./console-tabs";
 import { ConsoleToolbar } from "./console-toolbar";
+import { ConsoleActions } from "./console-actions";
+import { useTenantAccess } from "@/hooks/use-tenant-access";
 import { TextConsole, TextConsoleHandle } from "./text-console";
 import { GraphicsConsole, GraphicsConsoleHandle } from "./graphics-console";
 // import { BootPriorityPanel } from "./boot-priority-panel"; // Boot Order tab is hidden
@@ -116,6 +118,30 @@ export function ConsoleWindow({
   const [showCursor, setShowCursor] = useState(false);
   const [showClipboard, setShowClipboard] = useState(false);
   const [zoom, setZoom] = useState(100);
+  const displayAreaRef = React.useRef<HTMLDivElement>(null);
+
+  // Tenant grants: power controls need operate, the guest actions need console.
+  const { hasPermission, termReadOnlyReason } = useTenantAccess();
+  const canOperate = consoleInstance
+    ? hasPermission(consoleInstance.host, consoleInstance.project, consoleInstance.instanceName, "operate")
+    : false;
+  const operateReason = consoleInstance
+    ? termReadOnlyReason(consoleInstance.host, consoleInstance.project, consoleInstance.instanceName)
+    : undefined;
+  const canUseConsole = consoleInstance
+    ? hasPermission(consoleInstance.host, consoleInstance.project, consoleInstance.instanceName, "console")
+    : false;
+  const getSpiceConnection = useCallback(() => graphicsRef.current?.getSpiceConnection() ?? null, []);
+  const getGraphicsCanvas = useCallback(() => graphicsRef.current?.getCanvas() ?? null, []);
+  const getFullscreenTarget = useCallback(() => nodeRef.current, []);
+  // The largest zoom step that shows the whole guest display in the space the window gives it.
+  const fitToWindow = useCallback(() => {
+    const area = displayAreaRef.current;
+    const canvas = graphicsRef.current?.getCanvas();
+    if (!area || !canvas || !canvas.width || !canvas.height) return;
+    const ratio = Math.min(area.clientWidth / canvas.width, area.clientHeight / canvas.height);
+    setZoom(Math.max(50, Math.min(200, Math.floor((ratio * 100) / 10) * 10)));
+  }, []);
 
   // Skip session conflict check for embedded console - just connect directly
   // Session conflict check is only useful for full page console opened from external link
@@ -638,6 +664,21 @@ export function ConsoleWindow({
               zoom={zoom}
               onZoomChange={setZoom}
               onReconnect={() => graphicsRef.current?.reconnect()}
+              canOperate={canOperate}
+              operateReason={operateReason}
+              guestActions={consoleInstance.activeTab === "graphics" && consoleInstance.capabilities?.graphicsConsole ? (
+                <ConsoleActions
+                  instanceName={consoleInstance.instanceName}
+                  host={consoleInstance.host}
+                  project={consoleInstance.project}
+                  getConnection={getSpiceConnection}
+                  getCanvas={getGraphicsCanvas}
+                  getFullscreenTarget={getFullscreenTarget}
+                  onFitToWindow={fitToWindow}
+                  canUseConsole={canUseConsole}
+                  onAfterSend={() => graphicsRef.current?.focus()}
+                />
+              ) : undefined}
             />
           )}
 
@@ -655,6 +696,7 @@ export function ConsoleWindow({
 
               {/* Console display area */}
               <div 
+                ref={displayAreaRef}
                 className="flex-1 min-h-0 relative"
                 onMouseDown={(e) => {
                   // Stop propagation to prevent draggable from catching mouse events inside console

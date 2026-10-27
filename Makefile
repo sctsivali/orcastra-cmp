@@ -380,6 +380,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-branding-surfaces.mjs
 	@echo "$(COLOR_GREEN)Checking the release notice...$(COLOR_RESET)"
 	@node scripts/checks/check-release-notice.mjs
+	@echo "$(COLOR_GREEN)Checking the console guest actions...$(COLOR_RESET)"
+	@node scripts/checks/check-console-actions.mjs
 	@echo "$(COLOR_GREEN)Checking task journal pagination and duration behavior...$(COLOR_RESET)"
 	@node scripts/checks/check-task-journal-behavior.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal theme...$(COLOR_RESET)"
