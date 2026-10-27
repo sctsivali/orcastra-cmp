@@ -1,5 +1,6 @@
 "use client";
 
+import { Settings } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { RowActions } from "@/components/ui/row-actions";
@@ -237,7 +238,11 @@ export function InstanceTableRow({
       {/* Pinned: ten columns overflow every container this table gets, and the actions are
           what an operator scrolled for. */}
       <TableCell pinned="end" className="text-right">
-        <RowActions triggerLabel={`Actions for instance ${rowLabel}`} actions={actions} />
+        <RowActions
+          triggerLabel={`Actions for instance ${rowLabel}`}
+          triggerIcon={Settings}
+          actions={actions}
+        />
       </TableCell>
     </TableRow>
   );

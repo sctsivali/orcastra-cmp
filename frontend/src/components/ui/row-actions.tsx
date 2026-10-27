@@ -11,6 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 export interface RowAction {
@@ -47,6 +48,13 @@ interface RowActionsProps {
    * different casing contracts must not share one name.
    */
   triggerLabel: string;
+  /**
+   * Replaces the kebab glyph. The Instances table draws a gear here at the owner's request
+   * (2026-10-27); every other table keeps the kebab, see documentation/ui/table-conventions.md.
+   * A glyph other than the kebab gets a visible "Actions" tooltip, because a gear alone reads as
+   * "settings" rather than "the menu for this row".
+   */
+  triggerIcon?: React.ComponentType<{ className?: string }>;
   className?: string;
 }
 
@@ -67,7 +75,7 @@ interface RowActionsProps {
  * never be surfaced to anyone. Here the item stays focusable and explains itself instead.
  * Same reasoning as components/create-menu/create-menu.tsx.
  */
-export function RowActions({ actions, triggerLabel, className }: RowActionsProps) {
+export function RowActions({ actions, triggerLabel, triggerIcon, className }: RowActionsProps) {
   const [open, setOpen] = React.useState(false);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const selectionRef = React.useRef<{
@@ -82,23 +90,35 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
 
   if (actions.length === 0) return null;
 
+  const TriggerIcon = triggerIcon ?? MoreVertical;
+  const trigger = (
+    <DropdownMenuTrigger asChild>
+      <Button
+        ref={triggerRef}
+        variant="ghost"
+        size="sm"
+        aria-label={triggerLabel}
+        className={cn("h-8 w-8 p-0", className)}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <TriggerIcon className="h-4 w-4" aria-hidden="true" />
+      </Button>
+    </DropdownMenuTrigger>
+  );
+
   return (
     <DropdownMenu open={open} onOpenChange={(nextOpen) => {
       if (nextOpen) selectionRef.current = null;
       setOpen(nextOpen);
     }}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          ref={triggerRef}
-          variant="ghost"
-          size="sm"
-          aria-label={triggerLabel}
-          className={cn("h-8 w-8 p-0", className)}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreVertical className="h-4 w-4" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
+      {triggerIcon ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {trigger}
+          </TooltipTrigger>
+          <TooltipContent side="left">Actions</TooltipContent>
+        </Tooltip>
+      ) : trigger}
       {/* note: the shared DropdownMenuContent animates in and out with no reduced-motion
           guard. Fixing the primitive would touch every menu in the app, so the override is
           scoped here, as create-menu.tsx already does. */}
