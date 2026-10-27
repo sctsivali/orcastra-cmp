@@ -219,6 +219,11 @@ services:
       - OPENSEARCH_PORT=${OPENSEARCH_PORT:-9200}
       - OPENSEARCH_USER=${OPENSEARCH_USER:-fluentbit}
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD is required}
+      # Disk buffer per log stream while OpenSearch cannot take logs (storage.total_limit_size in
+      # config/fluent-bit/fluent-bit.conf). Size it to the host: the defaults need 14G free.
+      - FLUENT_BIT_ACCESS_BUFFER_LIMIT=${FLUENT_BIT_ACCESS_BUFFER_LIMIT:-2G}
+      - FLUENT_BIT_AUDIT_BUFFER_LIMIT=${FLUENT_BIT_AUDIT_BUFFER_LIMIT:-8G}
+      - FLUENT_BIT_APP_BUFFER_LIMIT=${FLUENT_BIT_APP_BUFFER_LIMIT:-4G}
     networks:
       - orcastra-dashboard
     depends_on:
