@@ -204,6 +204,11 @@ def _install_scope_sequence(monkeypatch, *, role: str, outcome: str) -> dict[str
     monkeypatch.setattr(org_scope, "get_tenant_scope", _tenant_scope)
     monkeypatch.setattr(org_scope, "get_visible_projects", _visible_projects)
     monkeypatch.setattr(org_scope, "_resolve_user_org_names", _org_names)
+
+    async def _no_read_only(*_args):
+        return frozenset()
+
+    monkeypatch.setattr(org_scope, "_partner_read_only", _no_read_only)
     return state
 
 

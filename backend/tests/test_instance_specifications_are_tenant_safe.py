@@ -313,7 +313,7 @@ def test_tenant_acl_query_revokes_inactive_unbound_and_cross_org_grants():
                 self.statements = []
             self.statements.append(statement)
             if len(self.statements) == 1:
-                return _Result(rows=[(rule, 7, "tenant-policy", "local", None, None)])
+                return _Result(rows=[(rule, 7, "tenant-policy", "local", None, None, "local", "partner@example.test")])
             return _Result(scalar_rows=[])
 
     db = _DB()
@@ -347,7 +347,10 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         connection.execute(
-            text("CREATE TABLE organizations (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL)")
+            text(
+                "CREATE TABLE organizations (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL, "
+                "source TEXT NOT NULL DEFAULT 'local')"
+            )
         )
         connection.execute(
             text(
@@ -359,7 +362,8 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
         connection.execute(
             text(
                 "CREATE TABLE organization_clusters "
-                "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL)"
+                "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL, "
+                "registered_by TEXT)"
             )
         )
         connection.execute(
@@ -387,7 +391,7 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
             )
         )
         connection.execute(
-            text("INSERT INTO organizations VALUES (:id, :active)"),
+            text("INSERT INTO organizations (id, is_active) VALUES (:id, :active)"),
             [
                 {"id": 1, "active": False},
                 {"id": 2, "active": True},
@@ -404,7 +408,7 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
             ],
         )
         connection.execute(
-            text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster)"),
+            text("INSERT INTO organization_clusters (id, organization_id, cluster_id) VALUES (:id, :org, :cluster)"),
             [
                 {"id": 21, "org": 1, "cluster": HOST},
                 {"id": 22, "org": 2, "cluster": HOST},

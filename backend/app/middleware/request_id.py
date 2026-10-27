@@ -59,6 +59,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             client_ip=self._get_client_ip(request),
             user_agent=request.headers.get("user-agent"),
             origin=request.headers.get("origin"),
+            method=request.method,
+            path=request.url.path,
         )
         
         # Set context for this request

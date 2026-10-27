@@ -26,6 +26,9 @@ class RequestContext:
     client_ip: Optional[str] = None
     user_agent: Optional[str] = None
     origin: Optional[str] = None
+    # The HTTP method and path, so a scope check can tell a change from a read (core/org_scope.py).
+    method: Optional[str] = None
+    path: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     # backward-compatible alias - user_type is always identical to user_role

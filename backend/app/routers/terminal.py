@@ -464,7 +464,7 @@ async def terminal_websocket(
         return
 
     # set org scope for WebSocket (context variable)
-    await set_org_scope_for_ws(user)
+    await set_org_scope_for_ws(user, interactive=True)
 
     # important: the console WebSocket added this and the terminal one never had it, so the
     # organisation boundary here rested entirely on the break-glass gate below and on a flag whose

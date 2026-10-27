@@ -41,6 +41,7 @@ from app.core.database import get_db
 from app.core.cache import get_cache_manager
 from app.core.config import get_settings
 from app.core.tenant_term import policy_phase
+from app.core.sale_term import sold_to_without_registering
 from app.models.db_models import (
     Organization,
     OrganizationMember,
@@ -521,6 +522,27 @@ async def _policy_rules(db: AsyncSession, policy_id: int) -> List[TenantPolicyRu
     return list(result.scalars().all())
 
 
+async def _refuse_rules_a_purchase_does_not_pay_for(
+    db: AsyncSession, user: AuthenticatedUser, organization_id: int, cluster_ids: list[str],
+) -> None:
+    """A buyer organization reaches a sold cluster through its purchase, whose policies come from
+    OrcaHub with the paid term on them. A rule written here would grant access no purchase pays for
+    and that no term ends, so only the seller's side or an Administrator may write one.
+    """
+    if get_highest_role(resolve_roles(user)) == Role.ADMIN:
+        return
+    refused = await sold_to_without_registering(db, organization_id, cluster_ids, user.email)
+    if refused:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Cluster '{sorted(refused)[0]}' reaches this organization through a purchase. Its "
+                "access comes from the purchase and ends with it, so a rule there can only be written "
+                "by the seller or an Administrator."
+            ),
+        )
+
+
 @router.post(
     "/policies",
     response_model=PolicyResponse,
@@ -535,6 +557,7 @@ async def create_policy(
 ):
     """Create a new tenant access policy with rules."""
     org = await _verify_org_access(user, body.organization_id, db, require_write=True)
+    await _refuse_rules_a_purchase_does_not_pay_for(db, user, org.id, [r.cluster_id for r in body.rules])
 
     # validate cluster_ids in rules against org's clusters
     allowed_clusters = get_current_allowed_clusters()
@@ -665,6 +688,10 @@ async def update_policy(
         raise HTTPException(status_code=404, detail="Policy not found")
 
     await _verify_org_access(user, policy.organization_id, db, require_write=True)
+    if body.rules is not None:
+        await _refuse_rules_a_purchase_does_not_pay_for(
+            db, user, policy.organization_id, [r.cluster_id for r in body.rules],
+        )
 
     async with _guard_rules_mutation(
         list(body.rules or []),

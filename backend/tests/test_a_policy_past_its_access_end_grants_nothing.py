@@ -41,9 +41,9 @@ def db():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
         for ddl in (
-            "CREATE TABLE organizations (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL)",
+            "CREATE TABLE organizations (id INTEGER PRIMARY KEY, is_active BOOLEAN NOT NULL, source TEXT NOT NULL DEFAULT 'local')",
             "CREATE TABLE organization_members (id INTEGER PRIMARY KEY, organization_id INTEGER, user_email TEXT)",
-            "CREATE TABLE organization_clusters (id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT)",
+            "CREATE TABLE organization_clusters (id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT, registered_by TEXT)",
             "CREATE TABLE tenant_access_policies (id INTEGER PRIMARY KEY, organization_id INTEGER, name TEXT, "
             "source TEXT NOT NULL, term_ended_at DATETIME, access_ends_at DATETIME)",
             "CREATE TABLE tenant_policy_assignments (id INTEGER PRIMARY KEY, policy_id INTEGER, org_member_id INTEGER, "
@@ -52,9 +52,9 @@ def db():
             "project_name TEXT, instance_name TEXT, permissions TEXT, created_at DATETIME)",
         ):
             conn.execute(text(ddl))
-        conn.execute(text("INSERT INTO organizations VALUES (1, 1)"))
+        conn.execute(text("INSERT INTO organizations (id, is_active) VALUES (1, 1)"))
         conn.execute(text("INSERT INTO organization_members VALUES (11, 1, :e)"), {"e": EMAIL})
-        conn.execute(text("INSERT INTO organization_clusters VALUES (21, 1, :h)"), {"h": HOST})
+        conn.execute(text("INSERT INTO organization_clusters (id, organization_id, cluster_id) VALUES (21, 1, :h)"), {"h": HOST})
         policies = [
             (31, "auto:paid", "orcahub", None, None),
             (32, "auto:retention", "orcahub", _iso(NOW - timedelta(days=2)), _iso(NOW + timedelta(days=28))),

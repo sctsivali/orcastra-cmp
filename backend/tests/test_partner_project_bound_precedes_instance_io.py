@@ -135,7 +135,7 @@ class _Socket:
     [console.console_websocket, terminal.terminal_websocket],
 )
 def test_a_foreign_project_websocket_is_closed_before_accept(monkeypatch, handler):
-    async def keep_test_scope(_user):
+    async def keep_test_scope(_user, **_kwargs):
         return None
 
     owner = console if handler is console.console_websocket else terminal

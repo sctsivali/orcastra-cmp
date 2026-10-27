@@ -25,6 +25,7 @@ from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.core.tenant_term import clamp, policy_phase
+from app.core.sale_term import ENDED as SALE_ENDED, READ_ONLY as SALE_READ_ONLY, latest_access_end, orcahub_terms, sale_phase
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,29 @@ _tenant_acl_var: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar
 _visible_projects_var: contextvars.ContextVar[Optional[dict[str, set[str]]]] = (
     contextvars.ContextVar("visible_projects", default=None)
 )
+
+# Clusters a role_partner buyer reaches only through purchases past their paid term: it may read
+# them, not change anything there (core/sale_term.py). Empty for everyone else.
+_read_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
+    "read_only_clusters", default=frozenset()
+)
+# Set by an interactive socket (console, terminal): driving a guest is a change, not a read.
+_interactive_var: contextvars.ContextVar[bool] = contextvars.ContextVar("interactive_scope", default=False)
+
+_READS = frozenset({"GET", "HEAD", "OPTIONS"})
+# POSTs that only read: a socket ticket is checked again by the socket it opens.
+_READ_POSTS = ("/ws-tickets",)
+
+
+def _is_change() -> bool:
+    if _interactive_var.get():
+        return True
+    from app.core.request_context import get_request_context
+
+    ctx = get_request_context()
+    if ctx is None or not ctx.method or ctx.method.upper() in _READS:
+        return False
+    return not any((ctx.path or "").endswith(suffix) for suffix in _READ_POSTS)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +186,14 @@ def verify_cluster_access(cluster_id: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied: cluster '{cluster_id}' is not in your organization",
+        )
+    if cluster_id in _read_only_clusters_var.get() and _is_change():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"The paid term for your access to cluster '{cluster_id}' has ended. It is view only "
+                "until the provider removes it."
+            ),
         )
 
 
@@ -450,6 +482,8 @@ async def get_tenant_policy_grants(
             TenantAccessPolicy.source,
             TenantAccessPolicy.term_ended_at,
             TenantAccessPolicy.access_ends_at,
+            Organization.source,
+            OrganizationCluster.registered_by,
         )
         .join(
             TenantAccessPolicy,
@@ -501,9 +535,28 @@ async def get_tenant_policy_grants(
         )
     )
     rows = (await db.execute(stmt)).unique().all()
+    # important: a local policy in a buyer organization naming a cluster the buyer reaches only by
+    # purchase follows that purchase's term. Without this a rule a founder wrote while the term ran
+    # kept granting after it ended (security review 2026-10-27, core/sale_term.py).
+    sale_terms = {}
+    if enforce_term:
+        bought = {
+            row[1] for row in rows
+            if row[3] != "orcahub" and row[6] == "orcahub" and row[7] is None
+        }
+        sale_terms = await orcahub_terms(db, bought)
     grants = []
-    for rule, organization_id, policy_name, source, term_ended_at, access_ends_at in rows:
+    for rule, organization_id, policy_name, source, term_ended_at, access_ends_at, org_source, registered_by in rows:
         stored = frozenset(rule.permissions if isinstance(rule.permissions, list) else [])
+        if enforce_term and source != "orcahub" and org_source == "orcahub" and registered_by is None:
+            terms = sale_terms.get((organization_id, rule.cluster_id), [])
+            phase = sale_phase(terms, now)
+            if phase == SALE_ENDED:
+                continue
+            if phase == SALE_READ_ONLY:
+                # Shown with the purchase's own dates, so the notice says when it ends.
+                term_ended_at = max(t for t, _a in terms if t is not None)
+                access_ends_at = latest_access_end(terms)
         state = policy_phase(
             source=source, term_ended_at=term_ended_at, access_ends_at=access_ends_at,
             permissions=stored, now=now,
@@ -655,6 +708,10 @@ async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
         .where(
             TenantAccessPolicy.organization_id == Organization.id,
             TenantPolicyRule.cluster_id == OrganizationCluster.cluster_id,
+            # important: only the purchase's own policies. A local policy a founder wrote in the
+            # buyer organization would otherwise keep the binding, and the founder's reach, alive
+            # after the purchase ended (security review 2026-10-27).
+            TenantAccessPolicy.source == "orcahub",
             or_(
                 not get_settings().tenant_term_enforcement_enabled,
                 TenantAccessPolicy.access_ends_at.is_(None),
@@ -1216,6 +1273,20 @@ def _narrow_by_tenant_acl(
 # FastAPI dependency (add to router-level dependencies list)
 # ---------------------------------------------------------------------------
 
+async def _partner_read_only(
+    user: "AuthenticatedUser", db: AsyncSession, allowed: Optional[set[str]],
+) -> frozenset:
+    """The clusters this Partner may only read: reached through purchases past their paid term."""
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+    from app.core.sale_term import partner_read_only_clusters
+
+    if allowed is None or db is None or not get_settings().tenant_term_enforcement_enabled:
+        return frozenset()
+    if get_highest_role(resolve_roles(user)) != Role.PARTNER:
+        return frozenset()
+    return frozenset(await partner_read_only_clusters(db, user.email) & allowed)
+
+
 async def org_scope_dependency(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -1224,6 +1295,8 @@ async def org_scope_dependency(
     Router-level dependency that sets the org-scope context variable
     and tenant ACL if applicable.
     """
+    _interactive_var.set(False)
+    _read_only_clusters_var.set(frozenset())
     if user is None:
         # dev mode - no filter
         _allowed_clusters_var.set(None)
@@ -1249,6 +1322,7 @@ async def org_scope_dependency(
         # needs a project bound as well. Admin remains unrestricted.
         tenant_visible_projects = await get_visible_projects(user, db)
     _visible_projects_var.set(tenant_visible_projects)
+    _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
 
     # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
@@ -1261,10 +1335,15 @@ async def org_scope_dependency(
         ctx.user_orgs = org_names
 
 
-async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
+async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"], *, interactive: bool = False) -> None:
     """
     Set org scope and tenant ACL for WebSocket handlers where DI is unavailable.
+
+    `interactive` for a socket that drives a guest (console, terminal): on a cluster a buyer reaches
+    only through an ended paid term, that is refused like any other change.
     """
+    _interactive_var.set(interactive)
+    _read_only_clusters_var.set(frozenset())
     if user is None:
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
@@ -1298,6 +1377,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         if tenant_grants is None:
             tenant_visible_projects = await get_visible_projects(user, db)
         _visible_projects_var.set(tenant_visible_projects)
+        _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
 
         # important: the same narrowing as the HTTP dependency, through the same helper. These
         # were two duplicated blocks, which is how the empty-ACL fallback survived: fixing one

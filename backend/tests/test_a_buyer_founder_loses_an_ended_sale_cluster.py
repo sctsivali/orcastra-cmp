@@ -73,3 +73,14 @@ async def test_an_ended_sale_takes_the_cluster_away(kwargs) -> None:
 async def test_only_a_sale_binding_is_scoped_to_its_sale(kwargs) -> None:
     db = await _world(with_rule=False, **kwargs)
     assert await org_scope._query_owned_clusters(FOUNDER, db) == {"sale-cluster"}
+
+
+async def test_a_local_rule_the_founder_wrote_does_not_keep_the_sale_alive() -> None:
+    """Security review 2026-10-27: only the purchase's own (OrcaHub) policies count."""
+    db = await _world(access_ends_at=NOW - timedelta(minutes=1))
+    db.add(TenantAccessPolicy(id=71, organization_id=7, name="founder-rule", source="local", created_by=FOUNDER))
+    await db.commit()
+    db.add(TenantPolicyRule(policy_id=71, cluster_id="sale-cluster", project_name="shop",
+                            instance_name="*", permissions=["view", "operate"]))
+    await db.commit()
+    assert await org_scope._query_owned_clusters(FOUNDER, db) == set()

@@ -1656,7 +1656,7 @@ async def console_websocket(
         return
 
     # set org scope for WebSocket (context variable)
-    await set_org_scope_for_ws(user)
+    await set_org_scope_for_ws(user, interactive=True)
 
     # important: the REST console path checks this and the WebSocket did not, so the same
     # session opened over a socket skipped the organisation boundary entirely. Closing rather
