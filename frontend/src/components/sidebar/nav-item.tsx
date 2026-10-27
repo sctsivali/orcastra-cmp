@@ -7,6 +7,7 @@ import type { NavItem, NavRenderContext } from "./types";
 import { TerminalMenuItem, ConsoleMenuItem } from "./session-menu-items";
 import { NavItemSpinner } from "./nav-link-status";
 import { linkIntentProps } from "@/components/navigation/route-intent";
+import { HostHealthCount } from "@/components/host-health/host-health-count";
 
 interface NavItemRowProps {
   item: NavItem;
@@ -47,6 +48,7 @@ export function NavItemRow({ item, ctx }: NavItemRowProps) {
       >
         <Icon className="h-4 w-4 mr-2 shrink-0" />
         {item.label}
+        {item.badge === "host-health" && <HostHealthCount />}
         <NavItemSpinner />
       </Link>
     </Button>

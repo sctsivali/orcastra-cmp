@@ -24,6 +24,7 @@ import {
   Blocks,
   History,
   ArrowLeftRight,
+  HeartPulse,
 } from "lucide-react";
 import type { QueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -103,6 +104,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "operations", label: "Operations", href: "/inventory/operations", icon: Cog },
       { id: "migrations", label: "Migrations", href: "/inventory/migrations", icon: ArrowLeftRight },
       { id: "warnings", label: "Warnings", href: "/inventory/warnings", icon: AlertTriangle },
+      // The dashboard's own dependencies (Vault, logging, IdP, Postgres, Redis, disk), kept apart
+      // from the clusters' warnings above. Admin only: it names internal addresses and unseals Vault.
+      { id: "host-health", label: "Host Health", href: "/inventory/warnings/host-health", icon: HeartPulse, role: "admin", indent: true, badge: "host-health" },
     ],
   },
   {

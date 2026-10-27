@@ -1,8 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Loader2, Unlock, RefreshCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TableLink } from "@/components/ui/table-link";
+import { UnsealVaultDialog } from "@/components/host-health/unseal-vault-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useVaultStatus } from "@/hooks/use-vault-status";
 
@@ -16,8 +18,9 @@ const ADMIN_COPY: Record<NonNullable<ReturnType<typeof useVaultStatus>["state"]>
     body: (
       <>
         Cluster credentials are locked, so cluster data cannot be read and lists may be empty or out
-        of date. Unseal Vault with <span className="font-mono text-foreground">vault operator unseal</span>,
-        repeated up to its key threshold.
+        of date. Unseal it here with the key shares, or run{" "}
+        <span className="font-mono text-foreground">vault operator unseal</span> on the Vault host up to its key
+        threshold.
       </>
     ),
   },
@@ -43,6 +46,7 @@ const OPERATOR_COPY = {
 export function VaultNotice() {
   const { state, status, checking, checkNow } = useVaultStatus();
   const { isAdmin } = usePermissions();
+  const [unsealOpen, setUnsealOpen] = useState(false);
   if (!state) return null;
 
   const { title, body } = isAdmin ? ADMIN_COPY[state] : OPERATOR_COPY;
@@ -65,13 +69,28 @@ export function VaultNotice() {
               This notice clears on its own when Vault recovers.
             </p>
             {reason && <p className="font-mono text-xs text-muted-foreground break-all">{reason}</p>}
+            {isAdmin && (
+              <p className="text-muted-foreground">
+                <TableLink href="/inventory/warnings/host-health">Host Health</TableLink> shows every service the
+                dashboard depends on.
+              </p>
+            )}
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={checkNow} disabled={checking} className="shrink-0 self-start">
-          {checking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-          Check now
-        </Button>
+        <div className="flex shrink-0 flex-wrap gap-2 self-start">
+          {isAdmin && state === "sealed" && (
+            <Button size="sm" onClick={() => setUnsealOpen(true)}>
+              <Unlock className="mr-2 h-4 w-4" aria-hidden="true" />
+              Unseal Vault
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={checkNow} disabled={checking}>
+            {checking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Check now
+          </Button>
+        </div>
       </div>
+      {isAdmin && <UnsealVaultDialog open={unsealOpen} onOpenChange={setUnsealOpen} />}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import type { NavGroup, NavItem, NavRenderContext } from "./types";
 import { NavItemRow } from "./nav-item";
 import { NavRailIcon } from "./nav-link-status";
 import { linkIntentProps } from "@/components/navigation/route-intent";
+import { useHostHealthAttention } from "@/components/host-health/host-health-count";
 
 // A pinned leaf icon on the collapsed rail: icon-only link with a tooltip label.
 function RailLeaf({ item, ctx }: { item: NavItem; ctx: NavRenderContext }) {
@@ -55,7 +56,11 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
 
   const terminalCount = useTerminalStore((s) => s.terminals.length);
   const consoleCount = useConsoleStore((s) => s.consoles.length);
-  const badge = group.id === "compute" ? terminalCount + consoleCount : 0;
+  // note: only a group that carries the Host Health item counts it, and that item is admin-only,
+  // so the filtered tree never hands a non-admin's group one.
+  const attention = useHostHealthAttention(group.items.some((i) => i.badge === "host-health"));
+  const sessions = group.id === "compute" ? terminalCount + consoleCount : 0;
+  const badge = sessions + attention;
 
   const openNow = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -97,8 +102,11 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
   const Icon = group.icon ?? group.items[0]?.icon;
 
 
-  const triggerLabel =
-    badge > 0 ? `${group.label}, ${badge} active session${badge === 1 ? "" : "s"}` : group.label;
+  const counted = [
+    sessions > 0 ? `${sessions} active session${sessions === 1 ? "" : "s"}` : null,
+    attention > 0 ? `${attention} host service${attention === 1 ? " needs" : "s need"} attention` : null,
+  ].filter(Boolean);
+  const triggerLabel = counted.length > 0 ? `${group.label}, ${counted.join(", ")}` : group.label;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

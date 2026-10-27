@@ -53,6 +53,9 @@ const QUERY_FAMILY_KEYS = {
   userGroups: [["user-groups"]],
   tasks: [["tasks"], ["task"], ["cluster-log"]],
   migrations: [["migrations"]],
+  // note: not ["vault-status"]. A plain re-read there can land on a worker still holding "sealed"
+  // for ten seconds; an unseal hands the notice a fresh read instead (announceUnsealed).
+  hostHealth: [["host-health"], ["vault-seal-status"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type QueryFamily = keyof typeof QUERY_FAMILY_KEYS;
@@ -368,6 +371,12 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     completion: "response",
     queryFamilies: ["instanceDetails", "tasks"],
     apiCalls: ["fileTransferAPI.push"],
+  },
+  // The answer is Vault's: progress moves at once, and an unseal hands the notice a fresh status.
+  "vault.unseal": {
+    completion: "response",
+    queryFamilies: ["hostHealth", "tasks"],
+    apiCalls: ["hostHealthAPI.unseal"],
   },
 } as const);
 

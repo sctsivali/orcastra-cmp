@@ -418,7 +418,14 @@ export const authConfig: NextAuthConfig = {
         (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
       );
 
-      if (isAdminOrPartnerRoute && !isPartner) {
+      // Host Health names internal addresses and unseals Vault: a platform operator's page.
+      // The API refuses a non-admin on its own; this keeps the page shell from loading at all.
+      const adminOnlyPaths = ["/inventory/warnings/host-health"];
+      const isAdminOnlyRoute = adminOnlyPaths.some(
+        (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
+      );
+
+      if ((isAdminOrPartnerRoute && !isPartner) || (isAdminOnlyRoute && !isAdmin)) {
         return Response.redirect(redirectTo(nextUrl, host, "/"));
       }
 

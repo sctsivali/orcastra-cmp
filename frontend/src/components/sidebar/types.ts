@@ -19,6 +19,9 @@ export interface NavItem {
   // note: renders one level deeper in the expanded tree. Terminals and Consoles are live
   // instances of what /inventory/sessions lists, and that hierarchy is meaningful.
   indent?: boolean;
+  // A live count beside the label, and on the collapsed rail's group icon. Admin-only items only:
+  // the count's read is refused (and audited) for any other role.
+  badge?: "host-health";
 }
 
 export interface NavGroup {
