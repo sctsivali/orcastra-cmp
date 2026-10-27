@@ -13,15 +13,15 @@ import threading
 import time
 from contextlib import nullcontext
 from functools import partial
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Optional, List, Dict, Any, Awaitable, Callable, FrozenSet, NamedTuple, Tuple, Type, TypeVar, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request, Response
-from pydantic import BaseModel, Field, SecretStr, StringConstraints, ValidationError, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, SecretStr, StringConstraints, ValidationError, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd.proxy_path_params import assert_path_params
-from app.services import api_key_usage, cluster_generations, project_deletion
+from app.services import api_key_usage, cluster_generations, instance_grants, project_deletion
 from app.services.integration_cluster_checks import (
     cluster_display_names_sync as _cluster_display_names_sync,
     cluster_infos_sync as _cluster_infos_sync,
@@ -67,6 +67,10 @@ from app.services.lxd.limited_write_reach import (
 from app.services.lxd.cloud_init_reach import cloud_init_changes, proxy_cloud_init_owed, refuse_changed_cloud_init
 from app.services.lxd.operation_metadata import redact_operation_response
 from app.services.settle_invalidation import invalidate_when_settled
+from app.services.raw_project_delete import delete_through_core, raw_project_delete_target
+from app.core.tenant_term import TermDates, TermDatesInvalid, TermDatesStale, merge_and_validate, policy_phase
+from app.services import stranded_rules
+from app.services.stranded_rules import raw_stranding_target
 from app.services.lxd.raw_proxy_operations import (
     LXD_OPERATION_NOT_FOUND,
     OwnerUnknown,
@@ -4909,6 +4913,19 @@ async def raw_proxy(
                         "operation_not_visible",
                     )
                     return RawProxyResponse(status_code=404, data=dict(LXD_OPERATION_NOT_FOUND), headers={})
+            # important: a project DELETE goes through the shared deletion core, which revokes the
+            # access rules naming the project once it is gone. Sent straight to LXD it left them
+            # behind, and a buyer whose project OrcaHub removed kept the cluster in scope.
+            deleted_project = raw_project_delete_target(method, request.path)
+            if deleted_project is not None:
+                return await _raw_project_delete(
+                    lxd_service, client, request, api_key, project, deleted_project, full_url
+                )
+            # An instance delete, rename or move, or a project rename, leaves the rules naming the
+            # old name for whatever is created under it next (services/stranded_rules.py).
+            forget_stranded = await stranded_rules.capture(
+                request.cluster_id, raw_stranding_target(method, request.path, request.body, project)
+            )
             response = await run_blocking(
                 raw_request,
                 client.api.session,
@@ -4972,7 +4989,10 @@ async def raw_proxy(
                         get_cache_manager().invalidate_after_external_write,
                         label=f"raw_proxy[{method} {request.cluster_id}]",
                         bucket=f"key:{api_key.get('id')}",
+                        on_outcome=forget_stranded,
                     )
+                elif status_code != 202 and forget_stranded is not None:
+                    await forget_stranded("Success")
 
             return RawProxyResponse(
                 status_code=status_code,
@@ -5050,6 +5070,89 @@ async def raw_proxy(
             data=None,
             error=str(e),
         )
+
+
+def _instance_rule_forgetter(
+    cluster_id: str, project: Optional[str], instance_name: Any, rule_ids: FrozenSet[int]
+) -> Optional[Callable[[str], Awaitable[None]]]:
+    """Forget the captured rules naming a deleted instance, once its delete is known to have landed."""
+    if not rule_ids or not isinstance(instance_name, str) or not instance_name:
+        return None
+
+    async def forget(outcome: str) -> None:
+        if outcome != "Success":
+            return
+        await instance_grants.forget_deleted_instance(
+            cluster_id=cluster_id,
+            project_name=project or "default",
+            instance_name=instance_name,
+            only_rule_ids=rule_ids,
+        )
+
+    return forget
+
+
+async def _raw_project_delete(
+    lxd_service: LXDService,
+    client: Any,
+    request: RawProxyRequest,
+    api_key: Dict[str, Any],
+    project: str,
+    name: str,
+    full_url: str,
+) -> RawProxyResponse:
+    """A raw `DELETE /1.0/projects/<name>`, answered with LXD's own reply (services/raw_project_delete.py)."""
+    try:
+        answer = await delete_through_core(
+            lxd_service,
+            client,
+            cluster_id=request.cluster_id,
+            name=name,
+            scope_project=project,
+            requester=api_key.get("id"),
+            full_url=full_url,
+            body=request.body,
+        )
+    except project_deletion.ProjectDeleteUnknown:
+        _audit_raw_proxy(api_key, request, "DELETE", project, "failure", error="timeout")
+        get_cache_manager().invalidate_after_external_write()
+        get_cache_manager().invalidate_project_caches()
+        return RawProxyResponse(
+            status_code=504, data=None, error=_still_running_message("delete_project", request.cluster_id)
+        )
+    except ClusterConfigurationBusy as busy:
+        _audit_raw_proxy(api_key, request, "DELETE", project, "failure", error="cluster_busy")
+        backlogged = isinstance(busy, project_deletion.ProjectDeletesBacklogged)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "project_deletes_backlogged" if backlogged else "cluster_busy",
+                "message": (
+                    f"Earlier project deletes on {request.cluster_id} are still settling. Retry shortly."
+                    if backlogged
+                    else f"Another configuration change on {request.cluster_id} is still running. Retry shortly."
+                ),
+            },
+        ) from busy
+    except MigrationFenceConflict as fenced:
+        _audit_raw_proxy(api_key, request, "DELETE", project, "failure", error="migration_fence")
+        raise HTTPException(
+            status_code=409,
+            detail=f"A migration holds project {name} on {request.cluster_id}; delete it once the migration ends.",
+        ) from fenced
+    except BlockingPoolFull as pool_error:
+        _audit_raw_proxy(api_key, request, "DELETE", project, "failure", error="overloaded")
+        return RawProxyResponse(status_code=503, data=None, error=str(pool_error))
+    status_code = answer.status_code or 500
+    health.clear(request.cluster_id)
+    _audit_raw_proxy(
+        api_key, request, "DELETE", project, "success" if status_code < 400 else "failure", lxd_status=status_code
+    )
+    logger.info(
+        f"Raw proxy: DELETE project {name} on {request.cluster_id} "
+        f"by {request.external_user_email or 'unknown'} via {api_key.get('app_name', 'unknown')} -> {status_code}"
+    )
+    return RawProxyResponse(status_code=status_code, data=answer.data, headers={})
 
 
 def _still_running_message(operation: str, cluster_id: str) -> str:
@@ -5402,6 +5505,14 @@ async def proxy_operation(
         from app.services.desktop.entry import serve_wait, wait_seconds
 
         _desktop_wait = wait_seconds(operation, request.params or {})
+        # A rule naming the instance must not pass to the next instance created under its name
+        # (services/instance_grants.py): captured before the delete, forgotten once it landed.
+        deleted_instance = (request.params or {}).get("name") if operation == "delete_instance" else None
+        instance_rules = (
+            await instance_grants.rule_ids_naming_instance(request.cluster_id, request.project, deleted_instance)
+            if isinstance(deleted_instance, str) and deleted_instance
+            else frozenset()
+        )
         try:
             if _desktop_wait is not None:
                 # important: on the event loop, after every permission, consent and budget check
@@ -5449,6 +5560,9 @@ async def proxy_operation(
                 pending_operation = (
                     result_data.get("operation_id") if isinstance(result_data, dict) else None
                 )
+                forget_rules = _instance_rule_forgetter(
+                    request.cluster_id, request.project, deleted_instance, instance_rules
+                )
                 if pending_operation:
                     # accepted but not finished (wait=false or a long operation): clear again
                     # once LXD settles it
@@ -5460,7 +5574,10 @@ async def proxy_operation(
                         get_cache_manager().invalidate_after_external_write,
                         label=f"proxy_operation[{operation} {request.cluster_id}]",
                         bucket=f"key:{api_key.get('id')}",
+                        on_outcome=forget_rules,
                     )
+                elif forget_rules is not None:
+                    await forget_rules("Success")
         except BlockingTimeout as timeout_error:
             # important: exec lands HERE, not in the generic handler below, so its audit record
             # and its "still running" message have to be written on this path too. They were only
@@ -6928,6 +7045,18 @@ class SyncPolicyAssignment(BaseModel):
     expires_at: Optional[str] = None
 
 
+def _assignment_expiry(raw: Optional[str]) -> Optional[datetime]:
+    """An assignment expiry as an instant. A value without an offset was always written as UTC.
+
+    note: kept a string on the wire, as OrcaHub sends it today; a bare `fromisoformat` handed the
+    database a naive value for a timestamptz column, which compared wrongly against aware now().
+    """
+    if not raw:
+        return None
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 class SyncPolicy(BaseModel):
     """Policy to sync from OrcaHub."""
     external_id: str = Field(..., description="UUID from OrcaHub")
@@ -6936,6 +7065,10 @@ class SyncPolicy(BaseModel):
     org_external_id: str = Field(..., description="Organization's external_id")
     rules: List[SyncPolicyRule] = []
     assignments: List[SyncPolicyAssignment] = []
+    # Same meaning as on provision-tenant-access: absent keeps the stored value, null clears it.
+    term_ended_at: Optional[AwareDatetime] = Field(default=None, description="When the paid term ended or ends")
+    access_ends_at: Optional[AwareDatetime] = Field(default=None, description="When the retention window ends")
+    as_of: Optional[AwareDatetime] = Field(default=None, description="When the sender decided these dates")
 
 
 class SyncPoliciesRequest(BaseModel):
@@ -7043,6 +7176,15 @@ async def sync_policies_from_external(
             result = await db.execute(existing_stmt)
             policy = result.scalar_one_or_none()
 
+            # Refused before this policy is touched, so a stale or impossible term skips it whole.
+            received_term = _received_term(sync_policy)
+            try:
+                merged_term = _merged_term(policy, received_term) if received_term else None
+            except HTTPException as refusal:
+                detail = refusal.detail if isinstance(refusal.detail, dict) else {"message": str(refusal.detail)}
+                errors.append(f"Policy '{sync_policy.name}': {detail.get('message')}")
+                continue
+
             if policy:
                 # update existing
                 policy.name = sync_policy.name
@@ -7060,6 +7202,10 @@ async def sync_policies_from_external(
                 )
                 db.add(policy)
                 await db.flush()
+            if merged_term is not None:
+                policy.term_ended_at = merged_term.term_ended_at
+                policy.access_ends_at = merged_term.access_ends_at
+                policy.term_as_of = merged_term.as_of
 
             # replace rules
             await db.execute(
@@ -7098,18 +7244,21 @@ async def sync_policies_from_external(
                         )
                     )
                 )
-                if not existing_assign.scalar_one_or_none():
+                assignment = existing_assign.scalar_one_or_none()
+                expires_at = _assignment_expiry(assign_data.expires_at)
+                if not assignment:
                     db.add(TenantPolicyAssignment(
                         policy_id=policy.id,
                         org_member_id=member.id,
                         assigned_by=f"orcahub:{api_key_id}",
                         source="orcahub",
                         external_id=sync_policy.external_id,
-                        expires_at=(
-                            datetime.fromisoformat(assign_data.expires_at)
-                            if assign_data.expires_at else None
-                        ),
+                        expires_at=expires_at,
                     ))
+                elif assignment.source == "orcahub" and assignment.expires_at != expires_at:
+                    # An assignment OrcaHub made follows OrcaHub's expiry; one a partner made here
+                    # keeps its own.
+                    assignment.expires_at = expires_at
 
             synced_count += 1
 
@@ -7120,11 +7269,9 @@ async def sync_policies_from_external(
     await db.commit()
 
     # This path changes what tenants may see on behalf of an external system, where nobody is
-    # watching a UI to notice a stale list. invalidate_instance_cache advances the generation the
-    # instance lists fence on, so a read already in flight cannot write the old scope back.
-    sync_cache = get_cache_manager()
-    sync_cache.invalidate_instance_cache()
-    sync_cache.invalidate_resource_cache("projects")
+    # watching a UI to notice a stale list. The helper advances the generation the instance lists
+    # fence on, so a read already in flight cannot write the old scope back.
+    get_cache_manager().invalidate_after_access_change()
     return {
         "message": f"Synced {synced_count} policies",
         "synced": synced_count,
@@ -7198,6 +7345,8 @@ async def get_policies_for_external(
             ],
             "created_at": policy.created_at.isoformat() if policy.created_at else None,
             "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
+            "term_ended_at": _iso(policy.term_ended_at),
+            "access_ends_at": _iso(policy.access_ends_at),
         })
 
     return {"policies": response_policies, "total": len(response_policies)}
@@ -7242,6 +7391,38 @@ class ProvisionTenantAccessRequest(BaseModel):
     # Auto-creation fields - sent when buyer org might not exist in Orcastra yet
     organization_name: Optional[str] = Field(default=None, description="Org name for auto-creation")
     organization_slug: Optional[str] = Field(default=None, description="Org slug for auto-creation")
+    # The paid term (core/tenant_term.py). Absent leaves the stored value, null clears it.
+    term_ended_at: Optional[AwareDatetime] = Field(
+        default=None,
+        description=(
+            "When the buyer's paid term ended or ends. From then on the access is view only: no "
+            "start, stop, console or snapshot. Absent keeps the stored value; null clears it."
+        ),
+    )
+    access_ends_at: Optional[AwareDatetime] = Field(
+        default=None,
+        description=(
+            "When the retention window ends. From then on the access grants nothing, even if no "
+            "revoke follows. Must not be before term_ended_at. Absent keeps; null clears."
+        ),
+    )
+    as_of: Optional[AwareDatetime] = Field(
+        default=None,
+        description=(
+            "When the sender decided these dates. A request older than the last one recorded is "
+            "refused with 409 stale_provision, so a delayed retry cannot undo a later decision."
+        ),
+    )
+
+    @field_validator("permissions")
+    @classmethod
+    def _known_permissions(cls, value: List[str]) -> List[str]:
+        # important: validated here, before the organization and member rows are written, rather
+        # than after them as it used to be.
+        unknown = set(value) - {"view", "operate", "console", "snapshot", "file_transfer"}
+        if unknown:
+            raise ValueError(f"Invalid permissions: {sorted(unknown)}")
+        return value
 
 
 class ProvisionTenantAccessResponse(BaseModel):
@@ -7255,6 +7436,36 @@ class ProvisionTenantAccessResponse(BaseModel):
     org_created: bool = False
     members_created: int = 0
     cluster_mapped: bool = False
+    term_ended_at: Optional[datetime] = None
+    access_ends_at: Optional[datetime] = None
+    phase: str = "active"
+
+
+_TERM_FIELDS = ("term_ended_at", "access_ends_at", "as_of")
+
+
+def _received_term(body: BaseModel) -> Dict[str, Any]:
+    """The term fields the caller actually sent: an absent field keeps, an explicit null clears."""
+    return {name: getattr(body, name) for name in _TERM_FIELDS if name in body.model_fields_set}
+
+
+def _merged_term(stored: Optional[Any], received: Dict[str, Any]) -> TermDates:
+    """Apply the received dates to the policy's, as the HTTP error the caller should read."""
+    current = TermDates(
+        getattr(stored, "term_ended_at", None),
+        getattr(stored, "access_ends_at", None),
+        getattr(stored, "term_as_of", None),
+    )
+    try:
+        return merge_and_validate(current, received, now=datetime.now(timezone.utc))
+    except TermDatesStale as exc:
+        raise HTTPException(status_code=409, detail={"code": "stale_provision", "message": str(exc)}) from exc
+    except TermDatesInvalid as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_term", "message": str(exc)}) from exc
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value is not None else None
 
 
 async def _ensure_provision_cluster_mapping(
@@ -7334,6 +7545,29 @@ async def provision_tenant_access(
     org_created = False
     members_created = 0
     cluster_mapped = False
+
+    # important: a stale or impossible term is refused before any organization, member or cluster
+    # row below is written, so a refused call leaves nothing behind.
+    from app.models.db_models import TenantAccessPolicy
+
+    received_term = _received_term(body)
+    merged_term: Optional[TermDates] = None
+    if received_term:
+        stored_policy = (
+            await db.execute(
+                select(TenantAccessPolicy)
+                .join(Organization, Organization.id == TenantAccessPolicy.organization_id)
+                .where(
+                    and_(
+                        Organization.source == "orcahub",
+                        Organization.external_id == body.organization_external_id,
+                        owned_by_clause([api_key_id]),
+                        TenantAccessPolicy.name == f"auto:{body.project_name}",
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        merged_term = _merged_term(stored_policy, received_term)
 
     # Step 1: resolve or auto-create org by external UUID
     stmt = select(Organization).where(
@@ -7533,14 +7767,8 @@ async def provision_tenant_access(
 
     await db.flush()
 
-    # validate permissions
-    valid_perms = {"view", "operate", "console", "snapshot", "file_transfer"}
-    invalid = set(body.permissions) - valid_perms
-    if invalid:
-        raise HTTPException(status_code=400, detail=f"Invalid permissions: {invalid}")
-
     # find or create policy for this project (idempotent)
-    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule, TenantPolicyAssignment
+    from app.models.db_models import TenantPolicyRule, TenantPolicyAssignment
 
     policy_name = f"auto:{body.project_name}"
     policy_stmt = select(TenantAccessPolicy).where(
@@ -7551,6 +7779,7 @@ async def provision_tenant_access(
     )
     policy_result = await db.execute(policy_stmt)
     policy = policy_result.scalar_one_or_none()
+    policy_created = policy is None
 
     if not policy:
         policy = TenantAccessPolicy(
@@ -7565,6 +7794,15 @@ async def provision_tenant_access(
         db.add(policy)
         await db.flush()
 
+    term_before = {
+        "term_ended_at": _iso(policy.term_ended_at),
+        "access_ends_at": _iso(policy.access_ends_at),
+    }
+    if merged_term is not None:
+        policy.term_ended_at = merged_term.term_ended_at
+        policy.access_ends_at = merged_term.access_ends_at
+        policy.term_as_of = merged_term.as_of
+
     # upsert rule for this cluster/project/instance
     rule_stmt = select(TenantPolicyRule).where(
         and_(
@@ -7577,6 +7815,7 @@ async def provision_tenant_access(
     rule_result = await db.execute(rule_stmt)
     existing_rule = rule_result.scalar_one_or_none()
     rules_created = 0
+    permissions_before = sorted(existing_rule.permissions or []) if existing_rule else None
 
     if existing_rule:
         existing_rule.permissions = sorted(set(body.permissions))
@@ -7632,11 +7871,49 @@ async def provision_tenant_access(
 
     # invalidate caches so tenants see access immediately
     try:
-        cache = get_cache_manager()
-        cache.invalidate_instance_cache()
-        cache.invalidate_resource_cache("projects")
+        get_cache_manager().invalidate_after_access_change()
     except Exception:
         pass
+
+    # A replay that changed nothing writes no record; a narrower permission set is the downgrade
+    # OrcaHub sends at the end of a paid term, recorded as such.
+    term_after = {"term_ended_at": _iso(policy.term_ended_at), "access_ends_at": _iso(policy.access_ends_at)}
+    permissions_after = sorted(set(body.permissions))
+    changed = (
+        policy_created
+        or rules_created
+        or assignments_created
+        or members_created
+        or permissions_before != permissions_after
+        or term_before != term_after
+    )
+    if changed:
+        _audit_key_action(
+            api_key,
+            action="tenant.access.provision" if policy_created else "tenant.access.update",
+            target_id=policy_name,
+            cluster_id=body.cluster_id,
+            project=body.project_name,
+            details={
+                "permissions_before": permissions_before,
+                "permissions_after": permissions_after,
+                "downgrade": permissions_before is not None and "operate" in permissions_before
+                and "operate" not in permissions_after,
+                "term_before": term_before,
+                "term_after": term_after,
+                "assignments_created": assignments_created,
+                "members_created": members_created,
+            },
+            target_organization_id=org.id,
+            target_organization_slug=org.slug,
+        )
+    term_state = policy_phase(
+        source=policy.source,
+        term_ended_at=policy.term_ended_at,
+        access_ends_at=policy.access_ends_at,
+        permissions=set(permissions_after),
+        now=datetime.now(timezone.utc),
+    )
 
     logger.info(
         f"Tenant access provisioned: policy={policy_name}, org={org.slug}, "
@@ -7654,6 +7931,9 @@ async def provision_tenant_access(
         org_created=org_created,
         members_created=members_created,
         cluster_mapped=cluster_mapped,
+        term_ended_at=policy.term_ended_at,
+        access_ends_at=policy.access_ends_at,
+        phase=term_state.phase,
     )
 
 
@@ -7669,6 +7949,12 @@ class RevokeTenantAccessRequest(BaseModel):
     user_emails: List[str] = Field(
         default_factory=list,
         description="If given, revoke only these users' assignments; otherwise revoke the whole project policy",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z0-9_.-]+$",
+        description="Why the access ends, recorded in the audit trail, for example term_ended or cancelled",
     )
 
 
@@ -7710,11 +7996,28 @@ async def revoke_tenant_access(
 
     def _invalidate_tenant_caches():
         try:
-            cache = get_cache_manager()
-            cache.invalidate_instance_cache()
-            cache.invalidate_resource_cache("projects")
+            get_cache_manager().invalidate_after_access_change()
         except Exception:
             pass
+
+    def _audit_revoke(org: Any, *, policy_deleted: bool, rules: int, assignments: int) -> None:
+        # note: counts only; the emails named in the request are not copied into the trail.
+        _audit_key_action(
+            api_key,
+            action="tenant.access.revoke",
+            target_id=f"auto:{body.project_name}",
+            cluster_id=body.cluster_id,
+            project=body.project_name,
+            details={
+                "reason": body.reason,
+                "policy_deleted": policy_deleted,
+                "rules_deleted": rules,
+                "assignments_deleted": assignments,
+                "users_named": len(body.user_emails),
+            },
+            target_organization_id=org.id,
+            target_organization_slug=org.slug,
+        )
 
     # Resolve org as provision does; absent org = nothing to revoke (idempotent success).
     caller_key_id = api_key.get("id", "")
@@ -7770,6 +8073,7 @@ async def revoke_tenant_access(
         await db.delete(policy)
         await db.commit()
         _invalidate_tenant_caches()
+        _audit_revoke(org, policy_deleted=True, rules=rule_count, assignments=len(assignment_rows))
         logger.info(f"Tenant access revoked (policy): {policy_name}, org={org.slug}, rules={rule_count}, assignments={len(assignment_rows)}")
         return RevokeTenantAccessResponse(
             policy_deleted=True, policy_id=policy_id,
@@ -7788,6 +8092,7 @@ async def revoke_tenant_access(
         await db.delete(policy)
         await db.commit()
         _invalidate_tenant_caches()
+        _audit_revoke(org, policy_deleted=True, rules=rule_count, assignments=len(to_delete))
         logger.info(f"Tenant access revoked (last users -> policy): {policy_name}, org={org.slug}")
         return RevokeTenantAccessResponse(
             policy_deleted=True, policy_id=policy_id,
@@ -7799,6 +8104,8 @@ async def revoke_tenant_access(
         await db.delete(a)
     await db.commit()
     _invalidate_tenant_caches()
+    if to_delete:
+        _audit_revoke(org, policy_deleted=False, rules=0, assignments=len(to_delete))
     logger.info(f"Tenant access revoked (users): {policy_name}, org={org.slug}, assignments={len(to_delete)}")
     return RevokeTenantAccessResponse(
         policy_deleted=False, policy_id=policy.id,

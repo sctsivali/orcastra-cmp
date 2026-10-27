@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.database import get_db
+from app.core.config import get_settings
+from app.core.tenant_term import clamp, policy_phase
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +399,12 @@ class TenantPolicyGrant:
     project_name: str
     instance_name: str
     permissions: frozenset[str]
+    # The paid term the policy stands for (core/tenant_term.py). `permissions` above is
+    # already narrowed by it; these say why, for the tenant's own view of their access.
+    source: str = "local"
+    term_ended_at: Optional[datetime] = None
+    access_ends_at: Optional[datetime] = None
+    read_only: bool = False
 
 
 _resolved_tenant_grants_var: contextvars.ContextVar[
@@ -433,11 +441,15 @@ async def get_tenant_policy_grants(
         return None
 
     now = datetime.now(timezone.utc)
+    enforce_term = get_settings().tenant_term_enforcement_enabled
     stmt = (
         select(
             TenantPolicyRule,
             TenantAccessPolicy.organization_id,
             TenantAccessPolicy.name,
+            TenantAccessPolicy.source,
+            TenantAccessPolicy.term_ended_at,
+            TenantAccessPolicy.access_ends_at,
         )
         .join(
             TenantAccessPolicy,
@@ -473,6 +485,13 @@ async def get_tenant_policy_grants(
                     TenantPolicyAssignment.expires_at.is_(None),
                     TenantPolicyAssignment.expires_at > now,
                 ),
+                # important: a policy whose access has ended grants nothing, whether or not the
+                # revoke that should have followed ever arrived.
+                or_(
+                    not enforce_term,
+                    TenantAccessPolicy.access_ends_at.is_(None),
+                    TenantAccessPolicy.access_ends_at > now,
+                ),
             )
         )
         .order_by(
@@ -482,19 +501,29 @@ async def get_tenant_policy_grants(
         )
     )
     rows = (await db.execute(stmt)).unique().all()
-    grants = [
-        TenantPolicyGrant(
-            organization_id=organization_id,
-            policy_name=policy_name,
-            cluster_id=rule.cluster_id,
-            project_name=rule.project_name,
-            instance_name=rule.instance_name,
-            permissions=frozenset(
-                rule.permissions if isinstance(rule.permissions, list) else []
-            ),
+    grants = []
+    for rule, organization_id, policy_name, source, term_ended_at, access_ends_at in rows:
+        stored = frozenset(rule.permissions if isinstance(rule.permissions, list) else [])
+        state = policy_phase(
+            source=source, term_ended_at=term_ended_at, access_ends_at=access_ends_at,
+            permissions=stored, now=now,
         )
-        for rule, organization_id, policy_name in rows
-    ]
+        # Past the paid term the policy grants viewing only (owner decision 2026-10-27).
+        permissions = clamp(stored, term_ended_at=term_ended_at, now=now) if enforce_term else stored
+        grants.append(
+            TenantPolicyGrant(
+                organization_id=organization_id,
+                policy_name=policy_name,
+                cluster_id=rule.cluster_id,
+                project_name=rule.project_name,
+                instance_name=rule.instance_name,
+                permissions=permissions,
+                source=source or "local",
+                term_ended_at=state.term_ended_at,
+                access_ends_at=state.access_ends_at,
+                read_only=state.read_only,
+            )
+        )
     logger.debug(
         "Tenant grants for %s: %d active provenanced rules",
         user.email,

@@ -27,6 +27,8 @@ CLOUD_INIT = APP / "core" / "cloud_init_config.py"
 BUCKET_KEYS = APP / "core" / "storage_bucket_keys.py"
 BODY_NAMES = APP / "core" / "lxd_body_names.py"
 ROUTER = APP / "routers" / "integrations.py"
+RAW_PROJECT_DELETE = APP / "services" / "raw_project_delete.py"
+STRANDED_RULES = APP / "services" / "stranded_rules.py"
 
 # Functions that take a raw-proxy path string, per file.
 GUARDS: Dict[Path, Tuple[str, ...]] = {
@@ -51,6 +53,9 @@ GUARDS: Dict[Path, Tuple[str, ...]] = {
     BUCKET_KEYS: ("reaches_bucket_keys", "assert_bucket_keys_unreached"),
     BODY_NAMES: ("assert_body_names_addressable",),
     ROUTER: ("_proxy_audit_action",),
+    # The project DELETE and the writes that strand an access rule are recognised by the same parser.
+    RAW_PROJECT_DELETE: ("raw_project_delete_target",),
+    STRANDED_RULES: ("raw_stranding_target",),
 }
 
 # The raw-proxy functions in the router that read `request.path`.

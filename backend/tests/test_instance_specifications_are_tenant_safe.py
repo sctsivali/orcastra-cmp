@@ -313,7 +313,7 @@ def test_tenant_acl_query_revokes_inactive_unbound_and_cross_org_grants():
                 self.statements = []
             self.statements.append(statement)
             if len(self.statements) == 1:
-                return _Result(rows=[(rule, 7, "tenant-policy")])
+                return _Result(rows=[(rule, 7, "tenant-policy", "local", None, None)])
             return _Result(scalar_rows=[])
 
     db = _DB()
@@ -339,6 +339,7 @@ def test_tenant_acl_query_revokes_inactive_unbound_and_cross_org_grants():
     ) in sql
     assert "organizations.is_active = true" in sql
     assert "tenant_policy_assignments.expires_at IS NULL" in sql
+    assert "tenant_access_policies.access_ends_at IS NULL" in sql, "a policy whose access ended grants nothing"
 
 
 def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_rows():
@@ -365,7 +366,8 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
             text(
                 "CREATE TABLE tenant_access_policies "
                 "(id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, "
-                "name TEXT NOT NULL)"
+                "name TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'local', "
+                "term_ended_at DATETIME, access_ends_at DATETIME)"
             )
         )
         connection.execute(
@@ -410,7 +412,7 @@ def test_tenant_acl_join_semantically_excludes_inactive_unbound_and_cross_org_ro
             ],
         )
         connection.execute(
-            text("INSERT INTO tenant_access_policies VALUES (:id, :org, :name)"),
+            text("INSERT INTO tenant_access_policies (id, organization_id, name) VALUES (:id, :org, :name)"),
             [
                 {"id": 31, "org": 1, "name": "inactive"},
                 {"id": 32, "org": 2, "name": "valid"},

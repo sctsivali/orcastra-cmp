@@ -18,7 +18,7 @@ import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
 from app.services.lxd.snapshots import wait_for_operation
 
@@ -47,11 +47,16 @@ def invalidate_when_settled(
     *,
     label: str,
     bucket: str = "dashboard",
+    on_outcome: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> bool:
     """Run `invalidate` once the operation settles. Returns False when no waiter was started.
 
     `get_client` returns the cluster's pylxd client; it runs on this module's threads because
     acquiring a pooled client can revalidate the connection.
+
+    `on_outcome` receives how the wait ended: LXD's status ("Success", "Failure", ...) when the
+    operation settled, or a description of why it is not known. It is awaited after the caches are
+    cleared and must act only on "Success" (an instance's access rules, services/instance_grants.py).
     """
     if not operation_id:
         return False
@@ -63,7 +68,7 @@ def invalidate_when_settled(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return False
-    task = loop.create_task(_settle(get_client, operation_id, project, invalidate, label))
+    task = loop.create_task(_settle(get_client, operation_id, project, invalidate, label, on_outcome))
     _waiters.add(task)
     owned.add(task)
 
@@ -83,6 +88,7 @@ async def _settle(
     project: Optional[str],
     invalidate: Callable[[], None],
     label: str,
+    on_outcome: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + SETTLE_DEADLINE_SECONDS
@@ -130,6 +136,11 @@ async def _settle(
         except Exception:  # noqa: BLE001 - the TTL still bounds the stale window
             logger.warning("settle invalidation failed for %s", label, exc_info=True)
         logger.info("settle %s %s: caches cleared (%s)", label, operation_id, outcome)
+        if on_outcome is not None:
+            try:
+                await on_outcome(outcome)
+            except Exception:  # noqa: BLE001 - the follow-up reports its own failure
+                logger.warning("settle follow-up failed for %s", label, exc_info=True)
 
 
 async def shutdown() -> None:

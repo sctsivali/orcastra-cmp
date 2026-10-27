@@ -500,6 +500,14 @@ class TenantAccessPolicy(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    # The purchase this policy stands for (core/tenant_term.py). Past term_ended_at the policy
+    # grants viewing only; past access_ends_at it grants nothing. Null means no term was given.
+    term_ended_at = Column(DateTime(timezone=True), nullable=True)
+    access_ends_at = Column(DateTime(timezone=True), nullable=True)
+    # When the sender decided those dates; an older decision arriving later is refused.
+    term_as_of = Column(DateTime(timezone=True), nullable=True)
+    # The last phase the term sweeper audited, so each boundary is recorded once.
+    term_phase_recorded = Column(String(16), nullable=True)
 
     # Relationships
     organization = relationship("Organization", backref="access_policies")

@@ -51,6 +51,7 @@ from app.core.org_scope import (
 )
 from app.core.config import get_settings
 from app.core.cache import clear_instance_lists_after_failure, get_cache_manager
+from app.services import instance_grants
 from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
@@ -999,13 +1000,23 @@ async def delete_vm(
     """Delete a VM."""
     project = verify_project_access(host, project)
     try:
-        await lxd_service.delete_vm(
+        # A rule naming this instance must not pass to the next instance created under its name.
+        captured_rules = (
+            await instance_grants.rule_ids_naming_instance(host, project, vm_name) if project else None
+        )
+        deleted_project = await lxd_service.delete_vm(
             name=vm_name,
             host=host,
             force=force,
             project=project,
         )
         get_cache_manager().invalidate_instance_cache()
+        await instance_grants.forget_deleted_instance(
+            cluster_id=host,
+            project_name=deleted_project or project or "default",
+            instance_name=vm_name,
+            only_rule_ids=captured_rules,
+        )
 
         # Clean up the instance's tag rows so the tag store doesn't drift from the
         # deleted instance. Best-effort, because the instance is already gone.

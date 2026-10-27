@@ -227,6 +227,18 @@ ACTION_CATEGORIES = {
     "instance.nic.address": EventCategory.NETWORK,
     "integration.mcp.tool_call": EventCategory.ADMIN,
     "rbac.access_denied": EventCategory.IDENTITY,
+    # A tenant's access over the paid term OrcaHub sells (core/tenant_term.py): granted or changed
+    # by provisioning, narrowed to viewing when the term ends, ended or revoked.
+    "tenant.access.provision": EventCategory.ADMIN,
+    "tenant.access.update": EventCategory.ADMIN,
+    "tenant.access.revoke": EventCategory.ADMIN,
+    "tenant.access.read_only": EventCategory.ADMIN,
+    "tenant.access.expire": EventCategory.ADMIN,
+    # Access rules that outlived what they named (services/instance_grants.py, tenant_rule_audit.py).
+    "instance.access.revoke": EventCategory.ADMIN,
+    "project.access.revoke": EventCategory.ADMIN,
+    "tenant.rule.orphan_detected": EventCategory.ADMIN,
+    "tenant.rule.remove": EventCategory.ADMIN,
 }
 
 # High severity actions
@@ -295,6 +307,9 @@ HIGH_SEVERITY_ACTIONS = {
     "user.ssh_key.delete",
     "user.ssh_key.download",
     "user.ssh_key.groups_cleanup",
+    # Both end a buyer's access to a project they paid for.
+    "tenant.access.revoke",
+    "tenant.access.expire",
     "vault.cert.generate",
     "vault.secret.write",
     "vault.secret.delete",

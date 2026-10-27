@@ -68,6 +68,7 @@ from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import clear_instance_lists_after_failure, get_cache_manager
 from app.core.lxd_errors import lxd_http_error
+from app.services import instance_grants
 from app.services.activity_logger import get_activity_logger
 from app.services.instance_operation_audit import drain_instance_operation_audits
 from app.services.tag_service import TagService
@@ -1319,6 +1320,11 @@ async def delete_instance(
     """Delete an instance."""
     project = verify_project_access(host, project)
     try:
+        # A rule naming this instance must not pass to the next instance created under its name.
+        # Captured before the delete so a rule staged for that newcomer afterwards is not taken.
+        captured_rules = (
+            await instance_grants.rule_ids_naming_instance(host, project, instance_name) if project else None
+        )
         # important: everything below is stamped with the project the deletion ACTUALLY used.
         # A caller that named none was resolved across projects and then had its tags, webhook,
         # upstream event and audit row written against "default", naming a project the deletion
@@ -1332,6 +1338,12 @@ async def delete_instance(
                 instance_name, host, force=force, project=project
             )
         get_cache_manager().invalidate_instance_cache()
+        await instance_grants.forget_deleted_instance(
+            cluster_id=host,
+            project_name=deleted_project or project or "default",
+            instance_name=instance_name,
+            only_rule_ids=captured_rules,
+        )
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
         # until now, so the catalogue was a promise with no sender behind it.

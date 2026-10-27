@@ -65,7 +65,8 @@ def _database():
         connection.execute(
             text(
                 "CREATE TABLE tenant_access_policies ("
-                "id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, name TEXT NOT NULL)"
+                "id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, name TEXT NOT NULL, "
+                "source TEXT NOT NULL DEFAULT 'local', term_ended_at DATETIME, access_ends_at DATETIME)"
             )
         )
         connection.execute(
@@ -111,7 +112,7 @@ def _database():
             ],
         )
         connection.execute(
-            text("INSERT INTO tenant_access_policies VALUES (:id, :org, :name)"),
+            text("INSERT INTO tenant_access_policies (id, organization_id, name) VALUES (:id, :org, :name)"),
             [
                 {"id": 31, "org": 1, "name": "A wildcard"},
                 {"id": 32, "org": 1, "name": "A project ownership"},

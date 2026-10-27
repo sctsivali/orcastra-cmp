@@ -177,6 +177,16 @@ class Settings(BaseSettings):
         description="Enforce per-project tenant ACL (operate/console) on power and console routes, not just cluster access."
     )
 
+    # The paid term on a tenant access policy (core/tenant_term.py): past term_ended_at a
+    # policy grants viewing only, past access_ends_at nothing. A wrong date from the integration
+    # that sent it locks a paying buyer out at once, so this is the switch that stops enforcing
+    # the dates (they are still stored and shown). Restart required, as above.
+    tenant_term_enforcement_enabled: bool = Field(
+        default=True,
+        alias="TENANT_TERM_ENFORCEMENT_ENABLED",
+        description="Enforce the term dates OrcaHub records on a tenant access policy.",
+    )
+
     # Tenant snapshot rights, gated separately from the flag above.
     # The "snapshot" permission has been in the vocabulary and pushed by OrcaHub for a long time
     # while nothing enforced it, so grants accumulated: 55 policy rules carry it today and 28 of

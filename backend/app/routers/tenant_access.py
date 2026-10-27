@@ -39,6 +39,8 @@ from app.core.org_scope import (
 from app.core.rbac import resolve_roles, get_highest_role, Role
 from app.core.database import get_db
 from app.core.cache import get_cache_manager
+from app.core.config import get_settings
+from app.core.tenant_term import policy_phase
 from app.models.db_models import (
     Organization,
     OrganizationMember,
@@ -57,6 +59,11 @@ from app.services.migration_fence import (
 
 logger = logging.getLogger(__name__)
 
+def _aware(value: datetime) -> datetime:
+    # note: SQLite test sessions hand back naive values for timestamptz columns; they were UTC.
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 # valid permission types for tenant policies
 VALID_PERMISSIONS = {"view", "operate", "console", "snapshot", "file_transfer"}
 
@@ -68,11 +75,10 @@ def _invalidate_acl_caches():
     see updated access.
     """
     try:
-        cache = get_cache_manager()
-        # ACL changes are mutations of the visible inventory. Use the generation-aware helpers
-        # so an older in-flight tenant read cannot restore its pre-change projection afterwards.
-        cache.invalidate_instance_cache()
-        cache.invalidate_resource_cache("projects")
+        # ACL changes are mutations of the visible inventory. The helper is generation-aware, so
+        # an older in-flight tenant read cannot restore its pre-change projection afterwards, and
+        # it clears the cluster, region and monitoring lists a grant also shapes.
+        get_cache_manager().invalidate_after_access_change()
         logger.info("Invalidated ACL-dependent API response caches")
     except Exception as e:
         logger.warning(f"Cache invalidation failed (non-fatal): {e}")
@@ -151,6 +157,11 @@ class PolicyResponse(BaseModel):
     updated_at: datetime
     rules: List[PolicyRuleResponse] = []
     assignments_count: int = 0
+    # The paid term the policy stands for (core/tenant_term.py), null when none was given.
+    term_ended_at: Optional[datetime] = None
+    access_ends_at: Optional[datetime] = None
+    phase: str = "active"
+    phase_inferred: bool = False
 
     class Config:
         from_attributes = True
@@ -198,6 +209,10 @@ class ResolvedAccess(BaseModel):
     instance_name: str
     permissions: List[str]
     policy_name: str
+    # Why `permissions` may be narrower than the rule: the policy's paid term (core/tenant_term.py).
+    read_only: bool = False
+    term_ended_at: Optional[datetime] = None
+    access_ends_at: Optional[datetime] = None
 
 
 class MyAccessResponse(BaseModel):
@@ -263,6 +278,18 @@ async def _verify_org_access(
 
 async def _policy_to_response(policy: TenantAccessPolicy) -> PolicyResponse:
     """Convert ORM model to response schema."""
+    rule_permissions = {
+        permission
+        for rule in (policy.rules or [])
+        for permission in (rule.permissions if isinstance(rule.permissions, list) else [])
+    }
+    term = policy_phase(
+        source=policy.source,
+        term_ended_at=getattr(policy, "term_ended_at", None),
+        access_ends_at=getattr(policy, "access_ends_at", None),
+        permissions=rule_permissions,
+        now=datetime.now(timezone.utc),
+    )
     return PolicyResponse(
         id=policy.id,
         organization_id=policy.organization_id,
@@ -285,6 +312,10 @@ async def _policy_to_response(policy: TenantAccessPolicy) -> PolicyResponse:
             for r in (policy.rules or [])
         ],
         assignments_count=len(policy.assignments or []),
+        term_ended_at=term.term_ended_at,
+        access_ends_at=term.access_ends_at,
+        phase=term.phase,
+        phase_inferred=term.inferred,
     )
 
 
@@ -952,6 +983,9 @@ async def get_my_access(
                     instance_name=grant.instance_name,
                     permissions=sorted(grant.permissions),
                     policy_name=grant.policy_name,
+                    read_only=grant.read_only,
+                    term_ended_at=grant.term_ended_at,
+                    access_ends_at=grant.access_ends_at,
                 )
             )
 
@@ -1003,6 +1037,12 @@ async def get_my_access(
     )
     result = await db.execute(policies_stmt)
     policies = {p.id: p for p in result.scalars().unique().all()}
+    if get_settings().tenant_term_enforcement_enabled:
+        # Mirrors the grant query: a policy whose access has ended grants nothing.
+        policies = {
+            pid: p for pid, p in policies.items()
+            if getattr(p, "access_ends_at", None) is None or _aware(p.access_ends_at) > now
+        }
 
     # build resolved access
     access_entries = []

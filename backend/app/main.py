@@ -509,6 +509,17 @@ async def lifespan(app: FastAPI):
     except Exception as sweeper_err:
         logger.error("Could not start the project delete sweeper: %s", sweeper_err, exc_info=True)
 
+    # Tenant terms: one worker (Redis lease) records each paid-term boundary as it passes. The
+    # boundary is enforced by the grant query whether or not this runs; this keeps the trail.
+    try:
+        from app.core.database import async_session_maker
+        from app.services.tenant_term_sweeper import start_tenant_term_sweeper
+
+        start_tenant_term_sweeper(async_session_maker)
+        logger.info("Tenant term sweeper started")
+    except Exception as term_err:
+        logger.error("Could not start the tenant term sweeper: %s", term_err, exc_info=True)
+
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
     # disk every HOST_HEALTH_INTERVAL_SECONDS. Its own try, for the reason the block above gives.
     try:
@@ -701,6 +712,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.host_health import stop_host_health_loop
         await stop_host_health_loop()
+    except Exception:
+        pass
+    try:
+        from app.services.tenant_term_sweeper import stop_tenant_term_sweeper
+        await stop_tenant_term_sweeper()
     except Exception:
         pass
     try:

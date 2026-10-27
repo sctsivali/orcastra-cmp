@@ -5,7 +5,9 @@ effect the real session turns into a request on the wire. `lxd_reads` parses a s
 does after requests has prepared it: the path decoded once and split, the query decoded once.
 """
 
+from contextlib import contextmanager
 from types import SimpleNamespace
+from unittest.mock import patch
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -92,15 +94,45 @@ async def call_raw_proxy(
     if body is None and method in ("POST", "PUT", "PATCH"):
         body = {}
     try:
-        response = await raw_proxy(
-            request=RawProxyRequest(cluster_id=CLUSTER_ID, method=method, path=path, project=project, body=body),
-            api_key=api_key,
-            lxd_service=fake_service(session, endpoint),
-            _=None,
-        )
+        with _without_rule_bookkeeping():
+            response = await raw_proxy(
+                request=RawProxyRequest(cluster_id=CLUSTER_ID, method=method, path=path, project=project, body=body),
+                api_key=api_key,
+                lxd_service=fake_service(session, endpoint),
+                _=None,
+            )
     except HTTPException as refusal:
         return refusal, session
     return response, session
+
+
+@contextmanager
+def _without_rule_bookkeeping() -> Iterator[None]:
+    """Run the raw proxy's request with the access-rule bookkeeping around it taken out.
+
+    A project DELETE runs inside the deletion core and a stranding write captures rules first
+    (services/raw_project_delete.py, services/stranded_rules.py); both need the database. These
+    tests judge what is SENT, so the core runs the sender alone and nothing is captured. The
+    bookkeeping itself is covered by test_a_raw_project_delete_forgets_its_access_rules.py and
+    test_a_deleted_instance_takes_its_named_rules_with_it.py.
+    """
+    from app.services import project_deletion, stranded_rules
+    from app.services.lxd.exceptions import LXDProjectNotFoundError
+
+    async def sender_only(_lxd_service, _host, _name, *, requester, scope_project, send=None):
+        try:
+            await send()
+        except LXDProjectNotFoundError:
+            return project_deletion.ProjectDeleted(already_gone=True, revoke_note="")
+        return project_deletion.ProjectDeleted(already_gone=False, revoke_note="")
+
+    async def nothing_captured(_cluster_id, _target):
+        return None
+
+    with patch.object(project_deletion, "delete_for_integration", sender_only), patch.object(
+        stranded_rules, "capture", nothing_captured
+    ):
+        yield
 
 
 def lxd_reads(url: str, method: str = "GET") -> Tuple[List[str], List[Tuple[str, str]]]:

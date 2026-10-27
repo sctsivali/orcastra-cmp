@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, replace
-from typing import Any, Awaitable, FrozenSet, Optional, Set
+from typing import Any, Awaitable, Callable, FrozenSet, Optional, Set
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,12 +74,17 @@ async def delete_project_and_forget(
     origin: str = "route",
     requester: Optional[str] = None,
     scope_project: Optional[str] = None,
+    send: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> ProjectDeleted:
     """Delete under the cluster lock, then revoke and announce; raises ProjectDeleteUnknown, never guesses.
 
     Raises ClusterConfigurationBusy when another configuration write holds the cluster past the
     wait, and MigrationFenceConflict when a migration owns the project. Everything a delete owes
     happens in here, so a caller that is cancelled after it returns owes nothing more.
+
+    `send` replaces the DELETE itself for a caller that must send its own request (the raw proxy
+    keeps LXD's answer for its caller, services/raw_project_delete.py). It raises the same
+    outcomes `lxd_service.delete_project` does, and anything else counts as a refusal.
     """
     async with serialize_cluster_configuration(db, host, wait_seconds=CLUSTER_LOCK_WAIT_SECONDS):
         await assert_project_not_migration_fenced(cluster_id=host, project=name, db=db)
@@ -90,7 +95,10 @@ async def delete_project_and_forget(
         if followup is None:
             raise ProjectDeletesBacklogged(host)
         try:
-            await lxd_service.delete_project(host, name)
+            if send is not None:
+                await send()
+            else:
+                await lxd_service.delete_project(host, name)
         except LXDProjectNotFoundError:
             if followup.created_here:
                 # important: a 404 revokes nothing on its own. Anyone with a cluster-wide delete
@@ -133,7 +141,13 @@ async def _settled(followup: store.Followup, *, settled_later: bool) -> None:
 
 
 async def delete_for_integration(
-    lxd_service: Any, host: str, name: str, *, requester: Optional[str], scope_project: Optional[str]
+    lxd_service: Any,
+    host: str,
+    name: str,
+    *,
+    requester: Optional[str],
+    scope_project: Optional[str],
+    send: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> ProjectDeleted:
     """The integration proxy's delete, start to finish in one task the caller only waits on.
 
@@ -144,7 +158,8 @@ async def delete_for_integration(
 
     async with async_session_maker() as db:
         return await delete_project_and_forget(
-            db, lxd_service, host, name, origin="proxy", requester=requester, scope_project=scope_project
+            db, lxd_service, host, name, origin="proxy", requester=requester, scope_project=scope_project,
+            send=send,
         )
 
 

@@ -577,6 +577,19 @@ class CacheManager:
         self.delete_pattern("api_responses", "regions:*")
         logger.info("Invalidated reachability caches for %s", ", ".join(cluster_ids))
 
+    def invalidate_after_access_change(self) -> None:
+        """Clear what a tenant's grant shapes, after a grant was added, narrowed, ended or revoked.
+
+        note: a tenant's scoped keys already hash the ACL (org_scope.get_scope_cache_key), so a
+        changed grant reads fresh keys anyway. This clears the shared lists that do not, and
+        is the one call provisioning, revoke, the term sweeper and policy edits make.
+        """
+        self.invalidate_resource_cache("clusters", "projects", "regions", "warnings", "monitoring")
+        self.invalidate_instance_cache()
+        self.invalidate_availability_cache()
+        self.delete_pattern("api_responses", "nodes:*")
+        self.delete_pattern("api_responses", "regions:*")
+
     def invalidate_instance_lists(self) -> None:
         """Fence, then clear, the /instances and /vms lists alone.
 
