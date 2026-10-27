@@ -74,16 +74,10 @@ async def orcahub_terms(
     return out
 
 
-async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> Set[str]:
-    """Clusters this account reaches only through purchases that are all past their paid term.
-
-    For a role_partner account: on these, it may look but not change anything (owner decision
-    2026-10-27: during retention the buyer has view only).
-    """
+async def _reach(db: AsyncSession, email: str) -> Tuple[Set[str], Dict[str, Set[int]]]:
+    """The clusters this account reaches outright, and those it reaches only by purchase (with whose)."""
     from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 
-    if not email:
-        return set()
     lower = email.lower()
     rows = (await db.execute(
         select(
@@ -101,18 +95,27 @@ async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> 
         )
         .distinct()
     )).all()
-    personal = set((await db.execute(
+    full: Set[str] = set((await db.execute(
         select(OrganizationCluster.cluster_id).where(func.lower(OrganizationCluster.registered_by) == lower)
     )).scalars().all())
-
-    full: Set[str] = set(personal)
     sale_only: Dict[str, Set[int]] = {}
     for cluster_id, org_id, registered_by, source, created_by in rows:
         if registered_by is not None or source != "orcahub" or (created_by or "").lower() == lower:
             full.add(cluster_id)
         else:
             sale_only.setdefault(cluster_id, set()).add(org_id)
-    candidates = {c: orgs for c, orgs in sale_only.items() if c not in full}
+    return full, {c: orgs for c, orgs in sale_only.items() if c not in full}
+
+
+async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> Set[str]:
+    """Clusters this account reaches only through purchases that are all past their paid term.
+
+    For a role_partner account: on these, it may look but not change anything (owner decision
+    2026-10-27: during retention the buyer has view only).
+    """
+    if not email:
+        return set()
+    _full, candidates = await _reach(db, email)
     if not candidates:
         return set()
     terms = await orcahub_terms(db, {o for orgs in candidates.values() for o in orgs})
@@ -123,6 +126,18 @@ async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> 
         if ACTIVE not in phases and READ_ONLY in phases:
             read_only.add(cluster_id)
     return read_only
+
+
+async def reaches_only_by_purchase(db: AsyncSession, email: Optional[str], cluster_id: str) -> bool:
+    """Whether this account reaches the cluster through purchases and nothing else.
+
+    Such an account may not bind the cluster to another organization: the binding it wrote would
+    carry it as registrant and outlive the purchase (security review 2026-10-27).
+    """
+    if not email:
+        return False
+    _full, candidates = await _reach(db, email)
+    return cluster_id in candidates
 
 
 async def sold_to_without_registering(

@@ -121,7 +121,7 @@ def test_key_rows_are_kept_for_their_own_retention() -> None:
 
     asyncio.run(repository_sweeps.prune_batch(_Db(), task_days=30, log_days=30, key_days=365))
     sql, params = captured[0]
-    assert "resource_type NOT IN ('ssh_key', 'ssh_key_cleanup')" in sql
+    assert "resource_type NOT IN ('ssh_key', 'ssh_key_cleanup', 'ssh_key_request')" in sql
     assert params["key_days"] == 365 and params["days"] == 30
     asyncio.run(repository_sweeps.prune_batch(_Db(), task_days=30, log_days=90, key_days=10))
     assert captured[-2][1]["key_days"] == 90, "a key row is never kept for less than any other row"

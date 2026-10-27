@@ -24,6 +24,7 @@ from app.core.dependencies import (
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.core import org_scope
 from app.core.org_scope import get_owned_clusters_ignoring_admin, verify_cluster_access
+from app.core.sale_term import reaches_only_by_purchase
 from app.services.organization_service import OrganizationService
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
@@ -471,6 +472,17 @@ async def bind_cluster(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Not permitted to bind cluster {body.cluster_id}",
+            )
+        # important: a cluster reached only by purchase is the seller's. Bound here, the new row
+        # would carry the buyer as registrant and outlive the purchase and its term
+        # (security review 2026-10-27, core/sale_term.py).
+        if await reaches_only_by_purchase(db, user.email, body.cluster_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Cluster {body.cluster_id} reaches you through a purchase, so it cannot be bound to "
+                    "another organization."
+                ),
             )
 
     async with _guard_cluster_write(db, body.cluster_id):

@@ -40,7 +40,7 @@ def _guard(monkeypatch, identities, checks, *, rounds: float = 0.2):
             raise result
         return result
 
-    async def scope(user):
+    async def scope(user, **_kwargs):
         return None
 
     monkeypatch.setattr(ws_session_guard, "check_identity", identity)
@@ -207,7 +207,7 @@ def test_a_round_resolves_scope_from_the_ticket_groups_alone(monkeypatch, identi
     async def identity_check(user):
         return identity
 
-    async def scope(user):
+    async def scope(user, **_kwargs):
         seen.append(rbac.get_highest_role(rbac.resolve_roles(user)))
 
     monkeypatch.setattr(ws_session_guard, "check_identity", identity_check)
@@ -235,7 +235,7 @@ def test_a_session_without_an_email_cannot_be_rechecked_and_ends():
 def test_the_role_check_reads_authentik_not_the_shared_cache(monkeypatch):
     calls = []
 
-    async def scope(user):
+    async def scope(user, **_kwargs):
         calls.append("scope")
 
     async def identity(user):

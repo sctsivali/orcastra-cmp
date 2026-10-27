@@ -265,7 +265,7 @@ async def prune_batch(
     """One batch of each delete; the third value says whether a full batch was deleted, so the
     caller commits and comes back for more. Nothing here holds more than one batch's rows.
 
-    A My Keys row (resource_type ssh_key or ssh_key_cleanup) is a credential's trail and is kept
+    A My Keys row (resource_type ssh_key, ssh_key_cleanup or ssh_key_request) is a credential's trail and is kept
     for `key_days` (MY_KEYS_AUDIT_RETENTION_DAYS), never less than every other row's `log_days`.
     """
     key_days = max(int(key_days if key_days is not None else log_days), int(log_days))
@@ -273,7 +273,7 @@ async def prune_batch(
         text(
             "DELETE FROM cluster_log WHERE id IN (SELECT id FROM cluster_log "
             "WHERE ts < now() - make_interval(days => CAST(:days AS integer)) "
-            "AND (resource_type IS NULL OR resource_type NOT IN ('ssh_key', 'ssh_key_cleanup') "
+            "AND (resource_type IS NULL OR resource_type NOT IN ('ssh_key', 'ssh_key_cleanup', 'ssh_key_request') "
             "OR ts < now() - make_interval(days => CAST(:key_days AS integer))) LIMIT :batch)"
         ),
         {"days": int(log_days), "key_days": key_days, "batch": batch},

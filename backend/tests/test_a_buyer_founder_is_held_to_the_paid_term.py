@@ -98,6 +98,12 @@ def scope():
     ("DELETE", "/api/v1/projects/sold/shop", True),
     ("PATCH", "/api/v1/instances/vm", True),
     ("POST", "/api/v1/ws-tickets", False),
+    ("POST", "/api/v1/operations/abc-123/wait", False),
+    # Re-review 2026-10-27: the exemption is the exact route, never a suffix or another method.
+    ("DELETE", "/api/v1/ws-tickets", True),
+    ("DELETE", "/api/v1/profiles/ws-tickets", True),
+    ("POST", "/api/v1/instances/ws-tickets", True),
+    ("PUT", "/api/v1/operations/abc-123/wait", True),
 ])
 def test_a_change_on_a_read_only_cluster_is_refused(scope, method, path, refused) -> None:
     set_request_context(RequestContext(method=method, path=path))
@@ -122,6 +128,40 @@ def test_a_console_or_terminal_socket_is_a_change(scope) -> None:
 def test_the_console_and_terminal_sockets_declare_themselves_interactive() -> None:
     from pathlib import Path
 
-    routers = Path(__file__).resolve().parents[1] / "app" / "routers"
-    for name in ("console.py", "terminal.py"):
-        assert "set_org_scope_for_ws(user, interactive=True)" in (routers / name).read_text(encoding="utf-8"), name
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    for name in ("routers/console.py", "routers/terminal.py", "services/ws_session_guard.py"):
+        # The guard re-checks an open console or terminal: a term that ends while one is open closes it.
+        assert "set_org_scope_for_ws(user, interactive=True)" in (app_dir / name).read_text(encoding="utf-8"), name
+
+
+async def test_a_founder_cannot_bind_a_cluster_it_reaches_only_by_purchase() -> None:
+    """Re-review 2026-10-27: bound to a new organization, the row would carry the founder as
+    registrant and outlive the purchase."""
+    from app.core.sale_term import reaches_only_by_purchase
+
+    assert await reaches_only_by_purchase(await _world(term_ended_at=None, access_ends_at=None), FOUNDER, "sold") is True
+    assert await reaches_only_by_purchase(await _world(registered_elsewhere=True), FOUNDER, "sold") is False
+
+
+async def test_the_bind_route_refuses_it(monkeypatch) -> None:
+    from app.core.auth import AuthenticatedUser
+    from app.routers import organizations
+
+    db = await _world(term_ended_at=None, access_ends_at=None)
+
+    class _Svc:
+        def __init__(self, _db):
+            pass
+
+        async def user_has_access(self, *_args):
+            return True
+
+    async def owned(_user, _db):
+        return {"sold"}
+
+    monkeypatch.setattr(organizations, "OrganizationService", _Svc)
+    monkeypatch.setattr(organizations, "get_owned_clusters_ignoring_admin", owned)
+    founder = AuthenticatedUser(user_id="f", email=FOUNDER, groups=["role_partner"])
+    with pytest.raises(HTTPException) as refused:
+        await organizations.bind_cluster(8, organizations.ClusterBindRequest(cluster_id="sold"), user=founder, db=db)
+    assert refused.value.status_code == 403 and "purchase" in refused.value.detail

@@ -85,7 +85,9 @@ async def reauthorize_while_open(
                 logger.warning("Closing %s: the role of %s changed since it opened", label, user.user_id)
                 await _close(websocket, ACCESS_REVOKED, "Access revoked")
                 return
-            await set_org_scope_for_ws(user)
+            # Only console and terminal sockets use this loop, and both drive a guest: a paid term
+            # that ends while one is open closes it like any other change (core/sale_term.py).
+            await set_org_scope_for_ws(user, interactive=True)
             await check(user)
             errors = 0
         except HTTPException as exc:

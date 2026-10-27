@@ -10,6 +10,7 @@ Tenant:  sees clusters bound to assigned access policies (ACL)
 """
 
 import contextvars
+import re
 import hashlib
 import logging
 from collections.abc import Callable
@@ -63,8 +64,9 @@ _read_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.Context
 _interactive_var: contextvars.ContextVar[bool] = contextvars.ContextVar("interactive_scope", default=False)
 
 _READS = frozenset({"GET", "HEAD", "OPTIONS"})
-# POSTs that only read: a socket ticket is checked again by the socket it opens.
-_READ_POSTS = ("/ws-tickets",)
+# POSTs that only read, matched as whole paths: a socket ticket (the socket it opens is checked
+# again) and waiting on an LXD operation.
+_READ_POSTS = r"/(?:ws-tickets|operations/[^/]+/wait)/?$"
 
 
 def _is_change() -> bool:
@@ -75,7 +77,8 @@ def _is_change() -> bool:
     ctx = get_request_context()
     if ctx is None or not ctx.method or ctx.method.upper() in _READS:
         return False
-    return not any((ctx.path or "").endswith(suffix) for suffix in _READ_POSTS)
+    prefix = re.escape(get_settings().api_prefix.rstrip("/"))
+    return not (ctx.method.upper() == "POST" and re.match(f"^{prefix}{_READ_POSTS}", ctx.path or ""))
 
 
 # ---------------------------------------------------------------------------
