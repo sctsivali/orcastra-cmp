@@ -1113,6 +1113,15 @@ Ensure your client certificates are properly configured.
     from app.routers.console import router as console_router
     app.include_router(console_router, prefix=settings.api_prefix)
     
+    # Organization branding first: organizations' `/{org_id}` would otherwise take `/my-preferences`.
+    from app.routers.organization_branding import router as organization_branding_router
+    app.include_router(organization_branding_router, prefix=settings.api_prefix)
+    from app.routers.branding import router as branding_router
+    app.include_router(branding_router, prefix=settings.api_prefix)
+    # Unauthenticated: the deployment default for the sign-in page and the tab (allow-listed fields).
+    from app.routers.public_branding import router as public_branding_router
+    app.include_router(public_branding_router, prefix=settings.api_prefix)
+
     # Organization Router (Three-Tier RBAC)
     from app.routers.organizations import router as organizations_router
     app.include_router(organizations_router, prefix=settings.api_prefix)

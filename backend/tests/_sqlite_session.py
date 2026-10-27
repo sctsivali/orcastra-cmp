@@ -80,6 +80,23 @@ class AsyncSessionFacade:
     def add(self, instance: Any) -> None:
         self.sync.add(instance)
 
+    def begin_nested(self) -> Any:
+        """A savepoint, as `async with db.begin_nested():` uses it."""
+        nested = self.sync.begin_nested()
+
+        class _Savepoint:
+            async def __aenter__(self) -> Any:
+                return nested
+
+            async def __aexit__(self, exc_type: Any, _exc: Any, _tb: Any) -> bool:
+                if exc_type is None:
+                    nested.commit()
+                else:
+                    nested.rollback()
+                return False
+
+        return _Savepoint()
+
     def add_all(self, instances: Iterable[Any]) -> None:
         self.sync.add_all(instances)
 

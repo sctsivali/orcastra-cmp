@@ -70,6 +70,7 @@ from app.services.settle_invalidation import invalidate_when_settled
 from app.services.raw_project_delete import delete_through_core, raw_project_delete_target
 from app.core.tenant_term import TermDates, TermDatesInvalid, TermDatesStale, merge_and_validate, policy_phase
 from app.services import stranded_rules
+from app.services.branding import provider_link
 from app.services.stranded_rules import raw_stranding_target
 from app.services.lxd.raw_proxy_operations import (
     LXD_OPERATION_NOT_FOUND,
@@ -7219,6 +7220,12 @@ async def sync_policies_from_external(
                     instance_name=rule_data.instance_name,
                     permissions=rule_data.permissions,
                 ))
+            # The branding link a provision makes, for an organization only ever synced (fill-only).
+            sold_on = next((r.cluster_id for r in sync_policy.rules if r.cluster_id and r.cluster_id != "*"), None)
+            if sold_on:
+                await provider_link.link_on_provision(
+                    db, org, cluster_id=sold_on, key_minter=api_key.get("created_by"), api_key_id=api_key_id,
+                )
 
             # sync assignments (merge - don't remove local ones)
             for assign_data in sync_policy.assignments:
@@ -7664,71 +7671,12 @@ async def provision_tenant_access(
 
 
 
-    # Step 1b: ensure buyer org inherits partner personalization (runs for new AND existing orgs)
-    # note: partner org is found via api_key created_by email -> org membership,
-    # because partner orgs created locally have api_key_id=NULL (not synced from OrcaHub)
-    try:
-        from app.models.db_models import OrganizationPreferences
-        existing_prefs_stmt = select(OrganizationPreferences).where(
-            OrganizationPreferences.organization_id == org.id
-        )
-        existing_prefs_result = await db.execute(existing_prefs_stmt)
-        existing_prefs = existing_prefs_result.scalar_one_or_none()
-        if not existing_prefs:
-            partner_org = None
-
-            # primary: find partner org via API key creator email -> org membership
-            partner_email = api_key.get("created_by")
-            if partner_email:
-                partner_member_stmt = (
-                    select(OrganizationMember)
-                    .where(OrganizationMember.user_email == partner_email)
-                    .order_by(OrganizationMember.joined_at.asc())
-                    .limit(1)
-                )
-                partner_member_result = await db.execute(partner_member_stmt)
-                partner_member = partner_member_result.scalar_one_or_none()
-                if partner_member and partner_member.organization_id != org.id:
-                    partner_org_stmt = select(Organization).where(
-                        Organization.id == partner_member.organization_id
-                    )
-                    partner_org_result = await db.execute(partner_org_stmt)
-                    partner_org = partner_org_result.scalar_one_or_none()
-                    if partner_org:
-                        logger.info(f"Found partner org {partner_org.slug} via creator email {partner_email}")
-
-            # fallback: find partner org by shared api_key_id (for orgs synced from OrcaHub)
-            if not partner_org:
-                partner_stmt = select(Organization).where(
-                    and_(
-                        owned_by_clause([api_key_id]),
-                        Organization.id != org.id,
-                    )
-                ).order_by(Organization.created_at.asc()).limit(1)
-                partner_result = await db.execute(partner_stmt)
-                partner_org = partner_result.scalar_one_or_none()
-
-            if partner_org:
-                partner_prefs_stmt = select(OrganizationPreferences).where(
-                    OrganizationPreferences.organization_id == partner_org.id
-                )
-                partner_prefs_result = await db.execute(partner_prefs_stmt)
-                partner_prefs = partner_prefs_result.scalar_one_or_none()
-                if partner_prefs and partner_prefs.settings:
-                    buyer_prefs = OrganizationPreferences(
-                        organization_id=org.id,
-                        settings=partner_prefs.settings,
-                        updated_by="orcahub-provisioning",
-                    )
-                    db.add(buyer_prefs)
-                    await db.flush()
-                    logger.info(f"Copied partner personalization to buyer org {org.slug}")
-                else:
-                    logger.info(f"Partner org {partner_org.slug} has no personalization to copy")
-            else:
-                logger.info(f"No partner org found for personalization inheritance (api_key_id={api_key_id})")
-    except Exception as e:
-        logger.warning(f"Failed to copy personalization (non-fatal): {e}")
+    # Step 1b: the buyer shows its seller's branding, live, until it sets its own. A link, not the
+    # copy this step used to make, so a later change by the seller reaches every buyer. Fill-only
+    # and never fatal (services/branding/provider_link.py).
+    await provider_link.link_on_provision(
+        db, org, cluster_id=body.cluster_id, key_minter=api_key.get("created_by"), api_key_id=api_key_id,
+    )
 
     # Step 2: ensure cluster is mapped to this org
     try:

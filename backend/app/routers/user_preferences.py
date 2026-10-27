@@ -1,12 +1,10 @@
 """
-API Router for User Preferences/Personalization.
-Handles CRUD operations for per-user dashboard customization.
+User preferences: the theme each user chose (light, dark or system), and the image proxy the
+branding editor uses.
 
-Architecture:
-- PostgreSQL is the SINGLE SOURCE OF TRUTH for user preferences
-- Frontend localStorage is only used as offline cache/fallback
-- All settings are keyed by user_id (OIDC subject claim from Authentik)
-- Cross-browser sync is achieved through server-side storage
+Branding is not per user. It belongs to an organization, its provider or the deployment
+(services/branding/), and a personal row keeps only the theme. Keyed by the OIDC subject of the
+validated token, never by a header.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -146,6 +144,19 @@ def get_default_settings() -> Dict[str, Any]:
     }
 
 
+THEMES = ("light", "dark", "system")
+
+
+def _personal_view(user_prefs: UserPreferences) -> Dict[str, Any]:
+    """The defaults with this user's theme laid over them. lastModified marks that a theme was chosen."""
+    settings = get_default_settings()
+    saved = user_prefs.settings or {}
+    if saved.get("theme") in THEMES:
+        settings["theme"] = saved["theme"]
+        settings["lastModified"] = saved.get("lastModified") or user_prefs.updated_at.isoformat()
+    return settings
+
+
 # important: identity comes from the validated JWT principal, never from a request
 # header. These endpoints used to key on X-User-ID, which any authenticated caller
 # could set to somebody else's subject and so read, overwrite or delete another
@@ -197,25 +208,7 @@ async def get_user_preferences(
         user_prefs = result.scalar_one_or_none()
         
         if user_prefs:
-            # Merge with defaults to ensure all fields exist
-            settings = get_default_settings()
-            saved_settings = user_prefs.settings or {}
-            
-            # Deep merge saved settings into defaults
-            for key in ["logo", "background", "branding", "colors"]:
-                if key in saved_settings:
-                    settings[key].update(saved_settings[key])
-            
-            # Preserve scalar top-level keys (theme, etc.)
-            for key in saved_settings:
-                if key not in ["logo", "background", "branding", "colors", "lastModified"]:
-                    settings[key] = saved_settings[key]
-            
-            if "lastModified" in saved_settings:
-                settings["lastModified"] = saved_settings["lastModified"]
-            else:
-                settings["lastModified"] = user_prefs.updated_at.isoformat()
-            
+            settings = _personal_view(user_prefs)
             logger.info(f"Returning saved preferences for user {x_user_id}, lastModified: {settings['lastModified']}")
             return settings
         else:
@@ -232,8 +225,8 @@ async def get_user_preferences(
 @router.put(
     "",
     response_model=Dict[str, Any],
-    summary="Update user preferences",
-    description="Save personalization settings for the authenticated user. This is the authoritative write operation."
+    summary="Set or clear the user's theme",
+    description="Stores the authenticated user's theme (light, dark or system); null clears it. Branding is per organization.",
 )
 async def update_user_preferences(
     settings: Dict[str, Any],
@@ -242,72 +235,53 @@ async def update_user_preferences(
     user: AuthenticatedUser = Depends(require_authenticated()),
     _: None = Depends(check_read_only_mode),
 ) -> Dict[str, Any]:
-    """
-    Update personalization settings for the current user.
-    
-    This endpoint saves settings to the database (source of truth).
-    Frontend should update both localStorage cache and call this API.
-    The timestamp is set server-side to ensure consistency across browsers.
-    """
-    
-    # Set cache-control headers
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
-    
     x_user_id, x_user_email = current_identity(user)
-    
-    logger.info(f"Updating preferences for user {x_user_id}")
-    
+    # important: only the theme is kept. Branding belongs to an organization or to the deployment
+    # (services/branding/); a personal row used to hold a full copy of it, which the fallback then
+    # handed to everyone in the owner's organization. `theme: null` clears the choice, so the
+    # organization's default theme applies again. Other keys a client sends are ignored, and keys
+    # an older build stored are left in place for a rollback to read.
+    if "theme" not in settings:
+        raise HTTPException(status_code=422, detail="Only the theme is stored per user; send {\"theme\": ...}.")
+    theme = settings.get("theme")
+    if theme is not None and theme not in THEMES:
+        raise HTTPException(status_code=422, detail=f"theme must be one of {', '.join(THEMES)}, or null")
+
     try:
-        # Check if user preferences exist
         result = await db.execute(
             select(UserPreferences).where(UserPreferences.user_id == x_user_id)
         )
         user_prefs = result.scalar_one_or_none()
-        
-        # Set lastModified timestamp server-side (authoritative)
-        now = datetime.now(timezone.utc)
-        settings["lastModified"] = now.isoformat()
-        
-        if user_prefs:
-            # Update existing preferences
-            user_prefs.settings = settings
-            user_prefs.user_email = x_user_email
-            user_prefs.updated_at = now
-            logger.info(f"Updated existing preferences for user {x_user_id}, lastModified: {settings['lastModified']}")
+        stored = dict(user_prefs.settings or {}) if user_prefs else {}
+        if theme is None:
+            stored.pop("theme", None)
+            stored.pop("lastModified", None)
         else:
-            # Create new preferences
-            user_prefs = UserPreferences(
-                user_id=x_user_id,
-                user_email=x_user_email,
-                settings=settings,
-            )
+            stored["theme"] = theme
+            stored["lastModified"] = datetime.now(timezone.utc).isoformat()
+
+        if user_prefs and not stored:
+            await db.delete(user_prefs)
+            await db.commit()
+            return get_default_settings()
+        if user_prefs:
+            user_prefs.settings = stored
+            user_prefs.user_email = x_user_email
+        elif stored:
+            user_prefs = UserPreferences(user_id=x_user_id, user_email=x_user_email, settings=stored)
             db.add(user_prefs)
-            logger.info(f"Created new preferences for user {x_user_id}, lastModified: {settings['lastModified']}")
-        
+        else:
+            return get_default_settings()
         await db.commit()
         await db.refresh(user_prefs)
-        
-        # Return the complete merged settings with defaults
-        merged_settings = get_default_settings()
-        saved_settings = user_prefs.settings or {}
-        for key in ["logo", "background", "branding", "colors"]:
-            if key in saved_settings:
-                merged_settings[key].update(saved_settings[key])
-        # Preserve scalar top-level keys (theme, etc.)
-        for key in saved_settings:
-            if key not in ["logo", "background", "branding", "colors", "lastModified"]:
-                merged_settings[key] = saved_settings[key]
-        merged_settings["lastModified"] = saved_settings.get("lastModified")
-        
-        return merged_settings
-        
+        return _personal_view(user_prefs)
+    except HTTPException:
+        raise
     except Exception as e:
         await db.rollback()
         logger.error(f"Error saving user preferences for {x_user_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to save preferences: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail="Failed to save preferences")
 
 
 @router.delete(

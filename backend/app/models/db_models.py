@@ -4,7 +4,7 @@ SQLAlchemy ORM models for PostgreSQL.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, event, select, text
+from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, event, func, select, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import Session, relationship
@@ -272,6 +272,18 @@ class Organization(Base):
     external_id = Column(String(255), nullable=True)  # UUID from OrcaHub
     api_key_id = Column(String(255), nullable=True, index=True)  # which API key synced this
 
+    # The organization whose branding this one shows when it has none of its own: the partner that
+    # sold to it (services/branding/provider_link.py). Branding only. important: no access decision
+    # reads these columns (tests/test_the_provider_link_decides_branding_only.py).
+    provider_organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    # provision | migration | admin. 'admin' with no provider is an Administrator's "no provider",
+    # which provisioning does not fill again.
+    provider_link_source = Column(String(16), nullable=True)
+    provider_linked_at = Column(DateTime(timezone=True), nullable=True)
+    provider_linked_by = Column(String(255), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -282,6 +294,17 @@ class Organization(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "provider_organization_id IS NULL OR provider_organization_id <> id",
+            name="ck_organizations_provider_not_self",
+        ),
+        CheckConstraint(
+            "provider_link_source IS NULL OR provider_link_source IN ('provision', 'migration', 'admin')",
+            name="ck_organizations_provider_link_source",
+        ),
     )
 
     # Relationships
@@ -367,6 +390,8 @@ class OrganizationMember(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "user_email", name="uq_org_member_email"),
         Index("ix_org_member_org_id", "organization_id"),
+        # Authentik and this table do not agree on casing, so membership is looked up on lower().
+        Index("ix_org_member_email_lower", func.lower(user_email)),
     )
 
     def __repr__(self) -> str:
@@ -435,8 +460,10 @@ class OrganizationPreferences(Base):
         unique=True,
         index=True,
     )
-    # JSONB stores the full PersonalizationSettings object
-    settings = Column(JSONB, nullable=False, default={})
+    # The organization's own branding, validated on write (services/branding/validation.py).
+    # note: migration 045 adds CHECK settings <> '{}' in Postgres: an organization with nothing of
+    # its own has no row, and inherits. Not declared here because SQLite cannot render the cast.
+    settings = Column(JSONB, nullable=False)
     updated_by = Column(String(255), nullable=True)
 
     created_at = Column(

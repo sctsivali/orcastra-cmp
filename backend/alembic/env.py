@@ -33,6 +33,7 @@ from app.models import task_journal_models  # noqa: F401
 from app.models import trust_cleanup_models  # noqa: F401
 from app.models import tenant_rule_models  # noqa: F401
 from app.models import my_key_models  # noqa: F401
+from app.models import branding_models  # noqa: F401
 
 # Alembic Config object
 config = context.config

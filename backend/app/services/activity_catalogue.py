@@ -240,6 +240,12 @@ ACTION_CATEGORIES = {
     "project.access.revoke": EventCategory.ADMIN,
     "tenant.rule.orphan_detected": EventCategory.ADMIN,
     "tenant.rule.remove": EventCategory.ADMIN,
+    # Branding (services/branding/store.py, provider_link.py)
+    "organization.branding.update": EventCategory.SETTINGS,
+    "organization.branding.reset": EventCategory.SETTINGS,
+    "organization.branding.provider.set": EventCategory.SETTINGS,
+    "deployment.branding.update": EventCategory.SETTINGS,
+    "deployment.branding.reset": EventCategory.SETTINGS,
 }
 
 # High severity actions
@@ -308,6 +314,9 @@ HIGH_SEVERITY_ACTIONS = {
     "user.ssh_key.delete",
     "user.ssh_key.download",
     "user.ssh_key.groups_cleanup",
+    # The sign-in page and every account without branding of its own show it.
+    "deployment.branding.update",
+    "deployment.branding.reset",
     # Both end a buyer's access to a project they paid for.
     "tenant.access.revoke",
     "tenant.access.expire",

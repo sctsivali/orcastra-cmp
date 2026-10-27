@@ -86,7 +86,8 @@ def test_the_two_orderings_that_caused_this_are_still_different():
     """
     import inspect
 
-    from app.services import organization_service, organization_preferences
+    from app.services import organization_service
+    from app.services.branding import subject
 
     listing = inspect.getsource(organization_service.OrganizationService.list_organizations)
     assert "order_by(Organization.name)" in listing, (
@@ -94,10 +95,11 @@ def test_the_two_orderings_that_caused_this_are_still_different():
         "from /organizations/my-preferences and not from this order"
     )
 
-    primary = inspect.getsource(organization_preferences._get_primary_org_id)
+    primary = inspect.getsource(subject.subject_organization_id)
     assert "joined_at" in primary, (
-        "the sidebar's organization is the earliest membership; the editor's default has to track "
-        "this function, not the list above"
+        "the sidebar's organization is the one the account runs, then the one where its access is "
+        "live, then the earliest membership; the editor's default has to track this function, not "
+        "the list above"
     )
 
 
@@ -116,7 +118,7 @@ def test_a_cross_organization_branding_write_is_recorded():
     import ast
     import inspect
 
-    from app.routers import organizations as module
+    from app.routers import organization_branding as module
 
     source = inspect.getsource(module)
     tree = ast.parse(source)
@@ -124,12 +126,12 @@ def test_a_cross_organization_branding_write_is_recorded():
         n
         for n in ast.walk(tree)
         if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-        and n.name == "update_org_preferences"
+        and n.name == "update_org_branding"
     )
     body = ast.dump(fn)
 
     assert "logger" in body and "warning" in body, (
-        "update_org_preferences must log a warning when the caller does not belong to the "
+        "update_org_branding must log a warning when the caller does not belong to the "
         "organization it is about to rewrite"
     )
     assert "members" in body, (
@@ -137,8 +139,8 @@ def test_a_cross_organization_branding_write_is_recorded():
     )
 
     # The record has to precede the mutation, or a failure between the two loses it.
-    tail = source.split("async def update_org_preferences")[1]
+    tail = source.split("async def update_org_branding")[1]
     warn_at = tail.find("logger.warning")
-    write_at = tail.find("prefs.settings = body.settings")
+    write_at = tail.find("store.save_org_branding(")
     assert warn_at != -1 and write_at != -1
     assert warn_at < write_at, "log the cross-organization write before performing it"
