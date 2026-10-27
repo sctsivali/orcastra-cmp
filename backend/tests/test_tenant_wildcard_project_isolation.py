@@ -45,7 +45,7 @@ def _database():
             text(
                 "CREATE TABLE organizations ("
                 "id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_by TEXT NOT NULL, "
-                "is_active BOOLEAN NOT NULL)"
+                "is_active BOOLEAN NOT NULL, source TEXT NOT NULL DEFAULT 'local')"
             )
         )
         connection.execute(
@@ -87,7 +87,7 @@ def _database():
         )
 
         connection.execute(
-            text("INSERT INTO organizations VALUES (:id, :name, :owner, :active)"),
+            text("INSERT INTO organizations (id, name, created_by, is_active) VALUES (:id, :name, :owner, :active)"),
             [
                 {"id": 1, "name": "Org A", "owner": "partner-a", "active": True},
                 {"id": 2, "name": "Org B", "owner": "partner-b", "active": True},

@@ -528,7 +528,9 @@ async def lifespan(app: FastAPI):
 
         start_tenant_rule_audit(
             async_session_maker,
-            lambda cluster_id: get_lxd_service().connection_manager.get_client(cluster_id),
+            # The bound method, called off the loop by the audit (asyncio.to_thread): get_client
+            # can revalidate and rebuild a pooled connection, which must never block the loop.
+            get_lxd_service().connection_manager.get_client,
             float(settings.tenant_rule_audit_interval_seconds),
         )
         logger.info("Tenant rule audit started (%ss)", settings.tenant_rule_audit_interval_seconds)
