@@ -1129,6 +1129,8 @@ Ensure your client certificates are properly configured.
     # Console Router (VGA/Graphics console access)
     from app.routers.console import router as console_router
     app.include_router(console_router, prefix=settings.api_prefix)
+    from app.routers.console_actions import router as console_actions_router
+    app.include_router(console_actions_router, prefix=settings.api_prefix)
     
     # Organization branding first: organizations' `/{org_id}` would otherwise take `/my-preferences`.
     from app.routers.organization_branding import router as organization_branding_router

@@ -103,6 +103,9 @@ ACTION_CATEGORIES = {
     # Admin
     "terminal.session.create": EventCategory.ADMIN,
     "console.session.create": EventCategory.ADMIN,
+    # The console toolbar (routers/console_actions.py): a key combination sent, a screenshot taken.
+    "console.keys.send": EventCategory.ADMIN,
+    "console.screenshot.take": EventCategory.ADMIN,
     # The key-authenticated surface. `integration.instance.exec` and `integration.instance.files`
     # are the API-key equivalents of the two session actions above: they reach inside a guest.
     # `integration.proxy.request` covers everything else that goes through the raw proxy, which
