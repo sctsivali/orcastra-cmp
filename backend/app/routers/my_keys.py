@@ -34,6 +34,7 @@ from app.core.org_scope import (
     get_scope_cache_key,
     verify_cluster_access,
     get_current_allowed_clusters,
+    get_current_visible_projects,
 )
 from app.services.activity_logger import get_activity_logger
 from app.services import my_keys_registry
@@ -292,10 +293,14 @@ def _owned_by_caller(metadata: Dict[str, Any], caller_email: Optional[str]) -> b
 
     The comparison folds case: the owner was stamped from the token's email claim, and the IdP
     does not promise to spell an address the same way on every token it issues.
+
+    important: a record from before owners were recorded stays on cluster scope only where one
+    party holds the cluster. On a cluster several organizations share, nobody but an
+    Administrator can tell whose it is, and it holds a private key (security review 2026-10-27).
     """
     owner = metadata.get("owner_email")
     if not owner:
-        return True
+        return metadata.get("node") not in (get_current_visible_projects() or {})
     return bool(caller_email) and str(owner).casefold() == str(caller_email).casefold()
 
 
@@ -653,8 +658,11 @@ def _audit_create_failure(request: KeyCreateRequest, code: str, message: str) ->
     """A key that was asked for and not issued is part of the key's trail too."""
     activity_logger.log_activity(
         action="user.ssh_key.create",
-        target_type="ssh_key",
-        target_id=request.name,
+        # important: its own type and a prefixed id. As an ssh_key row named after the request, a
+        # caller could name a failing request after another owner's key id and plant the row in
+        # that key's trail (security review 2026-10-27).
+        target_type="ssh_key_request",
+        target_id=f"request:{request.name}",
         target_host=request.node,
         target_project=request.project,
         result="failure",

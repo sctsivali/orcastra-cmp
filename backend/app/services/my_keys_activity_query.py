@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 from sqlalchemy import String, and_, cast, func, literal, null, or_, select, union_all
 
@@ -33,10 +33,15 @@ OUT_OF_BOUND = "Change outside your project scope"
 
 @dataclass(frozen=True)
 class Scope:
-    """Who is asking. `allowed_clusters` None means an unrestricted caller (Administrator)."""
+    """Who is asking. `allowed_clusters` None means an unrestricted caller (Administrator).
+
+    `shared_clusters` are the ones several organizations hold: a key there that predates owners is
+    nobody's to read but an Administrator's (routers/my_keys.py _owned_by_caller).
+    """
 
     caller_email: str
     allowed_clusters: Optional[Set[str]]
+    shared_clusters: FrozenSet[str] = frozenset()
 
     @property
     def unrestricted(self) -> bool:
@@ -57,7 +62,10 @@ def _owned(scope: Scope) -> Any:
     caller = scope.caller_email.lower()
     return or_(
         func.lower(MyKeyRecord.owner_email) == caller,
-        and_(MyKeyRecord.owner_email.is_(None), MyKeyRecord.cluster_id.in_(sorted(scope.allowed_clusters or []) or ["\x00"])),
+        and_(
+            MyKeyRecord.owner_email.is_(None),
+            MyKeyRecord.cluster_id.in_(sorted(set(scope.allowed_clusters or []) - set(scope.shared_clusters)) or ["\x00"]),
+        ),
     )
 
 

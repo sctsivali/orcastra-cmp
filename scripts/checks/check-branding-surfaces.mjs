@@ -52,7 +52,12 @@ assert.ok(!/>\s*Orcastra CMP\s*</.test(signIn), "the sign-in title is hard-coded
 // 5. The public reader cannot hang the sign-in page and accepts only images the backend allows.
 const reader = read("lib/server/public-branding.ts");
 assert.match(reader, /Promise\.race\(\[read\(\), deadline\]\)/, "the branding read has no deadline");
-assert.match(reader, /endsWith\("\.cloudinary\.com"\)/, "the reader passes image URLs the backend would refuse");
+assert.match(reader, /safeImageSrc\(/, "the reader passes image URLs the backend would refuse");
+const images = read("lib/branding-images.ts");
+assert.match(images, /endsWith\("\.cloudinary\.com"\)/, "remote images are Cloudinary only");
+assert.ok(!/\\\\/.test(images.match(/const SITE_PATH = (.*);/)?.[1] ?? "\\\\"), "a site path admits no backslash");
+assert.match(read("components/personalization/preferences.ts"), /safeImageSrc\(logo\.favicon\)/, "every branding image is checked where it is merged");
+assert.match(read("app/page.tsx"), /cssImageUrl\(backgroundImage\)/, "the landing background is a quoted, checked url()");
 
 // 6. Signing out forgets the previous account's colours.
 assert.match(read("lib/sign-out.ts"), /clearPersonalizationHint\(\)/, "sign-out leaves the last account's colours in the hint cookie");

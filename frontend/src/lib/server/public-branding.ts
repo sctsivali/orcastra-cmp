@@ -1,3 +1,4 @@
+import { safeImageSrc } from "@/lib/branding-images";
 import type { PublicBranding } from "@/types/branding";
 
 // note: server components only (the root layout's metadata and the auth layout). It reads the
@@ -19,16 +20,10 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-/** A site path or an https Cloudinary URL, the only image sources the backend accepts. */
+/** A site path or an https Cloudinary URL, the only image sources the backend serves here. */
 function imageUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  if (value.startsWith("/") && !value.startsWith("//")) return value;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname.endsWith(".cloudinary.com") ? value : null;
-  } catch {
-    return null;
-  }
+  const src = safeImageSrc(value);
+  return src && !src.startsWith("data:") ? src : null;
 }
 
 export function parsePublicBranding(body: unknown): PublicBranding | null {

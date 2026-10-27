@@ -84,6 +84,10 @@ async def check(now: Optional[float] = None) -> Dict[str, Any]:
             except (SafeHTTPError, manifest_module.ManifestInvalid) as exc:
                 errors.append(f"{source}: {exc}")
                 continue
+            except Exception as exc:  # noqa: BLE001 - recorded, so the backoff still applies
+                logger.warning("Release check read of %s failed unexpectedly", source, exc_info=True)
+                errors.append(f"{source}: unexpected {type(exc).__name__}")
+                continue
             state = {
                 "last_attempt_at": now,
                 "last_success_at": now,

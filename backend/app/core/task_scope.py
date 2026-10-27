@@ -141,7 +141,8 @@ def task_conditions(model: Any) -> List[Any]:
 # important: a My Keys row names a private credential by id (the only thing between a partner and
 # another owner's PFX download) on the key's cluster, so cluster scope would show it to every
 # partner sharing that cluster. These rows reach Admin and the person who acted, like a host-less row.
-KEY_RESOURCE_TYPES = ("ssh_key", "ssh_key_cleanup")
+# A key, the group cleanup, and a key that was asked for and not issued (its own type, never a key id).
+KEY_RESOURCE_TYPES = ("ssh_key", "ssh_key_cleanup", "ssh_key_request")
 
 
 def _is_own(model: Any, caller_email: str) -> Any:

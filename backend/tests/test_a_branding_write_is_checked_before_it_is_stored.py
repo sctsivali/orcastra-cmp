@@ -67,6 +67,11 @@ def test_a_favicon_must_be_an_icon_type() -> None:
     "https://cloudinary.com.evil.example/logo.png",
     "//evil.example/logo.png",
     "javascript:alert(1)",
+    "/\\evil.example/f.ico",
+    "/x), url(https://evil.example/b.png",
+    "/logo.png onerror=alert(1)",
+    'https://res.cloudinary.com/a/b"onload=x',
+    "https://res.cloudinary.com/a/(b)",
 ])
 def test_an_image_url_must_be_cloudinary_over_https_or_this_site(url: str) -> None:
     with pytest.raises(BrandingInvalid):

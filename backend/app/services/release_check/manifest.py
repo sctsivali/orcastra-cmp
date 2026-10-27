@@ -58,9 +58,13 @@ def _link(value: Any, field: str) -> Optional[str]:
         return None
     if not isinstance(value, str) or len(value) > 512:
         raise ManifestInvalid(f"{field} must be a URL")
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+        port = parts.port  # raises ValueError on ":99999" or ":abc"
+    except ValueError as exc:
+        raise ManifestInvalid(f"{field} must be an https link to the Orcastra documentation") from exc
     host = (parts.hostname or "").lower()
-    if parts.scheme != "https" or host not in LINK_HOSTS or parts.username or parts.port:
+    if parts.scheme != "https" or host not in LINK_HOSTS or parts.username or port:
         raise ManifestInvalid(f"{field} must be an https link to the Orcastra documentation")
     prefix = LINK_PATH_PREFIX.get(host)
     if prefix and not (parts.path == prefix or parts.path.startswith(prefix + "/")):

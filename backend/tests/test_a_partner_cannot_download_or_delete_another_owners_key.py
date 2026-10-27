@@ -76,6 +76,17 @@ async def test_a_record_that_predates_the_owner_field_stays_on_cluster_scope(vau
     assert isinstance(response, StreamingResponse)
 
 
+async def test_on_a_cluster_several_organizations_share_an_ownerless_key_is_an_administrators(vault, partner_scope):
+    """Security review 2026-10-27: nobody else can tell whose a pre-owner key is on a shared cluster."""
+    token = org_scope._visible_projects_var.set({SHARED: {"default"}})
+    try:
+        with pytest.raises(HTTPException) as caught:
+            await my_keys.download_key("key_legacy", _rbac=_user(OTHER))
+        assert caught.value.status_code == 404
+    finally:
+        org_scope._visible_projects_var.reset(token)
+
+
 async def test_an_administrator_reads_any_key(vault):
     # An administrator's request carries no cluster restriction (None), so no owner applies.
     response = await my_keys.download_key("key_a", _rbac=_user("ops@example.test", ("role_admin",)))

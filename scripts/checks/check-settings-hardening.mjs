@@ -23,7 +23,11 @@ function load(relativePath, dependencies = {}) {
 }
 
 const types = load("frontend/src/types/personalization.ts");
-const preferences = load("frontend/src/components/personalization/preferences.ts", { "@/types/personalization": types });
+const brandingImages = load("frontend/src/lib/branding-images.ts");
+const preferences = load("frontend/src/components/personalization/preferences.ts", {
+  "@/types/personalization": types,
+  "@/lib/branding-images": brandingImages,
+});
 const cache = load("frontend/src/app/settings/components/browser-cache.ts", {
   "@tanstack/react-query": frontendRequire("@tanstack/react-query"),
 });

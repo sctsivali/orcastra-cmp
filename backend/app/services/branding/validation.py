@@ -32,6 +32,8 @@ LOGO_COLORS = ("auto", "black", "white")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DATA_URI = re.compile(r"^data:(?P<type>[a-z0-9.+/-]+)(?:;charset=[a-z0-9-]+)?;base64,(?P<data>[A-Za-z0-9+/=\s]+)$", re.I)
 _TEXT_CAPS = {"appName": 64, "tagline": 300, "footerText": 120}
+_SITE_PATH = re.compile(r"^/[A-Za-z0-9._~-][A-Za-z0-9._~/-]*$")
+_URL_CHARS = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&*+,;=%-]+$")
 
 
 class BrandingInvalid(ValueError):
@@ -84,10 +86,19 @@ def _image(field: str, value: Any, *, types: Tuple[str, ...], limit: int) -> Opt
         if declared != actual and not (declared in ("image/x-icon", "image/vnd.microsoft.icon") and actual == "image/x-icon"):
             raise BrandingInvalid(f"{field} says {declared} but holds {actual}")
         return value
-    if value.startswith("/") and not value.startswith("//"):
+    # important: a plain character set, not just a leading "/". "/\\evil.example/x" resolves to
+    # another host in a browser, and "/x), url(https://evil.example/y" breaks out of the CSS url()
+    # the landing page builds (security review 2026-10-27). No quotes, brackets, backslashes or
+    # spaces in either form.
+    if len(value) <= 512 and _SITE_PATH.match(value):
         return value
     parts = urlsplit(value)
-    if parts.scheme == "https" and (parts.hostname or "").endswith(".cloudinary.com"):
+    if (
+        len(value) <= 1024
+        and parts.scheme == "https"
+        and (parts.hostname or "").endswith(".cloudinary.com")
+        and _URL_CHARS.match(value)
+    ):
         return value
     raise BrandingInvalid(f"{field} must be a base64 data URI, an https Cloudinary URL or a path on this site")
 

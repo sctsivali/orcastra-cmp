@@ -125,3 +125,19 @@ def test_key_rows_are_kept_for_their_own_retention() -> None:
     assert params["key_days"] == 365 and params["days"] == 30
     asyncio.run(repository_sweeps.prune_batch(_Db(), task_days=30, log_days=90, key_days=10))
     assert captured[-2][1]["key_days"] == 90, "a key row is never kept for less than any other row"
+
+
+def test_a_failed_create_is_recorded_as_a_request_never_as_a_key_id(monkeypatch) -> None:
+    """Security review 2026-10-27: a request named after another owner's key id must not land in
+    that key's trail, so a failed create has its own type and a prefixed id."""
+    from app.routers import my_keys
+
+    events = []
+    monkeypatch.setattr(my_keys.activity_logger, "log_activity", lambda **kwargs: events.append(kwargs))
+    request = my_keys.KeyCreateRequest(name="key_victim", node="nuc2", project="default", auth_level="standard", expire_days=1)
+    my_keys._audit_create_failure(request, "vault_unavailable", "Vault did not answer")
+    assert events[0]["target_type"] == "ssh_key_request"
+    assert events[0]["target_id"] == "request:key_victim"
+    from app.core.task_scope import KEY_RESOURCE_TYPES
+
+    assert "ssh_key_request" in KEY_RESOURCE_TYPES, "still visible only to its actor and an Administrator"

@@ -1,4 +1,5 @@
 import { DEFAULT_PERSONALIZATION, type PersonalizationSettings } from "@/types/personalization";
+import { safeImageSrc } from "@/lib/branding-images";
 
 // `version` is the server's token over every layer under the account (its organization, that
 // organization's provider, the deployment default) and the link between them. A timestamp alone
@@ -8,11 +9,19 @@ export type OrgPreferences = OrgPreferencesVersion & { settings: Personalization
 export type PreferenceRead<T> = { ok: true; value: T } | { ok: false };
 
 export function mergeWithDefaults(data: Partial<PersonalizationSettings>): PersonalizationSettings {
+  const logo = { ...DEFAULT_PERSONALIZATION.logo, ...data.logo };
+  const background = { ...DEFAULT_PERSONALIZATION.background, ...data.background };
   return {
     ...DEFAULT_PERSONALIZATION,
     ...data,
-    logo: { ...DEFAULT_PERSONALIZATION.logo, ...data.logo },
-    background: { ...DEFAULT_PERSONALIZATION.background, ...data.background },
+    // Image sources are checked again here: rows written before the server validated them are
+    // still read, and these end up in a CSS url(), a favicon link and an <img>.
+    logo: {
+      lightModeLogo: safeImageSrc(logo.lightModeLogo),
+      darkModeLogo: safeImageSrc(logo.darkModeLogo),
+      favicon: safeImageSrc(logo.favicon),
+    },
+    background: { ...background, backgroundImage: safeImageSrc(background.backgroundImage) },
     branding: { ...DEFAULT_PERSONALIZATION.branding, ...data.branding },
     colors: { ...DEFAULT_PERSONALIZATION.colors, ...data.colors },
     theme: data.theme ?? DEFAULT_PERSONALIZATION.theme,

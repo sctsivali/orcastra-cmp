@@ -21,7 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUser
 from app.core.database import get_db
 from app.core.dependencies import require_partner
-from app.core.org_scope import get_current_allowed_clusters, org_scope_dependency, visible_projects_for
+from app.core.org_scope import (
+    get_current_allowed_clusters,
+    get_current_visible_projects,
+    org_scope_dependency,
+    visible_projects_for,
+)
 from app.services import my_keys_activity_query as query
 from app.services.activity_logger import get_activity_logger
 
@@ -78,7 +83,11 @@ class KeyLastUsedList(BaseModel):
 
 
 def _scope(user: AuthenticatedUser) -> query.Scope:
-    return query.Scope(caller_email=user.email or "", allowed_clusters=get_current_allowed_clusters())
+    return query.Scope(
+        caller_email=user.email or "",
+        allowed_clusters=get_current_allowed_clusters(),
+        shared_clusters=frozenset(get_current_visible_projects() or {}),
+    )
 
 
 def _filters(

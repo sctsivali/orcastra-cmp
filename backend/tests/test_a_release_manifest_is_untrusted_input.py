@@ -43,6 +43,8 @@ def test_unknown_fields_are_ignored() -> None:
     (lambda d: d["releases"][0].update(notes_url="http://docs.orcastra.io/en/latest/"), "documentation"),
     (lambda d: d["releases"][0].update(upgrade_url="https://github.com/someone-else/orcastra-docs"), "orcastra-docs"),
     (lambda d: d["releases"][0].update(upgrade_url="javascript:alert(1)"), "documentation"),
+    (lambda d: d["releases"][0].update(notes_url="https://docs.orcastra.io:99999/x"), "documentation"),
+    (lambda d: d["releases"][0].update(notes_url="https://docs.orcastra.io:abc/x"), "documentation"),
 ])
 def test_a_manifest_that_breaks_a_rule_is_refused(change, message) -> None:
     with pytest.raises(ManifestInvalid, match=message):

@@ -10,6 +10,7 @@ import { useCounterAnimation } from "@/hooks/use-counter-animation";
 import { usePersonalization } from "@/components/personalization-provider";
 import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
 import { usePermissions } from "@/hooks/use-permissions";
+import { cssImageUrl } from "@/lib/branding-images";
 import { useAllProjects, useInstances, useNodeAvailability } from "@/hooks/use-lxd";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 
@@ -91,7 +92,7 @@ export default function HomePage() {
         <div 
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
           style={{ 
-            backgroundImage: `url(${backgroundImage})`,
+            backgroundImage: cssImageUrl(backgroundImage) ?? undefined,
             backgroundAttachment: 'fixed',
             filter: `brightness(1.2) contrast(0.9) blur(${backgroundBlur}px)`,
             transform: backgroundBlur > 0 ? 'scale(1.05)' : 'none', // Prevent blur edge artifacts
