@@ -1,7 +1,7 @@
 const { installApiFixtures, expectCleanHarness } = require("./fixtures.cjs");
 
 async function installSettingsFixtures(page, role, options = {}) {
-  const base = await installApiFixtures(page, role);
+  const base = await installApiFixtures(page, role, options.api || {});
   const state = {
     base,
     requests: [],
@@ -25,6 +25,9 @@ async function installSettingsFixtures(page, role, options = {}) {
     "/user-groups/sync-status": { authentik_configured: false, authentik_reachable: false, groups_exist: false, details: "Fixture identity provider is disabled" },
     "/tenant-access/policies": { policies: [], total: 0 },
     "/clusters": { clusters: [], total: 0 },
+    // An Administrator's Personalization tab edits the deployment default (2026-10-27). Any
+    // other role asking for it stays an unexpected request.
+    ...(role === "admin" ? { "/branding/deployment": { settings: {}, updated_by: null, updated_at: null, version: "e2e-built-in" } } : {}),
   };
 
   await page.route("**/api/v1/**", async (route) => {
