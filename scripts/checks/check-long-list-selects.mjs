@@ -30,7 +30,7 @@ const CONVERTED = new Map([
   ['components/network-acls/acl-form-dialog.tsx', ['acl-project']],
   ['components/profiles/profile-form-dialog.tsx', ['profile-project']],
   ['components/networks/network-create-dialog.tsx', ['net-project']],
-  ['app/my-keys/page.tsx', ['project']],
+  ['app/my-keys/components/create-key-dialog.tsx', ['project']],
   ['components/iso-upload-dialog.tsx', ['iso-pool']],
   ['components/integrations/transfer-owner-key-dialog.tsx', ['transfer-owner-key']],
 ]);

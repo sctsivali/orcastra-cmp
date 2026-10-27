@@ -319,6 +319,12 @@ async function installApiFixtures(page, role, options = {}) {
         blocked_reason: null,
         tenant_access: { total_clusters: 1, total_rules: 1 },
       };
+    } else if (path === "/tenant-access/orphan-rules") {
+      // Tenant Access lists the rules the audit found naming nothing (2026-10-27); none here.
+      body = { rules: [], total: 0 };
+    } else if (path === "/my-keys/last-used") {
+      // My Keys reads when each key last changed something (2026-10-27); no key has here.
+      body = { items: [] };
     } else if (path === "/instances/write-policy") {
       const host = url.searchParams.get("host");
       if (host !== configuredSnapshotTarget.host) {

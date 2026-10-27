@@ -1,12 +1,13 @@
 "use client";
 
 import { Suspense, useCallback, useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, AlertCircle, CheckCircle, Download, Key, ListChecks, Plus, Shield, Trash2 } from "lucide-react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackLink } from "@/components/ui/back-link";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -14,51 +15,16 @@ import {
   TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle } from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue } from "@/components/ui/select";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Key,
-  Plus,
-  Download,
-  Trash2,
-  
-  
-  Shield,
-  
-  
-  AlertCircle,
-  CheckCircle,
-  ChevronLeft } from "lucide-react";
+import { RowActions, type RowAction } from "@/components/ui/row-actions";
+import { TableEmptyValue } from "@/components/ui/table-text";
 import { useToast } from "@/hooks/use-toast";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAllProjects } from "@/hooks/use-lxd";
-import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
-import { SearchableSelect } from "@/components/ui/searchable-select";
-import { NodeStatusNotice } from "@/components/ui/node-status-notice";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { api } from "@/lib/api";
+import { myKeysActivityAPI } from "@/lib/my-keys-activity-api";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { KeyInfo, KeyCreateRequest } from "@/types/api";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -66,8 +32,7 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { IntentLink } from "@/components/navigation/route-intent";
-import { Input } from "@/components/ui/input";
-import { formatLabel } from "@/lib/utils";
+import { formatDate, formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -79,8 +44,14 @@ import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
+import { CreateKeyDialog } from "./components/create-key-dialog";
+import { KeyActivityDialog } from "./components/key-activity-dialog";
+import { DeleteKeyDialog, KeyStats } from "./components/key-stats-and-delete";
 
-const MY_KEYS = defineTable<KeyInfo>()({
+/** A key with when it last changed something on its cluster (GET /my-keys/last-used). */
+type KeyRow = KeyInfo & { last_used_at: string | null };
+
+const MY_KEYS = defineTable<KeyRow>()({
   searchPlaceholder: "Search by name, project, or cluster",
   defaultSort: { field: "name", direction: "asc" },
   columns: [
@@ -107,6 +78,8 @@ const MY_KEYS = defineTable<KeyInfo>()({
       facetSpec: { format: formatLabel } },
     { field: "created", label: "Created", sort: (k) => (k.created_at ? new Date(k.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
     { field: "expires", label: "Expires", sort: (k) => (k.expires_at ? new Date(k.expires_at).getTime() : null), filter: fromSort("date", { horizon: "future", emptyLabel: "Never" }) },
+    // The last change LXD reported under the key's certificate; a read (lxc list) leaves none.
+    { field: "last_used", label: "Last Used", sort: (k) => (k.last_used_at ? new Date(k.last_used_at).getTime() : null), filter: fromSort("date", { horizon: "past", emptyLabel: "Not recorded" }) },
     {
       // filter-coverage: the tabs above the table are this column's control. A Status facet
       // as well would be two controls for one piece of state, which is the failure this
@@ -140,15 +113,30 @@ function MyKeysContent() {
     queryKey: ["my-keys"],
     queryFn: ({ fresh, signal }) => api.myKeys.list(undefined, undefined, { fresh, signal }) });
 
-  const keys = useMemo(() => (keysData as any)?.keys || [], [keysData]);
+  // When each key last changed something; a separate read, so a slow journal never holds the list.
+  const { scopeKey } = useActorQueryScope();
+  const { data: lastUsedData } = useQuery({
+    queryKey: ["my-key-last-used", scopeKey],
+    queryFn: ({ signal }) => myKeysActivityAPI.lastUsed({ signal }),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const keys: KeyRow[] = useMemo(() => {
+    const used = new Map((lastUsedData?.items ?? []).map((item) => [item.key_id, item.last_used_at]));
+    return ((keysData as { keys?: KeyInfo[] } | undefined)?.keys ?? []).map((k) => ({
+      ...k,
+      last_used_at: used.get(k.id) ?? null,
+    }));
+  }, [keysData, lastUsedData]);
+  const [activityKey, setActivityKey] = useState<KeyRow | null>(null);
   // Derived from the full list rather than the response counters, so a tab label cannot
   // disagree with what the other tab holds.
-  const activeCount = useMemo(() => keys.filter((k: KeyInfo) => !k.is_expired).length, [keys]);
-  const expiredCount = useMemo(() => keys.filter((k: KeyInfo) => k.is_expired).length, [keys]);
+  const activeCount = useMemo(() => keys.filter((k) => !k.is_expired).length, [keys]);
+  const expiredCount = useMemo(() => keys.filter((k) => k.is_expired).length, [keys]);
 
   const tabKeys = useMemo(() => {
-    if (activeTab === "active") return keys.filter((k: KeyInfo) => !k.is_expired);
-    if (activeTab === "expired") return keys.filter((k: KeyInfo) => k.is_expired);
+    if (activeTab === "active") return keys.filter((k) => !k.is_expired);
+    if (activeTab === "expired") return keys.filter((k) => k.is_expired);
     return keys;
   }, [keys, activeTab]);
 
@@ -167,7 +155,7 @@ function MyKeysContent() {
     [resetPage],
   );
 
-  const filters = useTableFilters(MY_KEYS, tabKeys as KeyInfo[], {
+  const filters = useTableFilters(MY_KEYS, tabKeys, {
     onFilterChange: resetPage,
   });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
@@ -190,7 +178,7 @@ function MyKeysContent() {
     list: "my-keys",
     rows: keys,
     orderedRows: sortedKeys,
-    keyOf: (k: KeyInfo) => k.id,
+    keyOf: (k: KeyRow) => k.id,
     pageSize,
     setPage,
     dataUpdatedAt,
@@ -271,6 +259,8 @@ function MyKeysContent() {
       toast({
         title: "Success",
         description: "Key downloaded successfully" });
+      // The download is on the key's trail now; an open activity view should show it.
+      void queryClient.invalidateQueries({ queryKey: ["my-key-activity"] });
     } catch (error: any) {
       toast({
         title: "Error",
@@ -292,6 +282,20 @@ function MyKeysContent() {
     setDeleteDialogOpen(false);
     setKeyToDelete(null);
   };
+
+  const keyActions = (key: KeyRow): RowAction[] => [
+    { id: "download", label: "Download PFX", icon: Download, onSelect: () => void handleDownload(key.id) },
+    { id: "activity", label: "View Activity", icon: Activity, onSelect: () => setActivityKey(key) },
+    {
+      id: "delete",
+      label: "Delete Key",
+      icon: Trash2,
+      destructive: true,
+      separatorBefore: true,
+      unavailableReason: isReadOnly ? "Disabled in read-only mode" : undefined,
+      onSelect: () => handleDeleteClick(key.id, key.name),
+    },
+  ];
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -318,6 +322,13 @@ function MyKeysContent() {
             lastUpdatedAt={dataUpdatedAt}
             onRefresh={refreshNow}
           />
+          <Button asChild size="sm" variant="outline" className="gap-1.5 shrink-0">
+            <IntentLink href="/my-keys/activity">
+              <ListChecks className="h-4 w-4" aria-hidden="true" />
+              <span className="hidden sm:inline">Activity Log</span>
+              <span className="sr-only sm:hidden">Activity Log</span>
+            </IntentLink>
+          </Button>
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button 
@@ -345,29 +356,7 @@ function MyKeysContent() {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Keys</CardTitle>
-            <CheckCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{activeCount}</div>
-            <p className="text-xs text-muted-foreground">Valid and usable keys</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Expired Keys</CardTitle>
-            <AlertCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{expiredCount}</div>
-            <p className="text-xs text-muted-foreground">Keys past expiration</p>
-          </CardContent>
-        </Card>
-      </div>
+      <KeyStats activeCount={activeCount} expiredCount={expiredCount} />
 
       {/* Keys Table with Tabs */}
       <Card>
@@ -416,12 +405,13 @@ function MyKeysContent() {
                   <SortableTableHead label="Access Level" field="auth_level" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Expires" field="expires" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Last Used" field="last_used" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="w-12 text-right"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pagedKeys.map((key: KeyInfo) => (
+                {pagedKeys.map((key) => (
                   <TableRow key={key.id} {...focus.rowProps(key.id)}>
                     <TableCell className="font-medium">{key.name}</TableCell>
                     <TableCell><NodeLink clusterId={key.node} /></TableCell>
@@ -451,6 +441,9 @@ function MyKeysContent() {
                         ? new Date(key.expires_at).toLocaleDateString('en-GB')
                         : "Never"}
                     </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {key.last_used_at ? formatDate(key.last_used_at) : <TableEmptyValue label="Not recorded" />}
+                    </TableCell>
                     <TableCell>
                       {key.is_expired ? (
                         <Badge variant="negative" className="gap-1">
@@ -465,25 +458,7 @@ function MyKeysContent() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleDownload(key.id)}
-                          title="Download PFX"
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => handleDeleteClick(key.id, key.name)}
-                          title={isReadOnly ? "Disabled in read-only mode" : "Delete Key"}
-                          disabled={isReadOnly}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      <RowActions triggerLabel={`Actions for key ${key.name} on ${key.node}`} actions={keyActions(key)} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -512,237 +487,18 @@ function MyKeysContent() {
         </CardContent>
       </Card>
 
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => {
-        setDeleteDialogOpen(open);
-        if (!open) setKeyToDelete(null);
-      }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Key</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete the key <strong className="text-foreground">&quot;{keyToDelete?.name}&quot;</strong>?
-              This action cannot be undone and will permanently remove this TLS identity key.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setKeyToDelete(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDeleteConfirm}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <KeyActivityDialog keyRow={activityKey} onOpenChange={(open) => { if (!open) setActivityKey(null); }} />
+
+      <DeleteKeyDialog
+        keyName={keyToDelete?.name ?? null}
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) setKeyToDelete(null);
+        }}
+        onConfirm={handleDeleteConfirm}
+      />
     </div>
-  );
-}
-
-// Generate Key Dialog Component
-function CreateKeyDialog({
-  projects,
-  projectsLoading,
-  onSubmit,
-  isSubmitting }: {
-  projects: any[];
-  projectsLoading: boolean;
-  onSubmit: (data: KeyCreateRequest) => void;
-  isSubmitting: boolean;
-}) {
-  const nodePicker = useNodePickerOptions();
-  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
-
-  const [formData, setFormData] = useState<KeyCreateRequest>({
-    name: "",
-    node: "",  // Don't auto-select - let user choose
-    project: "",  // Don't auto-select - let user choose
-    auth_level: "standard",
-    expire_days: 365 });
-
-  // Get unique projects for the selected node
-  const filteredProjects = formData.node 
-    ? projects.filter((p: any) => !p.host || p.host === formData.node)
-    : [];
-  
-  // Get unique project names to avoid duplicates
-  const uniqueProjects = filteredProjects.reduce((acc: any[], project: any) => {
-    if (!acc.find(p => p.name === project.name)) {
-      acc.push(project);
-    }
-    return acc;
-  }, []);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.node) {
-      return; // Don't submit without node
-    }
-    if (formData.auth_level === "standard" && !formData.project) {
-      return; // Don't submit without project for standard auth
-    }
-    onSubmit(formData);
-  };
-
-  // Reset project when node changes
-  const handleNodeChange = (value: string) => {
-    setFormData({ ...formData, node: value, project: "" });
-  };
-
-  return (
-    <DialogContent className="sm:max-w-[550px]">
-      <DialogHeader>
-        <DialogTitle>Generate New Key</DialogTitle>
-        <DialogDescription>
-          Generate a new TLS identity key for accessing hypervisor resources. The key will
-          be generated with specific permissions for the selected project.
-        </DialogDescription>
-      </DialogHeader>
-      <form onSubmit={handleSubmit}>
-        <div className="grid gap-4 py-4">
-          <div className="grid gap-2">
-            <Label htmlFor="name">Key Name</Label>
-            <Input
-              id="name"
-              placeholder="e.g., Production Access Key"
-              value={formData.name}
-              onChange={(e) =>
-                setFormData({ ...formData, name: e.target.value })
-              }
-              required
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="node">Cluster</Label>
-            <SearchableSelect
-              id="node"
-              value={formData.node}
-              onValueChange={handleNodeChange}
-              options={nodeOptions}
-              placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
-              searchPlaceholder="Search clusters..."
-              emptyText="No clusters available."
-              disabled={loadingNodes}
-            />
-            <NodeStatusNotice
-              meta={formData.node ? nodePicker.statusOf(formData.node) : undefined}
-              reason={
-                formData.node
-                  ? nodePicker.availabilityOf(formData.node)?.reason ?? undefined
-                  : undefined
-              }
-              nodeLabel={formData.node ? nodePicker.labelOf(formData.node) : undefined}
-              unavailable={nodePicker.statusUnavailable}
-              noSelectableNodes={nodePicker.selectableCount === 0}
-              updatedAt={nodePicker.statusUpdatedAt}
-              onRecheck={nodePicker.refreshNow}
-            />
-          </div>
-          {formData.auth_level === "standard" && (
-            <div className="grid gap-2">
-              <Label htmlFor="project">Project</Label>
-              <SearchableSelect
-                id="project"
-                value={formData.project}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, project: value })
-                }
-                options={uniqueProjects.map((project: any) => ({
-                  value: project.name,
-                  label: project.name,
-                }))}
-                placeholder={
-                  !formData.node
-                    ? "Select a cluster first"
-                    : projectsLoading
-                      ? "Loading projects..."
-                      : uniqueProjects.length === 0
-                        ? `No projects available for ${formData.node}`
-                        : "Select a project"
-                }
-                searchPlaceholder="Search projects..."
-                emptyText="No projects found."
-                disabled={projectsLoading || !formData.node || uniqueProjects.length === 0}
-              />
-            </div>
-          )}
-          <div className="grid gap-2">
-            <Label htmlFor="auth_level">Authorization Level</Label>
-            <Select
-              value={formData.auth_level}
-              onValueChange={(value) =>
-                setFormData({ ...formData, auth_level: value })
-              }
-            >
-              <SelectTrigger id="auth_level">
-                <SelectValue placeholder="Select access level" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="standard">Standard</SelectItem>
-                <SelectItem value="admin">Admin</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="text-xs text-muted-foreground space-y-1">
-              {formData.auth_level === "standard" ? (
-                <p>Project-level access: manage instances and resources within the selected project only.</p>
-              ) : (
-                <p>Cluster-level access: full administrative control across all projects and the cluster&apos;s server configuration.</p>
-              )}
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="expire_days">
-              Expiration (days)
-            </Label>
-            <Input
-              id="expire_days"
-              type="number"
-              min={1}
-              max={3650}
-              value={formData.expire_days}
-              onChange={(e) => {
-                const value = e.target.value;
-                // Allow empty string for clearing
-                if (value === '') {
-                  setFormData({
-                    ...formData,
-                    expire_days: '' as any });
-                } else {
-                  const numValue = parseInt(value);
-                  if (!isNaN(numValue) && numValue >= 1 && numValue <= 3650) {
-                    setFormData({
-                      ...formData,
-                      expire_days: numValue });
-                  }
-                }
-              }}
-              onBlur={(e) => {
-                // Set to 365 if empty on blur
-                if (e.target.value === '' || parseInt(e.target.value) < 1) {
-                  setFormData({
-                    ...formData,
-                    expire_days: 365 });
-                }
-              }}
-              placeholder="365"
-              required
-            />
-            <p className="text-xs text-muted-foreground">
-              Key will expire on{" "}
-              {new Date(
-                Date.now() + (formData.expire_days || 365) * 24 * 60 * 60 * 1000
-              ).toLocaleDateString('en-GB')}
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? "Generating..." : "Generate Key"}
-          </Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
   );
 }
 

@@ -46,7 +46,8 @@ const PICKERS = new Map([
   ['components/image-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/iso-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/groups/create-group-dialog.tsx', { kind: 'hook', notice: true }],
-  ['app/my-keys/page.tsx', { kind: 'hook', notice: true }],
+  // The Generate Key dialog moved out of the page into its own component (2026-10-27).
+  ['app/my-keys/components/create-key-dialog.tsx', { kind: 'hook', notice: true }],
   ['app/inventory/snapshots/components/take-snapshot-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/tenant-access-dialog.tsx', { kind: 'meta', notice: false }],
   ['components/policy-management-section.tsx', { kind: 'meta', notice: false }],
