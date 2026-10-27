@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings } from "lucide-react";
+import { Lock, Settings } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { RowActions } from "@/components/ui/row-actions";
@@ -35,6 +35,8 @@ export interface InstanceTableRowProps {
     name: string,
     permission: InstancePermission,
   ) => string | undefined;
+  /** Why the instance is view only because its paid term ended (hooks/use-tenant-access.ts). */
+  termReadOnlyReason?: (host: string, project: string, name: string) => string | undefined;
   canDeleteInstance: boolean;
   /** True only for the row whose delete is in flight, so the other rows stay live. */
   deletePending: boolean;
@@ -108,6 +110,7 @@ export function InstanceTableRow({
   migrationMoveUnavailableReason,
   migrationCopyUnavailableReason,
   permissionReason,
+  termReadOnlyReason,
   canDeleteInstance,
   deletePending,
   onEditSpecification,
@@ -123,6 +126,7 @@ export function InstanceTableRow({
   const rootDisk = rootDiskLabel(instance);
   const inFlight = inFlightLabel(instance, pendingActions, deletePending);
   const statusDisplay = instanceStatusDisplay(instance.status);
+  const readOnlyByTerm = termReadOnlyReason?.(instance.host, project, instance.name);
 
   const actions = instanceRowActions({
     instance,
@@ -163,6 +167,13 @@ export function InstanceTableRow({
         <TableLink onClick={() => onOpen(instance)}>
           {instance.name}
         </TableLink>
+        {/* The menu says why each action is off; the row says that it is, without opening it. */}
+        {readOnlyByTerm && (
+          <TableSubText className="flex items-center gap-1" data-testid="term-read-only">
+            <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
+            Read only
+          </TableSubText>
+        )}
       </TableCell>
       <TableCell>
         <Badge variant={statusDisplay.tone}>

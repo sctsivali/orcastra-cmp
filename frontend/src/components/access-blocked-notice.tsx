@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { AccessGateState, AccessRecheck } from "@/hooks/use-access-gate";
 import { federatedSignOut } from "@/lib/sign-out";
+import { formatDate } from "@/lib/utils";
 
 // Issue #17: a signed-in account Orcastra has given nothing used to see an empty dashboard that
 // read as a broken deployment. This replaces the whole shell, so none of the dashboard's global
@@ -18,8 +19,8 @@ const COPY: Record<Exclude<AccessGateState, "allowed" | "checking">, { title: st
     body: "Your account has no role in Orcastra yet. Contact your administrator to have a role assigned, then choose Check again.",
   },
   no_tenant_access: {
-    title: "No cluster access yet",
-    body: "Your account is a Tenant, but no cluster access has been assigned yet. Contact your administrator to have access granted, then choose Check again.",
+    title: "No active access",
+    body: "Your account has no active access to any cluster. Contact your provider to restore access, then choose Check again.",
   },
 };
 
@@ -31,11 +32,13 @@ const RECHECK_RESULT: Record<Exclude<AccessRecheck, "changed">, string> = {
 interface AccessBlockedNoticeProps {
   state: Exclude<AccessGateState, "allowed" | "checking">;
   email: string | null;
+  /** When the caller's access ended by its paid term, if it did. */
+  endedAt?: string | null;
   rechecking: boolean;
   onCheckAgain: () => Promise<AccessRecheck>;
 }
 
-export function AccessBlockedNotice({ state, email, rechecking, onCheckAgain }: AccessBlockedNoticeProps) {
+export function AccessBlockedNotice({ state, email, endedAt, rechecking, onCheckAgain }: AccessBlockedNoticeProps) {
   const [result, setResult] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<"sign-in" | "sign-out" | null>(null);
   const { title, body } = COPY[state];
@@ -70,6 +73,9 @@ export function AccessBlockedNotice({ state, email, rechecking, onCheckAgain }: 
             <Icon className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden="true" />
             <h1 className="text-xl font-semibold">{title}</h1>
             <p className="text-sm text-muted-foreground">{body}</p>
+            {state === "no_tenant_access" && endedAt && (
+              <p className="text-sm text-muted-foreground">Your access ended on {formatDate(endedAt)}.</p>
+            )}
             {email && (
               <p className="text-sm">
                 Signed in as <span className="font-medium break-all">{email}</span>

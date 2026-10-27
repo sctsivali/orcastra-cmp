@@ -186,7 +186,7 @@ function InstancesContent() {
   // answers false for everyone, so an operator briefly sees every action withheld and told
   // "No permission" when the real answer is "not known yet". The items stay withheld, which is
   // the safe direction, but the reason must not claim a denial that has not been established.
-  const { hasPermission, isLoading: permsLoading } = useTenantAccess();
+  const { hasPermission, termReadOnlyReason, isLoading: permsLoading } = useTenantAccess();
 
   // Dialog targets are local state, so a sign-out/sign-in in the same document must clear
   // them explicitly. Query keys isolate the data, while this prevents an already-open detail
@@ -208,9 +208,8 @@ function InstancesContent() {
       ? "Checking permissions"
       : hasPermission(host, project, name, permission)
         ? undefined
-        : permission === "console"
-          ? "No console permission"
-          : "No operate permission";
+        : termReadOnlyReason(host, project, name)
+          ?? (permission === "console" ? "No console permission" : "No operate permission");
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
@@ -394,6 +393,7 @@ function InstancesContent() {
             migrationMoveUnavailableReason={migrationMoveUnavailableReason}
             migrationCopyUnavailableReason={migrationCopyUnavailableReason}
             permissionReason={permissionReason}
+            termReadOnlyReason={termReadOnlyReason}
             canDeleteInstance={canDeleteInstance}
             deletePending={actions.deletePending}
             onEditSpecification={(instance) => {

@@ -20,6 +20,8 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
+import { OrphanRulesNotice } from "@/components/tenant-access/orphan-rules-notice";
+import { PolicyTermStatus } from "@/components/tenant-access/policy-term-status";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -749,6 +751,7 @@ function PolicyManagementSectionContent() {
 
         {expanded && (
           <CardContent>
+            <OrphanRulesNotice />
             {policiesLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -844,6 +847,7 @@ function PolicyManagementSectionContent() {
                                   {policy.description}
                                 </TableSubText>
                               )}
+                              <PolicyTermStatus policy={policy} />
                             </div>
                           </TableCell>
                           <TableCell>

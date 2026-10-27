@@ -10,7 +10,8 @@ import {
   Trash2,
   Terminal,
   Monitor,
-  Loader2 } from "lucide-react";
+  Loader2,
+  Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
 import { TagManager } from "@/components/tag-manager";
@@ -61,7 +62,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [showMonitoring, setShowMonitoring] = React.useState(false);
   const { isPartner } = usePermissions();
-  const { hasPermission } = useTenantAccess();
+  const { hasPermission, termReadOnlyReason } = useTenantAccess();
   const { scopeKey } = useActorQueryScope();
   const activeActorScopeRef = React.useRef(scopeKey);
   activeActorScopeRef.current = scopeKey;
@@ -69,6 +70,10 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   // tenant permission checks for this instance
   const canOperate = hasPermission(vm.host, vm.project || "default", vm.name, "operate");
   const canConsole = hasPermission(vm.host, vm.project || "default", vm.name, "console");
+  // A paid term that ended says why the controls are off, rather than a bare "no permission".
+  const termReason = termReadOnlyReason(vm.host, vm.project || "default", vm.name);
+  const noOperate = termReason ?? "No operate permission";
+  const noConsole = termReason ?? "No console permission";
 
   // important: an instance name is unique only within one project on one host, and the projects
   // grid can hold two expanded cards at once, so `Start instance web-01` was capable of naming
@@ -266,6 +271,12 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
             <Badge variant={statusDisplay.tone} className="text-xs">
               {statusDisplay.label}
             </Badge>
+            {termReason && (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" data-testid="term-read-only">
+                <Lock className="h-3 w-3" aria-hidden="true" />
+                Read only
+              </span>
+            )}
           </div>
           
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -325,7 +336,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!canOperate ? "No operate permission" : isReadOnly ? "Disabled in read-only mode" : "Start"}</TooltipContent>
+              <TooltipContent>{!canOperate ? noOperate : isReadOnly ? "Disabled in read-only mode" : "Start"}</TooltipContent>
             </Tooltip>
 
             {/* Stop */}
@@ -346,7 +357,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!canOperate ? "No operate permission" : isReadOnly ? "Disabled in read-only mode" : "Stop"}</TooltipContent>
+              <TooltipContent>{!canOperate ? noOperate : isReadOnly ? "Disabled in read-only mode" : "Stop"}</TooltipContent>
             </Tooltip>
 
             {/* Restart */}
@@ -367,7 +378,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!canOperate ? "No operate permission" : isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
+              <TooltipContent>{!canOperate ? noOperate : isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
             </Tooltip>
 
             {/* Terminal */}
@@ -384,13 +395,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
                       project: vm.project || "default" });
                   }}
                   disabled={!isRunning || !canConsole}
-                  title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}
+                  title={!canConsole ? noConsole : !isRunning ? "Instance must be running" : "Open Terminal"}
                   aria-label={`Open terminal for instance ${rowLabel}`}
                 >
                   <Terminal className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}</TooltipContent>
+              <TooltipContent>{!canConsole ? noConsole : !isRunning ? "Instance must be running" : "Open Terminal"}</TooltipContent>
             </Tooltip>
 
             {/* Console */}
@@ -408,13 +419,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
                       project: vm.project || "default" });
                   }}
                   disabled={!isRunning || !canConsole}
-                  title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}
+                  title={!canConsole ? noConsole : !isRunning ? "Instance must be running" : "Open Console"}
                   aria-label={`Open console for instance ${rowLabel}`}
                 >
                   <Monitor className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}</TooltipContent>
+              <TooltipContent>{!canConsole ? noConsole : !isRunning ? "Instance must be running" : "Open Console"}</TooltipContent>
             </Tooltip>
 
             {/* Delete - Partner+ only */}

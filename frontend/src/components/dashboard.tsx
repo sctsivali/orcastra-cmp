@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { RotateCw, WifiOff } from "lucide-react";
+import { KeyRound, RotateCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { NodeStatusCards } from "@/components/node-status";
@@ -19,6 +19,8 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ReadErrorState } from "@/components/ui/read-error-state";
+import { EmptyState } from "@/components/ui/empty-state";
+import type { ProjectListResponse, VMListResponse } from "@/types/api";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { collectedAtMs } from "@/lib/utils";
 
@@ -120,7 +122,16 @@ export function Dashboard() {
         <TenantClusterStatusCards />
       )}
 
-      {/* Projects Overview */}
+      {/* Projects Overview. A Tenant whose access reaches nothing is told so instead of reading
+          an empty grid, and pointed at the one party who can change it. Only on a complete read:
+          an unreachable cluster or a failed list is not "nothing". */}
+      {!isPartner && tenantReachesNothing(projectsData, vmsData) ? (
+        <EmptyState
+          icon={KeyRound}
+          title="Nothing to show yet"
+          description="Your access does not reach any instance right now. If your subscription ended, contact your provider to renew it."
+        />
+      ) : (
       <ProjectsSection
         projectsData={projectsData}
         projectsLoading={projectsLoading}
@@ -130,6 +141,19 @@ export function Dashboard() {
         lastUpdatedAt={collectedAtMs(vmsData?.collected_at) || dataUpdatedAt}
         projectsUpdatedAt={projectsUpdatedAt}
       />
+      )}
     </div>
   );
+}
+
+function tenantReachesNothing(
+  projects: ProjectListResponse[] | undefined,
+  vms: VMListResponse | undefined,
+): boolean {
+  if (!projects || !vms) return false;
+  if (projects.some((host) => host.reachable === false)) return false;
+  if ((vms.unreachable_nodes?.length ?? 0) > 0) return false;
+  // note: `default` is listed for every cluster in scope, so it alone is not a workload.
+  const named = projects.some((host) => host.projects.some((project) => project.name !== "default"));
+  return !named && vms.vms.length === 0;
 }

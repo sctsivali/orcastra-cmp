@@ -2884,6 +2884,30 @@ export interface AccessPolicy {
   updated_at: string;
   rules: PolicyRule[];
   assignments_count: number;
+  /** The paid term the policy stands for (backend core/tenant_term.py); absent on older backends. */
+  term_ended_at?: string | null;
+  access_ends_at?: string | null;
+  phase?: "active" | "ending" | "read_only" | "ended";
+  phase_inferred?: boolean;
+}
+
+/** A rule the audit found naming a project or instance that is gone (GET /tenant-access/orphan-rules). */
+export interface OrphanRule {
+  rule_id: number;
+  policy_id: number;
+  policy_name: string;
+  organization_id: number;
+  organization_name: string;
+  cluster_id: string;
+  project_name: string;
+  instance_name: string;
+  first_missing_at: string;
+  reported_at: string;
+}
+
+export interface OrphanRuleList {
+  rules: OrphanRule[];
+  total: number;
 }
 
 export interface PolicyListResponse {
@@ -2938,6 +2962,10 @@ export interface ResolvedAccess {
   instance_name: string;
   permissions: TenantPermission[];
   policy_name: string;
+  /** The policy's paid term ended, so `permissions` is narrowed to viewing (backend core/tenant_term.py). */
+  read_only?: boolean;
+  term_ended_at?: string | null;
+  access_ends_at?: string | null;
 }
 
 export interface MyAccessResponse {

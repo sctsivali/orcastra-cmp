@@ -72,6 +72,7 @@ import {
   PolicyAssignment,
   AssignmentCreateRequest,
   MyAccessResponse,
+  OrphanRuleList,
   SnapshotListResponse,
   FleetSnapshotListResponse,
   SnapshotScheduleListResponse,
@@ -2960,5 +2961,10 @@ export const api = {
 
     // tenant self-view
     myAccess: () => fetchAPI<MyAccessResponse>("/tenant-access/my-access"),
+
+    // rules the audit found naming a project or instance that is gone (report only)
+    listOrphanRules: () => fetchAPI<OrphanRuleList>("/tenant-access/orphan-rules"),
+    removeOrphanRule: (ruleId: number) =>
+      fetchAPI<void>(`/tenant-access/orphan-rules/${ruleId}`, { method: "DELETE" }),
   },
 };

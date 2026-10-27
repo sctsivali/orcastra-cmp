@@ -13,6 +13,7 @@ import { useNavigationProgress } from "./navigation/navigation-progress";
 import { TaskPanel } from "@/components/task-panel";
 import { AccessBlockedNotice } from "@/components/access-blocked-notice";
 import { VaultNotice } from "@/components/vault-notice";
+import { TenantTermNotice } from "@/components/tenant-term-notice";
 import { useAccessGate } from "@/hooks/use-access-gate";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTerminalStore } from "@/lib/terminal-store";
@@ -85,6 +86,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       <AccessBlockedNotice
         state={access.state}
         email={access.email}
+        endedAt={access.tenantAccess?.ended_at ?? null}
         rechecking={access.rechecking}
         onCheckAgain={access.checkAgain}
       />
@@ -116,6 +118,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         {!isFullPageTerminalOrConsole && <Header />}
         {/* Issue #15: a sealed or unreachable Vault, said on every page rather than read as "no clusters" */}
         {!isFullPageTerminalOrConsole && <VaultNotice />}
+        {/* A Tenant's paid term: read-only or ending projects, said on every page */}
+        {!isFullPageTerminalOrConsole && <TenantTermNotice summary={access.tenantAccess} />}
         <main
           aria-busy={navPending || undefined}
           className={cn(

@@ -347,6 +347,9 @@ jobs:
       - name: Vault notice
         run: node scripts/checks/check-vault-notice.mjs .
 
+      - name: Tenant term notice
+        run: node scripts/checks/check-tenant-term-notice.mjs .
+
       - name: Task journal behavior
         run: node scripts/checks/check-task-journal-behavior.mjs .
 

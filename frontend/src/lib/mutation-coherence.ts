@@ -49,7 +49,7 @@ const QUERY_FAMILY_KEYS = {
   myKeys: [["my-keys"]],
   organizations: [["organizations"], ["organization-preferences"], ["integration-organizations"]],
   personalization: [["user-preferences"], ["organization-preferences"]],
-  tenantAccess: [["tenant-access-policies"], ["tenant-access-assignments"]],
+  tenantAccess: [["tenant-access-policies"], ["tenant-access-assignments"], ["tenant-access-orphan-rules"]],
   userGroups: [["user-groups"]],
   tasks: [["tasks"], ["task"], ["cluster-log"]],
   migrations: [["migrations"]],
@@ -346,6 +346,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     apiCalls: [
       "api.tenantAccess.createAssignment", "api.tenantAccess.deleteAssignment",
       "api.tenantAccess.createPolicy", "api.tenantAccess.updatePolicy", "api.tenantAccess.deletePolicy",
+      "api.tenantAccess.removeOrphanRule",
     ],
   },
   "user-group.write": {

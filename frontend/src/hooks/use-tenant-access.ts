@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
+import { formatDate } from "@/lib/utils";
 import type { MyAccessResponse, TenantPermission, ResolvedAccess } from "@/types";
 
 /**
@@ -47,6 +48,19 @@ export interface UseTenantAccessResult {
   filterClusters: <T extends { cluster_id: string }>(clusters: T[]) => T[];
   /** filter projects for a cluster */
   filterProjects: (clusterId: string, projectNames: string[]) => string[];
+  /**
+   * Why an instance is view only because its paid term ended, or undefined. A rule from another
+   * policy that still grants `operate` on it wins: then it is not read-only.
+   */
+  termReadOnlyReason: (clusterId: string, projectName: string, instanceName: string) => string | undefined;
+}
+
+function covers(rule: ResolvedAccess, clusterId: string, projectName: string, instanceName: string): boolean {
+  return (
+    rule.cluster_id === clusterId &&
+    (rule.project_name === projectName || rule.project_name === "*") &&
+    (rule.instance_name === instanceName || rule.instance_name === "*")
+  );
 }
 
 export function useTenantAccess(): UseTenantAccessResult {
@@ -153,6 +167,19 @@ export function useTenantAccess(): UseTenantAccessResult {
     };
   }, [isPartner, allowedClusterIds]);
 
+  const termReadOnlyReason = useMemo(() => {
+    return (clusterId: string, projectName: string, instanceName: string): string | undefined => {
+      if (isPartner) return undefined;
+      const rules = access.filter((rule) => covers(rule, clusterId, projectName, instanceName));
+      if (rules.some((rule) => rule.permissions.includes("operate"))) return undefined;
+      const ended = rules.find((rule) => rule.read_only);
+      if (!ended) return undefined;
+      return ended.access_ends_at
+        ? `Subscription ended: read-only until ${formatDate(ended.access_ends_at)}`
+        : "Subscription ended: read-only";
+    };
+  }, [access, isPartner]);
+
   const filterProjects = useMemo(() => {
     return (clusterId: string, projectNames: string[]): string[] => {
       if (isPartner) return projectNames;
@@ -168,6 +195,7 @@ export function useTenantAccess(): UseTenantAccessResult {
     canAccessCluster,
     canAccessProject,
     canAccessInstance,
+    termReadOnlyReason,
     hasPermission,
     allowedClusterIds,
     filterClusters,

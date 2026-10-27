@@ -101,5 +101,12 @@ export function useAccessGate({ enabled }: { enabled: boolean }) {
     }
   }, [groups, isTenant, queryClient, update, verdict.data?.blocked_reason, verdictKey]);
 
-  return { state, email: session?.user?.email ?? null, rechecking, checkAgain };
+  return {
+    state,
+    email: session?.user?.email ?? null,
+    rechecking,
+    checkAgain,
+    // The paid term behind a Tenant's own grants, for the term notice and the "access ended" date.
+    tenantAccess: isTenant ? knownVerdict?.tenant_access ?? null : null,
+  };
 }
