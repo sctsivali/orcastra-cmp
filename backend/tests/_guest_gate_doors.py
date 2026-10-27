@@ -26,7 +26,7 @@ from app.mcp import tools_inventory
 from app.routers import integrations
 from tests._cloud_init_fakes import ConfigSession
 from tests._limited_write_fakes import FakeClient, ToolRegistry
-from tests._raw_proxy_fakes import CLUSTER_ID, ENDPOINT, key
+from tests._raw_proxy_fakes import CLUSTER_ID, ENDPOINT, key, without_rule_bookkeeping
 
 BASE = ["inventory.read", "lxd.proxy"]
 NO_GUEST = key(["*"], BASE)
@@ -250,5 +250,8 @@ def door_fixture(monkeypatch: pytest.MonkeyPatch, fence_calls: Any) -> Iterator[
     monkeypatch.setattr(org_scope, "resolve_cluster_org", _owner)
     monkeypatch.setattr(database, "async_session_maker", _NoSession)
     monkeypatch.setattr(integrations, "_assert_desktop_allowed", _consented)
-    yield Door(trail, monkeypatch)
+    # These doors judge what reaches the cluster; the access-rule bookkeeping around a raw delete
+    # needs the database and is covered on its own (tests/_raw_proxy_fakes.py).
+    with without_rule_bookkeeping():
+        yield Door(trail, monkeypatch)
     _STATE.clear()

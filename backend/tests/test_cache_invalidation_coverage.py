@@ -60,6 +60,8 @@ INVALIDATORS = {
     "invalidate_after_external_write",
     "invalidate_capacity_cache",
     "invalidate_tag_cache",
+    # A tenant's grant changed: clusters, projects, regions, warnings, monitoring, instances, nodes.
+    "invalidate_after_access_change",
     "delete_pattern",
 }
 # note: `delete` counts only in the cache's own shape, delete("<namespace>", key). As a bare name

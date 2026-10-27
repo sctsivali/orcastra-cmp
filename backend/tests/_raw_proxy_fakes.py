@@ -94,7 +94,7 @@ async def call_raw_proxy(
     if body is None and method in ("POST", "PUT", "PATCH"):
         body = {}
     try:
-        with _without_rule_bookkeeping():
+        with without_rule_bookkeeping():
             response = await raw_proxy(
                 request=RawProxyRequest(cluster_id=CLUSTER_ID, method=method, path=path, project=project, body=body),
                 api_key=api_key,
@@ -107,7 +107,7 @@ async def call_raw_proxy(
 
 
 @contextmanager
-def _without_rule_bookkeeping() -> Iterator[None]:
+def without_rule_bookkeeping() -> Iterator[None]:
     """Run the raw proxy's request with the access-rule bookkeeping around it taken out.
 
     A project DELETE runs inside the deletion core and a stranding write captures rules first

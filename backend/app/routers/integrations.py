@@ -7444,9 +7444,10 @@ class ProvisionTenantAccessResponse(BaseModel):
 _TERM_FIELDS = ("term_ended_at", "access_ends_at", "as_of")
 
 
-def _received_term(body: BaseModel) -> Dict[str, Any]:
+def _received_term(body: Any) -> Dict[str, Any]:
     """The term fields the caller actually sent: an absent field keeps, an explicit null clears."""
-    return {name: getattr(body, name) for name in _TERM_FIELDS if name in body.model_fields_set}
+    sent = getattr(body, "model_fields_set", None) or set()
+    return {name: getattr(body, name) for name in _TERM_FIELDS if name in sent}
 
 
 def _merged_term(stored: Optional[Any], received: Dict[str, Any]) -> TermDates:

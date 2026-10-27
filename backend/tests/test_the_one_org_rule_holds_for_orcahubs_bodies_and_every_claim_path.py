@@ -235,7 +235,8 @@ REFUSED = [
     ("unregistered_cluster", None, {"cluster_id": "ghost"}, "POST", "", 404),
     ("org_another_key_owns", _other_key_owns_the_buyer, {}, "POST", "", 409),
     ("slug_already_taken", _slug_taken, {}, "POST", "", 409),
-    ("invalid_permission_after_the_org_flush", None, {"permissions": ["view", "root"]}, "POST", "", 400),
+    # Refused by the body model since 2026-10-27, before the organization is ever written.
+    ("invalid_permission_before_any_write", None, {"permissions": ["view", "root"]}, "POST", "", 422),
     ("no_org_name_for_a_new_org", None, {"organization_name": None}, "POST", "", 404),
     ("get", None, {}, "GET", "", 405),
     ("put", None, {}, "PUT", "", 405),

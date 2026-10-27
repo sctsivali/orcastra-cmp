@@ -585,7 +585,8 @@ async def test_the_proxy_deletes_through_the_shared_delete_as_its_own_origin(mon
     with pytest.raises(project_deletion.ProjectDeleteUnknown):
         await integrations._delete_project_for_proxy(object(), request("slow"), "oak_qa")
     assert [c[:2] for c in calls] == [(HOST, "web"), (HOST, "never-there"), (HOST, "slow")]
-    assert calls[0][2] == {"origin": "proxy", "requester": "oak_qa", "scope_project": "default"}
+    # `send` is the raw proxy's own sender (services/raw_project_delete.py); the structured proxy sends none.
+    assert calls[0][2] == {"origin": "proxy", "requester": "oak_qa", "scope_project": "default", "send": None}
     with pytest.raises(Exception):
         await integrations._delete_project_for_proxy(object(), request(".."), "oak_qa")
     assert len(calls) == 3, "a bad name never reaches the delete"
