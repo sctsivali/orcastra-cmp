@@ -36,7 +36,10 @@ from app.core.org_scope import (
     get_current_allowed_clusters,
 )
 from app.services.activity_logger import get_activity_logger
+from app.services import my_keys_registry
 from app.core.lxd_path import safe_segment
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -342,6 +345,7 @@ async def create_key(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Generate a new TLS identity key."""
     # A key is provisioned into a specific node's LXD trust store, so the node is the boundary.
@@ -613,8 +617,10 @@ async def create_key(
                 "auth_level": request.auth_level,
                 "expire_days": request.expire_days,
                 "fingerprint": fingerprint[:16] + "...",  # Truncated for security
+                "owner_email": _rbac.email,
             }
         )
+        await my_keys_registry.record_created(db, key_metadata)
         
         # Every scoped list caches the same Vault roster before applying actor visibility.
         # Fence and clear all actor scopes so another session cannot retain or restore it.
@@ -634,11 +640,28 @@ async def create_key(
             fingerprint=fingerprint,
         )
         
-    except HTTPException:
+    except HTTPException as refusal:
+        _audit_create_failure(request, str(refusal.status_code), str(refusal.detail))
         raise
     except Exception as e:
         logger.error(f"Error generating key: {e}", exc_info=True)
+        _audit_create_failure(request, type(e).__name__, str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _audit_create_failure(request: KeyCreateRequest, code: str, message: str) -> None:
+    """A key that was asked for and not issued is part of the key's trail too."""
+    activity_logger.log_activity(
+        action="user.ssh_key.create",
+        target_type="ssh_key",
+        target_id=request.name,
+        target_host=request.node,
+        target_project=request.project,
+        result="failure",
+        error_code=code,
+        error_message=message,
+        details={"name": request.name, "auth_level": request.auth_level},
+    )
 
 
 @router.get(
@@ -652,6 +675,7 @@ async def list_keys(
     search: Optional[str] = Query(None, description="Search by name, project, or cluster"),
     fresh: bool = False,
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """List all keys from Vault."""
     vault_client = get_vault_keys_client()
@@ -665,6 +689,9 @@ async def list_keys(
         if cached_data is None:
             list_generation = get_resource_list_generation(cache, "my_keys")
             keys_metadata = list_keys_from_vault(vault_client)
+            # A key issued before the registry existed joins it here, so its trail and its use on
+            # the cluster can be read even after it is deleted.
+            await my_keys_registry.backfill(db, keys_metadata)
             if get_resource_list_generation(cache, "my_keys") == list_generation:
                 cache.set("api_responses", cache_key, keys_metadata, ttl=180)
             else:
@@ -771,8 +798,13 @@ async def download_key(
     """Download PFX file for a key."""
     vault_client = get_vault_keys_client()
 
-    # important: this streams a private key. Authorize before reading it, not after.
-    _authorize_key(vault_client, key_id, _rbac.email)
+    # important: this streams a private key. Authorize before reading it, not after. A refused
+    # attempt is recorded: someone naming a key that is not theirs is the record most worth having.
+    try:
+        metadata = _authorize_key(vault_client, key_id, _rbac.email)
+    except HTTPException as refusal:
+        _audit_download(key_id, None, "denied", code=str(refusal.status_code), message=str(refusal.detail))
+        raise
 
     try:
         # Get certificate and key from Vault
@@ -783,6 +815,7 @@ async def download_key(
         
         # Create PFX
         pfx_data = create_pfx(cert_pem, key_pem)
+        _audit_download(key_id, metadata, "success")
         
         # Return as streaming response
         return StreamingResponse(
@@ -793,11 +826,36 @@ async def download_key(
             }
         )
         
-    except HTTPException:
+    except HTTPException as refusal:
+        _audit_download(key_id, metadata, "failure", code=str(refusal.status_code), message=str(refusal.detail))
         raise
     except Exception as e:
         logger.error(f"Error downloading key: {e}")
+        _audit_download(key_id, metadata, "failure", code=type(e).__name__, message=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _audit_download(
+    key_id: str,
+    metadata: Optional[Dict[str, Any]],
+    result: str,
+    *,
+    code: Optional[str] = None,
+    message: Optional[str] = None,
+) -> None:
+    """A download hands out the private key, so each one is on the key's trail (HIGH severity)."""
+    activity_logger.log_activity(
+        action="user.ssh_key.download",
+        target_type="ssh_key",
+        target_id=key_id,
+        # note: no cluster for a refused attempt; a host-less key row reaches Admin and the actor only.
+        target_host=(metadata or {}).get("node"),
+        target_project=(metadata or {}).get("project"),
+        result=result,
+        error_code=code,
+        error_message=message,
+        details={"name": (metadata or {}).get("name"), "owner_email": (metadata or {}).get("owner_email")},
+    )
 
 
 @router.delete(
@@ -811,6 +869,7 @@ async def delete_key(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a key."""
     vault_client = get_vault_keys_client()
@@ -895,8 +954,10 @@ async def delete_key(
                 "identity_id": key_meta.get("identity_id"),
                 "group_name": key_meta.get("group_name"),
                 "cleanup_errors": len(cleanup_errors) if cleanup_errors else 0,
+                "owner_email": key_meta.get("owner_email"),
             }
         )
+        await my_keys_registry.record_deleted(db, key_id, key_meta, _rbac.email)
         
         # Clear every actor projection and advance the list generation before an older read can
         # restore a roster that still contains this key.

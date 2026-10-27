@@ -414,6 +414,14 @@ class Settings(BaseSettings):
         alias="CLUSTER_LOG_RETENTION_DAYS",
         description="Days a cluster log line is kept before the prune loop removes it (at least 1)."
     )
+    # A My Keys audit row is a credential's trail (create, download, delete), kept a year by
+    # default, never less than the cluster log above (task_journal/repository_sweeps.prune_batch).
+    my_keys_audit_retention_days: int = Field(
+        default=365,
+        ge=1,
+        alias="MY_KEYS_AUDIT_RETENTION_DAYS",
+        description="Days to keep My Keys audit rows in cluster_log.",
+    )
     task_journal_follower_retry_seconds: int = Field(
         default=15,
         ge=1,

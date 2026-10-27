@@ -39,6 +39,7 @@ ACTION_CATEGORIES = {
     # Hands out a private key, and removes the LXD groups that give every key its permissions.
     "user.ssh_key.download": EventCategory.IDENTITY,
     "user.ssh_key.groups_cleanup": EventCategory.IDENTITY,
+    "user.ssh_key.activity.export": EventCategory.IDENTITY,
     
     # LXD Infrastructure
     "cluster.register": EventCategory.LXD_INFRA,

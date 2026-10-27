@@ -260,16 +260,23 @@ async def mark_stale_open_rows_lost(db: AsyncSession, *, task_days: int) -> int:
 
 
 async def prune_batch(
-    db: AsyncSession, *, task_days: int, log_days: int, batch: int = 5000
+    db: AsyncSession, *, task_days: int, log_days: int, batch: int = 5000, key_days: Optional[int] = None
 ) -> Tuple[int, int, bool]:
     """One batch of each delete; the third value says whether a full batch was deleted, so the
-    caller commits and comes back for more. Nothing here holds more than one batch's rows."""
+    caller commits and comes back for more. Nothing here holds more than one batch's rows.
+
+    A My Keys row (resource_type ssh_key or ssh_key_cleanup) is a credential's trail and is kept
+    for `key_days` (MY_KEYS_AUDIT_RETENTION_DAYS), never less than every other row's `log_days`.
+    """
+    key_days = max(int(key_days if key_days is not None else log_days), int(log_days))
     logs = await db.execute(
         text(
             "DELETE FROM cluster_log WHERE id IN (SELECT id FROM cluster_log "
-            "WHERE ts < now() - make_interval(days => CAST(:days AS integer)) LIMIT :batch)"
+            "WHERE ts < now() - make_interval(days => CAST(:days AS integer)) "
+            "AND (resource_type IS NULL OR resource_type NOT IN ('ssh_key', 'ssh_key_cleanup') "
+            "OR ts < now() - make_interval(days => CAST(:key_days AS integer))) LIMIT :batch)"
         ),
-        {"days": int(log_days), "batch": batch},
+        {"days": int(log_days), "key_days": key_days, "batch": batch},
     )
     tasks = await db.execute(
         text(
@@ -281,3 +288,30 @@ async def prune_batch(
     log_count = max(getattr(logs, "rowcount", 0) or 0, 0)
     task_count = max(getattr(tasks, "rowcount", 0) or 0, 0)
     return task_count, log_count, (log_count >= batch or task_count >= batch)
+
+
+async def roll_up_key_usage(db: AsyncSession, *, log_days: int, task_days: int) -> int:
+    """Carry the last change made with each My Key into its registry row before the prune takes it.
+
+    LXD names a TLS identity's requestor by its certificate fingerprint, which the follower stores
+    as `actor_email` on an external row. Only rows the prune is about to delete are read: newer
+    ones are still in the tables, where the key activity read finds them.
+    """
+    result = await db.execute(
+        text(
+            "UPDATE my_key_records AS r SET last_used_at = u.ts, last_used_action = u.action, "
+            "last_used_cluster = u.cluster_id "
+            "FROM (SELECT DISTINCT ON (fp) fp, ts, action, cluster_id FROM ("
+            "  SELECT lower(actor_email) AS fp, ts, action, cluster_id FROM cluster_log "
+            "  WHERE actor_kind = 'external' AND actor_email IS NOT NULL "
+            "  AND ts < now() - make_interval(days => CAST(:log_days AS integer)) "
+            "  UNION ALL "
+            "  SELECT lower(actor_email) AS fp, created_at AS ts, action, cluster_id FROM task_journal "
+            "  WHERE actor_kind = 'external' AND actor_email IS NOT NULL "
+            "  AND created_at < now() - make_interval(days => CAST(:task_days AS integer))"
+            ") AS used ORDER BY fp, ts DESC) AS u "
+            "WHERE u.fp = r.fingerprint AND (r.last_used_at IS NULL OR u.ts > r.last_used_at)"
+        ),
+        {"log_days": int(log_days), "task_days": int(task_days)},
+    )
+    return max(getattr(result, "rowcount", 0) or 0, 0)

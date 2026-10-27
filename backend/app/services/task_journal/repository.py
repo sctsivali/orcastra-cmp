@@ -31,6 +31,7 @@ from app.services.task_journal.repository_sweeps import (  # noqa: F401 - public
     mark_lost,
     mark_stale_open_rows_lost,
     prune_batch,
+    roll_up_key_usage,
     merge_racing_pairs,
     read_cluster_states,
     reset_cluster_states,

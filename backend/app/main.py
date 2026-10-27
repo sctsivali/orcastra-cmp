@@ -1103,6 +1103,9 @@ Ensure your client certificates are properly configured.
         app.include_router(tasks_ws_router, prefix=settings.api_prefix)
         app.include_router(tasks_router, prefix=settings.api_prefix)
         app.include_router(cluster_log_router, prefix=settings.api_prefix)
+        # My Keys activity reads journal rows too, so it exists only where they do.
+        from app.routers.my_keys_activity import router as my_keys_activity_router
+        app.include_router(my_keys_activity_router, prefix=settings.api_prefix)
 
     # Console Router (VGA/Graphics console access)
     from app.routers.console import router as console_router

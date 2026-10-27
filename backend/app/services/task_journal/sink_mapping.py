@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 from app.core.error_sanitizer import sanitize_error
+from app.core.task_scope import KEY_RESOURCE_TYPES
 from app.services.activity_logger import HIGH_SEVERITY_ACTIONS
 from app.services.task_journal.repository_types import ActorFields, CorrelationKey
 from app.services.task_journal.vocabulary import (
@@ -171,13 +172,20 @@ def record_to_log_row(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     # action an operator or a key drove still lands.
     if action.startswith("vault.") and actor.actor_kind == "system":
         return None
+    resource_type = _resource_type(target)
+    if resource_type in KEY_RESOURCE_TYPES:
+        # A credential's trail says where each touch came from. Only key rows carry it: they reach
+        # Admin and the person who acted alone (core/task_scope.py), every other row is wider.
+        client = _mapping(_mapping(record.get("actor")).get("client"))
+        if client:
+            details = {**details, "client": dict(client)}
     return {
         "ts": _text(record.get("@timestamp")),
         "kind": "audit",
         "severity": severity_for(record),
         "cluster_id": _text(target.get("host")),
         "project": _text(target.get("project")) or _text(details.get("project")),
-        "resource_type": _resource_type(target),
+        "resource_type": resource_type,
         "resource_name": _text(target.get("id")),
         "action": action,
         "message": _message(record, action, target),

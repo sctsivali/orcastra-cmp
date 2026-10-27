@@ -36,6 +36,7 @@ async def prune_once(session_maker: Callable[[], Any]) -> Optional[Tuple[int, in
     settings = get_settings()
     task_days = int(settings.task_journal_retention_days)
     log_days = int(settings.cluster_log_retention_days)
+    key_days = int(settings.my_keys_audit_retention_days)
     # One transaction per batch, the xact lock re-taken each time: a month of rows is never
     # one long lock, and a worker that dies mid-pass leaves the next pass its remainder.
     tasks = logs = 0
@@ -51,8 +52,9 @@ async def prune_once(session_maker: Callable[[], Any]) -> Optional[Tuple[int, in
                 return None if first else (tasks, logs)
             if first:
                 await repository.mark_stale_open_rows_lost(db, task_days=task_days)
+                await _roll_up_key_usage(db, log_days=log_days, task_days=task_days)
             t, l, more = await repository.prune_batch(
-                db, task_days=task_days, log_days=log_days, batch=BATCH
+                db, task_days=task_days, log_days=log_days, batch=BATCH, key_days=key_days
             )
             await db.commit()
         first = False
@@ -63,6 +65,18 @@ async def prune_once(session_maker: Callable[[], Any]) -> Optional[Tuple[int, in
     _audit(tasks=tasks, logs=logs, task_days=task_days, log_days=log_days)
     logger.info("Task journal pruned: %d tasks, %d log lines", tasks, logs)
     return tasks, logs
+
+
+async def _roll_up_key_usage(db: Any, *, log_days: int, task_days: int) -> None:
+    # note: under a savepoint, so a registry the database does not have yet (a rolling upgrade)
+    # costs the roll-up and never the prune.
+    try:
+        async with db.begin_nested():
+            rolled = await repository.roll_up_key_usage(db, log_days=log_days, task_days=task_days)
+        if rolled:
+            logger.info("My Keys last use carried past the prune for %d keys", rolled)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not carry My Keys last use past the prune", exc_info=True)
 
 
 def _audit(**details: Any) -> None:

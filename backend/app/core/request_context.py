@@ -49,6 +49,22 @@ class RequestContext:
             "client_ip": self.client_ip,
         }
 
+    def client(self) -> Dict[str, Any]:
+        """Where the request came from, as the access log names it, for the audit record.
+
+        `ip_source` says which header the address came from ("direct" when none was trusted), and
+        `proxy_trusted` whether the peer was a proxy allowed to say. A direct address from a
+        trusted proxy is the proxy's own, not the browser's, and a reader must be told so.
+        The user agent is the browser's own claim, capped and stripped of control characters.
+        """
+        agent = "".join(ch for ch in (self.user_agent or "") if ch.isprintable())[:256]
+        return {
+            "ip": self.client_ip,
+            "ip_source": self.extra.get("client_ip_source", "direct"),
+            "proxy_trusted": bool(self.extra.get("client_proxy_trusted", False)),
+            "user_agent": agent or None,
+        }
+
     def get_actor(self) -> Dict[str, Any]:
         """Get actor info for audit logs."""
         return {
@@ -58,6 +74,7 @@ class RequestContext:
             "groups": self.user_groups,
             "organizations": self.user_orgs,
             "session_id": self.session_id,
+            "client": self.client(),
         }
 
 
