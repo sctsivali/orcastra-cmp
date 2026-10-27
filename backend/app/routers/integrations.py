@@ -3010,6 +3010,11 @@ async def update_api_key_capabilities(
                 get_api_key_from_vault, vault_client, key_id, use_cache=False
             )
             refuse_grant_edit(metadata)
+            # A key minted before grants on purchased clusters were refused keeps its grants, but
+            # gains no capability through them (security review 2026-10-27).
+            refuse_grants_on_purchased_clusters(
+                p.get("cluster_id") for p in (metadata.get("cluster_permissions") or []) if isinstance(p, dict)
+            )
             previous = dict(metadata)
             was_legacy = "capabilities" not in metadata
             metadata["capabilities"] = sorted(set(request.capabilities))

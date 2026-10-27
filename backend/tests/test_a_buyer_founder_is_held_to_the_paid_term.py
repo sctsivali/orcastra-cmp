@@ -211,3 +211,14 @@ def test_a_sale_binding_is_not_ownership_for_registration(row, owns) -> None:
     from app.routers.cluster_registration import _owns_a_binding
 
     assert _owns_a_binding([row], [7], "founder@buyer.test") is owns
+
+
+def test_a_key_with_a_purchased_grant_gains_no_capability() -> None:
+    """Fourth look, 2026-10-27: a key minted before the refusal must not be given tenant.provision."""
+    import inspect
+
+    from app.routers import integrations
+
+    source = inspect.getsource(integrations.update_api_key_capabilities)
+    assert source.index("refuse_grant_edit(metadata)") < source.index("refuse_grants_on_purchased_clusters(")
+    assert source.index("refuse_grants_on_purchased_clusters(") < source.index('metadata["capabilities"] =')
