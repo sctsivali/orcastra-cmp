@@ -138,16 +138,28 @@ def task_conditions(model: Any) -> List[Any]:
     return _scope_conditions(model)
 
 
+# important: a My Keys row names a private credential by id (the only thing between a partner and
+# another owner's PFX download) on the key's cluster, so cluster scope would show it to every
+# partner sharing that cluster. These rows reach Admin and the person who acted, like a host-less row.
+KEY_RESOURCE_TYPES = ("ssh_key", "ssh_key_cleanup")
+
+
+def _is_own(model: Any, caller_email: str) -> Any:
+    return func.lower(model.actor_email) == caller_email.lower()
+
+
 def log_conditions(model: Any, *, caller_email: Optional[str]) -> List[Any]:
-    """WHERE terms for `cluster_log`. A host-less row (identity, settings, an access denial)
-    reaches Admin and its own actor; nobody else."""
+    """WHERE terms for `cluster_log`. A host-less row (identity, settings, an access denial) and
+    a My Keys row reach Admin and their own actor; nobody else."""
     if get_current_allowed_clusters() is None:
         return []
-    scoped = and_(*_scope_conditions(model))
+    not_a_key_row = or_(model.resource_type.is_(None), model.resource_type.notin_(KEY_RESOURCE_TYPES))
+    scoped = and_(not_a_key_row, *_scope_conditions(model))
     if not caller_email:
         return [scoped]
-    own_hostless = and_(model.cluster_id.is_(None), model.actor_email == caller_email)
-    return [or_(scoped, own_hostless)]
+    own_hostless = and_(model.cluster_id.is_(None), model.actor_email == caller_email, not_a_key_row)
+    own_key_row = and_(model.resource_type.in_(KEY_RESOURCE_TYPES), _is_own(model, caller_email))
+    return [or_(scoped, own_hostless, own_key_row)]
 
 
 def _row_in_scope(row: Mapping[str, Any]) -> bool:
@@ -182,6 +194,9 @@ def log_is_visible(row: Mapping[str, Any], *, caller_email: Optional[str]) -> bo
     """Whether one `cluster_log` row may reach the caller whose scope is in context."""
     if get_current_allowed_clusters() is None:
         return True
+    if row.get("resource_type") in KEY_RESOURCE_TYPES:
+        actor = row.get("actor_email")
+        return bool(caller_email and actor) and str(actor).lower() == caller_email.lower()
     if row.get("cluster_id") is None:
         return bool(caller_email) and row.get("actor_email") == caller_email
     return _row_in_scope(row)

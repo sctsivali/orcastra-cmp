@@ -3,7 +3,8 @@
 FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 as base
 
 # Build arguments for version management
-ARG APP_VERSION=1.0.0-RC2
+# Empty, not a version: an unstamped build must report "unknown" rather than claim an old release.
+ARG APP_VERSION=""
 # Provenance. APP_VERSION is a mutable label, the commit is the truth about what is running.
 ARG BUILD_DATE=""
 ARG BUILD_COMMIT=""

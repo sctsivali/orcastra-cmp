@@ -6,7 +6,7 @@ Keys are securely stored in HashiCorp Vault instead of local filesystem.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import logging
@@ -99,8 +99,14 @@ def get_vault_keys_client():
     return get_vault_client(settings.vault_addr, settings.vault_token)
 
 
-def list_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
-    """List all keys metadata from Vault."""
+def read_key_roster(vault_client) -> Tuple[List[Dict[str, Any]], bool]:
+    """Read every key's metadata from Vault, and say whether the read was complete.
+
+    important: an outage used to read as an empty roster, and a key whose metadata read failed
+    was skipped. Display tolerates that, but the orphaned-group cleanup deletes every group the
+    roster does not name, so it must be able to tell "no keys" from "could not read the keys".
+    A missing path (404) is a genuinely empty roster and counts as complete.
+    """
     try:
         # List keys in Vault - for KV v2, metadata path is secret/metadata/<path>
         list_url = f"{vault_client.vault_addr}/v1/secret/metadata/{VAULT_KEYS_PATH}"
@@ -110,32 +116,43 @@ def list_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
             params={"list": "true"},
             timeout=5
         )
-        
+
         if response.status_code == 404:
-            return []
-        
+            return [], True
+
         if response.status_code != 200:
             logger.error(f"Failed to list keys from Vault: HTTP {response.status_code}")
-            return []
-        
+            return [], False
+
         keys_list = response.json().get("data", {}).get("keys", [])
-        
+
         # Fetch metadata for each key
         all_keys = []
+        complete = True
         for key_id in keys_list:
+            # Remove trailing slash if present
+            clean_key_id = key_id.rstrip('/')
             try:
-                # Remove trailing slash if present
-                clean_key_id = key_id.rstrip('/')
                 metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{clean_key_id}/metadata")
-                if metadata:
-                    all_keys.append(metadata)
             except Exception as e:
                 logger.warning(f"Failed to read key {clean_key_id} metadata: {e}")
-        
-        return all_keys
+                complete = False
+                continue
+            if metadata:
+                all_keys.append(metadata)
+            else:
+                complete = False
+
+        return all_keys, complete
     except Exception as e:
         logger.error(f"Error listing keys from Vault: {e}")
-        return []
+        return [], False
+
+
+def list_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
+    """List all keys metadata from Vault, best effort (see read_key_roster)."""
+    keys, _complete = read_key_roster(vault_client)
+    return keys
 
 
 def save_key_to_vault(vault_client, key_id: str, cert_pem: bytes, key_pem: bytes, metadata: Dict[str, Any]):
@@ -267,14 +284,30 @@ def _short_fingerprint(fingerprint: str) -> str:
     return f"{fingerprint[:16]}..." if fingerprint else ""
 
 
-def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
-    """Return a key's metadata only if the caller may reach the cluster it belongs to.
+def _owned_by_caller(metadata: Dict[str, Any], caller_email: Optional[str]) -> bool:
+    """A record that names an owner is that owner's alone; one that predates the field is not.
+
+    The comparison folds case: the owner was stamped from the token's email claim, and the IdP
+    does not promise to spell an address the same way on every token it issues.
+    """
+    owner = metadata.get("owner_email")
+    if not owner:
+        return True
+    return bool(caller_email) and str(owner).casefold() == str(caller_email).casefold()
+
+
+def _authorize_key(vault_client, key_id: str, caller_email: Optional[str]) -> Dict[str, Any]:
+    """Return a key's metadata only if the caller may reach its cluster and owns it.
 
     important: a key here is a real LXD client certificate with a private key, and an
     ``auth_level`` of "admin" provisions it server-scope on that node. Nothing tied these
     records to the caller: the router gate is ``require_tenant()``, which every authenticated
     user satisfies, so any user could name any key id. The cluster is the boundary that already
     governs every other resource, so it governs these too.
+
+    important: the cluster alone is not enough on a cluster two partners share. ``list_keys``
+    hid another owner's key, but this guard let partner B name it and download its private key.
+    An unrestricted context (administrator) reads every key, as the list does.
     """
     try:
         metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
@@ -292,6 +325,9 @@ def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
         logger.warning("Refusing key %s: the record carries no node to scope it by", key_id)
         raise HTTPException(status_code=404, detail="Key not found")
     verify_cluster_access(node)
+    if get_current_allowed_clusters() is not None and not _owned_by_caller(metadata, caller_email):
+        # Same 404 as a missing key: another owner's id must not be confirmable by probing.
+        raise HTTPException(status_code=404, detail="Key not found")
     return metadata
 
 
@@ -650,7 +686,7 @@ async def list_keys(
                 if k.get("node") in allowed
                 # A record that names an owner is that person's alone. One that does not predates
                 # the field, and stays on cluster scope rather than disappearing from its owner.
-                and (not k.get("owner_email") or k.get("owner_email") == _rbac.email)
+                and _owned_by_caller(k, _rbac.email)
             ]
         
         # Process keys and check expiration
@@ -736,7 +772,7 @@ async def download_key(
     vault_client = get_vault_keys_client()
 
     # important: this streams a private key. Authorize before reading it, not after.
-    _authorize_key(vault_client, key_id)
+    _authorize_key(vault_client, key_id, _rbac.email)
 
     try:
         # Get certificate and key from Vault
@@ -779,7 +815,7 @@ async def delete_key(
     """Delete a key."""
     vault_client = get_vault_keys_client()
 
-    _authorize_key(vault_client, key_id)
+    _authorize_key(vault_client, key_id, _rbac.email)
 
     try:
         # Get metadata from Vault
@@ -903,7 +939,22 @@ async def cleanup_orphaned_groups(
     try:
         # Get all valid group names from Vault keys
         valid_groups = set()
-        keys_list = list_keys_from_vault(vault_client)
+        keys_list, complete = read_key_roster(vault_client)
+        if not complete:
+            # important: every group the roster does not name gets deleted below, so a partial
+            # read would strip the permissions from live keys. Refuse rather than guess.
+            activity_logger.log_activity(
+                action="user.ssh_key.groups_cleanup",
+                target_type="ssh_key_cleanup",
+                target_id="orphaned-groups",
+                result="failure",
+                error_code="incomplete_roster",
+                error_message="The key roster could not be read completely from Vault",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="The key roster could not be read completely from Vault, so no group was removed. Try again when Vault is healthy.",
+            )
         
         for key_meta in keys_list:
             if "group_name" in key_meta:
@@ -989,9 +1040,18 @@ async def cleanup_orphaned_groups(
         if errors:
             result["errors"] = errors
             result["message"] += f" ({len(errors)} errors encountered)"
-        
+
+        activity_logger.log_activity(
+            action="user.ssh_key.groups_cleanup",
+            target_type="ssh_key_cleanup",
+            target_id="orphaned-groups",
+            result="failure" if errors else "success",
+            details={"deleted_count": deleted_count, "valid_groups": len(valid_groups), "errors": len(errors)},
+        )
         return result
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
         raise HTTPException(status_code=500, detail=str(e))

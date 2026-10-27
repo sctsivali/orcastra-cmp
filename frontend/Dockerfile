@@ -24,7 +24,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build arguments for version management
-ARG APP_VERSION=1.0.0-RC2
+# Empty, not a version: an unstamped build must report "unknown" rather than claim an old release.
+ARG APP_VERSION=""
 
 # Auth build arguments - ONLY public/non-secret values needed at build time
 # Secrets (CLIENT_SECRET, NEXTAUTH_SECRET) are injected at RUNTIME via env vars

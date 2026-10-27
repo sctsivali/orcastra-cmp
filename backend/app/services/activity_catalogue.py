@@ -36,6 +36,9 @@ ACTION_CATEGORIES = {
     "auth.token.refresh": EventCategory.IDENTITY,
     "user.ssh_key.create": EventCategory.IDENTITY,
     "user.ssh_key.delete": EventCategory.IDENTITY,
+    # Hands out a private key, and removes the LXD groups that give every key its permissions.
+    "user.ssh_key.download": EventCategory.IDENTITY,
+    "user.ssh_key.groups_cleanup": EventCategory.IDENTITY,
     
     # LXD Infrastructure
     "cluster.register": EventCategory.LXD_INFRA,
@@ -290,6 +293,8 @@ HIGH_SEVERITY_ACTIONS = {
     "break_glass.grant.revoke",
     "user.ssh_key.create",
     "user.ssh_key.delete",
+    "user.ssh_key.download",
+    "user.ssh_key.groups_cleanup",
     "vault.cert.generate",
     "vault.secret.write",
     "vault.secret.delete",
