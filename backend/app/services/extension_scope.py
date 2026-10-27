@@ -31,6 +31,7 @@ from app.core.api_key_permissions import PERMISSION_LEVELS, granted_level
 from app.core.cache import get_cache_manager
 from app.core.org_scope import (
     get_current_allowed_clusters,
+    purchase_only_clusters,
     resolve_cluster_orgs,
 )
 from app.models.extension_models import Extension, ExtensionInstallation
@@ -86,6 +87,12 @@ async def assert_install_scope_within_partner(
                 "This installation would reach clusters outside your own access: "
                 + ", ".join(outside)
             )
+    # A cluster the partner reaches only by purchase carries no grant it may hand on.
+    purchased = sorted(requested_clusters & purchase_only_clusters())
+    if purchased:
+        raise ScopeRefused(
+            "This installation would reach clusters you reach only through a purchase: " + ", ".join(purchased)
+        )
 
     # 2. The target organization has to be one the operator actually holds.
     if not is_admin:

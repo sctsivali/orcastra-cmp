@@ -107,17 +107,27 @@ async def _reach(db: AsyncSession, email: str) -> Tuple[Set[str], Dict[str, Set[
     return full, {c: orgs for c, orgs in sale_only.items() if c not in full}
 
 
-async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> Set[str]:
-    """Clusters this account reaches only through purchases that are all past their paid term.
+async def partner_purchase_reach(db: AsyncSession, email: Optional[str]) -> Tuple[Set[str], Set[str]]:
+    """(clusters reached only by purchase, of those the ones past every purchase's paid term).
 
-    For a role_partner account: on these, it may look but not change anything (owner decision
-    2026-10-27: during retention the buyer has view only).
+    For a role_partner account. On the first set it may not grant anything a purchase does not pay
+    for (an integration key, an add-on, a binding); on the second it may look but not change
+    anything (owner decision 2026-10-27: during retention the buyer has view only).
     """
     if not email:
-        return set()
+        return set(), set()
     _full, candidates = await _reach(db, email)
     if not candidates:
-        return set()
+        return set(), set()
+    return set(candidates), await _past_term(db, candidates)
+
+
+async def partner_read_only_clusters(db: AsyncSession, email: Optional[str]) -> Set[str]:
+    """Clusters this account reaches only through purchases that are all past their paid term."""
+    return (await partner_purchase_reach(db, email))[1]
+
+
+async def _past_term(db: AsyncSession, candidates: Dict[str, Set[int]]) -> Set[str]:
     terms = await orcahub_terms(db, {o for orgs in candidates.values() for o in orgs})
     now = datetime.now(timezone.utc)
     read_only = set()

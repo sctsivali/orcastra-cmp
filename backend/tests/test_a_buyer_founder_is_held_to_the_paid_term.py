@@ -165,3 +165,49 @@ async def test_the_bind_route_refuses_it(monkeypatch) -> None:
     with pytest.raises(HTTPException) as refused:
         await organizations.bind_cluster(8, organizations.ClusterBindRequest(cluster_id="sold"), user=founder, db=db)
     assert refused.value.status_code == 403 and "purchase" in refused.value.detail
+
+
+async def test_every_cluster_reached_only_by_purchase_is_recorded_whatever_the_phase() -> None:
+    """Third look, 2026-10-27: grants are refused on these in every phase, not only in retention."""
+    from app.core.sale_term import partner_purchase_reach
+
+    purchase_only, read_only = await partner_purchase_reach(await _world(term_ended_at=None, access_ends_at=None), FOUNDER)
+    assert (purchase_only, read_only) == ({"sold"}, set())
+    purchase_only, _read_only = await partner_purchase_reach(await _world(registered_elsewhere=True), FOUNDER)
+    assert purchase_only == set()
+
+
+def test_no_key_or_add_on_grant_on_a_purchased_cluster() -> None:
+    token = org_scope._purchase_only_clusters_var.set(frozenset({"sold"}))
+    try:
+        with pytest.raises(HTTPException) as refused:
+            org_scope.refuse_grants_on_purchased_clusters(["mine", "sold"])
+        assert refused.value.status_code == 403 and "purchase" in refused.value.detail
+        org_scope.refuse_grants_on_purchased_clusters(["mine"])
+    finally:
+        org_scope._purchase_only_clusters_var.reset(token)
+
+
+def test_every_grant_door_asks() -> None:
+    import inspect
+
+    from app.routers import integrations
+    from app.services import extension_scope
+
+    create = inspect.getsource(integrations.create_api_key)
+    edit = inspect.getsource(integrations.update_api_key_permissions)
+    assert "refuse_grants_on_purchased_clusters(" in create
+    assert "refuse_grants_on_purchased_clusters(" in edit
+    assert "purchase_only_clusters()" in inspect.getsource(extension_scope)
+
+
+@pytest.mark.parametrize("row, owns", [
+    ((7, None, "orcahub"), False),
+    ((7, None, "local"), True),
+    ((7, "someone@x.test", "orcahub"), True),
+    ((None, "founder@buyer.test", None), True),
+], ids=["sale-binding", "local-unregistered", "registered", "own-unbound"])
+def test_a_sale_binding_is_not_ownership_for_registration(row, owns) -> None:
+    from app.routers.cluster_registration import _owns_a_binding
+
+    assert _owns_a_binding([row], [7], "founder@buyer.test") is owns

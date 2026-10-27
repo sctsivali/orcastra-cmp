@@ -128,9 +128,15 @@ def get_cert_manager() -> LXDCertificateManager:
 
 
 def _owns_a_binding(rows, org_ids, email: str) -> bool:
-    """Whether one of a cluster's ownership rows (organization_id, registered_by) is the caller's."""
+    """Whether one of a cluster's ownership rows (organization_id, registered_by[, source]) is the caller's.
+
+    important: a binding provisioning wrote for a sale (no registrant, OrcaHub organization) is not
+    ownership. It exists because the organization bought something on the seller's cluster, and
+    counting it let a buyer founder re-register the seller's cluster (rewriting its Vault record)
+    and gain a binding of its own (security review 2026-10-27).
+    """
     return any(
-        (row[0] is not None and row[0] in org_ids)
+        (row[0] is not None and row[0] in org_ids and not (row[1] is None and len(row) > 2 and row[2] == "orcahub"))
         or (row[0] is None and row[1] == email)
         or row[1] == email
         for row in rows
@@ -149,13 +155,13 @@ async def _continues_its_registration(db: AsyncSession, cluster_id: str, user: A
 
     from app.core.org_scope import get_user_org_ids
     from app.core.rbac import Role, get_highest_role, resolve_roles
-    from app.models.db_models import OrganizationCluster
+    from app.models.db_models import Organization, OrganizationCluster
 
     rows = (
         await db.execute(
-            sa_select(OrganizationCluster.organization_id, OrganizationCluster.registered_by).where(
-                OrganizationCluster.cluster_id == cluster_id
-            )
+            sa_select(OrganizationCluster.organization_id, OrganizationCluster.registered_by, Organization.source)
+            .outerjoin(Organization, Organization.id == OrganizationCluster.organization_id)
+            .where(OrganizationCluster.cluster_id == cluster_id)
         )
     ).all()
     if not rows:
@@ -181,7 +187,7 @@ async def _guard_registration_binding(
 
     from app.core.org_scope import get_user_org_ids
     from app.core.rbac import Role, get_highest_role, resolve_roles
-    from app.models.db_models import OrganizationCluster
+    from app.models.db_models import Organization, OrganizationCluster
 
     org_ids = await get_user_org_ids(user, db)
     prospective_org = org_ids[0] if org_ids else None
@@ -191,7 +197,10 @@ async def _guard_registration_binding(
             sa_select(
                 OrganizationCluster.organization_id,
                 OrganizationCluster.registered_by,
-            ).where(OrganizationCluster.cluster_id == cluster_id)
+                Organization.source,
+            )
+            .outerjoin(Organization, Organization.id == OrganizationCluster.organization_id)
+            .where(OrganizationCluster.cluster_id == cluster_id)
         )
     ).all()
     if not rows:

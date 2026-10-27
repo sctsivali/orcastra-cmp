@@ -157,6 +157,7 @@ from app.core.org_scope import (
     org_scope_dependency,
     project_is_visible,
     reconcile_personal_clusters,
+    refuse_grants_on_purchased_clusters,
 )
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
@@ -2320,6 +2321,7 @@ async def create_api_key(
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
 
+    refuse_grants_on_purchased_clusters(p.cluster_id for p in request.cluster_permissions)
     await _refuse_new_grants_to_unregistered_clusters(p.cluster_id for p in request.cluster_permissions)
 
     # After the scope guard on purpose: this reaches the clusters, so it must never run for a
@@ -2898,6 +2900,7 @@ async def update_api_key_permissions(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
+    refuse_grants_on_purchased_clusters(p.cluster_id for p in permissions)
 
     # The cluster reads stay outside the key's lock: nothing in them depends on what the key holds.
     await _assert_granted_projects_exist(lxd_service, permissions)

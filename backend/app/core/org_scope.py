@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterable, Optional
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select, or_, and_, func, cast, String
@@ -59,6 +59,11 @@ _visible_projects_var: contextvars.ContextVar[Optional[dict[str, set[str]]]] = (
 # them, not change anything there (core/sale_term.py). Empty for everyone else.
 _read_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
     "read_only_clusters", default=frozenset()
+)
+# Clusters a role_partner reaches only through purchases: it may not grant on them what no purchase
+# pays for (an integration key or add-on grant). Empty for everyone else.
+_purchase_only_clusters_var: contextvars.ContextVar[frozenset] = contextvars.ContextVar(
+    "purchase_only_clusters", default=frozenset()
 )
 # Set by an interactive socket (console, terminal): driving a guest is a change, not a read.
 _interactive_var: contextvars.ContextVar[bool] = contextvars.ContextVar("interactive_scope", default=False)
@@ -1279,15 +1284,44 @@ def _narrow_by_tenant_acl(
 async def _partner_read_only(
     user: "AuthenticatedUser", db: AsyncSession, allowed: Optional[set[str]],
 ) -> frozenset:
-    """The clusters this Partner may only read: reached through purchases past their paid term."""
-    from app.core.rbac import Role, get_highest_role, resolve_roles
-    from app.core.sale_term import partner_read_only_clusters
+    """The clusters this Partner may only read: reached through purchases past their paid term.
 
+    Also records, for this request, the clusters it reaches only by purchase at all
+    (`purchase_only_clusters`), which the grant doors read.
+    """
+    from app.core.rbac import Role, get_highest_role, resolve_roles
+    from app.core.sale_term import partner_purchase_reach
+
+    _purchase_only_clusters_var.set(frozenset())
     if allowed is None or db is None or not get_settings().tenant_term_enforcement_enabled:
         return frozenset()
     if get_highest_role(resolve_roles(user)) != Role.PARTNER:
         return frozenset()
-    return frozenset(await partner_read_only_clusters(db, user.email) & allowed)
+    purchase_only, read_only = await partner_purchase_reach(db, user.email)
+    _purchase_only_clusters_var.set(frozenset(purchase_only & allowed))
+    return frozenset(read_only & allowed)
+
+
+def purchase_only_clusters() -> frozenset:
+    """For this request: the clusters a Partner reaches only through purchases."""
+    return _purchase_only_clusters_var.get()
+
+
+def refuse_grants_on_purchased_clusters(cluster_ids: Iterable[str]) -> None:
+    """403 when a Partner tries to grant on a cluster it reaches only through a purchase.
+
+    A key or add-on grant there would reach the cluster with no paid term on it, outliving the
+    purchase (security review 2026-10-27). The seller's side and Administrators are unaffected.
+    """
+    refused = sorted(set(cluster_ids) & purchase_only_clusters())
+    if refused:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Cluster '{refused[0]}' reaches you through a purchase, so it cannot be granted to an "
+                "integration key or add-on."
+            ),
+        )
 
 
 async def org_scope_dependency(
