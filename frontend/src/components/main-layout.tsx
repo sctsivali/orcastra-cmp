@@ -15,6 +15,8 @@ import { AccessBlockedNotice } from "@/components/access-blocked-notice";
 import { VaultNotice } from "@/components/vault-notice";
 import { TenantTermNotice } from "@/components/tenant-term-notice";
 import { DocumentBranding } from "@/components/branding/document-branding";
+import { ReleaseNotice } from "@/components/release/release-notice";
+import { FooterReleaseHint } from "@/components/release/footer-release-hint";
 import { useAccessGate } from "@/hooks/use-access-gate";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTerminalStore } from "@/lib/terminal-store";
@@ -120,6 +122,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         {!isFullPageTerminalOrConsole && <Header />}
         {/* Issue #15: a sealed or unreachable Vault, said on every page rather than read as "no clusters" */}
         {!isFullPageTerminalOrConsole && <VaultNotice />}
+        {/* Administrators: the running version is out of date (end of life, security, deprecated, newer) */}
+        {!isFullPageTerminalOrConsole && <ReleaseNotice />}
         {/* A Tenant's paid term: read-only or ending projects, said on every page */}
         {!isFullPageTerminalOrConsole && <TenantTermNotice summary={access.tenantAccess} />}
         <main
@@ -144,6 +148,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                       v{APP_VERSION}
                     </span>
                   )}
+                  {!isLandingPage && <FooterReleaseHint />}
                 </div>
                 <p className="text-center sm:text-right" suppressHydrationWarning>
                   {footerText}

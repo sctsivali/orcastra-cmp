@@ -17,6 +17,8 @@ const INITIAL_ALLOWED_PATHS = new Set([
   "/system/vault-status",
   // Asked by an Administrator's sidebar count only; other roles never send it.
   "/system/host-health",
+  // An Administrator's release notice; other roles never send it.
+  "/system/release-status",
 ]);
 const OPTIONAL_CREATE_PATHS = [
   "/images/remote",

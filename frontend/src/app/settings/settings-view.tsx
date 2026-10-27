@@ -9,6 +9,7 @@ import { ChevronRight, Activity, Settings2, Palette, Shield, Users } from "lucid
 import { DesktopControlSettings } from "@/components/desktop-control-settings";
 import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
 import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
+import { ReleaseStatusCard } from "@/components/release/release-status-card";
 import { IntegrationsSettings } from "@/components/integrations-settings";
 import { SyncedOrganizationsPanel } from "@/components/integrations/synced-organizations-panel";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
@@ -166,7 +167,8 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
 
         {/* System Info Tab - Admin + Partner */}
         {isPartner && (
-        <TabsContent value="dashboard-host">
+        <TabsContent value="dashboard-host" className="space-y-6">
+          {isAdmin && <ReleaseStatusCard />}
           <SystemResourceUsagePanel />
         </TabsContent>
         )}

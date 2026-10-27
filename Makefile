@@ -1,7 +1,7 @@
 # Makefile for Orcastra CMP
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: ci-local export-openapi release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend test-qa-artifacts lint-qa-artifacts install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: ci-local export-openapi release release-preflight release-build release-tag release-push release-verify release-manifest setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend test-qa-artifacts lint-qa-artifacts install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
@@ -378,6 +378,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-tenant-term-notice.mjs
 	@echo "$(COLOR_GREEN)Checking the branding surfaces...$(COLOR_RESET)"
 	@node scripts/checks/check-branding-surfaces.mjs
+	@echo "$(COLOR_GREEN)Checking the release notice...$(COLOR_RESET)"
+	@node scripts/checks/check-release-notice.mjs
 	@echo "$(COLOR_GREEN)Checking task journal pagination and duration behavior...$(COLOR_RESET)"
 	@node scripts/checks/check-task-journal-behavior.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal theme...$(COLOR_RESET)"
@@ -687,6 +689,22 @@ release-verify: ## Verify a published tag pair (VERSION=x.y.z EXPECT_COMMIT=sha)
 		echo "  no expected commit given, checked pair agreement only"; \
 	fi; \
 	echo "$(COLOR_GREEN)✓ $$V is one commit: $$BREV$(COLOR_RESET)"
+
+# The release list running dashboards read (orcastra-docs docs/releases/manifest.json, see
+# backend/app/services/release_check/). Verifies the published pair, adds the release as latest with
+# the digests Docker Hub serves, validates, prints the change and stops: publishing it is a push to
+# the public docs repository, which is done by hand after a review.
+#   make release-manifest VERSION=1.0.0-RC5 [SECURITY=1] [DOCS_DIR=../orcastra-docs]
+release-manifest: ## Add a published release to the orcastra-docs release list (VERSION=x.y.z)
+	@set -eu; \
+	V="$(or $(VERSION),$(APP_VERSION))"; \
+	D="$(or $(DOCS_DIR),../orcastra-docs)"; \
+	$(MAKE) --no-print-directory release-verify VERSION=$$V; \
+	python3 "$$D/scripts/releases/manifest.py" add "$$V" $(if $(SECURITY),--security,); \
+	python3 "$$D/scripts/releases/manifest.py" check-images --write; \
+	python3 "$$D/scripts/releases/manifest.py" validate; \
+	git -C "$$D" --no-pager diff -- docs/releases/manifest.json; \
+	echo "Next: add a section for $$V to $$D/docs/operations/releases.md, review, commit and push orcastra-docs."
 
 ##@ Deployment
 

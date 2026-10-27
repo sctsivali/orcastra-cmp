@@ -56,6 +56,7 @@ const QUERY_FAMILY_KEYS = {
   // note: not ["vault-status"]. A plain re-read there can land on a worker still holding "sealed"
   // for ten seconds; an unseal hands the notice a fresh read instead (announceUnsealed).
   hostHealth: [["host-health"], ["vault-seal-status"]],
+  releaseStatus: [["release-status"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type QueryFamily = keyof typeof QUERY_FAMILY_KEYS;
@@ -317,6 +318,11 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
       "api.organizations.updatePreferences", "api.organizations.deletePreferences",
       "api.organizations.setProvider", "api.organizations.desktopControl.set",
     ],
+  },
+  "release.check": {
+    completion: "response",
+    queryFamilies: ["releaseStatus"],
+    apiCalls: ["releaseAPI.checkNow"],
   },
   // The deployment default sits under every organization without branding of its own.
   "branding.deployment": {

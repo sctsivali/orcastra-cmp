@@ -353,6 +353,9 @@ jobs:
       - name: Branding surfaces
         run: node scripts/checks/check-branding-surfaces.mjs .
 
+      - name: Release notice
+        run: node scripts/checks/check-release-notice.mjs .
+
       - name: Task journal behavior
         run: node scripts/checks/check-task-journal-behavior.mjs .
 

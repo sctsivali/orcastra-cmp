@@ -309,6 +309,26 @@ async function installApiFixtures(page, role, options = {}) {
         store: "shared",
         interval_seconds: 30,
       };
+    } else if (path === "/system/release-status") {
+      // An Administrator's shell reads what the release manifest says about this version
+      // (2026-10-27); other roles never send it. Up to date here, so nothing shows.
+      body = {
+        enabled: true,
+        running_version: "1.0.0-RC4-hotfix3",
+        level: "none",
+        reasons: [],
+        running_status: "latest",
+        latest_version: "1.0.0-RC4-hotfix3",
+        security_version: null,
+        notes_url: null,
+        upgrade_url: null,
+        checked_at: new Date().toISOString(),
+        last_success_at: new Date().toISOString(),
+        source: "github",
+        error: null,
+        stale: false,
+        ...(options.releaseStatus || {}),
+      };
     } else if (path === "/me/access") {
       // Asked only by a Tenant session (issue #17), which a fixture actor can become mid-test by
       // a downgrade; the fixture Tenant has access.
