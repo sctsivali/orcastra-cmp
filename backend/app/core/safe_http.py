@@ -17,7 +17,7 @@ stale without anybody noticing.
 
 import ipaddress
 import logging
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, FrozenSet, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -46,11 +46,17 @@ async def fetch_guarded(
     require_https: bool = False,
     headers: Optional[dict] = None,
     transport: Optional[httpx.AsyncBaseTransport] = None,
+    allowed_hosts: Optional[FrozenSet[str]] = None,
+    exemptions: Sequence[Any] = (),
 ) -> Tuple[str, bytes]:
     """GET `url`, following redirects only to destinations that pass the same check.
 
     Returns (content_type, body). Raises SafeHTTPError on refusal, transport failure, or a body
     that runs past `max_bytes`.
+
+    `allowed_hosts` pins every hop, the first included, to those names (lowercase): a fetch with
+    a fixed purpose, like the release feed, never follows a redirect anywhere else. `exemptions`
+    are the private networks an operator allowed for it (url_safety.describe_url_risk).
 
     important: the body is streamed and abandoned the moment it exceeds the cap. Reading first
     and measuring afterwards means a hostile responder decides how much memory a worker uses.
@@ -61,9 +67,11 @@ async def fetch_guarded(
         timeout=timeout, follow_redirects=False, transport=transport
     ) as client:
         for _ in range(max_redirects + 1):
-            reason = describe_url_risk(current, require_https=require_https)
+            reason = describe_url_risk(current, require_https=require_https, exemptions=exemptions)
             if reason is not None:
                 raise SafeHTTPError(reason)
+            if allowed_hosts is not None and (urlsplit(current).hostname or "").lower() not in allowed_hosts:
+                raise SafeHTTPError("destination is not one this fetch may reach")
 
             try:
                 async with client.stream("GET", current, headers=headers) as response:

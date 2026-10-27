@@ -695,6 +695,24 @@ class Settings(BaseSettings):
         description="Fluent Bit HTTP server (HTTP_Server On) read for delivery metrics; empty disables the logging check"
     )
 
+    # Release notice (services/release_check/): the public release manifest in orcastra-docs, read
+    # twice a day by one worker. Nothing identifying this deployment is sent.
+    release_check_enabled: bool = Field(
+        default=True,
+        alias="RELEASE_CHECK_ENABLED",
+        description="Read the public release manifest and tell Administrators about newer or deprecated versions",
+    )
+    release_feed_url: str = Field(
+        default="",
+        alias="RELEASE_FEED_URL",
+        description="A mirror of the release manifest (https); empty reads the published feed",
+    )
+    release_feed_private_cidrs: str = Field(
+        default="",
+        alias="RELEASE_FEED_PRIVATE_CIDRS",
+        description="Comma-separated private networks a RELEASE_FEED_URL mirror may sit on",
+    )
+
     # OpenSearch Archive Configuration
     opensearch_archive_enabled: bool = Field(
         default=False,
@@ -810,6 +828,27 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Cached settings instance."""
     return Settings()
+
+
+def release_feed_exemptions() -> tuple:
+    """Private networks the release feed may be read from: only for an operator's own mirror.
+
+    The published feed is public, so with no RELEASE_FEED_URL nothing is exempt. The URL comes from
+    the deployment's environment, never from a request, which is why a mirror on a private network
+    is allowed in production at all.
+    """
+    import ipaddress
+
+    settings = get_settings()
+    if not settings.release_feed_url.strip():
+        return ()
+    networks = []
+    for raw in (settings.release_feed_private_cidrs or "").split(","):
+        try:
+            networks.append(ipaddress.ip_network(raw.strip(), strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
 
 
 def webhook_destination_exemptions() -> tuple:

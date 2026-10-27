@@ -246,6 +246,8 @@ ACTION_CATEGORIES = {
     "organization.branding.provider.set": EventCategory.SETTINGS,
     "deployment.branding.update": EventCategory.SETTINGS,
     "deployment.branding.reset": EventCategory.SETTINGS,
+    # An Administrator reading the public release manifest now (routers/release_status.py)
+    "system.release_check.run": EventCategory.ADMIN,
 }
 
 # High severity actions
