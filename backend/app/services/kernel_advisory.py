@@ -271,17 +271,15 @@ def _ubuntu_status(record: UbuntuCve, release: KernelRelease, abi: int, os_versi
         named = f"Ubuntu {str(os_version)[:32]} is not a release this check knows" if os_version else (
             "The member did not report its Ubuntu release"
         )
-        return _UbuntuStatus("unverified", f"{named}, so Ubuntu's status cannot be matched; check the host's changelog.",
-                             None, False)
+        return _UbuntuStatus("unverified", f"{named}, so Ubuntu's status cannot be matched.", None, False)
     codename, ga_branch = known
     package = ubuntu_source_package(release.local, release.branch, ga_branch)
     if package is None:
-        return _UbuntuStatus("unverified", "Ubuntu kernel flavour not recognised; check its changelog.", None, False)
+        return _UbuntuStatus("unverified", "Ubuntu kernel flavour not recognised.", None, False)
     where = f"{package} on {series}"
     entry = record.status(package, codename)
     if entry is None:
-        return _UbuntuStatus("unverified", f"Ubuntu's record does not list {where}; check the host's changelog.",
-                             None, False)
+        return _UbuntuStatus("unverified", f"Ubuntu's record does not list {where}.", None, False)
     status, version = entry
     running = f"{release.major}.{release.minor}.{release.sublevel}-{abi}"
     fixed_abi = _ubuntu_fixed_abi(version, release.branch)
@@ -292,7 +290,7 @@ def _ubuntu_status(record: UbuntuCve, release: KernelRelease, abi: int, os_versi
             return _UbuntuStatus("unverified", (
                 f"Ubuntu released a fix for {where}, but its version cannot be compared with this kernel; "
                 "check its changelog."
-            ), version or None, False)
+            ), version or None, True)
         if abi >= fixed_abi:
             return _UbuntuStatus("patched", f"Kernel at or above Ubuntu's fix for {where} ({version}).", None, True)
         short = _UBUNTU_VERSION.match(version).group(1)
@@ -304,7 +302,7 @@ def _ubuntu_status(record: UbuntuCve, release: KernelRelease, abi: int, os_versi
             return _UbuntuStatus("unverified", (
                 f"This member runs {running}, the ABI of Ubuntu's fix in testing ({version}), which is not "
                 "released yet; check its changelog."
-            ), version, False)
+            ), version, True)
         testing = f" ({version})" if version else ""
         return _UbuntuStatus("exposed", f"Ubuntu has a fix in testing{testing}, not released yet. {_LIVEPATCH} {_REBOOT}",
                              version or None, True)
@@ -312,12 +310,11 @@ def _ubuntu_status(record: UbuntuCve, release: KernelRelease, abi: int, os_versi
         return _UbuntuStatus("exposed", f"Ubuntu has not released a fix for {where} yet. {_LIVEPATCH} {_REBOOT}",
                              None, True)
     if status == "ignored":
-        return _UbuntuStatus("unverified", (
-            f"Ubuntu does not plan a fix for {where}; check the host's changelog, or move to a supported kernel."
-        ), None, False)
-    return _UbuntuStatus("unverified", (
-        f"Ubuntu's record says {package} does not exist on {series}; check this kernel's changelog."
-    ), None, False)
+        # note: Ubuntu marks a package "ignored" when it is out of support, so no fix is coming.
+        return _UbuntuStatus("exposed", (
+            f"Ubuntu does not plan a fix for {where}; move to a supported kernel. {_REBOOT}"
+        ), None, True)
+    return _UbuntuStatus("unverified", f"Ubuntu's record says {package} does not exist on {series}.", None, False)
 
 
 def _ubuntu_verdict(
@@ -328,9 +325,15 @@ def _ubuntu_verdict(
     if not local:
         return "unverified", "Ubuntu kernel build not recognised; check its changelog.", None, "built-in"
     abi, flavour = int(local.group(1)), local.group(2)
-    feed = _ubuntu_status(ubuntu.record, release, abi, facts.os_version) if ubuntu_is_fresh(ubuntu, now) else None
+    feed = _ubuntu_status(ubuntu.record, release, abi, facts.os_version) if ubuntu is not None else None
     if feed is not None and feed.decisive:
-        return feed.state, feed.reason, feed.fixed_in, "ubuntu"
+        if ubuntu_is_fresh(ubuntu, now):
+            return feed.state, feed.reason, feed.fixed_in, "ubuntu"
+        # important: an old read keeps its verdict and says how old it is. Turning it into
+        # "unverified" lowered the severity, so anyone able to block ubuntu.com for three days
+        # could quietly silence the alert.
+        checked = ubuntu.checked_at.date().isoformat()
+        return feed.state, f"{feed.reason} Ubuntu not checked since {checked}.", feed.fixed_in, "ubuntu"
 
     # note: a fixed ABI in the built-in data is a known fact that does not age, so it decides
     # whenever Ubuntu's record does not (absent, stale, or silent about this kernel).
@@ -343,20 +346,18 @@ def _ubuntu_verdict(
         return "exposed", f"Ubuntu {branch} {track} kernel below fixed ABI {fixed_abi}. {_REBOOT}", f"ABI {fixed_abi}", (
             "built-in"
         )
-    if feed is not None:
-        return feed.state, feed.reason, feed.fixed_in, "ubuntu"
-    if ubuntu is not None:
-        return "unverified", (
-            f"Could not check Ubuntu since {ubuntu.checked_at.date().isoformat()}; check the host's changelog."
-        ), None, "ubuntu"
+    # A record that cannot be matched to this kernel says why, and the built-in data decides: a gap
+    # in the match is not evidence of a fix.
+    context = f"{feed.reason} " if feed is not None else ""
     as_of = advisory.data_as_of.isoformat()
     age = (today - advisory.data_as_of).days
     if age > advisory.stale_after_days:
         return "unverified", (
-            f"Built-in data from {as_of} is {age} days old and lists no Ubuntu fix; check the host's changelog."
+            f"{context}Built-in data from {as_of} is {age} days old and lists no Ubuntu fix; check the host's "
+            "changelog."
         ), None, "built-in"
     return "exposed", (
-        f"Built-in data from {as_of} lists no fixed Ubuntu {branch} kernel. {_LIVEPATCH} {_REBOOT}"
+        f"{context}Built-in data from {as_of} lists no fixed Ubuntu {branch} kernel. {_LIVEPATCH} {_REBOOT}"
     ), None, "built-in"
 
 

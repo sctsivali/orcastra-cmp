@@ -2,10 +2,11 @@
 (services/kernel_advisory.py, `assess` with an UbuntuSnapshot).
 
 The kernel flavour and branch name the source package, the host's release names the series, and
-Ubuntu's status for that pair decides. A status that names no fix for this kernel, an unknown
-release or a package Ubuntu does not list is "unverified" with an honest reason, never a guess.
-A record older than three days stops deciding; with none at all the built-in data decides and
-says that it did.
+Ubuntu's status for that pair decides. When the record cannot be matched to the kernel (an unknown
+release or flavour, a package Ubuntu does not list) it says so and the built-in data decides: a gap
+in the match is not evidence of a fix. A record older than three days keeps its verdict and says
+how old it is (a security review found that downgrading it let a blocked ubuntu.com silence the
+alert); with no record at all the built-in data decides and says that it did.
 """
 
 from dataclasses import replace
@@ -80,24 +81,12 @@ RELEASED_203 = with_status("linux", "jammy", "released", "5.15.0-203.213")
          f"Ubuntu has not released a fix for linux-hwe-6.8 on 22.04 yet. {LIVEPATCH} {REBOOT}", None),
         ("6.8.0-138-generic", "22.04", with_status("linux-hwe-6.8", "jammy", "not-affected"), "patched",
          "Ubuntu lists linux-hwe-6.8 on 22.04 as not affected.", None),
-        ("6.14.0-33-generic", "24.04", None, "unverified",
-         "Ubuntu does not plan a fix for linux-hwe-6.14 on 24.04; check the host's changelog, or move to a "
-         "supported kernel.", None),
-        ("6.8.0-50-generic", "20.04", None, "unverified",
-         "Ubuntu's record says linux-hwe-6.8 does not exist on 20.04; check this kernel's changelog.", None),
-        ("5.15.0-1050-oracle", "22.04", None, "unverified",
-         "Ubuntu's record does not list linux-oracle on 22.04; check the host's changelog.", None),
-        ("5.15.0-1032-realtime", "22.04", None, "unverified",
-         "Ubuntu's record does not list linux-realtime on 22.04; check the host's changelog.", None),
+        # out of support: no fix is coming
+        ("6.14.0-33-generic", "24.04", None, "exposed",
+         f"Ubuntu does not plan a fix for linux-hwe-6.14 on 24.04; move to a supported kernel. {REBOOT}", None),
         ("5.15.0-185-generic", "22.04", with_status("linux", "jammy", "released", "6.8.0-150.150"), "unverified",
          "Ubuntu released a fix for linux on 22.04, but its version cannot be compared with this kernel; "
          "check its changelog.", "6.8.0-150.150"),
-        ("5.15.0-185-generic", "23.10", None, "unverified",
-         "Ubuntu 23.10 is not a release this check knows, so Ubuntu's status cannot be matched; check the "
-         "host's changelog.", None),
-        ("5.15.0-185-generic", None, None, "unverified",
-         "The member did not report its Ubuntu release, so Ubuntu's status cannot be matched; check the "
-         "host's changelog.", None),
         ("5.15.0-185-generic", "22.04.5", None, "exposed",
          f"Ubuntu has a fix in testing (5.15.0-203.213), not released yet. {LIVEPATCH} {REBOOT}", "5.15.0-203.213"),
     ],
@@ -114,6 +103,31 @@ def test_ubuntu_status_decides(kernel, os_version, data, state, reason, fixed_in
         assert finding.severity == ("critical" if state == "exposed" else "warning")
 
 
+BUILT_IN = f"Built-in data from 2026-10-19 lists no fixed Ubuntu {{branch}} kernel. {LIVEPATCH} {REBOOT}"
+
+
+@pytest.mark.parametrize(
+    "kernel, os_version, context",
+    [
+        ("6.8.0-50-generic", "20.04", "Ubuntu's record says linux-hwe-6.8 does not exist on 20.04."),
+        ("5.15.0-1050-oracle", "22.04", "Ubuntu's record does not list linux-oracle on 22.04."),
+        ("5.15.0-1032-realtime", "22.04", "Ubuntu's record does not list linux-realtime on 22.04."),
+        ("5.15.0-185-generic", "23.10",
+         "Ubuntu 23.10 is not a release this check knows, so Ubuntu's status cannot be matched."),
+        ("5.15.0-185-generic", None,
+         "The member did not report its Ubuntu release, so Ubuntu's status cannot be matched."),
+        # a 24.04 member reporting a 5.15 kernel: the mismatch must not read as a fix
+        ("5.15.0-185-generic", "24.04", "Ubuntu's record says linux-hwe-5.15 does not exist on 24.04."),
+    ],
+)
+def test_a_record_that_cannot_be_matched_leaves_the_built_in_verdict(kernel, os_version, context):
+    finding = _assess(kernel, os_version, _snapshot())
+    branch = ".".join(kernel.split(".")[:2])
+    assert finding.state == "exposed" and finding.severity == "critical"
+    assert finding.reason == f"{context} {BUILT_IN.format(branch=branch)}"
+    assert (finding.source, finding.checked_at) == ("built-in", None)
+
+
 def test_a_vendor_kernel_on_ubuntu_keeps_the_vendor_hint():
     finding = _assess("5.15.148-tegra", "22.04", _snapshot())
     assert finding.state == "unverified" and finding.source == "built-in" and finding.checked_at is None
@@ -127,14 +141,16 @@ def test_other_distributions_are_not_judged_by_ubuntu():
     assert (debian.state, debian.source) == ("unverified", "built-in")
 
 
-def test_a_record_older_than_three_days_stops_deciding():
-    old = _snapshot(RELEASED_203, checked_at=NOW - timedelta(days=4))
-    finding = _assess("5.15.0-210-generic", "22.04", old)
-    assert finding.state == "unverified"
-    assert finding.reason == "Could not check Ubuntu since 2026-10-25; check the host's changelog."
-    assert (finding.source, finding.checked_at) == ("ubuntu", NOW - timedelta(days=4))
+def test_an_old_record_keeps_its_verdict_and_says_how_old():
+    old = _snapshot(checked_at=NOW - timedelta(days=4))
+    exposed = _assess("5.15.0-185-generic", "22.04", old)
+    assert (exposed.state, exposed.severity) == ("exposed", "critical"), "an outage must not lower the alert"
+    assert exposed.reason.endswith("Ubuntu not checked since 2026-10-25.")
+    assert (exposed.source, exposed.checked_at) == ("ubuntu", NOW - timedelta(days=4))
+    patched = _assess("5.15.0-210-generic", "22.04", _snapshot(RELEASED_203, checked_at=NOW - timedelta(days=9)))
+    assert patched.state == "patched" and patched.reason.endswith("Ubuntu not checked since 2026-10-20.")
     edge = _assess("5.15.0-210-generic", "22.04", _snapshot(RELEASED_203, checked_at=NOW - timedelta(days=3)))
-    assert edge.state == "patched"
+    assert edge.state == "patched" and "not checked since" not in edge.reason
 
 
 def test_without_a_record_the_built_in_data_decides_and_says_so():
@@ -151,7 +167,7 @@ def test_a_built_in_fixed_abi_decides_when_ubuntu_does_not():
     # Ubuntu's record says DNE for linux-hwe-6.8 on focal, which settles nothing
     fixed = _assess("6.8.0-121-generic", "20.04", _snapshot(), advisory=pinned)
     assert (fixed.state, fixed.source) == ("patched", "built-in")
-    # a stale record does not stop the pinned fix either
+    # nor does an old one
     stale = _assess("6.8.0-100-generic", "20.04", _snapshot(checked_at=NOW - timedelta(days=9)), advisory=pinned)
     assert (stale.state, stale.fixed_in) == ("exposed", "ABI 120")
     # but where Ubuntu's record does decide, it decides
