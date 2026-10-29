@@ -725,10 +725,12 @@ class Settings(BaseSettings):
         alias="KERNEL_CVE_FEED_URL",
         description="A mirror of Ubuntu's CVE records: an https URL with {id} where the CVE id goes; empty reads ubuntu.com",
     )
+    # note: at most 48 so a read always lands well inside the three days a verdict trusts a record
+    # (kernel_advisory.UBUNTU_GOOD_FOR), with room for the failure backoff.
     kernel_cve_feed_interval_hours: int = Field(
         default=6,
         ge=1,
-        le=168,
+        le=48,
         alias="KERNEL_CVE_FEED_INTERVAL_HOURS",
         description="How often Ubuntu's record of each tracked kernel CVE is read",
     )
