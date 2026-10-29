@@ -77,7 +77,7 @@ function MigrationCenterContent() {
   const centerEnabled = migrationCapabilities.centerEnabled === true;
   const jobsQuery = useMigrationJobs(allowed);
   const plansQuery = useMigrationPlans(allowed);
-  const { writeAvailability } = useReadOnlyMode();
+  const { writeAvailability, writeUnavailableCause, recheckWriteAvailability } = useReadOnlyMode();
 
   const view = viewFromQuery(searchParams.get("view"));
   const jobId = searchParams.get("job");
@@ -104,7 +104,7 @@ function MigrationCenterContent() {
     writeAvailability === "checking"
       ? "Checking system write availability"
       : writeAvailability === "unavailable"
-        ? "System write availability could not be verified"
+        ? writeUnavailableCause ?? "System write availability could not be verified"
         : writeAvailability === "read_only"
           ? "Disabled in read-only mode"
           : undefined;
@@ -444,6 +444,8 @@ function MigrationCenterContent() {
           })
         }
         writeDisabledReason={planWriteDisabledReason}
+        writeAvailability={centerEnabled ? writeAvailability : undefined}
+        onRecheckWrite={() => void recheckWriteAvailability()}
         rollout={{
           durableCopyEnabled: migrationCapabilities.durableCopyEnabled,
           instanceMoveEnabled: migrationCapabilities.instanceMoveEnabled,

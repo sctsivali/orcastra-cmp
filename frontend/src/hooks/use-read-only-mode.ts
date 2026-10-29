@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { APIError } from "@/types/api";
 
 /**
  * The one read of `/system/settings`, shared by every caller through its query key.
@@ -19,25 +20,51 @@ function useSystemSettings() {
   });
 }
 
+/**
+ * How long a write verdict keeps answering while later polls fail. A minute's poll that meets a
+ * token rotation or a dropped tunnel must not switch every write control off; a deployment that
+ * stops answering for this long has to be read again before anything is changed.
+ */
+const WRITE_VERDICT_MAX_AGE_MS = 5 * 60 * 1000;
+
+export type WriteAvailability = "checking" | "unavailable" | "read_only" | "available";
+
+/** Why the verdict is missing, in words an operator can act on. */
+function unavailableCause(error: unknown): string {
+  const status = error instanceof APIError ? error.status : undefined;
+  if (status === 401 || status === 403) return "Your session could not be confirmed. Sign in again";
+  return "The server did not answer the settings check";
+}
+
 export function useReadOnlyMode() {
-  const { data, isLoading, isFetching, isError } = useSystemSettings();
+  const { data, dataUpdatedAt, isLoading, isFetching, isError, error, refetch } =
+    useSystemSettings();
 
   // Keep the deployment mode exact. Mutation surfaces use writeAvailability separately so a
   // missing settings verdict blocks writes without falsely claiming that read-only mode is on.
   const isReadOnly = data?.read_only_mode ?? false;
-  const writeAvailability = isFetching
-    ? "checking"
-    : isError
-      ? "unavailable"
-      : isReadOnly
-        ? "read_only"
-        : "available";
+  // important: the last good verdict answers until it is five minutes old. Deriving this from
+  // isFetching or isError flipped every write control to "checking" on each minute's refetch
+  // and to "unavailable" on one failed poll, which Migration Center showed as "Execution is
+  // unavailable" while the deployment was fine.
+  const verdictIsFresh =
+    data !== undefined && Date.now() - dataUpdatedAt < WRITE_VERDICT_MAX_AGE_MS;
+  const writeAvailability: WriteAvailability = verdictIsFresh
+    ? isReadOnly
+      ? "read_only"
+      : "available"
+    : isLoading || isFetching
+      ? "checking"
+      : "unavailable";
   return {
     isReadOnly,
     isLoading,
     isFetching,
     isError,
     writeAvailability,
+    writeUnavailableCause:
+      writeAvailability === "unavailable" ? unavailableCause(error) : undefined,
+    recheckWriteAvailability: refetch,
     apiVersion: data?.api_version,
   };
 }

@@ -451,6 +451,71 @@ test("copy of a running source explains the stop and a failed draft read can ret
   await expectCleanMigrationHarness(api);
 });
 
+async function openNewMigration(page) {
+  await page.goto("/inventory/migrations");
+  const newMigration = page.getByRole("button", { name: "New Migration" });
+  await expect(newMigration).toBeEnabled();
+  await newMigration.click();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the source" })).toBeVisible();
+}
+
+test("a failed settings poll does not take away a good write verdict", async ({ page }) => {
+  // The owner saw "Execution is unavailable" while the deployment was fine: the first settings
+  // read answered, a later poll failed, and the wizard read that one failure as the verdict.
+  test.setTimeout(120_000);
+  await page.clock.install();
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", {
+    settingsGoodReads: 1,
+    settingsFailures: 1000,
+  });
+  const dialog = page.getByRole("dialog");
+  let flashed = false;
+  await page.exposeFunction("reportUnavailableNotice", () => {
+    flashed = true;
+  });
+
+  await openNewMigration(page);
+  await page.evaluate(() => {
+    // A MutationObserver catches a notice that appears and leaves between two assertions.
+    const observer = new MutationObserver(() => {
+      if (document.body.innerText.includes("Execution is unavailable")) {
+        window.reportUnavailableNotice();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  const readsBefore = api.settingsReads;
+  // Two minutes: the minute's poll and all of its retries fail, while the verdict is under five.
+  await page.clock.runFor("02:00");
+  expect(api.settingsReads, "the poll and its retries ran").toBeGreaterThan(readsBefore + 2);
+  expect(flashed, "the unavailable notice appeared for a failed poll").toBe(false);
+  await expect(dialog.getByText("Execution is unavailable", { exact: true })).toHaveCount(0);
+  expect(api.mutations).toEqual([]);
+});
+
+test("a verdict that went stale says why, offers Check Again, and recovers", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.clock.install();
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", {
+    settingsGoodReads: 1,
+    settingsFailures: 1000,
+  });
+  const dialog = page.getByRole("dialog");
+
+  await openNewMigration(page);
+  // Six minutes of failed polls: the last good verdict is older than five and stops answering.
+  await page.clock.runFor("06:00");
+  await expect(dialog.getByText("Execution is unavailable", { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/The server did not answer the settings check\./)).toBeVisible();
+
+  api.settingsFailuresLeft = 0;
+  await dialog.getByRole("button", { name: "Check Again", exact: true }).click();
+  await expect(dialog.getByText("Execution is unavailable", { exact: true })).toHaveCount(0);
+  expect(api.mutations).toEqual([]);
+});
+
 test("read-only mode still opens the wizard from the row menu and the center, and refuses only Start", async ({ page }) => {
   // Planning is not a write. The server refuses execute in read-only mode, so the entry points
   // answer to permission and rollout only, and the wizard says why Start is unavailable.

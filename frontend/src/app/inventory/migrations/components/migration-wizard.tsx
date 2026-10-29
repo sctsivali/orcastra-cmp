@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import type { WriteAvailability } from "@/hooks/use-read-only-mode";
 import { describeReadError } from "@/lib/read-error";
 import type { NetworkListResponse, StoragePoolListResponse } from "@/types/api";
 import type { MigrationJob } from "@/types/migrations";
@@ -41,13 +42,18 @@ interface MigrationWizardProps {
   onPlanIdChange: (planId: string | null) => void;
   onStarted: (job: MigrationJob) => void;
   writeDisabledReason?: string;
+  /** The verdict behind writeDisabledReason; the notice stays hidden while it is first read. */
+  writeAvailability?: WriteAvailability;
+  onRecheckWrite?: () => void;
   rollout: MigrationRollout;
   initialStep?: number | null;
   onStepChange?: (step: number) => void;
 }
 
 export function MigrationWizard(props: MigrationWizardProps) {
-  const { open, onPlanIdChange, planId, writeDisabledReason } = props;
+  const { open, onPlanIdChange, planId, writeDisabledReason, writeAvailability, onRecheckWrite } =
+    props;
+  const showWriteNotice = !!writeDisabledReason && writeAvailability !== "checking";
   const wizard = useMigrationWizard(props);
   const { step, setStep, draft, plan, pending, queries } = wizard;
   const [title, description] =
@@ -153,12 +159,23 @@ export function MigrationWizard(props: MigrationWizardProps) {
                   <AlertDescription>{wizard.notice}</AlertDescription>
                 </Alert>
               )}
-              {writeDisabledReason && (
+              {showWriteNotice && (
                 <Alert>
                   <AlertTriangle className="h-4 w-4" aria-hidden />
                   <AlertTitle>Execution is unavailable</AlertTitle>
                   <AlertDescription>
                     {writeDisabledReason}. A saved draft can still be reviewed and rechecked.
+                    {writeAvailability === "unavailable" && onRecheckWrite ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 block"
+                        onClick={onRecheckWrite}
+                      >
+                        Check Again
+                      </Button>
+                    ) : null}
                   </AlertDescription>
                 </Alert>
               )}

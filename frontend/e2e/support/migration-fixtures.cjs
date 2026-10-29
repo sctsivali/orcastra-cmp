@@ -98,6 +98,11 @@ async function installMigrationFixtures(page, role, options = {}) {
     patchBodies: [],
     executions: [],
     executeAttempts: 0,
+    // Settings reads to answer before failing, then reads still to fail with a 503. A spec
+    // lowers settingsFailuresLeft to model the server recovering.
+    settingsGoodReadsLeft: options.settingsGoodReads ?? 0,
+    settingsFailuresLeft: options.settingsFailures ?? 0,
+    settingsReads: 0,
   };
   const expectedBearer = `Bearer e2e-${role}-access-token`;
 
@@ -141,6 +146,14 @@ async function installMigrationFixtures(page, role, options = {}) {
 
     if (method === "GET" && path === "/system/settings") {
       if (options.settingsGate) await options.settingsGate;
+      state.settingsReads += 1;
+      if (state.settingsGoodReadsLeft > 0) {
+        state.settingsGoodReadsLeft -= 1;
+      } else if (state.settingsFailuresLeft > 0) {
+        state.settingsFailuresLeft -= 1;
+        await json(route, { detail: "Service unavailable" }, 503);
+        return;
+      }
       const executable = (value) => options.executionEnabled !== false && value;
       const projectRelocation = (value) => options.projectRelocationEnabled ?? value;
       await json(route, {
