@@ -15,6 +15,7 @@ image proxy shipped a weaker copy of the private-range list is that having two m
 stale without anybody noticing.
 """
 
+import asyncio
 import ipaddress
 import logging
 from typing import Any, FrozenSet, Mapping, Optional, Sequence, Tuple
@@ -67,7 +68,10 @@ async def fetch_guarded(
         timeout=timeout, follow_redirects=False, transport=transport
     ) as client:
         for _ in range(max_redirects + 1):
-            reason = describe_url_risk(current, require_https=require_https, exemptions=exemptions)
+            # The risk check resolves the name with a blocking getaddrinfo, so it runs off the loop.
+            reason = await asyncio.to_thread(
+                describe_url_risk, current, require_https=require_https, exemptions=exemptions
+            )
             if reason is not None:
                 raise SafeHTTPError(reason)
             if allowed_hosts is not None and (urlsplit(current).hostname or "").lower() not in allowed_hosts:

@@ -876,16 +876,33 @@ def kernel_cve_feed_exemptions() -> tuple:
 
 
 def _mirror_exemptions(url: str, cidrs: str) -> tuple:
+    """Private networks a configured mirror may sit on, never loopback, link-local or everything.
+
+    important: the fetch checks the address and then lets httpx resolve the name again, so an
+    exemption that covers loopback or the cloud metadata range would let a mirror name whose DNS
+    changes between the two lookups reach them.
+    """
     import ipaddress
+    import logging
 
     if not (url or "").strip():
         return ()
+    never = tuple(
+        ipaddress.ip_network(cidr)
+        for cidr in ("0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "::/128", "::1/128", "fe80::/10")
+    )
     networks = []
     for raw in (cidrs or "").split(","):
         try:
-            networks.append(ipaddress.ip_network(raw.strip(), strict=False))
+            network = ipaddress.ip_network(raw.strip(), strict=False)
         except ValueError:
             continue
+        if network.prefixlen == 0 or any(
+            network.version == bad.version and network.overlaps(bad) for bad in never
+        ):
+            logging.getLogger(__name__).warning("Ignoring mirror exemption %s: it covers a reserved range", network)
+            continue
+        networks.append(network)
     return tuple(networks)
 
 

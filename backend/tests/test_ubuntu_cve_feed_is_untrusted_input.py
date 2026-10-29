@@ -400,3 +400,49 @@ def test_a_stored_state_with_forged_numbers_neither_raises_nor_is_believed(store
     store.write(CVE, {**junk, "error": "upstream returned 503", "failures": float("nan")})
     answers[UBUNTU] = SafeHTTPError("upstream returned 503")
     assert asyncio.run(service.check(now=NOW))[CVE]["failures"] == 1
+
+
+# Second security review, 2026-10-29: the low findings on the feed's fetch and schedule.
+
+
+def test_a_stamp_from_the_future_makes_the_record_due() -> None:
+    from app.services.kernel_cve_feed import service
+
+    now = 1_800_000_000.0
+    forged = {"last_attempt_at": now, "last_success_at": 1e300, "error": None}
+    assert service.due(forged, now, every_seconds=6 * 3600) is True
+    honest = {"last_attempt_at": now, "last_success_at": now, "error": None}
+    assert service.due(honest, now, every_seconds=6 * 3600) is False
+
+
+def test_a_read_that_never_completes_is_recorded_as_failed(monkeypatch) -> None:
+    import asyncio
+
+    from app.services.kernel_cve_feed import service
+
+    async def stalled(_cve_id):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(service, "_read", stalled)
+    monkeypatch.setattr(service, "READ_DEADLINE_SECONDS", 0.05)
+    state = asyncio.run(service._check_one("CVE-2026-99999", {}, 1_800_000_000.0))
+    assert state["error"].startswith("no complete answer within")
+    assert state["failures"] == 1
+
+
+def test_a_mirror_exemption_never_covers_loopback_link_local_or_everything() -> None:
+    from app.core.config import _mirror_exemptions
+
+    kept = _mirror_exemptions(
+        "https://mirror.example/{id}.json",
+        "0.0.0.0/0,127.0.0.0/8,169.254.169.254/32,::1/128,fe80::/64,10.20.0.0/16,fd00::/8",
+    )
+    assert [str(network) for network in kept] == ["10.20.0.0/16", "fd00::/8"]
+
+
+def test_the_address_check_runs_off_the_event_loop() -> None:
+    import inspect
+
+    from app.core import safe_http
+
+    assert "to_thread(\n                describe_url_risk" in inspect.getsource(safe_http.fetch_guarded)

@@ -41,6 +41,9 @@ TICK_SECONDS = 600
 CLOCK_SKEW = timedelta(hours=1)
 BACKOFF_SECONDS = (3600, 2 * 3600, 4 * 3600, 12 * 3600)
 CHECK_NOW_COOLDOWN_SECONDS = 60
+# Wall clock for one read. httpx's read timeout applies per chunk, so a responder that drips bytes
+# could otherwise hold the check lock and an Administrator's request open indefinitely.
+READ_DEADLINE_SECONDS = 30.0
 LEASE_KEY = "orcastra:kernel_cve_feed:lease"
 
 _check_lock = asyncio.Lock()
@@ -111,9 +114,11 @@ async def _read(cve_id: str) -> record_module.UbuntuCve:
 
 async def _check_one(cve_id: str, state: Dict[str, Any], now: float) -> Dict[str, Any]:
     try:
-        parsed = await _read(cve_id)
+        parsed = await asyncio.wait_for(_read(cve_id), READ_DEADLINE_SECONDS)
     except (SafeHTTPError, record_module.RecordInvalid) as exc:
         error = str(exc)
+    except TimeoutError:
+        error = f"no complete answer within {int(READ_DEADLINE_SECONDS)} s"
     except Exception as exc:  # noqa: BLE001 - recorded, so the backoff still applies
         logger.warning("Kernel CVE read of %s failed unexpectedly", cve_id, exc_info=True)
         error = f"unexpected {type(exc).__name__}"
@@ -151,6 +156,11 @@ async def check(cve_ids: Optional[Iterable[str]] = None, now: Optional[float] = 
 def due(state: Dict[str, Any], now: float, every_seconds: Optional[int] = None) -> bool:
     attempted = _number(state.get("last_attempt_at"))
     if not attempted:
+        return True
+    # A stamp from the future (a skewed clock or a forged store) would otherwise postpone every
+    # read until the record expired.
+    future = now + CLOCK_SKEW.total_seconds()
+    if attempted > future or _number(state.get("last_success_at")) > future:
         return True
     if not state.get("error"):
         every = every_seconds if every_seconds is not None else get_settings().kernel_cve_feed_interval_hours * 3600
