@@ -1,8 +1,9 @@
 """Kernel advisories the dashboard checks every cluster member against.
 
-Adding an advisory, or a vendor fix that ships later (ex; Canonical's fixed ABI for a series),
-is a data change here plus a deploy. test_kernel_advisory_data_is_well_formed.py checks every
-entry's shape.
+Adding an advisory is a data change here plus a deploy; its id is then also what the background
+check reads from Ubuntu (services/kernel_cve_feed/), so Ubuntu's status of a tracked CVE follows
+without a deploy. `ubuntu_fixed_abi` stays as a fallback for when Ubuntu's record is absent, stale
+or silent about a kernel. test_kernel_advisory_data_is_well_formed.py checks every entry's shape.
 """
 
 from datetime import date
@@ -15,6 +16,7 @@ from app.services.kernel_advisory import AdvisoryScore, KernelAdvisory, KernelRe
 #   https://lists.openwall.net/linux-cve-announce/2026/10/15/2
 # - Red Hat 8.8 PR:L: https://access.redhat.com/security/cve/cve-2026-99999
 # - Ubuntu priority Medium, jammy/noble "Needs evaluation": https://ubuntu.com/security/CVE-2026-99999
+#   (2026-10-28 Ubuntu lists linux jammy/noble as pending; read live since, see kernel_cve_feed)
 # - Debian bookworm 6.1.190-1 (DLA-4841-1), trixie 6.12.113-1 (DSA-6568-1):
 #   https://security-tracker.debian.org/tracker/CVE-2026-99999
 # - AWS 2026-137-AWS: "There are no workarounds for this issue."

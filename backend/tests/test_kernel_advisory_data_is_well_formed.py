@@ -9,13 +9,15 @@ from datetime import date
 import pytest
 
 from app.services.kernel_advisory_data import ADVISORIES
+from app.services.kernel_cve_feed.record import CVE_ID
 
-_TRACKS = {"generic", "aws", "azure", "gcp", "gke", "kvm", "oracle", "ibm", "nvidia", "raspi"}
+_TRACKS = {"generic", "aws", "azure", "gcp", "gke", "kvm", "oracle", "ibm", "nvidia", "raspi", "realtime"}
 
 
 @pytest.mark.parametrize("advisory", ADVISORIES, ids=lambda a: a.id)
 def test_an_advisory_entry_is_well_formed(advisory):
-    assert advisory.id.startswith("CVE-") and advisory.summary
+    # the id is also the path the background check reads from Ubuntu (services/kernel_cve_feed/)
+    assert CVE_ID.match(advisory.id) and advisory.summary
     assert advisory.reference_url.startswith("https://")
     assert date(2026, 1, 1) <= advisory.data_as_of <= date.today()
     assert advisory.stale_after_days > 0

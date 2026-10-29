@@ -127,10 +127,16 @@ def _kernel_report(state: str, severity: str):
         KernelAdvisoryResponse,
     )
 
+    from datetime import datetime, timezone
+
+    checked = datetime(2026, 10, 29, 10, 0, tzinfo=timezone.utc)
     finding = KernelAdvisoryFinding(advisory_id="CVE-2026-99999", state=state, severity=severity,
-                                    reason="r", check_command="uname -r", reference_url="https://x")
+                                    reason="r", check_command="uname -r", reference_url="https://x",
+                                    fixed_in="5.15.0-203.213", source="ubuntu", checked_at=checked)
     info = KernelAdvisoryInfo(id="CVE-2026-99999", summary="s", reference_url="https://x",
-                              data_as_of=date(2026, 10, 19), introduced="2.6.27", fixed_mainline="7.3-rc7")
+                              data_as_of=date(2026, 10, 19), introduced="2.6.27", fixed_mainline="7.3-rc7",
+                              source="ubuntu", checked_at=checked, ubuntu_priority="medium",
+                              ubuntu_url="https://ubuntu.com/security/CVE-2026-99999")
     host = HostKernelRow(cluster_id="c1", display_name="C1", member="m1",
                          kernel_version="5.15.0-185-generic", findings=[finding])
     return KernelAdvisoryResponse(advisories=[info], hosts=[host])
@@ -147,7 +153,11 @@ def test_kernel_advisories_join_the_feed_and_its_totals(monkeypatch):
     assert [(k["member"], k["warning_type"], k["severity"]) for k in body["kernel_advisories"]] == [
         ("m1", "kernel_exposed", "critical")
     ]
-    assert body["kernel_advisories"][0]["data_as_of"] == "2026-10-19"
+    row = body["kernel_advisories"][0]
+    assert row["data_as_of"] == "2026-10-19"
+    # where the verdict came from and when, so the tab can say how current it is
+    assert (row["source"], row["checked_at"], row["fixed_in"]) == ("ubuntu", "2026-10-29T10:00:00Z", "5.15.0-203.213")
+    assert (row["ubuntu_priority"], row["ubuntu_url"]) == ("medium", "https://ubuntu.com/security/CVE-2026-99999")
     assert (body["total"], body["critical"], body["info"]) == (2, 1, 1)
 
 

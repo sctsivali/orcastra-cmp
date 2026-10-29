@@ -88,6 +88,9 @@ def test_an_exposed_verdict_says_only_a_reboot_clears_it():
     finding = assess(CVE_2026_99999, _facts("5.15.0-185-generic", "Ubuntu", "22.04"), today=TODAY)
     assert "reboot" in finding.reason
     assert "Livepatch" in finding.reason
+    # with no read of Ubuntu's record, the reason says the data is built in and from when
+    assert finding.reason.startswith("Built-in data from 2026-10-19 lists no fixed Ubuntu 5.15 kernel.")
+    assert (finding.source, finding.checked_at) == ("built-in", None)
     assert "canonical-livepatch status" in finding.check_command
     assert "/usr/share/doc/linux-modules-$(uname -r)/changelog.Debian.gz" in finding.check_command
 
@@ -119,7 +122,7 @@ def test_a_published_ubuntu_fix_is_a_data_change_only():
 def test_a_vendor_pending_verdict_goes_stale_but_an_upstream_one_does_not():
     later = date(2026, 12, 1)
     ubuntu = assess(CVE_2026_99999, _facts("5.15.0-185-generic", "Ubuntu", "22.04"), today=later)
-    assert ubuntu.state == "unverified" and "days old" in ubuntu.reason
+    assert ubuntu.state == "unverified" and "days old" in ubuntu.reason and "Built-in data" in ubuntu.reason
     upstream = assess(CVE_2026_99999, _facts("6.12.112"), today=later)
     assert upstream.state == "exposed"
     edge = assess(CVE_2026_99999, _facts("5.15.0-185-generic", "Ubuntu", "22.04"), today=date(2026, 11, 18))
