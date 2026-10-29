@@ -1,7 +1,9 @@
 """Only Partners and Admins read host kernel advisories, and only for clusters in their scope.
 
 Host kernels are host facts: a Tenant has no business with them, and a Partner asking for a
-cluster outside its organization is refused before any cluster is touched.
+cluster outside its organization is refused before any cluster is touched. Reading Ubuntu's
+records now (POST .../check) reaches the internet on the deployment's behalf, so only an
+Administrator may ask for it.
 """
 
 from typing import Any, List
@@ -80,3 +82,48 @@ def test_a_failed_build_is_a_500_without_internals(monkeypatch):
     response = _client(["role_admin"]).get(PATH)
     assert response.status_code == 500
     assert "vault" not in response.text
+
+
+@pytest.fixture
+def feed(monkeypatch) -> List[Any]:
+    """The Ubuntu check with no network: a stored copy only, a check that records the call."""
+    from app.services.kernel_cve_feed import service
+    from app.services.kernel_cve_feed.store import KernelCveFeedStore
+
+    checks: List[Any] = []
+    store = KernelCveFeedStore(redis=lambda: None)
+
+    async def fake_check(cve_ids=None, now=None):
+        checks.append(cve_ids)
+        return {}
+
+    class _Quiet:
+        def log_activity(self, **_kwargs):
+            return None
+
+        def invalidate_resource_cache(self, *_kinds):
+            return None
+
+    monkeypatch.setattr(service, "get_store", lambda: store)
+    monkeypatch.setattr(service, "check", fake_check)
+    monkeypatch.setattr(security_advisories, "get_activity_logger", lambda: _Quiet())
+    monkeypatch.setattr(security_advisories, "get_cache_manager", lambda: _Quiet())
+    return checks
+
+
+@pytest.mark.parametrize("groups, expected", [(["role_tenant"], 403), (["role_partner"], 403), (["role_admin"], 200)])
+def test_only_an_administrator_checks_ubuntu_now(feed, groups, expected):
+    response = _client(groups).post(f"{PATH}/check")
+    assert response.status_code == expected, response.text[:200]
+    assert feed == ([None] if expected == 200 else [])
+
+
+@pytest.mark.parametrize("groups, expected", [(["role_tenant"], 403), (["role_partner"], 200), (["role_admin"], 200)])
+def test_partners_and_admins_read_when_ubuntu_was_checked(feed, groups, expected):
+    response = _client(groups).get(f"{PATH}/ubuntu-status")
+    assert response.status_code == expected, response.text[:200]
+    if expected == 200:
+        body = response.json()
+        assert [a["id"] for a in body["advisories"]] == ["CVE-2026-99999"]
+        assert body["advisories"][0]["ubuntu_url"] == "https://ubuntu.com/security/CVE-2026-99999"
+    assert feed == []

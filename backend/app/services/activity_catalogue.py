@@ -256,6 +256,8 @@ ACTION_CATEGORIES = {
     "deployment.branding.reset": EventCategory.SETTINGS,
     # An Administrator reading the public release manifest now (routers/release_status.py)
     "system.release_check.run": EventCategory.ADMIN,
+    # An Administrator reading Ubuntu's kernel CVE records now (routers/security_advisories.py)
+    "system.kernel_cve_check.run": EventCategory.ADMIN,
 }
 
 # High severity actions
