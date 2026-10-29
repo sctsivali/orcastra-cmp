@@ -125,3 +125,33 @@ async def client_for(
     except BlockingPoolFull:
         logger.warning("Connect to %s shed: the connect pool is saturated", cluster_id)
         return None
+
+
+# Wall clock for one pin refresh: two TLS handshakes at most, each with a 5 s socket timeout.
+PIN_REFRESH_TIMEOUT: float = 15.0
+
+
+async def refresh_pin_for(lxd_service: Any, cluster_id: str) -> Optional[str]:
+    """Record a missing pin or a renewal on the bounded connect pool, one at a time per cluster.
+
+    None when the refresh did not finish in time or the pool is saturated; the caller then reads
+    whatever is pinned. A refused certificate (`LXDCertificatePinError`) propagates.
+    """
+    refresh = getattr(getattr(lxd_service, "connection_manager", None), "refresh_pin", None)
+    if refresh is None:
+        return None
+    try:
+        return await run_blocking(
+            refresh,
+            cluster_id,
+            timeout=PIN_REFRESH_TIMEOUT,
+            label="pin.refresh",
+            executor=_CONNECT_EXECUTOR,
+            max_in_flight=_MAX_IN_FLIGHT,
+            concurrency_key=f"pin:{cluster_id}",
+            max_in_flight_per_key=1,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        logger.warning("Pin refresh for %s did not finish: %s", cluster_id, exc)
+        return None
+

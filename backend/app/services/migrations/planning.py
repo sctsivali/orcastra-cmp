@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Optional
@@ -19,12 +20,16 @@ from app.models.db_models import (
 )
 from app.models.migration_models import MigrationJob, MigrationPlan
 from app.models.migration_schemas import MigrationPlanCreateRequest, MigrationPlanPatchRequest
-from app.services.break_glass_service import cluster_fingerprint
+from app.services.break_glass_service import (
+    PinStoreUnavailable,
+    cluster_pin_state,
+)
 from app.services.instance_job_identity import resolve_instance_job_organization
 from app.services.lxd.availability import require_client
 from app.services.lxd.connection import require_client_server_fingerprint
 from app.services.lxd.exceptions import LXDTransportPinError
-from app.services.lxd.lazy_client import client_for
+from app.services.lxd_certs.pinning import LXDCertificatePinError
+from app.services.lxd.lazy_client import client_for, refresh_pin_for
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.shared_cluster_audit import serialize_cluster_configuration
 
@@ -215,6 +220,24 @@ def _target_project_config(client: Any, project: str) -> dict[str, Any]:
     return dict((record or {}).get("config") or {})
 
 
+
+def _cluster_label(cluster_id: str) -> str:
+    """The name an operator knows the cluster by, the id when no display name is set."""
+    try:
+        from app.core.vault_client import get_vault_client
+        from app.services.lxd.status import resolve_display_name
+
+        settings = get_settings()
+        vault_name = None
+        if settings.vault_enabled and settings.vault_token:
+            metadata = get_vault_client(settings.vault_addr, settings.vault_token).vault_read(
+                f"{settings.vault_clusters_path}/{cluster_id}/metadata"
+            )
+            vault_name = (metadata or {}).get("display_name")
+        return resolve_display_name(cluster_id, vault_name)
+    except Exception:  # noqa: BLE001
+        return cluster_id
+
 class MigrationPlanningMixin:
     def __init__(
         self,
@@ -314,24 +337,81 @@ class MigrationPlanningMixin:
                 )
         return source.organization_id, target.organization_id
 
+    async def _pin_state(self, cluster_id: str):
+        """The cluster's current pin, read again from the certificate the cluster presents now.
+
+        note: one identifying handshake per cluster per plan action. It records a pin for a
+        reachable cluster that has none, and a public-CA renewal that no connection has noticed
+        yet, so the transports below bind to what the cluster actually serves. It sends no client
+        credential, so it is safe for a cluster that has never been proven.
+        """
+        try:
+            await cluster_pin_state(cluster_id, strict=True)
+        except PinStoreUnavailable as exc:
+            raise MigrationConflict(
+                "The certificate store could not be read, so the clusters' identity cannot be "
+                "proven right now. Try again in a moment."
+            ) from exc
+        try:
+            await refresh_pin_for(self.lxd_service, cluster_id)
+        except LXDCertificatePinError as exc:
+            label = await asyncio.to_thread(_cluster_label, cluster_id)
+            raise MigrationConflict(
+                f"{label} presented a different server certificate than the one pinned. "
+                "An Administrator has to re-pin it before it can take part in a migration."
+            ) from exc
+        return await cluster_pin_state(cluster_id)
+
     async def _fingerprints(
         self, request: MigrationPlanCreateRequest
     ) -> tuple[str, str]:
-        source = await cluster_fingerprint(request.source.cluster_id)
+        source = await self._pin_state(request.source.cluster_id)
         target = (
             source
             if request.source.cluster_id == request.target.cluster_id
-            else await cluster_fingerprint(request.target.cluster_id)
+            else await self._pin_state(request.target.cluster_id)
         )
-        if not source or not target:
-            raise MigrationConflict(
-                "Both clusters need pinned certificate fingerprints before migration."
+        missing = [
+            cluster_id
+            for cluster_id, state in (
+                (request.source.cluster_id, source),
+                (request.target.cluster_id, target),
             )
-        if request.source.cluster_fingerprint and request.source.cluster_fingerprint != source:
+            if state is None
+        ]
+        if missing and not self.settings.lxd_pin_server_certificate:
+            raise MigrationConflict(
+                "Certificate pinning is turned off on this deployment, so Migration Center cannot "
+                "prove which clusters it is talking to."
+            )
+        if missing:
+            labels = [await asyncio.to_thread(_cluster_label, cluster_id) for cluster_id in missing]
+            names = " and ".join(dict.fromkeys(labels))
+            raise MigrationConflict(
+                f"{names} has no recorded server certificate yet, so its identity cannot be "
+                "proven. Check that the cluster is reachable and try again, or ask an "
+                "Administrator to re-pin its certificate."
+            )
+        if request.source.cluster_fingerprint and not source.accepts(
+            request.source.cluster_fingerprint
+        ):
             raise MigrationConflict("The source cluster registration changed. Re-select it.")
-        if request.target.cluster_fingerprint and request.target.cluster_fingerprint != target:
+        if request.target.cluster_fingerprint and not target.accepts(
+            request.target.cluster_fingerprint
+        ):
             raise MigrationConflict("The target cluster registration changed. Re-select it.")
-        return source, target
+        return source.fingerprint, target.fingerprint
+
+    async def _renewed_since(self, request: MigrationPlanCreateRequest, plan: Any) -> bool:
+        """Whether every pin that differs from the plan's is a public-CA renewal of it."""
+        for cluster_id, approved in (
+            (request.source.cluster_id, plan.source_cluster_fingerprint),
+            (request.target.cluster_id, plan.target_cluster_fingerprint),
+        ):
+            state = await cluster_pin_state(cluster_id)
+            if state is None or not state.accepts(approved):
+                return False
+        return True
 
     async def _preflight(
         self,
@@ -751,7 +831,7 @@ class MigrationPlanningMixin:
             if (
                 source_fingerprint != plan.source_cluster_fingerprint
                 or target_fingerprint != plan.target_cluster_fingerprint
-            ):
+            ) and not await self._renewed_since(request, plan):
                 raise MigrationConflict("A cluster registration changed. Create a new plan.")
             report = await self._preflight(
                 request,

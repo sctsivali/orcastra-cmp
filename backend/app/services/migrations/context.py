@@ -8,12 +8,13 @@ from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.models.migration_models import MigrationJob, MigrationPlan, MigrationResource
 from app.models.migration_schemas import MigrationPlanCreateRequest
-from app.services.break_glass_service import cluster_fingerprint
+from app.services.break_glass_service import cluster_pin_state
 from app.services.instance_job_identity import resolve_instance_job_organization
 from app.services.lxd.availability import require_client
 from app.services.lxd.connection import require_client_server_fingerprint
 from app.services.lxd.exceptions import LXDTransportPinError
-from app.services.lxd.lazy_client import client_for
+from app.services.lxd_certs.pinning import LXDCertificatePinError
+from app.services.lxd.lazy_client import client_for, refresh_pin_for
 from app.services.lxd_service import get_lxd_service
 from app.services.snapshots.schedule_authority import standing_authority_refusal
 
@@ -45,16 +46,7 @@ async def _authoritative_clients(
             raise MigrationAuthorityError(str(exc), code=exc.code) from exc
     actor_email = current_authority.pin.identity.email
     actor_role = current_authority.role.value
-    source_fingerprint = await cluster_fingerprint(job.source_cluster_id)
-    target_fingerprint = (
-        source_fingerprint
-        if job.source_cluster_id == job.target_cluster_id
-        else await cluster_fingerprint(job.target_cluster_id)
-    )
-    if source_fingerprint != job.source_cluster_fingerprint:
-        raise MigrationAuthorityError("The source cluster registration changed.")
-    if target_fingerprint != job.target_cluster_fingerprint:
-        raise MigrationAuthorityError("The target cluster registration changed.")
+    source_fingerprint, target_fingerprint = await _current_job_pins(job)
     async with async_session_maker() as db:
         source_owner = await resolve_instance_job_organization(
             db, cluster_id=job.source_cluster_id, project=job.source_project
@@ -86,42 +78,84 @@ async def _authoritative_clients(
                     raise MigrationAuthorityError(refusal.message)
     lxd_service = get_lxd_service()
     try:
-        source = require_client(
-            await client_for(
-                lxd_service,
-                job.source_cluster_id,
-                label="migration.worker.source",
-                expected_server_fingerprint=job.source_cluster_fingerprint,
-            ),
-            job.source_cluster_id,
-        )
-        require_client_server_fingerprint(
-            source, job.source_cluster_fingerprint
-        )
-        if job.source_cluster_id == job.target_cluster_id:
-            if job.source_cluster_fingerprint != job.target_cluster_fingerprint:
-                raise LXDTransportPinError(
-                    "One cluster cannot have two approved certificate fingerprints."
-                )
-            return source, source
-        target = require_client(
-            await client_for(
-                lxd_service,
-                job.target_cluster_id,
-                label="migration.worker.target",
-                expected_server_fingerprint=job.target_cluster_fingerprint,
-            ),
-            job.target_cluster_id,
-        )
-        require_client_server_fingerprint(
-            target, job.target_cluster_fingerprint
-        )
-        return source, target
+        return await _bound_clients(job, lxd_service, source_fingerprint, target_fingerprint)
     except LXDTransportPinError as exc:
-        raise MigrationAuthorityError(
-            "A cluster HTTPS transport is not bound to its approved certificate.",
-            code="cluster_transport_pin_mismatch",
-        ) from exc
+        if not hasattr(getattr(lxd_service, "connection_manager", None), "refresh_pin"):
+            raise _transport_refusal() from exc
+        # A public-CA certificate may have been renewed after this worker last read the pin.
+        # Recording it is what a reconnect would do anyway; the job then binds to the result only
+        # if it is still the same registration.
+        try:
+            for cluster_id in dict.fromkeys((job.source_cluster_id, job.target_cluster_id)):
+                await refresh_pin_for(lxd_service, cluster_id)
+        except LXDCertificatePinError as refused:
+            raise _transport_refusal() from refused
+        source_fingerprint, target_fingerprint = await _current_job_pins(job)
+        try:
+            return await _bound_clients(
+                job, lxd_service, source_fingerprint, target_fingerprint
+            )
+        except LXDTransportPinError as retry_exc:
+            raise _transport_refusal() from retry_exc
+
+
+def _transport_refusal() -> MigrationAuthorityError:
+    return MigrationAuthorityError(
+        "A cluster HTTPS transport is not bound to its approved certificate.",
+        code="cluster_transport_pin_mismatch",
+    )
+
+
+async def _current_job_pins(job: MigrationJob) -> tuple[Any, Any]:
+    """The pins the job's transports bind to now, refusing anything but its own registrations.
+
+    A job holds the fingerprints it was approved against. A public-CA cluster may renew its
+    certificate during a long job, which is the same registration; any other change is not.
+    One read per cluster answers both questions, so they cannot disagree.
+    """
+    source = await cluster_pin_state(job.source_cluster_id)
+    target = (
+        source
+        if job.source_cluster_id == job.target_cluster_id
+        else await cluster_pin_state(job.target_cluster_id)
+    )
+    if source is None or not source.accepts(job.source_cluster_fingerprint):
+        raise MigrationAuthorityError("The source cluster registration changed.")
+    if target is None or not target.accepts(job.target_cluster_fingerprint):
+        raise MigrationAuthorityError("The target cluster registration changed.")
+    return source.fingerprint, target.fingerprint
+
+
+async def _bound_clients(
+    job: MigrationJob, lxd_service: Any, source_fingerprint: Any, target_fingerprint: Any
+) -> tuple[Any, Any]:
+    source = require_client(
+        await client_for(
+            lxd_service,
+            job.source_cluster_id,
+            label="migration.worker.source",
+            expected_server_fingerprint=source_fingerprint,
+        ),
+        job.source_cluster_id,
+    )
+    require_client_server_fingerprint(source, source_fingerprint)
+    if job.source_cluster_id == job.target_cluster_id:
+        if source_fingerprint != target_fingerprint:
+            raise LXDTransportPinError(
+                "One cluster cannot have two approved certificate fingerprints."
+            )
+        return source, source
+    target = require_client(
+        await client_for(
+            lxd_service,
+            job.target_cluster_id,
+            label="migration.worker.target",
+            expected_server_fingerprint=target_fingerprint,
+        ),
+        job.target_cluster_id,
+    )
+    require_client_server_fingerprint(target, target_fingerprint)
+    return source, target
 
 
 async def _fenced_job_update(

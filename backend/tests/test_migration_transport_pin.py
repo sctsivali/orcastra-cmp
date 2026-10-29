@@ -13,6 +13,7 @@ from app.services.lxd.connection import (
     require_client_server_fingerprint,
 )
 from app.services.lxd.exceptions import LXDTransportPinError
+from app.services.lxd_certs.pinning import TRUST_TOFU, PinState
 from app.services.migrations import context, planning, worker
 from app.services.migrations.contracts import MigrationAuthorityError, MigrationConflict
 
@@ -199,8 +200,8 @@ async def test_worker_resume_rejects_unpinned_client_before_reconciliation_io(
     )
     acquired: list[str | None] = []
 
-    async def fingerprint(_cluster_id: str) -> str:
-        return PIN_A
+    async def pin_state(_cluster_id: str, *, strict: bool = False) -> PinState:
+        return PinState(fingerprint=PIN_A, trust=TRUST_TOFU, host=None, previous=())
 
     async def owner(*_args: Any, **_kwargs: Any) -> Any:
         return SimpleNamespace(resolution="exact", organization_id=7)
@@ -228,7 +229,7 @@ async def test_worker_resume_rejects_unpinned_client_before_reconciliation_io(
     async def reconciliation_io(*_args: Any, **_kwargs: Any) -> None:
         pytest.fail("worker reconciliation I/O ran before the transport pin was proved")
 
-    monkeypatch.setattr(context, "cluster_fingerprint", fingerprint)
+    monkeypatch.setattr(context, "cluster_pin_state", pin_state)
     monkeypatch.setattr(context, "resolve_instance_job_organization", owner)
     monkeypatch.setattr(context, "async_session_maker", lambda: _SessionContext())
     monkeypatch.setattr(context, "get_lxd_service", lambda: object())
