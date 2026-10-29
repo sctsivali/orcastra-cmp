@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  Bell,
   CheckCircle2,
   Flame,
   Info,
@@ -20,6 +21,7 @@ import { TONE_TEXT, type ClusterStatusTone } from "@/lib/cluster-status";
 import { cn } from "@/lib/utils";
 
 export type AlarmKind =
+  | "total"
   | "critical"
   | "high"
   | "warning"
@@ -31,6 +33,7 @@ export type AlarmKind =
 // The labels and tones are the Warnings page's own (warning-severity.ts and its tab titles), so
 // a tile reads the same word in the same tone as the list it opens.
 const ALARM_KINDS: Record<AlarmKind, { label: string; icon: LucideIcon; tone: ClusterStatusTone }> = {
+  total: { label: "Total Warnings", icon: Bell, tone: "neutral" },
   critical: { label: "Critical", icon: Flame, tone: "negative" },
   high: { label: "High", icon: ShieldAlert, tone: "negative" },
   warning: { label: "Warning", icon: AlertTriangle, tone: "caution" },
@@ -51,18 +54,11 @@ const ALARM_KINDS: Record<AlarmKind, { label: string; icon: LucideIcon; tone: Cl
  *
  * note: the number is the first <p> in the link. The browser harness reads it from there.
  */
-export function AlarmTile({ kind, count, href }: { kind: AlarmKind; count: number; href: string }) {
+function AlarmTileBody({ kind, count }: { kind: AlarmKind; count: number }) {
   const { label, icon: Icon, tone } = ALARM_KINDS[kind];
   const active = count > 0;
   return (
-    <Link
-      href={href}
-      className={cn(
-        "flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/50",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-        "focus-visible:ring-offset-background motion-reduce:transition-none",
-      )}
-    >
+    <>
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
         <Icon className={cn("h-4 w-4", active ? TONE_TEXT[tone] : "text-muted-foreground")} aria-hidden="true" />
       </div>
@@ -72,7 +68,31 @@ export function AlarmTile({ kind, count, href }: { kind: AlarmKind; count: numbe
         </p>
         <p className="text-xs text-muted-foreground">{label}</p>
       </div>
+    </>
+  );
+}
+
+export function AlarmTile({ kind, count, href }: { kind: AlarmKind; count: number; href: string }) {
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        "focus-visible:ring-offset-background motion-reduce:transition-none",
+      )}
+    >
+      <AlarmTileBody kind={kind} count={count} />
     </Link>
+  );
+}
+
+/** The same count where the list it would open is already on the page, as on Warnings. */
+export function AlarmCount({ kind, count }: { kind: AlarmKind; count: number }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border bg-card p-3">
+      <AlarmTileBody kind={kind} count={count} />
+    </div>
   );
 }
 

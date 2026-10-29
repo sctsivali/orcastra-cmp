@@ -7,6 +7,7 @@ import { IntentLink } from "@/components/navigation/route-intent";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { AlarmCount } from "@/components/dashboard/alarm-tile";
 import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -425,48 +426,15 @@ function WarningsContent() {
       <UnreachableNodesBanner noun="warnings" nodes={reach.unreachable} reasons={reach.reasons} />
       <UnreachableNodesBanner noun="warnings" nodes={reach.partial} reasons={reach.reasons} partial />
 
-      {/* Summary Cards */}
+      {/* Summary counts: neutral, toned on the icon only while a count is above zero */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
-        <Card>
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium">Total Warnings</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold">
-              {allWarnings.length + certWarnings.length + nodeWarnings.length + kernelWarnings.length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-status-offline/50">
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Critical</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-status-offline">
-              {systemWarnings?.critical || 0}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-status-pending/50">
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-status-pending">Certificate Issues</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-status-pending">
-              {certWarnings.length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-status-offline/50">
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Offline Clusters</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-status-offline">
-              {nodeWarnings.length}
-            </div>
-          </CardContent>
-        </Card>
+        <AlarmCount
+          kind="total"
+          count={allWarnings.length + certWarnings.length + nodeWarnings.length + kernelWarnings.length}
+        />
+        <AlarmCount kind="critical" count={systemWarnings?.critical || 0} />
+        <AlarmCount kind="certificates" count={certWarnings.length} />
+        <AlarmCount kind="offlineClusters" count={nodeWarnings.length} />
       </div>
 
       {/* Tabbed Content */}
