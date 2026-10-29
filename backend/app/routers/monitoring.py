@@ -71,6 +71,15 @@ def _resource_generation(cache: Any, kind: str) -> Optional[str]:
     read = getattr(cache, "resource_list_generation", None)
     return read(kind) if callable(read) else None
 
+def _share(used: float, total: float) -> Optional[float]:
+    """`used` as a percentage of `total`, or None when nothing reported a total.
+
+    important: never 0 for 0/0. A gauge reading 0.0% over a total of zero tells an operator the
+    fleet is idle when no cluster reported its capacity at all.
+    """
+    return round(used / total * 100, 2) if total > 0 else None
+
+
 router = APIRouter(
     prefix="/monitoring",
     tags=["Monitoring"],
@@ -220,6 +229,9 @@ async def get_monitoring_dashboard(
         
         online_nodes = 0
         inactive_nodes = 0
+        # Clusters whose capacity went into the totals above. Not online_nodes: a connected
+        # cluster that sent no resources adds nothing, and the page has to say so.
+        reporting_nodes = 0
 
         # important: resources.py sets node_type only for a cluster that answered AND trusted us,
         # so on the one path that shows a trust hint it is always None, and get_cli_command_prefix
@@ -241,6 +253,7 @@ async def get_monitoring_dashboard(
                 online_nodes += 1
                 if node.resources:
                     resources = node.resources
+                    reporting_nodes += 1
                     total_cpu += resources.cpu_total
                     used_cpu += resources.cpu_used
                     total_memory += resources.memory_total
@@ -291,13 +304,11 @@ async def get_monitoring_dashboard(
                         cpu_overcommitted=resources.cpu_used > resources.cpu_total,
                         memory_total_bytes=resources.memory_total,
                         memory_used_bytes=resources.memory_used,
-                        memory_usage_percent=round(
-                            (resources.memory_used / resources.memory_total * 100) if resources.memory_total > 0 else 0, 2
-                        ),
+                        memory_usage_percent=_share(resources.memory_used, resources.memory_total),
                         storage_total_bytes=resources.storage_total,
                         storage_used_bytes=resources.storage_total - resources.storage_available,
-                        storage_usage_percent=round(
-                            ((resources.storage_total - resources.storage_available) / resources.storage_total * 100) if resources.storage_total > 0 else 0, 2
+                        storage_usage_percent=_share(
+                            resources.storage_total - resources.storage_available, resources.storage_total
                         ),
                         gpu_total=resources.gpu_total,
                         gpu_used=resources.gpu_used,
@@ -354,10 +365,10 @@ async def get_monitoring_dashboard(
                     cpu_usage_percent=0,
                     memory_total_bytes=0,
                     memory_used_bytes=0,
-                    memory_usage_percent=0,
+                    memory_usage_percent=None,
                     storage_total_bytes=0,
                     storage_used_bytes=0,
-                    storage_usage_percent=0,
+                    storage_usage_percent=None,
                     # important: an offline node contributes zero GPU, exactly as it
                     # contributes zero CPU and memory above. Do not "fix" this into a
                     # remembered number: the fleet total must only count hardware we can
@@ -375,8 +386,8 @@ async def get_monitoring_dashboard(
             storage_pools_list = []
 
         cpu_usage_percent = round((used_cpu / total_cpu * 100) if total_cpu > 0 else 0, 2)
-        memory_usage_percent = round((used_memory / total_memory * 100) if total_memory > 0 else 0, 2)
-        storage_usage_percent = round((used_storage / total_storage * 100) if total_storage > 0 else 0, 2)
+        memory_usage_percent = _share(used_memory, total_memory)
+        storage_usage_percent = _share(used_storage, total_storage)
         
         # Live usage for every running instance, from the state the fleet list already carried.
         running_vms = [vm for vm in all_vms if vm.status.value == "Running"]
@@ -410,7 +421,9 @@ async def get_monitoring_dashboard(
             total_nodes=len(node_statuses_list),
             online_nodes=online_nodes,
             inactive_nodes=inactive_nodes,
-            
+            clusters_reporting=reporting_nodes,
+            clusters_total=len(node_statuses_list),
+
             # Instance Overview
             total_instances=total_instances,
             running_instances=running_instances,
@@ -488,8 +501,11 @@ async def get_monitoring_dashboard(
                     nodes_metrics,
                     usages,
                     fleet_cpu_percent=fleet_cpu.busy_percent,
-                    memory_usage_percent=memory_usage_percent,
-                    storage_usage_percent=storage_usage_percent,
+                    # note: a history point keeps 0.0 for a missing total, as it always has. Its
+                    # Postgres column is NOT NULL and the chart reads a number; only the gauges
+                    # learned to say "Unavailable".
+                    memory_usage_percent=memory_usage_percent if memory_usage_percent is not None else 0.0,
+                    storage_usage_percent=storage_usage_percent if storage_usage_percent is not None else 0.0,
                     running_instances=running_instances,
                 )
                 history_written = await record_point(cache, history_key, new_point)
@@ -612,10 +628,10 @@ async def get_node_metrics(
                 cpu_usage_percent=0,
                 memory_total_bytes=0,
                 memory_used_bytes=0,
-                memory_usage_percent=0,
+                memory_usage_percent=None,
                 storage_total_bytes=0,
                 storage_used_bytes=0,
-                storage_usage_percent=0,
+                storage_usage_percent=None,
                 gpu_total=0,
                 gpu_used=0,
                 instance_count=0,
@@ -647,13 +663,11 @@ async def get_node_metrics(
             cpu_overcommitted=resources.cpu_used > resources.cpu_total,
             memory_total_bytes=resources.memory_total,
             memory_used_bytes=resources.memory_used,
-            memory_usage_percent=round(
-                (resources.memory_used / resources.memory_total * 100) if resources.memory_total > 0 else 0, 2
-            ),
+            memory_usage_percent=_share(resources.memory_used, resources.memory_total),
             storage_total_bytes=resources.storage_total,
             storage_used_bytes=resources.storage_total - resources.storage_available,
-            storage_usage_percent=round(
-                ((resources.storage_total - resources.storage_available) / resources.storage_total * 100) if resources.storage_total > 0 else 0, 2
+            storage_usage_percent=_share(
+                resources.storage_total - resources.storage_available, resources.storage_total
             ),
             gpu_total=resources.gpu_total,
             gpu_used=resources.gpu_used,

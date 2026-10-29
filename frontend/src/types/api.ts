@@ -1692,7 +1692,7 @@ export interface StoragePoolMetrics {
   name: string;
   /** The registered cluster this pool was read through, not the machine holding the disk. */
   node: string;
-  /** Cluster members this row covers. Empty on a standalone host. */
+  /** Cluster members this row covers. A standalone host lists itself as its one member. */
   members?: string[];
   /** 'shared': one backing store counted once. 'local': per-member pools summed. */
   scope?: "shared" | "local" | null;
@@ -1747,6 +1747,11 @@ export interface MonitoringDashboardResponse {
   total_nodes: number;
   online_nodes: number;
   inactive_nodes: number;
+  /** Clusters whose capacity went into the totals below. 0: no total is a reading. Absent or
+   *  null from an older backend. */
+  clusters_reporting?: number | null;
+  /** Clusters in the caller's scope, reporting or not. */
+  clusters_total?: number | null;
   
   // Instance Overview
   total_instances: number;
@@ -1773,6 +1778,7 @@ export interface MonitoringDashboardResponse {
   
   total_memory_bytes: number | null;
   used_memory_bytes: number | null;
+  /** null when no Cluster reported a memory total, never 0 for 0/0. */
   memory_usage_percent: number | null;
   
   // Real-time memory usage from running instances

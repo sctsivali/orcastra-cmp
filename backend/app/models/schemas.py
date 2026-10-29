@@ -1581,12 +1581,16 @@ class ClusterMonitoringMetrics(BaseModel):
     # Memory Metrics
     memory_total_bytes: Optional[int] = Field(0, description="Total memory in bytes")
     memory_used_bytes: Optional[int] = Field(0, description="Used memory in bytes")
-    memory_usage_percent: Optional[float] = Field(0.0, description="Memory usage percentage")
+    memory_usage_percent: Optional[float] = Field(
+        None, description="Memory usage percentage; None when the Cluster reported no memory total, as an offline one never does"
+    )
     
     # Storage Metrics
     storage_total_bytes: Optional[int] = Field(0, description="Total storage in bytes")
     storage_used_bytes: Optional[int] = Field(0, description="Used storage in bytes")
-    storage_usage_percent: Optional[float] = Field(0.0, description="Storage usage percentage")
+    storage_usage_percent: Optional[float] = Field(
+        None, description="Storage usage percentage; None when the Cluster reported no storage total"
+    )
     
     # GPU Metrics
     gpu_total: Optional[int] = Field(0, description="Compute GPUs on this Cluster")
@@ -1660,8 +1664,8 @@ class StoragePoolMetrics(BaseModel):
     # Every row used to carry the cluster name and nothing else, so three members each with a
     # pool called `local` were indistinguishable. `members` names where the bytes are and
     # `scope` says whether the row was counted once for the whole cluster or summed per member.
-    members: List[str] = Field(default_factory=list, description="Cluster members this pool was read from. Empty on a standalone host, where the node is the member")
-    scope: Optional[str] = Field(None, description="'shared' when one backing store serves every member and the row is counted once, 'local' when per-member pools were summed. None on a standalone host")
+    members: List[str] = Field(default_factory=list, description="Cluster members this pool was read from. A standalone host lists one entry, its own registered name")
+    scope: Optional[str] = Field(None, description="'shared' when one backing store serves every member and the row is counted once, 'local' when per-member pools were summed. A standalone host reports 'local' for a local driver, its one member being itself")
     driver: str = Field(..., description="Storage driver")
     total_bytes: int = Field(0, description="Total space in bytes")
     used_bytes: int = Field(0, description="Used space in bytes")
@@ -1716,6 +1720,16 @@ class MonitoringDashboardResponse(BaseModel):
     total_nodes: int = Field(0, description="Total registered Clusters")
     online_nodes: int = Field(0, description="Online Cluster count")
     inactive_nodes: int = Field(0, description="Inactive Cluster count")
+    clusters_reporting: Optional[int] = Field(
+        None,
+        description=(
+            "Clusters in the caller's scope whose capacity went into the resource totals. Zero "
+            "means no figure below is a reading. None on a body cached by an older release"
+        ),
+    )
+    clusters_total: Optional[int] = Field(
+        None, description="Clusters in the caller's scope, reporting or not. None on a body cached by an older release"
+    )
     
     # Instance Overview
     total_instances: int = Field(0, description="Total instances")
@@ -1752,7 +1766,9 @@ class MonitoringDashboardResponse(BaseModel):
     
     total_memory_bytes: Optional[int] = Field(0, description="Total memory across all Clusters")
     used_memory_bytes: Optional[int] = Field(0, description="Used memory bytes")
-    memory_usage_percent: Optional[float] = Field(0.0, description="Overall memory usage percentage")
+    memory_usage_percent: Optional[float] = Field(
+        None, description="Overall memory usage percentage; None when no Cluster reported a memory total"
+    )
     
     # Real-time memory usage (from instance metrics)
     realtime_memory_bytes: Optional[int] = Field(
@@ -1768,7 +1784,9 @@ class MonitoringDashboardResponse(BaseModel):
     
     total_storage_bytes: Optional[int] = Field(0, description="Total storage across all Clusters")
     used_storage_bytes: Optional[int] = Field(0, description="Used storage bytes")
-    storage_usage_percent: Optional[float] = Field(0.0, description="Overall storage usage percentage")
+    storage_usage_percent: Optional[float] = Field(
+        None, description="Overall storage usage percentage; None when no Cluster reported a storage total"
+    )
     
     total_gpu: Optional[int] = Field(0, description="Total compute GPUs across connected Clusters")
     total_gpu_cards: Optional[int] = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
