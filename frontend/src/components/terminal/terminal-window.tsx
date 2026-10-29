@@ -350,7 +350,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                     size="icon"
                     className={cn(
                       "h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-white hover:bg-white/10 touch-manipulation active:scale-95",
-                      terminal.sticky && "bg-blue-500/20 text-blue-400"
+                      terminal.sticky && "bg-terminal-border text-gray-100"
                     )}
                     onClick={handleToggleSticky}
                     onTouchEnd={(e) => { e.preventDefault(); handleToggleSticky(); }}
@@ -424,7 +424,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-yellow-400 hover:bg-yellow-400/10 touch-manipulation active:scale-95"
+                    className="h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-pending hover:bg-terminal-raised touch-manipulation active:scale-95"
                     onClick={handleMinimize}
                     onTouchEnd={(e) => { e.preventDefault(); handleMinimize(); }}
                   >
@@ -440,7 +440,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-green-400 hover:bg-green-400/10 touch-manipulation active:scale-95"
+                    className="h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-online hover:bg-terminal-raised touch-manipulation active:scale-95"
                     onClick={handleMaximize}
                     onTouchEnd={(e) => { e.preventDefault(); handleMaximize(); }}
                   >
@@ -460,7 +460,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-red-400 hover:bg-red-400/10 touch-manipulation active:scale-95"
+                    className="h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-offline hover:bg-terminal-raised touch-manipulation active:scale-95"
                     onClick={handleClose}
                     onTouchEnd={(e) => { e.preventDefault(); handleClose(); }}
                   >
@@ -532,8 +532,8 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
 
           {/* Drag overlay */}
           {isDragOver && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-blue-500/20 border-2 border-dashed border-blue-400 rounded pointer-events-none">
-              <div className="flex flex-col items-center gap-2 text-blue-300">
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-primary/20 border-2 border-dashed border-primary rounded pointer-events-none">
+              <div className="flex flex-col items-center gap-2 text-gray-100">
                 <Upload className="h-10 w-10" />
                 <span className="text-sm font-medium">Drop files to upload</span>
               </div>

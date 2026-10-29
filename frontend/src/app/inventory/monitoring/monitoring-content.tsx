@@ -82,42 +82,25 @@ interface MetricCardProps {
   title: string;
   value: string | number;
   subtitle?: string;
-  trend?: "up" | "down" | "neutral";
-  trendValue?: string;
   progress?: number;
   className?: string;
 }
 
+// note: no trend arrow. It rendered only with a trendValue no caller ever passed, and painted a
+// rise in critical warnings green.
 const MetricCard = memo(function MetricCard({ 
   title, 
   value, 
   subtitle, 
-  trend, 
-  trendValue, 
   progress,
   className 
 }: MetricCardProps) {
   return (
-    <Card className={cn("transition-all hover:shadow-md", className)}>
+    <Card className={className}>
       <CardContent className="p-6">
         <div className="space-y-2">
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          <div className="flex items-baseline gap-2">
-            <p className="text-2xl sm:text-3xl font-bold tracking-tight">{value}</p>
-            {trend && trendValue && (
-              <span className={cn(
-                "flex items-center text-xs font-medium",
-                trend === "up" && "text-green-500",
-                trend === "down" && "text-red-500",
-                trend === "neutral" && "text-muted-foreground"
-              )}>
-                {trend === "up" && <TrendingUp className="h-3 w-3 mr-0.5" />}
-                {trend === "down" && <TrendingDown className="h-3 w-3 mr-0.5" />}
-                {trend === "neutral" && <Minus className="h-3 w-3 mr-0.5" />}
-                {trendValue}
-              </span>
-            )}
-          </div>
+          <p className="text-2xl sm:text-3xl font-bold tracking-tight tabular-nums">{value}</p>
           {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
           {progress !== undefined && (
             <Progress value={progress} className="h-2 mt-2" />
@@ -141,17 +124,17 @@ const ChartStats = memo(function ChartStats({ min, max, avg, unit = "%", color }
   return (
     <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-6 mb-3 py-2 px-2 sm:px-4 bg-muted/50 rounded-lg">
       <div className="flex items-center gap-1 sm:gap-2">
-        <TrendingDown className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-blue-500 shrink-0" />
+        <TrendingDown className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
         <span className="text-[10px] sm:text-xs text-muted-foreground">Min:</span>
         <span className="text-xs sm:text-sm font-semibold" style={{ color }}>{min.toFixed(2)}{unit}</span>
       </div>
       <div className="flex items-center gap-1 sm:gap-2">
-        <Minus className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-gray-500 shrink-0" />
+        <Minus className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
         <span className="text-[10px] sm:text-xs text-muted-foreground">Avg:</span>
         <span className="text-xs sm:text-sm font-semibold" style={{ color }}>{avg.toFixed(2)}{unit}</span>
       </div>
       <div className="flex items-center gap-1 sm:gap-2">
-        <TrendingUp className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-red-500 shrink-0" />
+        <TrendingUp className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
         <span className="text-[10px] sm:text-xs text-muted-foreground">Max:</span>
         <span className="text-xs sm:text-sm font-semibold" style={{ color }}>{max.toFixed(2)}{unit}</span>
       </div>
@@ -1536,15 +1519,13 @@ export default function MonitoringContent() {
         <MetricCard
           title="Clusters Online"
           value={`${filteredStats.online_nodes} / ${filteredStats.total_nodes}`}
-          subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All clusters healthy"}
-          trend={filteredStats.inactive_nodes > 0 ? "down" : "neutral"}
+          subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} offline` : "All clusters healthy"}
         />
         {isPartner && (
           <MetricCard
             title="Warnings"
             value={filteredStats.warnings?.total || 0}
             subtitle={filteredStats.warnings?.critical ? `${filteredStats.warnings.critical} critical` : "No critical issues"}
-            trend={(filteredStats.warnings?.critical || 0) > 0 ? "up" : "neutral"}
           />
         )}
       </div>

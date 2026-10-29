@@ -421,8 +421,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
         {/* Snapshot block: LXD refuses to rebuild an instance with snapshots */}
         {phase === "form" && blocked && (
           <div className="space-y-3">
-            <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            <div className="flex gap-2 rounded-md border border-status-pending/40 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-status-pending" aria-hidden="true" />
               <div>
                 <p className="font-medium">Delete snapshots before rebuilding</p>
                 <p className="mt-1 text-muted-foreground">
@@ -538,7 +538,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
             {/* Reassurances: what survives the rebuild */}
             <div className="flex gap-2 rounded-md border bg-muted/30 p-3 text-sm">
-              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-status-online" aria-hidden="true" />
               <div className="space-y-1 text-muted-foreground">
                 <p>Kept: name, profiles/config, network config and the instance&apos;s IP.</p>
                 {volumes.length > 0 ? (
@@ -600,16 +600,16 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
         {(phase === "running" || phase === "done" || phase === "failed" || phase === "unknown") && (
           <div className="space-y-3">
             {phase === "done" ? (
-              <div className="flex items-center gap-2 text-sm font-medium text-emerald-600">
-                <CheckCircle2 className="h-5 w-5" /> Rebuild complete
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <CheckCircle2 className="h-5 w-5 text-status-online" aria-hidden="true" /> Rebuild complete
               </div>
             ) : phase === "failed" ? (
               <div className="flex items-center gap-2 text-sm font-medium text-destructive">
                 <XCircle className="h-5 w-5" /> Rebuild failed
               </div>
             ) : phase === "unknown" ? (
-              <div className="flex items-center gap-2 text-sm font-medium text-amber-600">
-                <AlertTriangle className="h-5 w-5" /> Rebuild status unknown
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <AlertTriangle className="h-5 w-5 text-status-pending" aria-hidden="true" /> Rebuild status unknown
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm">
@@ -621,7 +621,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
             {(phase === "failed" || phase === "unknown") && runError && (
               <div className={phase === "failed"
                 ? "rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive"
-                : "rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300"}
+                : "rounded-md border border-status-pending/40 p-3 text-xs"}
               >
                 {runError}
               </div>

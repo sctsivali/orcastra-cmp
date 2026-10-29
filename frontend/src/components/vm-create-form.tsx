@@ -246,10 +246,10 @@ export function VMCreateForm() {
                   id="name"
                   placeholder="my-instance"
                   {...register("name")}
-                  className={errors.name ? "border-red-500" : ""}
+                  className={errors.name ? "border-destructive" : ""}
                 />
                 {errors.name && (
-                  <p className="text-sm text-red-500">{errors.name.message}</p>
+                  <p className="text-sm text-destructive">{errors.name.message}</p>
                 )}
               </div>
 
@@ -300,7 +300,7 @@ export function VMCreateForm() {
                       setValue("host", value);
                       setValue("image", ""); // Reset image when host changes
                     }}
-                    className={errors.host ? "border-red-500" : ""}
+                    className={errors.host ? "border-destructive" : ""}
                     placeholder="Select a cluster"
                     searchPlaceholder="Search clusters..."
                     emptyText="No clusters available"
@@ -317,7 +317,7 @@ export function VMCreateForm() {
                   onRecheck={nodePicker.refreshNow}
                 />
                 {errors.host && (
-                  <p className="text-sm text-red-500">{errors.host.message}</p>
+                  <p className="text-sm text-destructive">{errors.host.message}</p>
                 )}
               </div>
 
@@ -330,7 +330,7 @@ export function VMCreateForm() {
                   onChange={(value) => setValue("image", value)}
                 />
                 {errors.image && (
-                  <p className="text-sm text-red-500">{errors.image.message}</p>
+                  <p className="text-sm text-destructive">{errors.image.message}</p>
                 )}
                 <p className="text-xs text-muted-foreground">
                   You can also enter an image alias like{" "}
@@ -354,7 +354,7 @@ export function VMCreateForm() {
                   <input
                     type="checkbox"
                     {...register("start_on_create")}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <div>
                     <div className="font-medium text-sm">

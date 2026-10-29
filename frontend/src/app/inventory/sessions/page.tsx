@@ -1056,20 +1056,21 @@ function ActiveRow({ session, onSelect, scope }: {
       </TableCell>
       <TableCell>
         <div className="flex flex-col text-xs font-mono">
-          <span className="text-green-600 dark:text-green-400">
-            <ArrowDownToLine className="h-3 w-3 inline mr-1" />
+          {/* Plain text: a direction, not a state. The arrow carries it. */}
+          <span>
+            <ArrowDownToLine className="h-3 w-3 inline mr-1 text-muted-foreground" aria-hidden="true" />
             {formatBytes(session.bandwidth.download_bytes)}
           </span>
-          <span className="text-blue-600 dark:text-blue-400">
-            <ArrowUpFromLine className="h-3 w-3 inline mr-1" />
+          <span>
+            <ArrowUpFromLine className="h-3 w-3 inline mr-1 text-muted-foreground" aria-hidden="true" />
             {formatBytes(session.bandwidth.upload_bytes)}
           </span>
         </div>
       </TableCell>
       <TableCell>
         <div className="flex flex-col text-xs font-mono">
-          <span className="text-green-600 dark:text-green-400">↓{formatNetworkRate(session.bandwidth.download_rate_bps, 1)}</span>
-          <span className="text-blue-600 dark:text-blue-400">↑{formatNetworkRate(session.bandwidth.upload_rate_bps, 1)}</span>
+          <span>↓{formatNetworkRate(session.bandwidth.download_rate_bps, 1)}</span>
+          <span>↑{formatNetworkRate(session.bandwidth.upload_rate_bps, 1)}</span>
         </div>
       </TableCell>
       <TableCell>

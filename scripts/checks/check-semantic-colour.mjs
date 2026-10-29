@@ -78,8 +78,8 @@ const DEAD = new Set(['components/tag-manager-legacy.tsx']);
 
 // The tint-plus-saturated-text pairing everywhere outside the cleared tree. This is what stops
 // the pattern spreading into the surfaces the Cluster submenu change deliberately left alone.
-// Ratchet: may fall, never rise.
-const TINT_PAIR_BASELINE = 2;
+// Ratchet: may fall, never rise. At zero since the 2026-10-29 sweep.
+const TINT_PAIR_BASELINE = 0;
 
 // A <Badge> naming its own foreground colour at the call site. Badge exists so a chip's colour
 // is one decision in one file, and a className override is how the same semantic ends up in
@@ -111,8 +111,9 @@ const SPLIT_KEY_BASELINE = 0;
 // whose prose inherits --foreground and whose icon alone is amber is the sanctioned shape, and
 // a proximity rule would fire on the reference implementation. This is the population a genuine
 // cross-line pair could hide inside.
-// Ratchet: may fall, never rise.
-const UNPAIRED_TINT_BASELINE = 11;
+// Ratchet: may fall, never rise. At zero since the 2026-10-29 sweep moved the last alert
+// containers onto a token border and a toned icon, and the chrome hovers onto bg-terminal-raised.
+const UNPAIRED_TINT_BASELINE = 0;
 
 // --- measured contrast failures ---------------------------------------------------------
 //

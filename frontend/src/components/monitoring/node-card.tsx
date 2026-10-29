@@ -152,7 +152,7 @@ export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardPr
   );
 
   return (
-    <Card className="transition-all hover:shadow-md">
+    <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -202,7 +202,7 @@ export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardPr
             <div className="flex items-center justify-between pt-2 border-t">
               <span className="text-sm text-muted-foreground">Running</span>
               <div className="flex items-center gap-1">
-                <Play className="h-3 w-3 text-green-500" />
+                <Play className="h-3 w-3 text-status-online" aria-hidden="true" />
                 <span className="text-sm font-medium">{node.running_instances} / {node.instance_count}</span>
               </div>
             </div>

@@ -278,10 +278,10 @@ export function NodeRegisterForm() {
 
       {/* Certificate Copy-Paste UI */}
       {registrationResult?.success && registrationResult.certificate && (
-        <Card className="mb-6 border-blue-500/50 bg-blue-500/5">
+        <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <CheckCircle className="h-5 w-5 text-blue-500" />
+              <CheckCircle className="h-5 w-5 text-status-online" aria-hidden="true" />
               Certificate Generated Successfully
             </CardTitle>
             <CardDescription>

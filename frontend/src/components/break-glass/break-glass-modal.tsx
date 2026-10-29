@@ -68,7 +68,7 @@ export function BreakGlassModal() {
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="h-5 w-5 text-amber-500" />
+            <ShieldAlert className="h-5 w-5 text-status-pending" aria-hidden="true" />
             Break-Glass Access Required
           </DialogTitle>
           <DialogDescription>
@@ -80,7 +80,7 @@ export function BreakGlassModal() {
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label htmlFor="bg-reason">Reason <span className="text-red-500">*</span></Label>
+            <Label htmlFor="bg-reason">Reason <span className="text-destructive">*</span></Label>
             <Textarea
               id="bg-reason"
               placeholder="e.g. investigating ticket INC-1234 on tenant request"

@@ -269,11 +269,19 @@ export function ConsoleResourceBar({
 
   // Connection status indicator
   const StatusIcon = isConnected ? Wifi : isConnecting ? Loader2 : WifiOff;
-  const statusColor = isConnected
-    ? "text-green-400"
-    : isConnecting
-    ? "text-yellow-400"
-    : "text-red-400";
+  // The session vocabulary's tones (components/terminal/session-status.tsx). `terminal-status`
+  // rebinds them to their dark values, which this fixed dark bar needs in either page theme.
+  // Disconnected is not an error.
+  const statusColor = cn(
+    "terminal-status",
+    isConnected
+      ? "text-status-online"
+      : isConnecting
+      ? "text-status-pending"
+      : connectionStatus === "error"
+      ? "text-status-offline"
+      : "text-status-unknown",
+  );
   const statusLabel = isConnected
     ? "Connected"
     : isConnecting
@@ -338,9 +346,10 @@ export function ConsoleResourceBar({
 
         {/* Network bandwidth */}
         <div className="flex items-center gap-2 text-xs text-gray-400">
-          <Network className="h-3 w-3 text-purple-400" />
-          <span className="text-green-400 font-mono">↓{formatNetworkRate(dlRate, 1)}</span>
-          <span className="text-blue-400 font-mono">↑{formatNetworkRate(ulRate, 1)}</span>
+          <Network className="h-3 w-3" aria-hidden="true" />
+          {/* A direction, not a state: the arrow carries it. */}
+          <span className="text-gray-300 font-mono">↓{formatNetworkRate(dlRate, 1)}</span>
+          <span className="text-gray-300 font-mono">↑{formatNetworkRate(ulRate, 1)}</span>
         </div>
 
         <div className="flex-1" />
@@ -372,12 +381,10 @@ export function ConsoleResourceBar({
                 <InfoRow
                   label="Download"
                   value={`${formatNetworkRate(dlRate, 1)} (${formatBytes(dlTotal, 1)} total)`}
-                  valueClass="text-green-400"
                 />
                 <InfoRow
                   label="Upload"
                   value={`${formatNetworkRate(ulRate, 1)} (${formatBytes(ulTotal, 1)} total)`}
-                  valueClass="text-blue-400"
                 />
               </div>
             </div>

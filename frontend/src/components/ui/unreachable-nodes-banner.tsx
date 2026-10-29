@@ -54,24 +54,22 @@ interface UnreachableNodesBannerProps {
 type DetailProps = Omit<UnreachableNodesBannerProps, "nodes"> & { nodes: string[] };
 
 /**
- * The amber shell, written once for both shapes.
+ * The caution shell, written once for both shapes.
  *
- * important: this is the only bg-amber-500/10 in the file and it has to stay that way.
- * scripts/checks/check-semantic-colour.mjs counts at-rest tints whose foreground could be on
- * another line and holds the tree at a baseline of 37, which is exactly where it sits. Writing
- * the container twice, once per role branch, makes it 38 and fails the gate for a duplicated
- * string rather than for a colour decision.
+ * note: a token border and a toned icon on the card, not a wash. It was a 10% amber tint under
+ * amber-600, the raw palette shape scripts/checks/check-semantic-colour.mjs ratchets; the prose
+ * already inherited --foreground, so only the icon and the border carry the caution.
  */
 function BannerShell({ className, children }: { className?: string; children: ReactNode }) {
   return (
     <div
       className={cn(
-        "flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm",
+        "flex items-start gap-2 rounded-lg border border-status-pending/40 bg-card p-3 text-sm",
         className,
       )}
       role="status"
     >
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-status-pending" aria-hidden="true" />
       <div className="space-y-1">{children}</div>
     </div>
   );

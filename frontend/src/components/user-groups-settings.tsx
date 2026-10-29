@@ -88,7 +88,7 @@ function roleBadge(role: string) {
       );
     case "partner":
       return (
-        <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-xs">
+        <Badge variant="outline" className="text-xs">
           Partner
         </Badge>
       );
@@ -321,8 +321,8 @@ function UserGroupsSettingsContent() {
             {syncStatus?.authentik_configured ? (
               syncStatus.authentik_reachable ? (
                 <>
-                  <Wifi className="h-4 w-4 text-green-500" />
-                  <span className="text-sm text-green-600 dark:text-green-400">
+                  <Wifi className="h-4 w-4 text-status-online" aria-hidden="true" />
+                  <span className="text-sm">
                     {syncStatus.groups_exist
                       ? "Connected. Role changes and groups sync automatically."
                       : "Connected. Role changes sync automatically."}
@@ -330,8 +330,8 @@ function UserGroupsSettingsContent() {
                 </>
               ) : (
                 <>
-                  <WifiOff className="h-4 w-4 text-yellow-500" />
-                  <span className="text-sm text-yellow-600 dark:text-yellow-400">
+                  <WifiOff className="h-4 w-4 text-status-pending" aria-hidden="true" />
+                  <span className="text-sm">
                     Configured but unreachable. Changes are saved locally only.
                   </span>
                 </>
@@ -580,7 +580,7 @@ function UserGroupsSettingsContent() {
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-7 text-xs gap-1.5 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-800 dark:hover:bg-blue-950"
+                              className="h-7 text-xs gap-1.5"
                               onClick={() => openAccessDialog(user)}
                             >
                               <ShieldCheck className="h-3.5 w-3.5" />

@@ -201,7 +201,7 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
       const vcpus = instance.cpu_vcpus;
       return (
         <>
-          <p className="text-sm font-bold text-blue-600 tabular-nums">
+          <p className="text-sm font-bold tabular-nums">
             {instance.cpu_usage !== null && instance.cpu_usage !== undefined
               ? `${instance.cpu_usage.toFixed(1)}%`
               : `${formatVcpuAmount(busy ?? 0)} vCPUs`}
@@ -219,7 +219,7 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
     case "memory":
       return (
         <>
-          <p className="text-sm font-bold text-green-600 tabular-nums">{formatMemory(instance.memory_usage_bytes)}</p>
+          <p className="text-sm font-bold tabular-nums">{formatMemory(instance.memory_usage_bytes)}</p>
           <p className="text-xs text-muted-foreground">
             {instance.memory_includes_cache === false ? "Memory in use" : "Memory, with page cache"}
           </p>
@@ -228,17 +228,17 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
     case "storage":
       return (
         <>
-          <p className="text-sm font-bold text-amber-600 tabular-nums">{formatBytes(instance.disk_usage_bytes)}</p>
+          <p className="text-sm font-bold tabular-nums">{formatBytes(instance.disk_usage_bytes)}</p>
           <p className="text-xs text-muted-foreground">Disk Usage</p>
         </>
       );
     case "network":
       return (
         <>
-          <p className="text-sm font-bold text-purple-600 tabular-nums">
+          <p className="text-sm font-bold tabular-nums">
             ↓{formatNetworkRate(instance.network_rx_bytes_per_sec ?? 0)}
           </p>
-          <p className="text-sm font-bold text-pink-600 tabular-nums">
+          <p className="text-sm font-bold tabular-nums">
             ↑{formatNetworkRate(instance.network_tx_bytes_per_sec ?? 0)}
           </p>
         </>

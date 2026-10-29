@@ -1191,7 +1191,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       <Dialog open={showUnsavedWarning} onOpenChange={setShowUnsavedWarning}>
         <DialogContent className="max-w-md">
           <DialogHeader className="pb-4">
-            <DialogTitle className="text-amber-600">
+            <DialogTitle>
               Unsaved Changes
             </DialogTitle>
             <DialogDescription>

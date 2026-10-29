@@ -691,7 +691,7 @@ function IntegrationsSettingsContent() {
                     {!apiKey.is_revoked && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <Button variant="outline" size="sm" className="text-yellow-600">
+                          <Button variant="outline" size="sm">
                             <Ban className="h-4 w-4 mr-1" />
                             Revoke
                           </Button>
@@ -710,7 +710,7 @@ function IntegrationsSettingsContent() {
                               <AlertDialogCancel>Cancel</AlertDialogCancel>
                               <AlertDialogAction
                                 onClick={() => revokeMutation.mutate(apiKey.id)}
-                                className="bg-yellow-600"
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                               >
                                 Revoke
                               </AlertDialogAction>
@@ -722,7 +722,7 @@ function IntegrationsSettingsContent() {
                     
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button variant="outline" size="sm" className="text-red-600">
+                        <Button variant="outline" size="sm" className="text-destructive hover:text-destructive">
                           Delete
                         </Button>
                       </AlertDialogTrigger>
@@ -740,7 +740,7 @@ function IntegrationsSettingsContent() {
                             <AlertDialogCancel>Cancel</AlertDialogCancel>
                             <AlertDialogAction
                               onClick={() => deleteMutation.mutate(apiKey.id)}
-                              className="bg-red-600"
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                             >
                               Delete
                             </AlertDialogAction>

@@ -821,8 +821,8 @@ export function PersonalizationSettings() {
                         </div>
                       </div>
                       {isSelected && (
-                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center">
-                          <Check className="h-3 w-3 text-white" />
+                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                          <Check className="h-3 w-3 text-primary-foreground" aria-hidden="true" />
                         </div>
                       )}
                       <p className="text-[10px] text-center mt-1 text-muted-foreground truncate">{preset.name}</p>

@@ -45,9 +45,9 @@ const ALARM_KINDS: Record<AlarmKind, { label: string; icon: LucideIcon; tone: Cl
  * Monitoring page's Alarm Statistics, which drew the same tiles in two sizes and two palettes.
  *
  * important: a neutral tile. The colour is on the icon alone and only while the count is above
- * zero. Each tile used to sit in its own tinted box (bg-red-500/5 under a red-600 number, and so
- * on through six hues), so a fleet with nothing wrong still painted a row of alarm colours, and
- * the one tile that mattered looked like the five that did not.
+ * zero. Each tile used to sit in its own tinted box, a low-opacity wash of a palette hue under a
+ * number in a darker step of the same hue, through six hues, so a fleet with nothing wrong still
+ * painted a row of alarm colours and the one tile that mattered looked like the five that did not.
  *
  * note: the number is the first <p> in the link. The browser harness reads it from there.
  */

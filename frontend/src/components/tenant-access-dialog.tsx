@@ -1048,7 +1048,7 @@ function AssignedPolicyCard({
         <span>Assigned by: {assignment.assigned_by}</span>
         <span>{new Date(assignment.assigned_at).toLocaleDateString()}</span>
         {assignment.expires_at && (
-          <span className="text-yellow-600">
+          <span className="text-status-pending">
             Expires: {new Date(assignment.expires_at).toLocaleDateString()}
           </span>
         )}

@@ -212,8 +212,8 @@ export function InstanceOperations({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-green-400 hover:bg-green-400/10 touch-manipulation active:scale-95",
-                  loading === 'start' && "text-green-400"
+                  "h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-online hover:bg-terminal-raised touch-manipulation active:scale-95",
+                  loading === 'start' && "text-status-online"
                 )}
                 onClick={() => requestOperation('start')}
                 onTouchEnd={(e) => { e.preventDefault(); requestOperation('start'); }}
@@ -238,8 +238,8 @@ export function InstanceOperations({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-blue-400 hover:bg-blue-400/10 touch-manipulation active:scale-95",
-                  loading === 'restart' && "text-blue-400"
+                  "h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-gray-100 hover:bg-terminal-raised touch-manipulation active:scale-95",
+                  loading === 'restart' && "text-gray-100"
                 )}
                 onClick={() => requestOperation('restart')}
                 onTouchEnd={(e) => { e.preventDefault(); requestOperation('restart'); }}
@@ -264,8 +264,8 @@ export function InstanceOperations({
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-red-400 hover:bg-red-400/10 touch-manipulation active:scale-95",
-                  loading === 'stop' && "text-red-400"
+                  "h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-offline hover:bg-terminal-raised touch-manipulation active:scale-95",
+                  loading === 'stop' && "text-status-offline"
                 )}
                 onClick={() => requestOperation('stop')}
                 onTouchEnd={(e) => { e.preventDefault(); requestOperation('stop'); }}
@@ -287,7 +287,7 @@ export function InstanceOperations({
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="h-8 w-8 min-h-[32px] min-w-[32px] flex items-center justify-center">
-                <Loader2 className="h-4 w-4 animate-spin text-yellow-400" />
+                <Loader2 className="terminal-status h-4 w-4 animate-spin text-status-pending" />
               </div>
             </TooltipTrigger>
             <TooltipContent>{instanceStatus}...</TooltipContent>
@@ -313,8 +313,7 @@ export function InstanceOperations({
             <AlertDialogAction
               onClick={handleConfirm}
               className={cn(
-                confirmDialog.operation === 'stop' && "bg-red-600 hover:bg-red-700",
-                confirmDialog.operation === 'restart' && "bg-blue-600 hover:bg-blue-700"
+                confirmDialog.operation === 'stop' && "bg-destructive text-destructive-foreground hover:bg-destructive/90"
               )}
             >
               {confirmDialog.operation === 'stop' ? 'Stop Instance' : 'Restart Instance'}

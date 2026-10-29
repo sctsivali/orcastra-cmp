@@ -79,7 +79,7 @@ function TrayItem({
         // Always add padding for buttons on mobile
         (showButtons || isMobile) && "pr-20",
         isDragging && "opacity-50 scale-95",
-        isDropTarget && "border-blue-500 bg-blue-500/10",
+        isDropTarget && "border-primary bg-primary/10",
         // Better touch target on mobile
         "min-h-[44px]"
       )}
@@ -117,7 +117,7 @@ function TrayItem({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-green-400 hover:bg-green-400/10 touch-manipulation"
+                  className="h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-online hover:bg-terminal-raised touch-manipulation"
                   aria-label={`Restore terminal ${terminal.instanceName} on ${terminal.host}`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -135,7 +135,7 @@ function TrayItem({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-red-400 hover:bg-red-400/10 touch-manipulation"
+                  className="h-8 w-8 min-h-[32px] min-w-[32px] terminal-status text-gray-400 hover:text-status-offline hover:bg-terminal-raised touch-manipulation"
                   aria-label={`Close terminal ${terminal.instanceName} on ${terminal.host}`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -238,7 +238,7 @@ export function TerminalTray() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-2 text-[10px] gap-1 bg-terminal border-terminal-border text-gray-300 hover:bg-green-500/20 hover:border-green-500/50 hover:text-green-400"
+                    className="h-7 px-2 text-[10px] gap-1 bg-terminal border-terminal-border text-gray-300 terminal-status hover:bg-terminal-raised hover:border-status-online/50 hover:text-status-online"
                     onClick={() => restoreAllTerminals()}
                   >
                     <Layers className="h-3 w-3" />
@@ -254,7 +254,7 @@ export function TerminalTray() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-2 text-[10px] gap-1 bg-terminal border-terminal-border text-gray-300 hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400"
+                    className="h-7 px-2 text-[10px] gap-1 bg-terminal border-terminal-border text-gray-300 terminal-status hover:bg-terminal-raised hover:border-status-offline/50 hover:text-status-offline"
                     onClick={() => closeAllTerminals()}
                   >
                     <XCircle className="h-3 w-3" />
@@ -293,7 +293,7 @@ export function TerminalTray() {
           <span className="text-sm">
             Terminals
             {minimizedTerminals.length > 0 && (
-              <span className="ml-1 text-yellow-400">({minimizedTerminals.length})</span>
+              <span className="ml-1 text-gray-400 tabular-nums">({minimizedTerminals.length})</span>
             )}
           </span>
           {trayExpanded ? (

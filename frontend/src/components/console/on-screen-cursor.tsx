@@ -702,18 +702,18 @@ export function OnScreenCursor({
           {/* Mode Label */}
           <div className={cn(
             "absolute -bottom-1 -right-1 w-5 h-5 rounded-full shadow flex items-center justify-center",
-            isHoldMode ? "bg-green-200 dark:bg-green-800" : "bg-white dark:bg-gray-200"
+            isHoldMode ? "bg-status-online" : "bg-white dark:bg-gray-200"
           )}>
             <span className={cn(
               "text-[10px] font-bold",
-              isHoldMode ? "text-green-700 dark:text-green-300" : "text-gray-800 dark:text-gray-900"
+              isHoldMode ? "text-status-online-foreground" : "text-gray-800 dark:text-gray-900"
             )}>
               {isHoldMode ? "H" : clickMode === "left" ? "L" : "R"}
             </span>
           </div>
 
           {/* Drag indicator */}
-          <div className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-white/90 dark:bg-gray-200/90 shadow flex items-center justify-center">
+          <div className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-white/90 shadow flex items-center justify-center">
             <Move className="h-2.5 w-2.5 text-gray-600 dark:text-gray-700" />
           </div>
         </div>
@@ -725,7 +725,7 @@ export function OnScreenCursor({
 
         {/* Hold mode pulsing ring */}
         {isHoldMode && (
-          <div className="absolute inset-0 rounded-full animate-pulse bg-green-400/30" />
+          <div className="absolute inset-0 rounded-full animate-pulse bg-status-online/30" />
         )}
       </div>
 
@@ -741,7 +741,7 @@ export function OnScreenCursor({
         <div className={cn(
           "w-3 h-3 rounded-full border-2",
           isHoldMode 
-            ? "border-green-400 bg-green-400/50" 
+            ? "border-status-online bg-status-online/50" 
             : clickMode === "left" 
               ? "border-blue-400" 
               : "border-orange-400",
@@ -753,7 +753,9 @@ export function OnScreenCursor({
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
         <div className={cn(
           "text-white/90 text-xs px-3 py-1.5 rounded-full",
-          isHoldMode ? "bg-green-600/80" : "bg-black/70"
+          // One pill for both modes: the words say which, and white on a bright green pill
+          // measured below AA.
+          "bg-black/70"
         )}>
           {isHoldMode 
             ? "Hold Mode ON • Drag to move window • Tap Hold to release"

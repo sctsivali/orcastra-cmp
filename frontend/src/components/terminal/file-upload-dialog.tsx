@@ -302,7 +302,7 @@ export function FileUploadDialog({
           className={cn(
             "border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer",
             isDragOver
-              ? "border-blue-400 bg-blue-500/10"
+              ? "border-primary bg-primary/10"
               : "border-terminal-border hover:border-gray-500",
             isUploading && "pointer-events-none opacity-50"
           )}
@@ -338,10 +338,10 @@ export function FileUploadDialog({
                   <Loader2 className="h-4 w-4 text-blue-400 animate-spin shrink-0" />
                 )}
                 {entry.status === "success" && (
-                  <CheckCircle2 className="h-4 w-4 text-green-400 shrink-0" />
+                  <CheckCircle2 className="terminal-status h-4 w-4 text-status-online shrink-0" />
                 )}
                 {entry.status === "error" && (
-                  <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
+                  <AlertCircle className="terminal-status h-4 w-4 text-status-offline shrink-0" />
                 )}
                 {entry.status === "idle" && (
                   <FileIcon className="h-4 w-4 text-gray-500 shrink-0" />
@@ -360,7 +360,7 @@ export function FileUploadDialog({
                     {formatBytes(entry.file.size)} → {entry.destPath}
                   </p>
                   {entry.error && (
-                    <p className="text-xs text-red-400 mt-0.5">{entry.error}</p>
+                    <p className="terminal-status text-xs text-status-offline mt-0.5">{entry.error}</p>
                   )}
                 </div>
 
@@ -369,7 +369,7 @@ export function FileUploadDialog({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6 text-gray-500 hover:text-red-400"
+                    className="terminal-status h-6 w-6 text-gray-500 hover:text-status-offline"
                     onClick={(e) => {
                       e.stopPropagation();
                       removeEntry(idx);

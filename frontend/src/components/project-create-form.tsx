@@ -290,10 +290,10 @@ export function ProjectCreateForm() {
                   id="name"
                   placeholder="production"
                   {...register("name")}
-                  className={errors.name ? "border-red-500" : ""}
+                  className={errors.name ? "border-destructive" : ""}
                 />
                 {errors.name && (
-                  <p className="text-sm text-red-500">{errors.name.message}</p>
+                  <p className="text-sm text-destructive">{errors.name.message}</p>
                 )}
                 <p className="text-xs text-muted-foreground">
                   A unique name for the project. Used to organize instances and resources.
@@ -307,7 +307,7 @@ export function ProjectCreateForm() {
                   value={selectedHost}
                   onValueChange={(value) => setValue("host", value)}
                   disabled={nodesLoading}
-                  className={errors.host ? "border-red-500" : ""}
+                  className={errors.host ? "border-destructive" : ""}
                   placeholder={nodesLoading ? "Loading clusters..." : "Select a cluster"}
                   searchPlaceholder="Search clusters..."
                   emptyText="No clusters available"
@@ -323,7 +323,7 @@ export function ProjectCreateForm() {
                   onRecheck={nodePicker.refreshNow}
                 />
                 {errors.host && (
-                  <p className="text-sm text-red-500">{errors.host.message}</p>
+                  <p className="text-sm text-destructive">{errors.host.message}</p>
                 )}
               </div>
 
@@ -377,10 +377,10 @@ export function ProjectCreateForm() {
                     placeholder="e.g., 2"
                     onKeyDown={blockNonNumeric}
                     {...register("maxCpu")}
-                    className={errors.maxCpu ? "border-red-500" : ""}
+                    className={errors.maxCpu ? "border-destructive" : ""}
                   />
                   {errors.maxCpu && (
-                    <p className="text-sm text-red-500">{errors.maxCpu.message}</p>
+                    <p className="text-sm text-destructive">{errors.maxCpu.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
                     Maximum vCPU allocation for this project
@@ -397,7 +397,7 @@ export function ProjectCreateForm() {
                       min="1"
                       max={maxRamInBytes ? Math.floor(maxRamInBytes / (watch("maxRamUnit") === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024)) : undefined}
                       placeholder="e.g., 1"
-                      className={errors.maxRamValue ? "flex-1 border-red-500" : "flex-1"}
+                      className={errors.maxRamValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
                       {...register("maxRamValue")}
                     />
@@ -415,7 +415,7 @@ export function ProjectCreateForm() {
                     </Select>
                   </div>
                   {errors.maxRamValue && (
-                    <p className="text-sm text-red-500">{errors.maxRamValue.message}</p>
+                    <p className="text-sm text-destructive">{errors.maxRamValue.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
                     Maximum memory for this project
@@ -432,7 +432,7 @@ export function ProjectCreateForm() {
                       min="1"
                       max={maxStorageInBytes ? Math.floor(maxStorageInBytes / (watch("maxStorageUnit") === "MB" ? 1_000_000 : 1_000_000_000)) : undefined}
                       placeholder="e.g., 10"
-                      className={errors.maxStorageValue ? "flex-1 border-red-500" : "flex-1"}
+                      className={errors.maxStorageValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
                       {...register("maxStorageValue")}
                     />
@@ -450,7 +450,7 @@ export function ProjectCreateForm() {
                     </Select>
                   </div>
                   {errors.maxStorageValue && (
-                    <p className="text-sm text-red-500">{errors.maxStorageValue.message}</p>
+                    <p className="text-sm text-destructive">{errors.maxStorageValue.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
                     Maximum storage for this project
@@ -474,7 +474,7 @@ export function ProjectCreateForm() {
                   <input
                     type="checkbox"
                     {...register("enableImages")}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <div>
                     <div className="font-medium text-sm">Images</div>
@@ -488,7 +488,7 @@ export function ProjectCreateForm() {
                   <input
                     type="checkbox"
                     {...register("enableProfiles")}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <div>
                     <div className="font-medium text-sm">Profiles</div>
@@ -502,7 +502,7 @@ export function ProjectCreateForm() {
                   <input
                     type="checkbox"
                     {...register("enableStorageVolumes")}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <div>
                     <div className="font-medium text-sm">Storage Volumes</div>
@@ -516,7 +516,7 @@ export function ProjectCreateForm() {
                   <input
                     type="checkbox"
                     {...register("enableNetworks")}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <div>
                     <div className="font-medium text-sm">Networks</div>

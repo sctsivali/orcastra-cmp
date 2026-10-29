@@ -1486,8 +1486,8 @@ function ConsoleContent() {
                       variant="ghost"
                       size="icon"
                       className={cn(
-                        "h-8 w-8 text-gray-400 hover:text-green-400 hover:bg-green-400/10",
-                        operationLoading === "start" && "text-green-400"
+                        "h-8 w-8 terminal-status text-gray-400 hover:text-status-online hover:bg-terminal-raised",
+                        operationLoading === "start" && "text-status-online"
                       )}
                       onClick={() => requestOperation("start")}
                       disabled={isOperationDisabled}
@@ -1511,8 +1511,8 @@ function ConsoleContent() {
                         variant="ghost"
                         size="icon"
                         className={cn(
-                          "h-8 w-8 text-gray-400 hover:text-blue-400 hover:bg-blue-400/10",
-                          operationLoading === "restart" && "text-blue-400"
+                          "h-8 w-8 text-gray-400 hover:text-gray-100 hover:bg-terminal-raised",
+                          operationLoading === "restart" && "text-gray-100"
                         )}
                         onClick={() => requestOperation("restart")}
                         disabled={isOperationDisabled}
@@ -1533,8 +1533,8 @@ function ConsoleContent() {
                         variant="ghost"
                         size="icon"
                         className={cn(
-                          "h-8 w-8 text-gray-400 hover:text-red-400 hover:bg-red-400/10",
-                          operationLoading === "stop" && "text-red-400"
+                          "h-8 w-8 terminal-status text-gray-400 hover:text-status-offline hover:bg-terminal-raised",
+                          operationLoading === "stop" && "text-status-offline"
                         )}
                         onClick={() => requestOperation("stop")}
                         disabled={isOperationDisabled}
@@ -1804,8 +1804,7 @@ function ConsoleContent() {
             <AlertDialogAction
               onClick={handleConfirm}
               className={cn(
-                confirmDialog.operation === "stop" && "bg-red-600 hover:bg-red-700",
-                confirmDialog.operation === "restart" && "bg-blue-600 hover:bg-blue-700"
+                confirmDialog.operation === "stop" && "bg-destructive text-destructive-foreground hover:bg-destructive/90"
               )}
             >
               {confirmDialog.force ? "Force " : ""}
@@ -1819,7 +1818,7 @@ function ConsoleContent() {
       <AlertDialog open={sessionConflict.show}>
         <AlertDialogContent className="bg-terminal border-terminal-border max-w-lg">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-yellow-400">
+            <AlertDialogTitle className="text-gray-100">
               Active Console Session Detected
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-300">
@@ -1839,7 +1838,7 @@ function ConsoleContent() {
             {sessionConflict.sessions.map((session) => (
               <div
                 key={session.operation_id}
-                className="flex items-center justify-between p-2 bg-gray-800/50 rounded text-sm"
+                className="flex items-center justify-between p-2 bg-terminal-raised rounded text-sm"
               >
                 <div className="flex-1 min-w-0">
                   <div className="break-all text-gray-200">{session.operation_id}</div>
@@ -1875,7 +1874,7 @@ function ConsoleContent() {
             </Button>
             <Button
               variant="outline"
-              className="border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"
+              className="terminal-status border-status-pending/50 text-status-pending hover:bg-terminal-raised"
               onClick={() => setSessionConflict({ show: false, sessions: [] })}
             >
               Continue Anyway
