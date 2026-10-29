@@ -6,7 +6,7 @@ import { Server } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { SearchableSelectOption } from "@/components/ui/searchable-select";
 import { usePermissions } from "@/hooks/use-permissions";
-import { clusterStatusMeta } from "@/lib/cluster-status";
+import { clusterStatusMeta, clusterSublabel } from "@/lib/cluster-status";
 import { ClusterStatus, type ClusterMonitoringMetrics } from "@/types/api";
 
 export const ALL_NODES = "all";
@@ -15,6 +15,8 @@ interface NodeFilterSelectProps {
   nodes: ClusterMonitoringMetrics[];
   value: string;
   onValueChange: (value: string) => void;
+  /** The cluster's display name, from useClusterLabel. Defaults to the id. */
+  labelOf?: (nodeName: string) => string;
 }
 
 /**
@@ -32,6 +34,7 @@ export function NodeFilterSelect({
   nodes,
   value,
   onValueChange,
+  labelOf = (nodeName) => nodeName,
 }: NodeFilterSelectProps) {
   const { isPartner } = usePermissions();
   const options = useMemo<SearchableSelectOption[]>(() => {
@@ -45,9 +48,13 @@ export function NodeFilterSelect({
         isPartner || raw.reachable
           ? raw
           : { ...clusterStatusMeta(ClusterStatus.OFFLINE), label: "Unavailable" };
+      // The display name leads and the id sits under it, as on the Clusters page: the id is what
+      // the URL and every table carry, so it has to stay findable.
+      const label = labelOf(node.node_name);
       return {
         value: node.node_name,
-        label: node.node_name,
+        label,
+        sublabel: clusterSublabel(node.node_name, label, undefined),
         status: {
           label: meta.label,
           tone: meta.tone,
@@ -63,7 +70,7 @@ export function NodeFilterSelect({
       { value: ALL_NODES, label: "All Clusters" },
       ...rows.map(({ _rank, ...opt }) => opt),
     ];
-  }, [nodes, isPartner]);
+  }, [nodes, isPartner, labelOf]);
 
   return (
     <SearchableSelect

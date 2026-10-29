@@ -29,6 +29,8 @@ import type { ClusterMonitoringMetrics } from "@/types/api";
 // Node Card Component
 interface NodeCardProps {
   node: ClusterMonitoringMetrics;
+  /** What the Clusters page calls this cluster. Defaults to its id. */
+  displayName?: string;
 }
 
 // A Tenant is sent a cluster's status and its own instance counts only (owner decision
@@ -126,8 +128,9 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
   );
 }
 
-export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
+export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardProps) {
   const { isPartner } = usePermissions();
+  const label = displayName || node.node_name;
   const host = hostFigures(node);
   const rawStatus = clusterStatusMeta(node);
   // important: "Pending Trust" and "Error" are certificate-handshake and platform vocabulary a
@@ -154,7 +157,13 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <Server className="h-5 w-5 shrink-0 text-muted-foreground" />
-            <CardTitle className="text-base">{node.node_name}</CardTitle>
+            {/* The display name leads and the id sits under it, as on the Clusters page. */}
+            <div className="min-w-0">
+              <CardTitle className="text-base break-words">{label}</CardTitle>
+              {label !== node.node_name ? (
+                <p className="text-xs text-muted-foreground break-all">{node.node_name}</p>
+              ) : null}
+            </div>
           </div>
           {/* status_message is the backend exception reflected back (monitoring.py builds it
               from node.error, which is str(e)), so it carries the endpoint, port and TLS

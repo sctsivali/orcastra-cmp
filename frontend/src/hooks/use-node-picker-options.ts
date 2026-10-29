@@ -62,6 +62,38 @@ export interface UseNodePickerOptionsResult {
   retryNames: () => Promise<unknown>;
 }
 
+/** Availability rows keyed by cluster id. */
+function useAvailabilityByName() {
+  const availability = useNodeAvailability();
+  const byName = useMemo(() => {
+    const map = new Map<string, ClusterAvailability>();
+    for (const row of availability.data?.clusters ?? []) map.set(row.name, row);
+    return map;
+  }, [availability.data]);
+  return { availability, byName };
+}
+
+// note: the trigger shows the display name, so a warning that names the cluster id instead
+// reads as being about a different cluster. blitzkrieg renders as "Hetzner".
+function useLabelOf(byName: Map<string, ClusterAvailability>) {
+  return useCallback(
+    (nodeName: string) => byName.get(nodeName)?.display_name || nodeName,
+    [byName],
+  );
+}
+
+/**
+ * What the console calls a cluster, its display name or else its id, for a surface that names
+ * clusters without offering a choice between them (the Monitoring cards and pools).
+ *
+ * note: availability only. The names list behind useNodePickerOptions is Partner-only, and
+ * Monitoring is a Tenant page too; availability is Tenant-readable and keeps display_name.
+ */
+export function useClusterLabel(): (nodeName: string) => string {
+  const { byName } = useAvailabilityByName();
+  return useLabelOf(byName);
+}
+
 export function useNodePickerOptions(
   params: UseNodePickerOptionsParams = {},
 ): UseNodePickerOptionsResult {
@@ -74,13 +106,7 @@ export function useNodePickerOptions(
   } = params;
 
   const names = useNodeNames();
-  const availability = useNodeAvailability();
-
-  const byName = useMemo(() => {
-    const map = new Map<string, ClusterAvailability>();
-    for (const row of availability.data?.clusters ?? []) map.set(row.name, row);
-    return map;
-  }, [availability.data]);
+  const { availability, byName } = useAvailabilityByName();
 
   // Reachability failing must not look like the fleet failing. With no status we render the
   // names plainly rather than painting every cluster Offline, which would turn a monitoring
@@ -166,12 +192,7 @@ export function useNodePickerOptions(
     [byName],
   );
 
-  // note: the trigger shows the display name, so a warning that names the cluster id instead
-  // reads as being about a different cluster. blitzkrieg renders as "Hetzner".
-  const labelOf = useCallback(
-    (nodeName: string) => byName.get(nodeName)?.display_name || nodeName,
-    [byName],
-  );
+  const labelOf = useLabelOf(byName);
 
   const refreshNow = useCallback(async () => {
     // Only an explicit recheck forces. The forced-read budget is 12 per minute per user, and

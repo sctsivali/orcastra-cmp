@@ -27,6 +27,7 @@ import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWar
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { useClusterLabel } from "@/hooks/use-node-picker-options";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { cn, formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
 import { instanceStatusDisplay } from "@/lib/instance-status";
@@ -287,6 +288,8 @@ interface ResourceMetricsTooltipProps {
   nodeStatusMap?: Record<string, { status: string; statusMessage?: string; isOnline: boolean }>;
   nodeNames?: string[];
   selectedNode?: string;
+  /** The cluster's display name, from useClusterLabel. */
+  labelOf?: (nodeName: string) => string;
 }
 
 const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({ 
@@ -296,7 +299,8 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
   metricType, 
   nodeStatusMap = {},
   nodeNames = [],
-  selectedNode = "all"
+  selectedNode = "all",
+  labelOf = (nodeName) => nodeName,
 }: ResourceMetricsTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
   
@@ -355,7 +359,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
                     className="inline-block w-2.5 h-2.5 rounded-[2px] shrink-0"
                     style={{ backgroundColor: entry.color }}
                   />
-                  <span className="text-sm truncate">{nodeName}</span>
+                  <span className="text-sm truncate">{labelOf(nodeName)}</span>
                 </div>
                 {offline ? (
                   <span className="text-xs text-muted-foreground italic shrink-0">Offline</span>
@@ -612,6 +616,8 @@ export default function MonitoringContent() {
   // along with status_message (the backend exception verbatim, see monitoring.py).
   const { isPartner } = usePermissions();
   const { scopeKey: actorScope } = useActorQueryScope();
+  // Display names, as the Clusters page shows them; the id stays the value every filter uses.
+  const labelOf = useClusterLabel();
   const queryClient = useQueryClient();
   const [isPaused, setIsPaused] = useState(false);
   const [pausedSnapshot, setPausedSnapshot] = useState<MonitoringDisplaySnapshot | null>(null);
@@ -1564,6 +1570,7 @@ export default function MonitoringContent() {
             nodes={dashboardData?.nodes ?? []}
             value={selectedNode}
             onValueChange={setSelectedNode}
+            labelOf={labelOf}
           />
         </div>
       </div>
@@ -1574,7 +1581,7 @@ export default function MonitoringContent() {
         <MetricCard
           title="Total Instances"
           value={filteredStats.total_instances}
-          subtitle={selectedNode === "all" ? `${filteredStats.container_count} containers • ${filteredStats.vm_count} VMs` : `on ${selectedNode}`}
+          subtitle={selectedNode === "all" ? `${filteredStats.container_count} containers • ${filteredStats.vm_count} VMs` : `on ${labelOf(selectedNode)}`}
         />
         <MetricCard
           title="Running"
@@ -1604,7 +1611,7 @@ export default function MonitoringContent() {
         <ResourceUtilizationCard
           stats={filteredStats}
           scope={capacityScope(data, selectedNode)}
-          scopeLabel={selectedNode}
+          scopeLabel={selectedNode === "all" ? "all" : labelOf(selectedNode)}
           isPartner={isPartner}
         />
       )}
@@ -1789,7 +1796,7 @@ export default function MonitoringContent() {
                       }}
                       onClick={() => toggleNodeVisibility(nodeName)}
                     >
-                      {nodeName}
+                      {labelOf(nodeName)}
                     </Button>
                   ))}
                 </div>
@@ -1835,6 +1842,7 @@ export default function MonitoringContent() {
                         nodeStatusMap={nodeStatusMap}
                         nodeNames={nodeNames}
                         selectedNode={selectedNode}
+                        labelOf={labelOf}
                       />
                     }
                   />
@@ -1916,7 +1924,7 @@ export default function MonitoringContent() {
                       }}
                       onClick={() => toggleNodeVisibility(nodeName)}
                     >
-                      {nodeName}
+                      {labelOf(nodeName)}
                     </Button>
                   ))}
                 </div>
@@ -1962,6 +1970,7 @@ export default function MonitoringContent() {
                         nodeStatusMap={nodeStatusMap}
                         nodeNames={nodeNames}
                         selectedNode={selectedNode}
+                        labelOf={labelOf}
                       />
                     }
                   />
@@ -2041,7 +2050,7 @@ export default function MonitoringContent() {
                       }}
                       onClick={() => toggleNodeVisibility(nodeName)}
                     >
-                      {nodeName}
+                      {labelOf(nodeName)}
                     </Button>
                   ))}
                 </div>
@@ -2087,6 +2096,7 @@ export default function MonitoringContent() {
                         nodeStatusMap={nodeStatusMap}
                         nodeNames={nodeNames}
                         selectedNode={selectedNode}
+                        labelOf={labelOf}
                       />
                     }
                   />
@@ -2366,7 +2376,7 @@ export default function MonitoringContent() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredNodes.map((node) => (
-              <NodeCard key={node.node_name} node={node} />
+              <NodeCard key={node.node_name} node={node} displayName={labelOf(node.node_name)} />
             ))}
             {filteredNodes.length === 0 && (
               <div className="col-span-full text-center py-8 text-muted-foreground">
@@ -2378,9 +2388,11 @@ export default function MonitoringContent() {
         </CardContent>
       </Card>
 
-      {/* Storage Pools */}
-      {data.storage_pools.length > 0 && (
-        <StoragePoolsCard pools={data.storage_pools} selectedNode={selectedNode} isPartner={isPartner} />
+      {/* Storage Pools: host detail, so absent for a Tenant like the gauges above. Shown with
+          an empty state rather than dropped when no pool is reported, so the page does not
+          change shape under an operator whose clusters went offline. */}
+      {filteredStats?.hostVisible && (
+        <StoragePoolsCard pools={data.storage_pools} selectedNode={selectedNode} labelOf={labelOf} />
       )}
 
       {/* Collection Time Footer */}
