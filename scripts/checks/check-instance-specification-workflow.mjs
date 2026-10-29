@@ -192,10 +192,12 @@ requireText(dialogPath, dialog, [
 
 const readOnlyPath = "frontend/src/hooks/use-read-only-mode.ts";
 const readOnly = read(readOnlyPath);
+// Fail-closed, but on the verdict rather than the fetch: a good verdict answers until it is five
+// minutes old, "checking" only before the first one, and "unavailable" once there is none.
 requireText(readOnlyPath, readOnly, [
-  'isFetching\n    ? "checking"',
-  'isError\n      ? "unavailable"',
-  'isReadOnly\n        ? "read_only"',
+  "data !== undefined && Date.now() - dataUpdatedAt < WRITE_VERDICT_MAX_AGE_MS",
+  'isReadOnly\n      ? "read_only"',
+  'isLoading || isFetching\n      ? "checking"\n      : "unavailable"',
   "writeAvailability",
 ]);
 
