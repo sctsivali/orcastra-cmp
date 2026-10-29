@@ -630,7 +630,8 @@ def _bound_unmeasured_footprints(
         pools = ", ".join(sorted({f"'{pool}'" for pool, _member in bounds}))
         result.warn(
             "source_footprint_bounded_by_pool",
-            f"{', '.join(bounded)} sit on a dir storage pool, which does not report how much each "
+            f"{', '.join(bounded)} {'sits' if len(bounded) == 1 else 'sit'} on a dir storage pool, "
+            "which does not report how much each "
             f"instance uses, so the transfer is sized by everything pool {pools} holds "
             f"({_gib(sum(bounds.values()))}).",
             "Nothing to do when the target has room for that. A pool that reports usage (zfs, "

@@ -144,7 +144,7 @@ def test_a_dir_instance_is_bounded_by_its_pool_and_can_move(monkeypatch: pytest.
     result = _capacity(monkeypatch, _dir_client(), source_used=5 * GiB, target_free=50 * GiB)
     assert result.blockers == []
     warning = next(w for w in result.warnings if w["code"] == "source_footprint_bounded_by_pool")
-    assert "workload" in warning["message"] and "dir" in warning["message"]
+    assert warning["message"].startswith("workload sits on a dir storage pool")
     assert "5.0 GiB" in warning["message"]
 
 
