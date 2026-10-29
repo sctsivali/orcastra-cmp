@@ -60,6 +60,9 @@ const requiredContracts = [
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatMemory(', "monitoring memory uses the memory formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatNetworkRate(', "monitoring rate uses the network formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", "CPU Usage", "utilization is CPU usage"],
+  // The utilization gauges moved out of monitoring-content.tsx; the contract moved with them.
+  ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'label="CPU Usage"', "the utilization gauge is CPU usage"],
+  ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'formatMemory(', "the memory gauge uses the memory formatter"],
   ["components/regions/regions-page.tsx", "Hardware Threads", "region capacity uses hardware threads"],
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Reporting Clusters"', "technology coverage uses clusters"],
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Memory per Cluster"', "technology averages use clusters"],

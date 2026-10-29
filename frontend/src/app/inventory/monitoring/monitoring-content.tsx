@@ -1,14 +1,10 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef } from "react";
-import { cpuAllocation } from "@/lib/cpu-allocation";
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-// note: the alarm cards point at /inventory/warnings with distinct query strings, which
-// are distinct router cache keys. They warm on intent rather than on sight.
-import { IntentLink as Link } from "@/components/navigation/route-intent";
 
-import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container, Monitor, RefreshCw, TrendingUp, TrendingDown, Minus, Box, Pause, Play, Clock, ArrowUp, ArrowDown, Info, ShieldAlert, Flame, Shield, WifiOff, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container, Monitor, RefreshCw, TrendingUp, TrendingDown, Minus, Box, Pause, Play, Clock, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 
 // Dynamically import Lottie to avoid SSR issues
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
@@ -181,8 +177,7 @@ function LoadingSkeleton() {
 }
 
 // Colors for charts
-import { GaugeChart } from "@/components/monitoring/gauge-chart";
-import { CpuUsageGauge, type CpuUsageReading } from "@/components/monitoring/cpu-usage-gauge";
+import type { CpuUsageReading } from "@/components/monitoring/cpu-usage-gauge";
 import { TopConsumersCard, consumerPool } from "@/components/monitoring/top-consumers-card";
 import { LiveTimestamp } from "@/components/ui/live-timestamp";
 import { STALE_AFTER_MS } from "@/lib/query-config";
@@ -192,10 +187,11 @@ import {
   collectedAtOf,
   toChartPoints,
 } from "@/lib/monitoring-history";
-import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
 import { NodeCard } from "@/components/monitoring/node-card";
-import { inventoryLinks } from "@/lib/inventory-links";
-import { severityBucket, warningClusterValue, warningNodeValue } from "@/lib/warning-facets";
+import { severityBucket, warningNodeValue } from "@/lib/warning-facets";
+import { AlarmStatisticsCard } from "./components/alarm-statistics-card";
+import { ResourceUtilizationCard } from "./components/resource-utilization-card";
+import { StoragePoolsCard } from "./components/storage-pools-card";
 
 const CHART_COLORS = {
   cpu: "#3b82f6",    // blue
@@ -652,9 +648,6 @@ export default function MonitoringContent() {
   const selectedNode = monitoringUiIsCurrent ? selectedNodeState : "all";
   
   // Top N consumers count
-  
-  // Storage pools sort order
-  const [storagePoolsSortDesc, setStoragePoolsSortDesc] = useState(true);
   
   // Visible nodes for multi-line graph (when "all" is selected)
   const [visibleNodesState, setVisibleNodes] = useState<Record<string, boolean>>({});
@@ -1608,63 +1601,12 @@ export default function MonitoringContent() {
 
       {/* Resource Utilization Gauges */}
       {filteredStats?.hostVisible && (
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>
-              Resource Utilization
-            </CardTitle>
-            <CardDescription>
-              {selectedNode === "all" ? "Usage and allocation across all clusters" : `Usage and allocation on ${selectedNode}`}
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <div className="text-center">
-              <CpuUsageGauge
-                reading={filteredStats.cpu_reading}
-                label="CPU Usage"
-                color={CHART_COLORS.cpu}
-                statusMessage={isPartner && filteredStats.cpu_reading.status !== "ready" && filteredStats.status_message ? filteredStats.status_message : undefined}
-              />
-              <p className="text-sm text-muted-foreground mt-2">
-                Allocated: {filteredStats.used_cpu} vCPU / {filteredStats.total_cpu} hardware threads (
-                {cpuAllocation({ cpu_total: filteredStats.total_cpu, cpu_used: filteredStats.used_cpu }).ratioLabel})
-              </p>
-            </div>
-            <div className="text-center">
-              <GaugeChart 
-                value={filteredStats.memory_usage_percent} 
-                label="Memory Usage" 
-                color={CHART_COLORS.memory}
-                statusMessage={isPartner && filteredStats.memory_usage_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
-              />
-              <p className="text-sm text-muted-foreground mt-2">
-                {formatMemory(filteredStats.used_memory_bytes)} / {formatMemory(filteredStats.total_memory_bytes)}
-              </p>
-            </div>
-            <div className="text-center">
-              <GaugeChart 
-                value={filteredStats.storage_usage_percent} 
-                label="Storage Usage" 
-                color={CHART_COLORS.storage}
-                statusMessage={isPartner && filteredStats.storage_usage_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
-              />
-              <p className="text-sm text-muted-foreground mt-2">
-                {formatBytes(filteredStats.used_storage_bytes)} / {formatBytes(filteredStats.total_storage_bytes)}
-              </p>
-            </div>
-            <div className="text-center">
-              <GpuAllocationGauge
-                stats={filteredStats}
-                scope={selectedNode}
-                color={CHART_COLORS.gpu}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        <ResourceUtilizationCard
+          stats={filteredStats}
+          selectedNode={selectedNode}
+          isPartner={isPartner}
+          colors={CHART_COLORS}
+        />
       )}
 
       {/* Live Charts: the hosts' load over time, operator content (see the note above). */}
@@ -2402,122 +2344,11 @@ export default function MonitoringContent() {
           /inventory/clusters/certificates, both of which useRequireRole(Role.PARTNER) bounces a
           tenant away from, so for a tenant this card is a wall of dead ends. */}
       {isPartner && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>
-                Alarm Statistics
-              </CardTitle>
-              <CardDescription>System alerts and warnings overview</CardDescription>
-            </div>
-            {warningsCounts.total > 0 && (
-              <Link 
-                href={inventoryLinks.warnings({ node: selectedNode === "all" ? undefined : selectedNode })}
-                className="text-sm text-primary hover:underline flex items-center gap-1"
-              >
-                View All ({warningsCounts.total})
-                <ChevronRight className="h-4 w-4" />
-              </Link>
-            )}
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Link 
-                href={inventoryLinks.warnings({ severity: "critical", node: selectedNode === "all" ? undefined : selectedNode })}
-                className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
-                  <Flame className="h-5 w-5 text-red-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-red-600">{warningsCounts.critical}</p>
-                  <p className="text-xs text-muted-foreground">Critical</p>
-                </div>
-              </Link>
-              <Link 
-                href={inventoryLinks.warnings({ severity: "high", node: selectedNode === "all" ? undefined : selectedNode })}
-                className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
-                  <ShieldAlert className="h-5 w-5 text-orange-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-orange-600">{warningsCounts.high}</p>
-                  <p className="text-xs text-muted-foreground">Major</p>
-                </div>
-              </Link>
-              <Link 
-                href={inventoryLinks.warnings({ severity: "warning", node: selectedNode === "all" ? undefined : selectedNode })}
-                className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
-                  <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-yellow-600">{warningsCounts.warning}</p>
-                  <p className="text-xs text-muted-foreground">Warning</p>
-                </div>
-              </Link>
-              <Link 
-                href={inventoryLinks.warnings({ severity: "info", node: selectedNode === "all" ? undefined : selectedNode })}
-                className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
-                  <Info className="h-5 w-5 text-blue-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-blue-600">{warningsCounts.info}</p>
-                  <p className="text-xs text-muted-foreground">Info</p>
-                </div>
-              </Link>
-            </div>
-          
-            {/* Certificate Issues & Inactive Nodes */}
-            {(warningsCounts.certIssues > 0 || warningsCounts.inactiveNodes > 0) && (
-              <div className="grid grid-cols-2 gap-4 mt-4">
-                {warningsCounts.certIssues > 0 && (
-                  <Link 
-                    href="/inventory/clusters/certificates"
-                    className="flex items-center gap-3 p-4 rounded-lg border border-primary/20 bg-primary/5 transition-all hover:border-primary/40 hover:bg-primary/10 cursor-pointer group"
-                  >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 transition-colors group-hover:bg-primary/20">
-                      <Shield className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold text-foreground">{warningsCounts.certIssues}</p>
-                      <p className="text-xs text-muted-foreground">Cert Issues</p>
-                    </div>
-                  </Link>
-                )}
-                {warningsCounts.inactiveNodes > 0 && (
-                  <Link 
-                    href={inventoryLinks.warnings({ tab: "nodes", cluster: selectedNodeWarning ? warningClusterValue(selectedNodeWarning) : undefined })}
-                    className="flex items-center gap-3 p-4 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
-                  >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
-                      <WifiOff className="h-5 w-5 text-rose-500" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold text-rose-600">{warningsCounts.inactiveNodes}</p>
-                      <p className="text-xs text-muted-foreground">Inactive Clusters</p>
-                    </div>
-                  </Link>
-                )}
-              </div>
-            )}
-          
-            {warningsCounts.total === 0 && (
-              <div className="mt-4 text-center py-4 bg-green-500/5 rounded-lg border border-green-500/20">
-                <p className="text-green-600 font-medium">✓ All systems operational - No active alarms</p>
-              </div>
-            )}
-            {warningsCounts.total > 0 && (
-              <div className="mt-4 text-xs text-muted-foreground">
-                <span>Click any category to view details</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <AlarmStatisticsCard
+          counts={warningsCounts}
+          selectedNode={selectedNode}
+          selectedNodeWarning={selectedNodeWarning}
+        />
       )}
 
       {/* Cluster status cards */}
@@ -2549,80 +2380,7 @@ export default function MonitoringContent() {
 
       {/* Storage Pools */}
       {data.storage_pools.length > 0 && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>
-                  Storage Pools
-                </CardTitle>
-                <CardDescription>
-                  Storage pool utilization across all clusters
-                </CardDescription>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setStoragePoolsSortDesc(!storagePoolsSortDesc)}
-                className="flex items-center gap-1.5 h-8 px-2.5 sm:px-3 shrink-0"
-              >
-                {storagePoolsSortDesc ? (
-                  <>
-                    <ArrowDown className="h-4 w-4" />
-                    <span className="text-xs">Highest</span>
-                  </>
-                ) : (
-                  <>
-                    <ArrowUp className="h-4 w-4" />
-                    <span className="text-xs">Lowest</span>
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {[...data.storage_pools]
-                .filter(pool => selectedNode === "all" || pool.node === selectedNode)
-                .sort((a, b) => storagePoolsSortDesc 
-                  ? (b.usage_percent || 0) - (a.usage_percent || 0)
-                  : (a.usage_percent || 0) - (b.usage_percent || 0))
-                .map((pool) => (
-                <div
-                  key={`${pool.node}-${pool.name}-${pool.driver}`}
-                  className="space-y-1.5"
-                >
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{pool.name}</span>
-                      <Badge variant="outline" className="text-xs">{pool.driver}</Badge>
-                      {/* note: `node` is the registered cluster. On a MicroCloud the bytes live
-                          on the members, and a shared pool is one store all of them can see,
-                          so the row says which rather than implying the cluster owns a disk.
-                          Member hostnames are operator content, gated like status_message
-                          above: a tenant is told the shape, not the names. */}
-                      <span className="text-muted-foreground">
-                        ({pool.node}
-                        {pool.members && pool.members.length > 0
-                          ? isPartner
-                            ? `: ${pool.scope === "shared" ? "shared by " : ""}${pool.members.join(", ")}`
-                            : pool.scope === "shared"
-                              ? `, shared by ${pool.members.length} members`
-                              : `, ${pool.members.length} members`
-                          : ""}
-                        )
-                      </span>
-                    </div>
-                    <span className="font-medium">
-                      {formatBytes(pool.used_bytes)} / {formatBytes(pool.total_bytes)}
-                    </span>
-                  </div>
-                  <Progress value={pool.usage_percent} className="h-2" />
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <StoragePoolsCard pools={data.storage_pools} selectedNode={selectedNode} isPartner={isPartner} />
       )}
 
       {/* Collection Time Footer */}
