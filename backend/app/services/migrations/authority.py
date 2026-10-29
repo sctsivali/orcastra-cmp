@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -23,6 +24,8 @@ import httpx
 from app.core.auth import AuthenticatedUser
 from app.core.config import get_settings
 from app.core.rbac import AUTHENTIK_GROUP_MAP, Role, get_highest_role
+
+logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = httpx.Timeout(connect=1.5, read=2.5, write=2.0, pool=1.0)
 _TOTAL_TIMEOUT_SECONDS = 4.0
@@ -482,6 +485,21 @@ class AuthentikAuthorityVerifier:
         return _UserPage(results=results, count=reported_count)
 
     async def _query_users(self, params: dict[str, str | int]) -> _UserPage:
+        """One lookup, retried once when Authentik did not answer in time.
+
+        note: only a timeout is retried, never a refusal or a malformed answer, and only once, so
+        the worst case is two deadlines (8 s) and the result is still Authentik's own answer. The
+        dev identity provider answers in 0.4 to 2 s but spikes past the 4 s deadline under load.
+        """
+        try:
+            return await self._query_users_once(params)
+        except AuthorityUnavailableError as exc:
+            if exc.code != "authentik_lookup_timeout":
+                raise
+            logger.info("Authentik authority lookup timed out; retrying once")
+            return await self._query_users_once(params)
+
+    async def _query_users_once(self, params: dict[str, str | int]) -> _UserPage:
         if self._client is not None:
             return await self._request_with_client(self._client, params=params)
         limits = httpx.Limits(max_connections=2, max_keepalive_connections=0)

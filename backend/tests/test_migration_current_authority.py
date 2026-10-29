@@ -418,6 +418,50 @@ async def test_timeout_is_retryable_and_transport_text_is_sanitized() -> None:
     assert error.__cause__ is None
 
 
+async def test_one_timed_out_lookup_is_retried_once() -> None:
+    """The dev identity provider answers in 0.4 to 2 s and spikes past 4 s under load; one retry
+    turned one plan in six from a 503 into a pass (2026-10-29), and the answer is still Authentik's."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json=_page(_record()))
+
+    current = await _verifier(handler).pin_user(_user())
+
+    assert current.role is Role.PARTNER
+    assert len(calls) == 2
+
+
+async def test_a_second_timeout_still_fails_closed() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        raise httpx.ConnectTimeout("slow", request=request)
+
+    with pytest.raises(AuthorityUnavailableError) as raised:
+        await _verifier(handler).pin_user(_user())
+
+    assert raised.value.code == "authentik_lookup_timeout"
+    assert len(calls) == 2, "exactly one retry, never a loop"
+
+
+async def test_a_refusal_is_not_retried() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(403)
+
+    with pytest.raises(AuthorityConfigurationError):
+        await _verifier(handler).pin_user(_user())
+
+    assert len(calls) == 1
+
+
 def test_plain_http_admin_api_is_only_available_in_explicit_debug_mode() -> None:
     transport = httpx.MockTransport(lambda _request: httpx.Response(500))
 
