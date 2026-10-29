@@ -547,6 +547,16 @@ async def lifespan(app: FastAPI):
     except Exception as release_err:
         logger.error("Could not start the release check: %s", release_err, exc_info=True)
 
+    # Kernel CVE status: one worker (Redis lease) reads Ubuntu's record of each tracked kernel CVE
+    # every KERNEL_CVE_FEED_INTERVAL_HOURS, so the verdicts follow Ubuntu (services/kernel_cve_feed/).
+    try:
+        from app.services.kernel_cve_feed.service import start_kernel_cve_feed
+
+        start_kernel_cve_feed()
+        logger.info("Kernel CVE feed started (enabled=%s)", settings.kernel_cve_feed_enabled)
+    except Exception as cve_feed_err:
+        logger.error("Could not start the kernel CVE feed: %s", cve_feed_err, exc_info=True)
+
     # Host Health: one worker (Redis lease) re-checks Vault, logging, the IdP, Postgres, Redis and
     # disk every HOST_HEALTH_INTERVAL_SECONDS. Its own try, for the reason the block above gives.
     try:
@@ -749,6 +759,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.release_check.service import stop_release_check
         await stop_release_check()
+    except Exception:
+        pass
+    try:
+        from app.services.kernel_cve_feed.service import stop_kernel_cve_feed
+        await stop_kernel_cve_feed()
     except Exception:
         pass
     try:

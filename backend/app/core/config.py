@@ -713,6 +713,31 @@ class Settings(BaseSettings):
         description="Comma-separated private networks a RELEASE_FEED_URL mirror may sit on",
     )
 
+    # Kernel CVE status (services/kernel_cve_feed/): Ubuntu's public record of each tracked kernel
+    # CVE, read by one worker every few hours. Nothing identifying this deployment is sent.
+    kernel_cve_feed_enabled: bool = Field(
+        default=True,
+        alias="KERNEL_CVE_FEED_ENABLED",
+        description="Read Ubuntu's status of each tracked kernel CVE; false keeps the built-in data only",
+    )
+    kernel_cve_feed_url: str = Field(
+        default="",
+        alias="KERNEL_CVE_FEED_URL",
+        description="A mirror of Ubuntu's CVE records: an https URL with {id} where the CVE id goes; empty reads ubuntu.com",
+    )
+    kernel_cve_feed_interval_hours: int = Field(
+        default=6,
+        ge=1,
+        le=168,
+        alias="KERNEL_CVE_FEED_INTERVAL_HOURS",
+        description="How often Ubuntu's record of each tracked kernel CVE is read",
+    )
+    kernel_cve_feed_private_cidrs: str = Field(
+        default="",
+        alias="KERNEL_CVE_FEED_PRIVATE_CIDRS",
+        description="Comma-separated private networks a KERNEL_CVE_FEED_URL mirror may sit on",
+    )
+
     # OpenSearch Archive Configuration
     opensearch_archive_enabled: bool = Field(
         default=False,
@@ -837,13 +862,24 @@ def release_feed_exemptions() -> tuple:
     the deployment's environment, never from a request, which is why a mirror on a private network
     is allowed in production at all.
     """
+    settings = get_settings()
+    return _mirror_exemptions(settings.release_feed_url, settings.release_feed_private_cidrs)
+
+
+def kernel_cve_feed_exemptions() -> tuple:
+    """Private networks Ubuntu's CVE records may be read from: only for an operator's own mirror
+    (KERNEL_CVE_FEED_URL), for the reason release_feed_exemptions gives."""
+    settings = get_settings()
+    return _mirror_exemptions(settings.kernel_cve_feed_url, settings.kernel_cve_feed_private_cidrs)
+
+
+def _mirror_exemptions(url: str, cidrs: str) -> tuple:
     import ipaddress
 
-    settings = get_settings()
-    if not settings.release_feed_url.strip():
+    if not (url or "").strip():
         return ()
     networks = []
-    for raw in (settings.release_feed_private_cidrs or "").split(","):
+    for raw in (cidrs or "").split(","):
         try:
             networks.append(ipaddress.ip_network(raw.strip(), strict=False))
         except ValueError:
