@@ -81,7 +81,10 @@ def _timestamp(value: Any) -> Optional[str]:
 def _score(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float, ex; 1 followed by 400 zeros
+        return None
     return number if math.isfinite(number) and 0 <= number <= 10 else None
 
 
@@ -184,5 +187,5 @@ def from_dict(data: Any, expected_id: str) -> Optional[UbuntuCve]:
         return None
     try:
         return _record(data, expected_id)
-    except RecordInvalid:
+    except (RecordInvalid, ValueError, TypeError, OverflowError, RecursionError):
         return None

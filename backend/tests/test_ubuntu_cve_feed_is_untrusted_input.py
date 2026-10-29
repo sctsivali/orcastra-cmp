@@ -24,7 +24,8 @@ from app.services.kernel_cve_feed.record import MAX_BYTES, RecordInvalid, from_d
 from app.services.kernel_cve_feed.store import KernelCveFeedStore
 from tests._ubuntu_cve_record import CVE, body, published, record
 
-NOW = 1_800_000_000.0
+# In the past: a read stamped ahead of the clock is not believed (service.CLOCK_SKEW).
+NOW = 1_790_000_000.0
 
 
 def _with(change):
@@ -359,3 +360,43 @@ def test_an_oversized_record_is_abandoned_while_streaming(public_dns) -> None:
             UBUNTU, max_bytes=MAX_BYTES, transport=httpx.MockTransport(handler),
             allowed_hosts=service.PUBLIC_HOSTS, require_https=True,
         ))
+
+
+# --- security review 2026-10-29 ------------------------------------------------------------------
+
+
+def test_an_integer_too_large_for_a_float_reads_as_no_score() -> None:
+    """A score of 1e400 written as an integer raised OverflowError past RecordInvalid, which threw
+    the whole record away upstream and failed POST .../check when read back from Redis."""
+    data = published()
+    data["cvss3"] = 10**400
+    data["impact"]["baseMetricV3"]["cvssV3"]["baseScore"] = 10**400
+    parsed = parse(body(data), CVE)
+    assert parsed.cvss_score is None and parsed.status("linux", "jammy") == ("pending", "5.15.0-203.213")
+    stored = to_dict(record())
+    stored["cvss3"] = 10**400
+    stored["impact"]["baseMetricV3"]["cvssV3"]["baseScore"] = 10**400
+    assert from_dict(stored, CVE).cvss_score is None
+
+
+def test_a_stored_state_with_forged_numbers_neither_raises_nor_is_believed(store, settings, feed) -> None:
+    settings(kernel_cve_feed_enabled=True, kernel_cve_feed_url="", kernel_cve_feed_interval_hours=6)
+    _calls, answers = feed
+    answers[UBUNTU] = body()
+    from datetime import datetime, timezone
+
+    now = datetime.fromtimestamp(NOW, tz=timezone.utc)
+    future = {"last_attempt_at": NOW + 86400, "last_success_at": NOW + 86400, "error": None,
+              "failures": 0, "record": to_dict(record())}
+    # a read stamped in the future would stay fresh forever, so it is not used at all
+    assert service.view(CVE, future, True, now=now).snapshot is None
+    assert service.view(CVE, {**future, "last_success_at": NOW + 60}, True, now=now).snapshot is not None
+
+    junk = {"last_attempt_at": "soon", "last_success_at": [1], "error": "x", "failures": "many"}
+    assert service.due(junk, NOW) is True
+    store.write(CVE, junk)
+    state = asyncio.run(service.check(now=NOW))[CVE]
+    assert state["error"] is None and state["failures"] == 0
+    store.write(CVE, {**junk, "error": "upstream returned 503", "failures": float("nan")})
+    answers[UBUNTU] = SafeHTTPError("upstream returned 503")
+    assert asyncio.run(service.check(now=NOW))[CVE]["failures"] == 1

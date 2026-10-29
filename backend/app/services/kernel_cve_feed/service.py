@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -36,6 +37,8 @@ USER_AGENT = "Orcastra-CMP-kernel-cve-check/1"
 TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
 
 TICK_SECONDS = 600
+# A read stamped further ahead than this is not believed: it would never go stale.
+CLOCK_SKEW = timedelta(hours=1)
 BACKOFF_SECONDS = (3600, 2 * 3600, 4 * 3600, 12 * 3600)
 CHECK_NOW_COOLDOWN_SECONDS = 60
 LEASE_KEY = "orcastra:kernel_cve_feed:lease"
@@ -54,6 +57,17 @@ class CveCheck:
     snapshot: Optional[UbuntuSnapshot]
     last_attempt_at: Optional[datetime]
     error: Optional[str]
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    """A stored epoch or count, or `default`: Redis is shared, so a value there may not be a number."""
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return number if math.isfinite(number) else default
 
 
 def tracked_ids() -> Tuple[str, ...]:
@@ -117,7 +131,7 @@ async def _check_one(cve_id: str, state: Dict[str, Any], now: float) -> Dict[str
         **state,
         "last_attempt_at": now,
         "error": error,
-        "failures": int(state.get("failures") or 0) + 1,
+        "failures": int(max(0.0, _number(state.get("failures")))) + 1,
     }
 
 
@@ -135,14 +149,14 @@ async def check(cve_ids: Optional[Iterable[str]] = None, now: Optional[float] = 
 
 
 def due(state: Dict[str, Any], now: float, every_seconds: Optional[int] = None) -> bool:
-    attempted = state.get("last_attempt_at")
+    attempted = _number(state.get("last_attempt_at"))
     if not attempted:
         return True
     if not state.get("error"):
         every = every_seconds if every_seconds is not None else get_settings().kernel_cve_feed_interval_hours * 3600
-        return now - float(state.get("last_success_at") or 0) >= every
-    failures = max(1, int(state.get("failures") or 1))
-    return now - float(attempted) >= BACKOFF_SECONDS[min(failures, len(BACKOFF_SECONDS)) - 1]
+        return now - _number(state.get("last_success_at")) >= every
+    failures = int(min(max(1.0, _number(state.get("failures"), 1.0)), len(BACKOFF_SECONDS)))
+    return now - attempted >= BACKOFF_SECONDS[failures - 1]
 
 
 def _when(epoch: Any) -> Optional[datetime]:
@@ -167,10 +181,12 @@ def _stored_record(cve_id: str, state: Dict[str, Any]) -> Optional[record_module
     return parsed
 
 
-def view(cve_id: str, state: Dict[str, Any], enabled: bool) -> CveCheck:
+def view(cve_id: str, state: Dict[str, Any], enabled: bool, now: Optional[datetime] = None) -> CveCheck:
     """One CVE's stored state as the verdict and the API read it. Turned off, no copy is used."""
     record = _stored_record(cve_id, state) if enabled else None
     checked_at = _when(state.get("last_success_at"))
+    if checked_at is not None and checked_at > (now or datetime.now(timezone.utc)) + CLOCK_SKEW:
+        checked_at = None
     snapshot = UbuntuSnapshot(record, checked_at) if record is not None and checked_at is not None else None
     error = state.get("error")
     return CveCheck(
@@ -186,7 +202,8 @@ def read_checks(cve_ids: Optional[Iterable[str]] = None) -> Dict[str, CveCheck]:
     ids = tuple(cve_ids) if cve_ids is not None else tracked_ids()
     enabled = get_settings().kernel_cve_feed_enabled
     states = get_store().read_many(ids)
-    return {cve_id: view(cve_id, states.get(cve_id) or {}, enabled) for cve_id in ids}
+    now = datetime.now(timezone.utc)
+    return {cve_id: view(cve_id, states.get(cve_id) or {}, enabled, now) for cve_id in ids}
 
 
 async def _loop() -> None:
