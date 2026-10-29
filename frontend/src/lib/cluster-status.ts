@@ -54,6 +54,14 @@ const TONE_RANK: Record<ClusterStatusTone, number> = {
   negative: 3,
 };
 
+/** Foreground utility for an icon toned by a tone rather than by a cluster status. */
+export const TONE_TEXT: Record<ClusterStatusTone, string> = {
+  positive: "text-status-online",
+  caution: "text-status-pending",
+  neutral: "text-status-unknown",
+  negative: "text-status-offline",
+};
+
 type Entry = Omit<ClusterStatusMeta, "srLabel" | "toneRank">;
 
 const ENTRIES: Record<ClusterStatus, Entry> = {

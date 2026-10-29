@@ -112,7 +112,7 @@ const SPLIT_KEY_BASELINE = 0;
 // a proximity rule would fire on the reference implementation. This is the population a genuine
 // cross-line pair could hide inside.
 // Ratchet: may fall, never rise.
-const UNPAIRED_TINT_BASELINE = 34;
+const UNPAIRED_TINT_BASELINE = 11;
 
 // --- measured contrast failures ---------------------------------------------------------
 //

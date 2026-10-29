@@ -189,7 +189,7 @@ import {
   toChartPoints,
 } from "@/lib/monitoring-history";
 import { NodeCard } from "@/components/monitoring/node-card";
-import { severityBucket, warningNodeValue } from "@/lib/warning-facets";
+import { platformWarnings } from "@/lib/alarm-counts";
 import { AlarmStatisticsCard } from "./components/alarm-statistics-card";
 import { ResourceUtilizationCard, capacityScope } from "./components/resource-utilization-card";
 import { StoragePoolsCard } from "./components/storage-pools-card";
@@ -887,62 +887,6 @@ export default function MonitoringContent() {
     setSelectedTopConsumer(instance);
   }, [actorScope]);
 
-  const actualWarnings = (warningsData as any)?.warnings || [];
-  const certWarnings = systemWarnings?.certificate_warnings || [];
-  const nodeWarnings = systemWarnings?.node_warnings || [];
-  
-  // Count warnings by severity (including cert and node warnings)
-  // Filter by selectedNode if a specific node is selected
-  const warningsCounts = useMemo(() => {
-    const counts = { critical: 0, high: 0, warning: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0 };
-
-    // important: the same node accessor and the same severity buckets the warnings page
-    // filters by, so a tile's number is the count the list it opens will show. The substring
-    // match this used to do counted a member's warnings under a cluster the page could not
-    // filter to, and the tile said 5 above a list that said "No warning matches".
-    const filteredWarnings = selectedNode === "all"
-      ? actualWarnings
-      : actualWarnings.filter((w: any) => warningNodeValue(w) === selectedNode);
-
-    // LXD warnings
-    filteredWarnings.forEach((w: any) => {
-      counts.total++;
-      const bucket = severityBucket(w.severity);
-      if (bucket) counts[bucket]++;
-    });
-
-    // Certificate warnings - filter by cluster_id matching selected node
-    const filteredCertWarnings = selectedNode === "all"
-      ? certWarnings
-      : certWarnings.filter((w: any) => (w.cluster_id || "") === selectedNode);
-    
-    filteredCertWarnings.forEach((w: any) => {
-      counts.total++;
-      counts.certIssues++;
-    });
-    
-    // Inactive node warnings - filter by node_id matching selected node
-    const filteredNodeWarnings = selectedNode === "all"
-      ? nodeWarnings
-      : nodeWarnings.filter((w: any) => {
-          const nodeId = w.node_id || w.cluster_id || "";
-          return nodeId === selectedNode;
-        });
-    
-    filteredNodeWarnings.forEach(() => {
-      counts.total++;
-      counts.inactiveNodes++;
-    });
-    
-    return counts;
-  }, [actualWarnings, certWarnings, nodeWarnings, selectedNode]);
-
-  // The offline-nodes tab facets on the row's own value (display name, else id), so the tile
-  // link carries that row's value rather than the picker's id.
-  const selectedNodeWarning = useMemo(
-    () => (selectedNode === "all" ? undefined : nodeWarnings.find((w: any) => (w.node_id || w.cluster_id || "") === selectedNode)),
-    [nodeWarnings, selectedNode],
-  );
 
   // The distribution is fleet-wide, so project "*" is an explicit part of the request
   // identity. Always force an authoritative read: the retired VM cache is not patched by the
@@ -2355,9 +2299,10 @@ export default function MonitoringContent() {
           tenant away from, so for a tenant this card is a wall of dead ends. */}
       {isPartner && (
         <AlarmStatisticsCard
-          counts={warningsCounts}
+          warnings={platformWarnings(warningsData)}
+          system={systemWarnings}
           selectedNode={selectedNode}
-          selectedNodeWarning={selectedNodeWarning}
+          loaded={warningsData !== undefined && systemWarnings !== undefined}
         />
       )}
 
