@@ -16,6 +16,11 @@ interface GaugeChartProps {
   statusMessage?: string;
   /** What the gauge says when there is no reading, ex; "Calculating…". */
   emptyLabel?: string;
+  /**
+   * "usage" puts the arc on the usage ramp. "allocation" keeps it on the accent: a fully
+   * allocated GPU is a working state, and the ramp painted it critical red.
+   */
+  kind?: "usage" | "allocation";
 }
 
 export function GaugeChart({
@@ -25,6 +30,7 @@ export function GaugeChart({
   size = 120,
   statusMessage,
   emptyLabel = "Unavailable",
+  kind = "usage",
 }: GaugeChartProps) {
   const reported =
     value !== null && Number.isFinite(value) && value >= 0 && Number.isFinite(max) && max > 0;
@@ -61,7 +67,7 @@ export function GaugeChart({
             strokeLinecap="round"
             className={cn(
               "transition-all duration-500 motion-reduce:transition-none",
-              usageTone(percentage).stroke,
+              kind === "usage" ? usageTone(percentage).stroke : "stroke-primary",
             )}
           />
         ) : null}

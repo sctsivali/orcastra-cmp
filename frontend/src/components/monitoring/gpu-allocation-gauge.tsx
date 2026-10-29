@@ -52,7 +52,7 @@ export function GpuAllocationGauge({ stats, scope }: GpuAllocationGaugeProps) {
 
   return (
     <>
-      <GaugeChart value={gpu.allocationPercent ?? 0} label="GPU Allocation" />
+      <GaugeChart value={gpu.allocationPercent ?? 0} label="GPU Allocation" kind="allocation" />
       <p className="mt-2 text-sm text-muted-foreground">{gpuAllocationCaption(gpu)}</p>
       <p className="mt-0.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
         {cardsCaption}
