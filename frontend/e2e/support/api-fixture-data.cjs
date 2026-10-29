@@ -344,6 +344,8 @@ function monitoringDashboard() {
     total_nodes: 1,
     online_nodes: 1,
     inactive_nodes: 0,
+    clusters_reporting: 1,
+    clusters_total: 1,
     total_instances: 1,
     running_instances: 1,
     stopped_instances: 0,
@@ -410,8 +412,9 @@ function monitoringDashboard() {
       {
         name: "fast-pool",
         node: "cluster-a",
-        members: [],
-        scope: null,
+        // As resources.py sends it for a standalone host: the host is its own one member.
+        members: ["cluster-a"],
+        scope: "local",
         driver: "zfs",
         total_bytes: 2 * 1024 ** 4,
         used_bytes: 600 * gib,

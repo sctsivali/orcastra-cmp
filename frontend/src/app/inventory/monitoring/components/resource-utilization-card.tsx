@@ -89,7 +89,7 @@ export function ResourceUtilizationCard({ stats, scope, scopeLabel, isPartner }:
   const caption = scope.unavailable ?? NOT_REPORTED;
 
   return (
-    <Card>
+    <Card data-slot="resource-utilization">
       <CardHeader>
         <div>
           <CardTitle>

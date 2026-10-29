@@ -81,7 +81,7 @@ export function StoragePoolsCard({ pools, selectedNode, labelOf }: StoragePoolsC
   const scopeLabel = selectedNode === "all" ? null : labelOf(selectedNode);
 
   return (
-    <Card>
+    <Card data-slot="storage-pools">
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>

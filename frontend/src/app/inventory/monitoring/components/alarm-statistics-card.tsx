@@ -29,7 +29,7 @@ export function AlarmStatisticsCard({ warnings, system, selectedNode, loaded }: 
   const kernelRow = node ? system?.kernel_advisories?.find((row) => row.cluster_id === node) : undefined;
 
   return (
-    <Card>
+    <Card data-slot="alarm-statistics">
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle>

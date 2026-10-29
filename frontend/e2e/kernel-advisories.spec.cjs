@@ -144,6 +144,11 @@ for (const role of ["admin", "partner"]) {
 
     const tile = page.getByRole("link", { name: /1\s*Kernel CVEs/ });
     await expect(tile).toHaveAttribute("href", "/inventory/warnings?tab=kernel");
+    // System Alerts speaks the Warnings page's words, and View All is every tile added up.
+    await expect(page.getByRole("link", { name: /^0\s*High$/ })).toHaveAttribute("href", /all\.severity=high/);
+    await expect(page.getByRole("link", { name: "View All (1)" })).toBeVisible();
+    await expect(page.locator("main")).not.toContainText("Major");
+    await capture(page, testInfo, `${role}-system-alerts`);
     await tile.click();
     await expect(page).toHaveURL(/\/inventory\/warnings\?tab=kernel$/);
     await expect(page.getByRole("tab", { name: /CVEs/, selected: true })).toBeVisible();

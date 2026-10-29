@@ -358,3 +358,186 @@ test("an instance without limits says so instead of showing the host's size", as
   await expect(dialog).not.toContainText(/of 64 vCPUs|62(\.00)? GiB/);
   await expectCleanHarness(api);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Gauges, pools, names and alarms (2026-10-29)
+// ---------------------------------------------------------------------------------------------
+
+const GIB = 1024 ** 3;
+
+// An offline row as GET /monitoring/dashboard sends it: totals zero, shares null, never 0%.
+function offlineNode(name) {
+  return {
+    node_name: name, node_type: "LXD", is_online: false, cluster_status: "offline",
+    status_message: "Cannot connect to LXD endpoint.", collection_timed_out: false,
+    cpu_total: 0, cpu_used: 0, cpu_usage_percent: 0, cpu_allocated: 0, cpu_allocation_ratio: 0,
+    cpu_overcommitted: false, cpu_busy_threads: null, cpu_busy_percent: null,
+    cpu_status: "unavailable", cpu_reporting_instances: 0,
+    memory_total_bytes: 0, memory_used_bytes: 0, memory_usage_percent: null,
+    storage_total_bytes: 0, storage_used_bytes: 0, storage_usage_percent: null,
+    gpu_total: 0, gpu_used: 0, gpu_available: 0, gpu_cards_total: 0, gpu_integrated_total: 0,
+    gpu_models: [], gpu_utilization_supported: false,
+    instance_count: 0, running_instances: 0, container_count: 0, vm_count: 0,
+  };
+}
+
+// Every cluster offline. The memory and storage gauges used to draw 0.0% over "0 B / 0 B" here
+// while the CPU gauge said Unavailable.
+function nothingReported() {
+  const { monitoringDashboard } = require("./support/api-fixture-data.cjs");
+  return {
+    ...monitoringDashboard(),
+    online_nodes: 0, inactive_nodes: 1, clusters_reporting: 0, clusters_total: 1,
+    total_instances: 0, running_instances: 0, stopped_instances: 0, container_count: 0, vm_count: 0,
+    total_cpu: 0, used_cpu: 0, cpu_usage_percent: 0, realtime_cpu_percent: 0,
+    cpu_busy_threads: null, cpu_busy_percent: null, cpu_status: "unavailable",
+    cpu_reporting_instances: 0, cpu_reporting_threads: 0,
+    total_memory_bytes: 0, used_memory_bytes: 0, memory_usage_percent: null,
+    realtime_memory_bytes: 0, realtime_memory_percent: 0,
+    total_storage_bytes: 0, used_storage_bytes: 0, storage_usage_percent: null,
+    total_gpu: 0, total_gpu_cards: 0, used_gpu: 0,
+    nodes: [offlineNode("cluster-a")],
+    storage_pools: [], consumers: [], top_cpu_consumers: [], top_memory_consumers: [],
+  };
+}
+
+// cluster-a reports; cluster-unreachable ("Edge Cluster" in the availability fixture) does not.
+function oneOfTwoReporting() {
+  const { monitoringDashboard } = require("./support/api-fixture-data.cjs");
+  const body = monitoringDashboard();
+  return {
+    ...body,
+    total_nodes: 2, inactive_nodes: 1, clusters_total: 2,
+    nodes: [...body.nodes, offlineNode("cluster-unreachable")],
+  };
+}
+
+test("no cluster reporting: every gauge says Unavailable under one caption", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringDashboard: nothingReported });
+  await page.goto("/inventory/monitoring");
+
+  const card = page.locator('[data-slot="resource-utilization"]');
+  await expect(card).toBeVisible();
+  // CPU, memory, storage and GPU alike; the allocation line goes with the reading.
+  await expect(card.getByText("Unavailable", { exact: true })).toHaveCount(4);
+  await expect(card.getByText("No cluster reported usage", { exact: true })).toHaveCount(4);
+  await expect(card).not.toContainText(/\d%|0 B \/ 0 B|Allocated:|No GPU on/);
+
+  // The pools card stays and says why it is empty, so the page keeps its shape.
+  const pools = page.locator('[data-slot="storage-pools"]');
+  await expect(pools.getByText("No storage pools", { exact: true })).toBeVisible();
+  await expect(pools.getByText("No cluster reported a storage pool.")).toBeVisible();
+  await expect(pools.getByRole("button", { name: /Highest|Lowest/ })).toHaveCount(0);
+
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "monitoring-nothing-reported");
+  await expectCleanHarness(api);
+});
+
+test("partial reporting says how many clusters, and a picked offline cluster says it is offline", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringDashboard: oneOfTwoReporting });
+  await page.goto("/inventory/monitoring");
+
+  const card = page.locator('[data-slot="resource-utilization"]');
+  await expect(card.getByText("From 1 of 2 clusters", { exact: true })).toBeVisible();
+  await expect(card.getByText("2.8%", { exact: true })).toBeVisible();
+  await expect(card.getByText("Unavailable", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("combobox", { name: "Filter by cluster" }).click();
+  await page.getByRole("option", { name: /Edge Cluster/ }).click();
+  await expect(card.getByText("Usage and allocation on Edge Cluster", { exact: true })).toBeVisible();
+  await expect(card.getByText("Cluster offline", { exact: true })).toHaveCount(4);
+  await expect(card.getByText("Unavailable", { exact: true })).toHaveCount(4);
+  await expect(card.getByText("From 1 of 2 clusters")).toHaveCount(0);
+  await expect(card).not.toContainText(/Allocated:|0 B \/ 0 B/);
+  await expect(page.locator('[data-slot="storage-pools"]').getByText("Edge Cluster reported no storage pool.")).toBeVisible();
+
+  await expectNoHorizontalOverflow(page);
+  await expectCleanHarness(api);
+});
+
+test("clusters and pools read by display name, and pool members only when there are several", async ({ page }, testInfo) => {
+  const { monitoringDashboard } = require("./support/api-fixture-data.cjs");
+  const withSharedPool = () => {
+    const body = monitoringDashboard();
+    return {
+      ...body,
+      storage_pools: [
+        ...body.storage_pools,
+        {
+          name: "remote", node: "cluster-a", members: ["micro1", "micro2", "micro3"], scope: "shared",
+          driver: "ceph", total_bytes: 400 * GIB, used_bytes: 100 * GIB, available_bytes: 300 * GIB,
+          usage_percent: 25,
+        },
+      ],
+    };
+  };
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringDashboard: withSharedPool });
+  await page.goto("/inventory/monitoring");
+  const main = page.getByRole("main");
+
+  // The cluster card leads with the name the Clusters page shows, the id beneath it.
+  await expect(main.getByText("Core Cluster", { exact: true }).first()).toBeVisible();
+  await expect(main.getByText("cluster-a", { exact: true }).first()).toBeVisible();
+
+  const pools = page.locator('[data-slot="storage-pools"]');
+  await expect(pools.getByText("fast-pool", { exact: true })).toBeVisible();
+  await expect(pools.locator('[data-slot="badge"]', { hasText: /^zfs$/ })).toBeVisible();
+  await expect(pools.getByText("Core Cluster", { exact: true })).toHaveCount(2);
+  // A standalone host lists itself as its one member: nothing to add beside its own name.
+  await expect(pools).not.toContainText(/\(cluster-a|1 members/);
+  const members = pools.getByRole("button", { name: "Show the 3 members holding remote on Core Cluster" });
+  await expect(members).toHaveText("shared by 3 members");
+  await members.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Members holding remote" })).toBeVisible();
+  await expect(dialog.getByText("micro2", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  // The picker names the cluster the same way, with the id as its second line.
+  await page.getByRole("combobox", { name: "Filter by cluster" }).click();
+  await expect(page.getByRole("option", { name: /Core Cluster/ })).toContainText("cluster-a");
+  await page.keyboard.press("Escape");
+
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "monitoring-names-and-pools");
+  await expectCleanHarness(api);
+});
+
+test("alarm tiles speak the Warnings page's words and stay neutral at zero", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner");
+  await page.goto("/inventory/monitoring");
+
+  const alarms = page.locator('[data-slot="alarm-statistics"]');
+  for (const label of ["Critical", "High", "Warning", "Info"]) {
+    const tile = alarms.getByRole("link", { name: new RegExp(`^0\\s*${label}$`) });
+    await expect(tile).toBeVisible();
+    // the number is the first <p> in the tile, which the live harness reads
+    await expect(tile.locator("p").first()).toHaveText("0");
+  }
+  await expect(alarms).not.toContainText(/Major|Inactive|All systems operational|✓/);
+  await expect(alarms.getByText("No active alarms", { exact: true })).toBeVisible();
+  await expect(alarms.getByRole("link", { name: /View All/ })).toHaveCount(0);
+  await expectCleanHarness(api);
+});
+
+test("Monitoring counts kernel findings in View All, as the dashboard does", async ({ page }, testInfo) => {
+  const { kernelWarningRows } = require("./support/kernel-advisory-fixtures.cjs");
+  const kernels = kernelWarningRows("exposed").length;
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { kernel: "exposed" });
+  await page.goto("/inventory/monitoring");
+
+  const alarms = page.locator('[data-slot="alarm-statistics"]');
+  const tile = alarms.getByRole("link", { name: new RegExp(`^${kernels}\\s*Kernel CVEs$`) });
+  await expect(tile).toHaveAttribute("href", "/inventory/warnings?tab=kernel");
+  await expect(alarms.getByRole("link", { name: `View All (${kernels})` })).toBeVisible();
+  await expect(alarms.getByText("No active alarms")).toHaveCount(0);
+  await capture(page, testInfo, "monitoring-alarms-kernel");
+  await expectCleanHarness(api);
+});
