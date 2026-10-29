@@ -505,6 +505,13 @@ def _check_capacity(
             )
             return
         headroom = mobility.pool_headroom(target_client, target_pool)
+    bounds = _bound_unmeasured_footprints(
+        result,
+        client=source_client,
+        project=source_project,
+        instance_names=instance_names,
+        footprints=footprints,
+    )
     if any(value is None for value in footprints):
         unstarted = [
             name
@@ -533,13 +540,103 @@ def _check_capacity(
         )
         return
     if all(value is not None for value in footprints):
-        required = sum(int(value or 0) for value in footprints)
+        bound = sum(bounds.values())
+        required = sum(int(value or 0) for value in footprints) + bound
         if required > int(headroom["free"]):
+            message = f"Target pool '{target_pool}' has insufficient measured free space."
+            if bound:
+                message = (
+                    f"Target pool '{target_pool}' has {_gib(int(headroom['free']))} free, and the "
+                    f"transfer is bounded at {_gib(required)} because part of the source sits on a "
+                    "dir pool that cannot report per-instance usage."
+                )
             result.block(
                 "target_pool_insufficient_capacity",
-                f"Target pool '{target_pool}' has insufficient measured free space.",
+                message,
                 "Free capacity or choose another mapped pool.",
             )
+
+
+# Drivers that report no per-volume usage without project quotas: LXD answers 0 for every volume on
+# them, so a 0 from one is not a measurement.
+_UNMEASURED_USAGE_DRIVERS = frozenset({"dir"})
+
+
+def _gib(value: int) -> str:
+    return f"{value / 1024**3:.1f} GiB"
+
+
+def _unmeasured_pool_bound(
+    client: Any, project: str, name: str
+) -> Optional[tuple[tuple[str, str], int]]:
+    """((pool, member), used bytes) when the instance's root sits on a driver that cannot size it.
+
+    Everything the pool holds bounds what the instance and its snapshots can need, which is the
+    owner's choice (2026-10-29) for dir pools over refusing them outright.
+    """
+    instance = _instance(client, project, name)
+    if not isinstance(instance, dict):
+        return None
+    devices = instance.get("expanded_devices") or instance.get("devices") or {}
+    pool = next(
+        (
+            device.get("pool")
+            for device in devices.values()
+            if isinstance(device, dict) and device.get("type") == "disk" and device.get("path") == "/"
+        ),
+        None,
+    )
+    if not isinstance(pool, str) or not pool:
+        return None
+    detail = _metadata(client.api.storage_pools[safe_segment(pool)].get(), resource=f"storage pool '{pool}'")
+    if not isinstance(detail, dict) or detail.get("driver") not in _UNMEASURED_USAGE_DRIVERS:
+        return None
+    member = str(instance.get("location") or "")
+    if member and member != "none":
+        headroom = _member_pool_headroom(client, pool, member)
+    else:
+        member = ""
+        headroom = mobility.pool_headroom(client, pool)
+    if not headroom:
+        return None
+    return (pool, member), int(headroom["used"])
+
+
+def _bound_unmeasured_footprints(
+    result: PreflightResult,
+    *,
+    client: Any,
+    project: str,
+    instance_names: list[str],
+    footprints: list[Optional[int]],
+) -> dict[tuple[str, str], int]:
+    """Replace unmeasurable dir footprints with their pool's usage, counted once per pool."""
+    bounds: dict[tuple[str, str], int] = {}
+    bounded: list[str] = []
+    for index, name in enumerate(instance_names):
+        if footprints[index] is not None:
+            continue
+        try:
+            found = _unmeasured_pool_bound(client, project, name)
+        except Exception:  # noqa: BLE001 - an unreadable pool leaves the footprint unmeasured
+            found = None
+        if found is None:
+            continue
+        key, used = found
+        bounds[key] = used
+        footprints[index] = 0
+        bounded.append(name)
+    if bounds:
+        pools = ", ".join(sorted({f"'{pool}'" for pool, _member in bounds}))
+        result.warn(
+            "source_footprint_bounded_by_pool",
+            f"{', '.join(bounded)} sit on a dir storage pool, which does not report how much each "
+            f"instance uses, so the transfer is sized by everything pool {pools} holds "
+            f"({_gib(sum(bounds.values()))}).",
+            "Nothing to do when the target has room for that. A pool that reports usage (zfs, "
+            "btrfs, lvm) gives an exact size.",
+        )
+    return bounds
 
 
 def _instance_transfer_bytes(
