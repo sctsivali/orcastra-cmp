@@ -62,12 +62,21 @@ def test_cached_unpinned_client_is_rejected_before_validation() -> None:
     validation_calls: list[Any] = []
     manager._validate_connection = lambda *args: validation_calls.append(args) or True
 
-    with pytest.raises(LXDTransportPinError):
+    reconnects: list[Any] = []
+    manager._auto_reconnect = lambda cluster_id, **kwargs: reconnects.append(kwargs)
+
+    # The unpinned client is dropped rather than used, and the replacement can only come from a
+    # reconnect that verifies the expected pin before any client credential is sent.
+    assert (
         manager.get_client(
             "cluster-a",
             expected_server_fingerprint=PIN_A,
         )
+        is None
+    )
 
+    assert "cluster-a" not in manager._clients
+    assert reconnects == [{"expected_server_fingerprint": PIN_A}]
     assert validation_calls == []
 
 

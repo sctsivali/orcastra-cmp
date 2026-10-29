@@ -1740,8 +1740,12 @@ async def repin_cluster_certificate(
         repin_fields,
     )
 
+    from app.core.vault_client import VaultCASConflict
+
     vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-    metadata = vault_client.vault_read(f"{settings.vault_clusters_path}/{cluster_id}/metadata")
+    path = f"{settings.vault_clusters_path}/{cluster_id}/metadata"
+    # Uncached and versioned: the write below must land on exactly what was read.
+    metadata, version = await asyncio.to_thread(vault_client.vault_read_versioned, path)
     if not metadata:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
@@ -1760,9 +1764,21 @@ async def repin_cluster_certificate(
     # A re-pin is a new trust decision: classified like a first sighting, and the renewal lineage
     # of the old pin is dropped so nothing approved against it still counts as this cluster.
     fields = await asyncio.to_thread(repin_fields, endpoint_url, fingerprint)
-    vault_client.vault_kv_put(
-        f"{settings.vault_clusters_path}/{cluster_id}/metadata", {**metadata, **fields}
-    )
+    for attempt in range(2):
+        try:
+            # Check-and-set, so a renewal decided from the old body cannot land on top of this.
+            await asyncio.to_thread(
+                vault_client.vault_kv_put, path, {**metadata, **fields}, cas=version
+            )
+            break
+        except VaultCASConflict:
+            if attempt:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The cluster's pin changed while it was being re-pinned. Try again.",
+                )
+            metadata, version = await asyncio.to_thread(vault_client.vault_read_versioned, path)
+            previous = metadata.get(FINGERPRINT_FIELD)
 
     # The cluster metadata this just rewrote is what the availability and region reads render,
     # and a pooled client built before the re-pin still holds the old pin, so drop both.

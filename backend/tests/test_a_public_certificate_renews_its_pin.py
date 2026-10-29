@@ -45,7 +45,7 @@ def _live(monkeypatch, presented, publicly_trusted=None):
     )
 
 
-def _public_pin(fingerprint=OLD, host="vdc.example.org", previous=None):
+def _public_pin(fingerprint=OLD, host="vdc.example.org:443", previous=None):
     return {
         "endpoint": ENDPOINT,
         FINGERPRINT_FIELD: fingerprint,
@@ -82,7 +82,7 @@ def test_a_publicly_trusted_certificate_is_pinned_as_public_ca(monkeypatch) -> N
     assert decision.outcome == "pinned"
     assert decision.fingerprint == OLD
     assert decision.update[TRUST_FIELD] == TRUST_PUBLIC_CA
-    assert decision.update[PINNED_HOST_FIELD] == "vdc.example.org"
+    assert decision.update[PINNED_HOST_FIELD] == "vdc.example.org:443"
     assert decision.update[PREVIOUS_FIELD] == []
 
 
@@ -150,6 +150,13 @@ def test_a_changed_self_signed_certificate_is_still_refused(monkeypatch) -> None
         decide_pin("lab", "https://10.0.0.5:8443", tofu)
 
 
+def test_a_certificate_on_another_port_of_the_same_host_is_refused(monkeypatch) -> None:
+    """Another TLS service on the same name has its own valid certificate and is not the API."""
+    _live(monkeypatch, NEW, NEW)
+    with pytest.raises(LXDCertificatePinError):
+        decide_pin("hetzner", "https://vdc.example.org:8443", _public_pin())
+
+
 def test_a_certificate_for_another_host_is_refused(monkeypatch) -> None:
     """The endpoint can be edited while the pin survives, so the host is part of the promise."""
     _live(monkeypatch, NEW, NEW)
@@ -180,7 +187,7 @@ def test_a_legacy_pin_is_classified_once(monkeypatch) -> None:
     assert decision.outcome == "match"
     assert decision.update == {
         TRUST_FIELD: TRUST_PUBLIC_CA,
-        PINNED_HOST_FIELD: "vdc.example.org",
+        PINNED_HOST_FIELD: "vdc.example.org:443",
         PREVIOUS_FIELD: [],
     }
 
@@ -253,17 +260,32 @@ def test_repin_resets_the_lineage(monkeypatch) -> None:
 
 
 class _Vault:
-    def __init__(self, stored):
+    def __init__(self, stored, *, lose_cas_to=None):
         self.stored = dict(stored)
+        self.version = 3
         self.writes = []
+        self.lose_cas_to = lose_cas_to
 
     def vault_read(self, path, use_cache=True):
-        assert use_cache is False, "the pin is re-read uncached so a fresh re-pin is not lost"
+        assert use_cache is False, "a pin decision is read uncached so a fresh re-pin is not lost"
         return dict(self.stored)
 
-    def vault_kv_put(self, path, data):
+    def vault_read_versioned(self, path):
+        return dict(self.stored), self.version
+
+    def vault_kv_put(self, path, data, *, cas=None):
+        from app.core.vault_client import VaultCASConflict
+
+        if self.lose_cas_to is not None:
+            # Another writer lands between our read and our write.
+            self.stored = dict(self.lose_cas_to)
+            self.version += 1
+            self.lose_cas_to = None
+        if cas is not None and cas != self.version:
+            raise VaultCASConflict("lost", status_code=400)
         self.writes.append(data)
         self.stored = dict(data)
+        self.version += 1
 
 
 def _manager_with_vault(monkeypatch, vault):
@@ -339,3 +361,94 @@ def test_a_pooled_client_bound_to_a_superseded_pin_is_replaced(monkeypatch) -> N
     assert manager.get_client("hetzner", expected_server_fingerprint=NEW) == "fresh"
     assert "hetzner" not in manager._clients
     assert reconnects == [{"expected_server_fingerprint": NEW}]
+
+
+def _settings_with_vault(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.core.config.get_settings",
+        lambda: SimpleNamespace(
+            lxd_pin_server_certificate=True, vault_enabled=True, vault_token="t",
+            vault_addr="http://vault", vault_clusters_path="secret/data/clusters",
+        ),
+    )
+
+
+def test_a_write_that_loses_a_check_and_set_race_is_not_recorded(monkeypatch) -> None:
+    vault = _Vault(_public_pin(), lose_cas_to=_public_pin(fingerprint=OTHER))
+    manager, audits = _manager_with_vault(monkeypatch, vault)
+    stored = manager._write_cluster_pin(
+        "hetzner", compared=OLD, update={FINGERPRINT_FIELD: NEW}, outcome="renewed",
+        endpoint=ENDPOINT,
+    )
+    assert stored == OTHER, "the caller learns which pin won"
+    assert vault.writes == []
+    assert audits == []
+
+
+def test_a_connection_that_lost_the_pin_race_is_refused(monkeypatch) -> None:
+    """Worker 1 pins the real certificate; worker 2 saw another one and must not connect."""
+    _settings_with_vault(monkeypatch)
+    _live(monkeypatch, NEW, None)
+    vault = _Vault({"endpoint": ENDPOINT}, lose_cas_to={FINGERPRINT_FIELD: OTHER, TRUST_FIELD: TRUST_TOFU})
+    manager, _audits = _manager_with_vault(monkeypatch, vault)
+    with pytest.raises(LXDCertificatePinError):
+        manager._enforce_certificate_pin("hetzner", "https://10.0.0.5:8443")
+
+
+def test_a_vault_outage_holds_the_socket_to_the_last_pin_seen(monkeypatch) -> None:
+    _settings_with_vault(monkeypatch)
+    _live(monkeypatch, OLD, None)
+    vault = _Vault({FINGERPRINT_FIELD: OLD, TRUST_FIELD: TRUST_TOFU})
+    manager, _audits = _manager_with_vault(monkeypatch, vault)
+    assert manager._enforce_certificate_pin("lab", "https://10.0.0.5:8443") == OLD
+
+    def unreachable(*args, **kwargs):
+        raise RuntimeError("vault down")
+
+    monkeypatch.setattr(vault, "vault_read", unreachable)
+    assert manager._enforce_certificate_pin("lab", "https://10.0.0.5:8443") == OLD
+
+
+def test_a_refresh_is_reused_briefly_and_skips_a_tripped_cluster(monkeypatch) -> None:
+    from app.services.lxd import pin_enforcement
+
+    _settings_with_vault(monkeypatch)
+    handshakes = []
+
+    def presented(endpoint, timeout=5):
+        handshakes.append(endpoint)
+        return OLD
+
+    monkeypatch.setattr(pinning, "fetch_server_fingerprint", presented)
+    monkeypatch.setattr(pinning, "fetch_public_ca_fingerprint", lambda endpoint, timeout=5: None)
+    vault = _Vault({"endpoint": "https://10.0.0.5:8443", FINGERPRINT_FIELD: OLD, TRUST_FIELD: TRUST_TOFU})
+    manager, _audits = _manager_with_vault(monkeypatch, vault)
+    monkeypatch.setattr(pin_enforcement.health, "is_tripped", lambda cluster_id: cluster_id == "down")
+
+    assert manager.refresh_pin("lab") == OLD
+    assert manager.refresh_pin("lab") == OLD
+    assert len(handshakes) == 1, "a refresh within the reuse window answers from memory"
+    assert manager.refresh_pin("down") is None
+    assert len(handshakes) == 1, "a cluster the breaker holds as down is not handshaken"
+
+
+def test_a_refresh_replaces_a_pooled_client_that_holds_no_pin(monkeypatch) -> None:
+    import requests
+
+    from app.services.lxd import connection as connection_module
+
+    _settings_with_vault(monkeypatch)
+    _live(monkeypatch, OLD, None)
+    vault = _Vault({"endpoint": "https://10.0.0.5:8443", FINGERPRINT_FIELD: OLD, TRUST_FIELD: TRUST_TOFU})
+    manager, _audits = _manager_with_vault(monkeypatch, vault)
+    session = requests.Session()
+    session.mount("https://", connection_module.FingerprintHTTPAdapter(server_fingerprint=None))
+    unpinned = type("Client", (), {})()
+    unpinned.api = type("Api", (), {"_api_endpoint": "https://10.0.0.5:8443", "session": session})()
+    manager._clients["lab"] = unpinned
+    monkeypatch.setattr(connection_module.health, "is_tripped", lambda cluster_id: False)
+    assert manager.refresh_pin("lab") == OLD
+    assert "lab" not in manager._clients
+

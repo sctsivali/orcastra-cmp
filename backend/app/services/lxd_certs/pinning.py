@@ -76,7 +76,13 @@ def _is_https(endpoint: str) -> bool:
 
 
 def _pinned_host(endpoint: str) -> str:
-    return endpoint_host_port(endpoint)[0].lower().rstrip(".")
+    """The host and port a public-CA pin is bound to.
+
+    The port is part of it: another TLS service on the same name, with its own valid certificate,
+    is not this cluster's API.
+    """
+    host, port = endpoint_host_port(endpoint)
+    return f"{host.lower().rstrip('.')}:{port}"
 
 
 def _is_ip_literal(host: str) -> bool:

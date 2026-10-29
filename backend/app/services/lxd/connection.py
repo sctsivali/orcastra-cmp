@@ -674,12 +674,11 @@ class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
 
         if cluster_id in self._clients and expected_server_fingerprint:
             cached_pin = _client_adapter_fingerprint(self._clients[cluster_id])
-            if cached_pin and cached_pin != normalize_server_fingerprint(
-                expected_server_fingerprint
-            ):
-                # A client pooled before a public-CA renewal holds the superseded pin. The
-                # reconnect below verifies the live certificate against the expected one before
-                # any client credential is sent, so dropping the stale client is safe.
+            if cached_pin != normalize_server_fingerprint(expected_server_fingerprint):
+                # A client pooled before a public-CA renewal holds the superseded pin, and one
+                # pooled before the first pin holds none. The reconnect below verifies the live
+                # certificate against the expected one before any client credential is sent, so
+                # dropping the stale client is safe.
                 logger.info("Reconnecting %s: its pooled client predates the current pin", cluster_id)
                 self.cleanup_connection(cluster_id)
 

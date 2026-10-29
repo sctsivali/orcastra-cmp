@@ -12,7 +12,7 @@ Secret VALUES are NEVER logged - only access paths and operation results.
 
 import logging
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -109,6 +109,10 @@ class VaultClientError(Exception):
     def __init__(self, message: str = "", status_code: Optional[int] = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class VaultCASConflict(VaultClientError):
+    """A check-and-set write lost: the document changed since the version the caller read."""
 
 
 def _unique_vault_json_pairs(pairs):
@@ -334,15 +338,43 @@ class VaultClient:
             logger.error(f"Failed to write to Vault path {path}: {e}")
             raise VaultClientError(f"Vault write failed: {str(e)}")
     
-    def vault_kv_put(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def vault_read_versioned(self, path: str) -> Tuple[Dict[str, Any], Optional[int]]:
+        """Read a KV v2 document uncached, with the version a check-and-set write needs.
+
+        The version is None on a KV v1 mount or a document that does not exist yet.
+        """
+        url = _safe_vault_url(self.vault_addr, path)
+        try:
+            response = self.session.get(url, headers=self.headers, timeout=(2, 3))
+            if response.status_code == 404:
+                return {}, None
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.error(f"Failed to read from Vault path {path}: {e}")
+            raise VaultClientError(f"Vault read failed: {str(e)}", status_code=status)
+        body = response.json().get("data") or {}
+        if "data" in body and isinstance(body.get("metadata"), dict):
+            version = body["metadata"].get("version")
+            return body.get("data") or {}, version if isinstance(version, int) else None
+        return body, None
+
+    def vault_kv_put(
+        self, path: str, data: Dict[str, Any], *, cas: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Put data into Vault KV v2 store.
         Invalidates cache for the path.
+
+        ``cas`` makes the write conditional on the document still being at that version, and a
+        lost race raises `VaultCASConflict` instead of overwriting the winner.
         """
         start = time.perf_counter()
         url = _safe_vault_url(self.vault_addr, path)
         
-        payload = {"data": data}
+        payload: Dict[str, Any] = {"data": data}
+        if cas is not None:
+            payload["options"] = {"cas": cas}
         
         try:
             response = self.session.post(url, headers=self.headers, json=payload, timeout=(2, 3))
@@ -374,8 +406,12 @@ class VaultClient:
                 error_message=str(e),
                 duration_ms=duration,
             )
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if cas is not None and status == 400:
+                logger.warning(f"Check-and-set write to Vault path {path} lost to a newer version")
+                raise VaultCASConflict(f"Vault KV put lost a check-and-set race: {str(e)}", status_code=400)
             logger.error(f"Failed to put KV data to Vault path {path}: {e}")
-            raise VaultClientError(f"Vault KV put failed: {str(e)}")
+            raise VaultClientError(f"Vault KV put failed: {str(e)}", status_code=status)
     
     def vault_delete(self, path: str) -> bool:
         """
