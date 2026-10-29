@@ -10,7 +10,7 @@ const {
   platformNodes,
   tenantSpecifications,
 } = require("./api-fixture-data.cjs");
-const { kernelAdvisories, kernelWarningRows } = require("./kernel-advisory-fixtures.cjs");
+const { kernelAdvisories, kernelCveUbuntuStatus, kernelWarningRows } = require("./kernel-advisory-fixtures.cjs");
 const {
   fulfillSnapshotCreate,
   fulfillSnapshotRead,
@@ -457,6 +457,15 @@ async function installApiFixtures(page, role, options = {}) {
         body = { detail: "Partner access required" };
       } else {
         body = kernelAdvisories(options.kernel);
+      }
+    } else if (path === "/security/kernel-advisories/ubuntu-status") {
+      // When Ubuntu's records were last read, for the Kernel CVEs tab; Partner and Admin only.
+      if (role === "tenant") {
+        state.unexpected.push(entry);
+        status = 403;
+        body = { detail: "Partner access required" };
+      } else {
+        body = kernelCveUbuntuStatus(options.kernelUbuntu);
       }
     } else if (path === "/warnings") {
       body = { total: 0, warnings: [], nodes: ["cluster-a"], unreachable_nodes: [] };

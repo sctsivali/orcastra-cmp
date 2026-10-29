@@ -7,10 +7,21 @@ import { TableLink } from "@/components/ui/table-link";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { formatDateTime } from "@/lib/utils";
 import type { HostKernelRow, KernelAdvisoryInfo } from "@/types/kernel-advisory";
-import { KERNEL_STATE_DISPLAY, advisoryTitle, osLabel, rowState, scoreText } from "./kernel-advisory-display";
+import { KERNEL_STATE_DISPLAY, advisoryTitle, osLabel, rowState, scoreText, ubuntuCheck } from "./kernel-advisory-display";
+import { UbuntuCheckText } from "./kernel-cve-ubuntu-status";
 
-/** What one advisory is, where it is fixed and how current the data is. */
-export function KernelAdvisorySummary({ advisory }: { advisory: KernelAdvisoryInfo }) {
+/**
+ * What one advisory is, where it is fixed and how current the data is. Severity carries Ubuntu's
+ * own priority beside the CVSS scores once Ubuntu's record has been read.
+ */
+export function KernelAdvisorySummary({
+  advisory,
+  ubuntuCheckEnabled = true,
+}: {
+  advisory: KernelAdvisoryInfo;
+  /** False when the deployment turned the Ubuntu check off. */
+  ubuntuCheckEnabled?: boolean;
+}) {
   return (
     <DetailSection title={advisoryTitle(advisory.id, advisory.name)}>
       <p className="text-sm text-muted-foreground">{advisory.summary}</p>
@@ -21,13 +32,25 @@ export function KernelAdvisorySummary({ advisory }: { advisory: KernelAdvisoryIn
           value={`${advisory.fixed_upstream.join(", ")}, mainline ${advisory.fixed_mainline}`}
           span="full"
         />
-        <DetailField label="Advisory Data As Of" value={advisory.data_as_of} />
+        <DetailField
+          label="Ubuntu Status"
+          value={<UbuntuCheckText check={ubuntuCheck(advisory, ubuntuCheckEnabled)} />}
+          span="full"
+        />
+        <DetailField label="Built-in Data As Of" value={advisory.data_as_of} />
         <DetailField
           label="Reference"
           value={
-            <TableLink href={advisory.reference_url} external title="Open the advisory announcement">
-              Kernel CVE announcement
-            </TableLink>
+            <span className="flex flex-wrap gap-x-3 gap-y-1">
+              <TableLink href={advisory.reference_url} external title="Open the advisory announcement">
+                Kernel CVE announcement
+              </TableLink>
+              {advisory.ubuntu_url && (
+                <TableLink href={advisory.ubuntu_url} external title="Open Ubuntu's page for this CVE">
+                  Ubuntu CVE page
+                </TableLink>
+              )}
+            </span>
           }
         />
       </DetailGrid>

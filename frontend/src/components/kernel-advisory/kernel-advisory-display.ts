@@ -5,6 +5,7 @@ import type {
   KernelAdvisoryResponse,
   KernelAdvisoryScore,
   KernelAdvisoryState,
+  KernelCveCheck,
 } from "@/types/kernel-advisory";
 
 // note: the wire values stay exposed/unverified/patched (backend, URL facets, the warning feed).
@@ -134,4 +135,66 @@ export function cveCountText(count: number): string {
 export function membersText(item: Pick<OpenAdvisory, "affected" | "total" | "unlisted">): string {
   const noun = item.total === 1 ? "member" : "members";
   return `${item.affected} of ${item.total} ${noun}${item.unlisted ? " read" : ""}`;
+}
+
+/**
+ * How current the Ubuntu statuses behind a verdict are. `fresh` and `stale` carry the last
+ * successful read; the other three say why the built-in data decided instead.
+ */
+export type UbuntuCheck =
+  | { kind: "fresh" | "stale"; checkedAt: string }
+  | { kind: "off" | "unreachable" | "not-yet"; dataAsOf: string };
+
+const UBUNTU_CHECK_RANK: Record<UbuntuCheck["kind"], number> = {
+  off: 0,
+  unreachable: 1,
+  "not-yet": 2,
+  stale: 3,
+  fresh: 4,
+};
+
+type UbuntuCheckFields = Partial<Pick<KernelCveCheck, "source" | "checked_at" | "stale" | "check_error">> &
+  Pick<KernelCveCheck, "data_as_of">;
+
+export function ubuntuCheck(entry: UbuntuCheckFields, enabled = true): UbuntuCheck {
+  if (!enabled) return { kind: "off", dataAsOf: entry.data_as_of };
+  if (entry.source === "ubuntu" && entry.checked_at) {
+    return { kind: entry.stale ? "stale" : "fresh", checkedAt: entry.checked_at };
+  }
+  return { kind: entry.check_error ? "unreachable" : "not-yet", dataAsOf: entry.data_as_of };
+}
+
+/** The least current of several CVEs' checks: the line has to hold for every one of them. */
+export function leastCurrentUbuntuCheck(
+  entries: readonly UbuntuCheckFields[],
+  enabled = true,
+): UbuntuCheck | null {
+  let worst: UbuntuCheck | null = null;
+  for (const entry of entries) {
+    const check = ubuntuCheck(entry, enabled);
+    if (
+      !worst ||
+      UBUNTU_CHECK_RANK[check.kind] < UBUNTU_CHECK_RANK[worst.kind] ||
+      ("checkedAt" in check && "checkedAt" in worst && check.kind === worst.kind && check.checkedAt < worst.checkedAt)
+    ) {
+      worst = check;
+    }
+  }
+  return worst;
+}
+
+/** "Ubuntu status checked 2h ago", or why the built-in data decided. `relative` is the live age. */
+export function ubuntuCheckText(check: UbuntuCheck, relative: string, formatWhen: (iso: string) => string): string {
+  switch (check.kind) {
+    case "fresh":
+      return `Ubuntu status checked ${relative}`;
+    case "stale":
+      return `Could not check Ubuntu since ${formatWhen(check.checkedAt)}`;
+    case "off":
+      return `Using built-in data from ${check.dataAsOf}; the Ubuntu check is turned off`;
+    case "unreachable":
+      return `Using built-in data from ${check.dataAsOf}; Ubuntu could not be reached`;
+    case "not-yet":
+      return `Using built-in data from ${check.dataAsOf}; Ubuntu has not been checked yet`;
+  }
 }

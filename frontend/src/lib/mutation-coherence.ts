@@ -57,6 +57,7 @@ const QUERY_FAMILY_KEYS = {
   // for ten seconds; an unseal hands the notice a fresh read instead (announceUnsealed).
   hostHealth: [["host-health"], ["vault-seal-status"]],
   releaseStatus: [["release-status"]],
+  kernelAdvisories: [["kernelAdvisories"], ["kernelCveFeed"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type QueryFamily = keyof typeof QUERY_FAMILY_KEYS;
@@ -323,6 +324,12 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     completion: "response",
     queryFamilies: ["releaseStatus"],
     apiCalls: ["releaseAPI.checkNow"],
+  },
+  // A new read of Ubuntu's records changes the verdicts both the advisories and the warnings show.
+  "kernelCve.check": {
+    completion: "response",
+    queryFamilies: ["kernelAdvisories", "warnings"],
+    apiCalls: ["kernelAdvisoryAPI.checkNow"],
   },
   // The deployment default sits under every organization without branding of its own.
   "branding.deployment": {

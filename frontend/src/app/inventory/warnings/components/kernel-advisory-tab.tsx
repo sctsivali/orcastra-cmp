@@ -15,6 +15,7 @@ import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { KERNEL_STATE_DISPLAY } from "@/components/kernel-advisory/kernel-advisory-display";
+import { KernelCveUbuntuStatus } from "@/components/kernel-advisory/kernel-cve-ubuntu-status";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
@@ -108,6 +109,9 @@ function KernelAdvisoryTable({
           <CardDescription className="text-xs md:text-sm">
             Cluster members whose running kernel is affected by a known kernel CVE, or could not be confirmed as patched
           </CardDescription>
+          <div className="mt-2">
+            <KernelCveUbuntuStatus />
+          </div>
         </div>
         <UnreachableNodesBanner noun="member kernels" nodes={unread} />
         <TableToolbar filters={filters} noun="kernel CVE findings" />

@@ -126,7 +126,11 @@ export function KernelAdvisoryBadge({
       >
         <div className="space-y-6">
           {(advisories ?? []).map((advisory) => (
-            <KernelAdvisorySummary key={advisory.id} advisory={advisory} />
+            <KernelAdvisorySummary
+              key={advisory.id}
+              advisory={advisory}
+              ubuntuCheckEnabled={query.data?.ubuntu_check_enabled ?? true}
+            />
           ))}
           {verdict.open
             .filter((item) => item.advisory === null)

@@ -15,6 +15,7 @@ import {
 } from "./warning-severity";
 import { CodeBlock } from "@/components/ui/code-block";
 import { KERNEL_STATE_DISPLAY, osLabel } from "@/components/kernel-advisory/kernel-advisory-display";
+import { UbuntuCheckText } from "@/components/kernel-advisory/kernel-cve-ubuntu-status";
 
 // One dialog for all three warning tabs.
 //
@@ -113,14 +114,32 @@ export function WarningDetailDialog({
               <DetailField label="OS" value={osLabel(record) ?? undefined} />
               <DetailField label="CVE" value={record.advisory_id} />
               <DetailField label="Severity" value={severity.label} />
-              <DetailField label="Advisory Data As Of" value={record.data_as_of} />
+              {record.fixed_in ? <DetailField label="Fixed In" value={record.fixed_in} mono /> : null}
+              <DetailField
+                label="Decided By"
+                span="full"
+                value={
+                  record.source === "ubuntu" && record.checked_at ? (
+                    <UbuntuCheckText check={{ kind: "fresh", checkedAt: record.checked_at }} />
+                  ) : (
+                    `Built-in data from ${record.data_as_of}`
+                  )
+                }
+              />
               <DetailField
                 label="Reference"
                 span="full"
                 value={
-                  <TableLink href={record.reference_url} external title="Open the advisory announcement">
-                    {record.reference_url}
-                  </TableLink>
+                  <span className="flex flex-col gap-1">
+                    <TableLink href={record.reference_url} external title="Open the advisory announcement">
+                      {record.reference_url}
+                    </TableLink>
+                    {record.source === "ubuntu" && record.ubuntu_url ? (
+                      <TableLink href={record.ubuntu_url} external title="Open Ubuntu's page for this CVE">
+                        {record.ubuntu_url}
+                      </TableLink>
+                    ) : null}
+                  </span>
                 }
               />
             </DetailGrid>

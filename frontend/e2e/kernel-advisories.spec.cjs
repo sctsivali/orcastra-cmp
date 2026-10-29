@@ -9,6 +9,7 @@ const {
   expectCleanInventoryHarness,
   installInventoryHardeningFixtures,
 } = require("./support/inventory-hardening-fixtures.cjs");
+const { kernelCveUbuntuStatus } = require("./support/kernel-advisory-fixtures.cjs");
 
 // The overview also reads /clusters, /instances and /projects, which the inventory fixture
 // serves; kernel answers come from the base fixture underneath it (options.kernel).
@@ -102,6 +103,12 @@ for (const role of ["admin", "partner"]) {
     await expect(dialog.getByText("CVE-2026-99999 (PwnEscape)", { exact: true })).toBeVisible();
     await expect(dialog.getByText("5.15.0-185-generic", { exact: true })).toBeVisible();
     await expect(dialog.getByText(/Linux CNA: 9\.3 Critical, Red Hat: 8\.8 Important, Ubuntu: Medium/)).toBeVisible();
+    // where the verdict came from: Ubuntu's record, read two hours ago, and its page
+    await expect(dialog.getByText("Ubuntu status checked 2h ago", { exact: true })).toBeVisible();
+    await expect(dialog.getByText(/Ubuntu has a fix in testing \(5\.15\.0-203\.213\), not released yet\./)).toBeVisible();
+    const ubuntuPage = dialog.getByRole("link", { name: /Ubuntu CVE page/ });
+    await expect(ubuntuPage).toHaveAttribute("href", "https://ubuntu.com/security/CVE-2026-99999");
+    await expect(ubuntuPage).toHaveAttribute("target", "_blank");
     await expect(dialog.getByText(/linux-modules-\$\(uname -r\)\/changelog\.Debian\.gz/).first()).toBeVisible();
     const reference = dialog.getByRole("link", { name: /Kernel CVE announcement/ });
     await expect(reference).toHaveAttribute("href", "https://lists.openwall.net/linux-cve-announce/2026/10/15/2");
@@ -140,6 +147,8 @@ for (const role of ["admin", "partner"]) {
     await tile.click();
     await expect(page).toHaveURL(/\/inventory\/warnings\?tab=kernel$/);
     await expect(page.getByRole("tab", { name: /CVEs/, selected: true })).toBeVisible();
+    // how current Ubuntu's statuses are, for every role that reads the tab
+    await expect(page.getByText("Ubuntu status checked 2h ago", { exact: true })).toBeVisible();
     // the CVE column: its sort control, and the id in the row
     await expect(page.getByRole("button", { name: "CVE", exact: true })).toBeVisible();
     await expect(page.locator("tbody tr td").getByText("CVE-2026-99999", { exact: true })).toBeVisible();
@@ -150,6 +159,8 @@ for (const role of ["admin", "partner"]) {
     await expect(detail.getByRole("heading", { name: "cluster-a on Core Cluster" })).toBeVisible();
     await expect(detail.getByText("Affected", { exact: true }).first()).toBeVisible();
     await expect(detail.getByText("CVE", { exact: true })).toBeVisible();
+    await expect(detail.getByText("5.15.0-203.213", { exact: true })).toBeVisible();
+    await expect(detail.getByText("Ubuntu status checked 2h ago", { exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await capture(page, testInfo, `${role}-kernel-tab`);
 
@@ -276,6 +287,84 @@ test("admin: an outdated LXD offers its update as an outline chip that opens the
   await expectCleanInventoryHarness(fixture);
 });
 
+// Spec-local answers for the Ubuntu check, registered after the base fixture so they win: the
+// status a GET returns follows what the POST did, and a second POST inside a minute is refused.
+async function serveUbuntuCheck(page, { retryAfter = 42 } = {}) {
+  const calls = { status: 0, check: 0 };
+  let scenario = "checked";
+  await page.route("**/api/v1/security/kernel-advisories/ubuntu-status", async (route) => {
+    calls.status += 1;
+    await route.fulfill({ json: kernelCveUbuntuStatus(scenario) });
+  });
+  await page.route("**/api/v1/security/kernel-advisories/check", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    calls.check += 1;
+    if (calls.check > 1) {
+      return route.fulfill({
+        status: 429,
+        headers: { "Retry-After": String(retryAfter) },
+        json: { detail: `Ubuntu was checked moments ago. Try again in ${retryAfter} seconds.` },
+      });
+    }
+    scenario = "now";
+    return route.fulfill({ json: kernelCveUbuntuStatus("now") });
+  });
+  return calls;
+}
+
+test("admin: the Kernel CVEs tab says when Ubuntu was checked and checks it now", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "admin");
+  const fixture = await install(page, "admin", { kernel: "exposed" });
+  const calls = await serveUbuntuCheck(page);
+
+  await page.goto("/inventory/warnings?tab=kernel");
+  const line = page.locator('[data-slot="kernel-cve-ubuntu-status"] p');
+  await expect(line).toHaveText("Ubuntu status checked 2h ago");
+  const checkNow = page.getByRole("button", { name: "Check Now", exact: true });
+  await expect(checkNow).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await capture(page, testInfo, "admin-kernel-ubuntu-status");
+
+  await checkNow.click();
+  await expect(line).toHaveText("Ubuntu status checked just now");
+  expect(calls.check).toBe(1);
+
+  // a second check inside the minute is refused, and the wait is said
+  await checkNow.click();
+  await expect(page.getByText("Ubuntu was checked moments ago. Try again in 42 seconds.").first()).toBeVisible();
+  expect(calls.check).toBe(2);
+  await expect(line).toHaveText("Ubuntu status checked just now");
+
+  await expectCleanInventoryHarness(fixture);
+});
+
+test("partner: reads when Ubuntu was checked, with no Check Now", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const fixture = await install(page, "partner", { kernel: "exposed" });
+
+  await page.goto("/inventory/warnings?tab=kernel");
+  const line = page.locator('[data-slot="kernel-cve-ubuntu-status"] p');
+  await expect(line).toHaveText("Ubuntu status checked 2h ago");
+  // the same locator finds the button for an Administrator in the test above
+  await expect(page.getByRole("button", { name: "Check Now", exact: true })).toHaveCount(0);
+  expect(countRequests(fixture.base, "/security/kernel-advisories/ubuntu-status")).toBeGreaterThan(0);
+
+  await expectCleanInventoryHarness(fixture);
+});
+
+test("admin: built-in data is named when Ubuntu could not be reached", async ({ page }) => {
+  await authenticate(page.context(), "admin");
+  const fixture = await install(page, "admin", { kernel: "exposed", kernelUbuntu: "unreachable" });
+
+  await page.goto("/inventory/warnings?tab=kernel");
+  await expect(page.locator('[data-slot="kernel-cve-ubuntu-status"] p')).toHaveText(
+    "Using built-in data from 2026-10-19; Ubuntu could not be reached",
+  );
+  await expect(page.getByRole("button", { name: "Check Now", exact: true })).toBeEnabled();
+
+  await expectCleanInventoryHarness(fixture);
+});
+
 test("tenant: no kernel CVE is requested or shown, and no version check either", async ({ page }) => {
   await authenticate(page.context(), "tenant");
   const fixture = await install(page, "tenant", { kernel: "exposed" });
@@ -293,6 +382,7 @@ test("tenant: no kernel CVE is requested or shown, and no version check either",
   await page.goto("/inventory/warnings?tab=kernel");
   await expect(page).not.toHaveURL(/\/inventory\/warnings/);
   expect(countRequests(api, "/security/kernel-advisories")).toBe(0);
+  expect(countRequests(api, "/security/kernel-advisories/ubuntu-status")).toBe(0);
 
   await expectCleanInventoryHarness(fixture);
 });

@@ -1,6 +1,9 @@
 const { iso } = require("./api-fixture-data.cjs");
 
 const KERNEL_ADVISORY_URL = "https://lists.openwall.net/linux-cve-announce/2026/10/15/2";
+const UBUNTU_URL = "https://ubuntu.com/security/CVE-2026-99999";
+// The last read of Ubuntu's record, two hours before the page asks.
+const checkedAt = () => iso(-2 * 60 * 60 * 1000);
 
 const PWN_ESCAPE = {
   id: "CVE-2026-99999",
@@ -16,20 +19,29 @@ const PWN_ESCAPE = {
   introduced: "2.6.27",
   fixed_upstream: ["5.10.272", "5.15.223", "6.1.190", "6.6.159", "6.12.113", "6.18.57", "7.2.11"],
   fixed_mainline: "7.3-rc7",
+  source: "ubuntu",
+  stale: false,
+  check_error: null,
+  ubuntu_priority: "medium",
+  ubuntu_cvss_score: 9.3,
+  ubuntu_url: UBUNTU_URL,
 };
 
 const REBOOT = "Only a reboot into a fixed kernel clears this; an installed kernel that is not running does not.";
 
 const FINDINGS = {
+  // Ubuntu's record on 2026-10-28: linux on jammy has the fix in -proposed
   exposed: {
     advisory_id: "CVE-2026-99999",
     state: "exposed",
     severity: "critical",
-    reason: `Ubuntu had not published a fixed 5.15 kernel as of 2026-10-19. Livepatch can fix a running kernel without changing its version. ${REBOOT}`,
+    reason: `Ubuntu has a fix in testing (5.15.0-203.213), not released yet. Livepatch can fix a running kernel without changing its version. ${REBOOT}`,
     check_command:
       "zgrep -m1 CVE-2026-99999 /usr/share/doc/linux-modules-$(uname -r)/changelog.Debian.gz; canonical-livepatch status",
-    fixed_in: null,
+    fixed_in: "5.15.0-203.213",
     reference_url: KERNEL_ADVISORY_URL,
+    source: "ubuntu",
+    ubuntuChecked: true,
   },
   unverified: {
     advisory_id: "CVE-2026-99999",
@@ -62,7 +74,12 @@ const FINDINGS = {
   },
 };
 
-function host(member, { clustered = false, kernel, os = "22.04", findings }) {
+function finding({ ubuntuChecked, ...rest }) {
+  return { source: "built-in", checked_at: null, ...rest, ...(ubuntuChecked ? { checked_at: checkedAt() } : {}) };
+}
+
+function host(member, { clustered = false, kernel, os = "22.04", findings: raw }) {
+  const findings = raw.map(finding);
   return {
     cluster_id: "cluster-a",
     display_name: "Core Cluster",
@@ -103,12 +120,40 @@ function kernelAdvisories(scenario = "patched") {
   const counts = { exposed: 0, unverified: 0, patched: 0 };
   for (const h of hosts) counts[worst(h)] += 1;
   return {
-    advisories: [PWN_ESCAPE],
+    advisories: [{ ...PWN_ESCAPE, checked_at: checkedAt() }],
     hosts,
     counts,
     unreachable_nodes: ["cluster-unreachable"],
     partial_nodes: [],
     node_errors: { "cluster-unreachable": "unreachable: no connection to the cluster" },
+    ubuntu_check_enabled: true,
+  };
+}
+
+/**
+ * GET /security/kernel-advisories/ubuntu-status and the POST .../check answer: "checked" (two
+ * hours ago), "now" (just read), "unreachable" (never read, last try failed) or "off".
+ */
+function kernelCveUbuntuStatus(scenario = "checked") {
+  const read = scenario === "checked" || scenario === "now";
+  return {
+    enabled: scenario !== "off",
+    mirror: false,
+    advisories: [
+      {
+        id: PWN_ESCAPE.id,
+        source: read ? "ubuntu" : "built-in",
+        checked_at: read ? (scenario === "now" ? iso() : checkedAt()) : null,
+        last_attempt_at: scenario === "off" ? null : iso(),
+        stale: false,
+        check_error: scenario === "unreachable" ? "could not reach the URL" : null,
+        ubuntu_priority: read ? "medium" : null,
+        ubuntu_cvss_score: read ? 9.3 : null,
+        ubuntu_updated_at: read ? "2026-10-28T17:47:40.655962+00:00" : null,
+        ubuntu_url: UBUNTU_URL,
+        data_as_of: PWN_ESCAPE.data_as_of,
+      },
+    ],
   };
 }
 
@@ -132,8 +177,13 @@ function kernelWarningRows(scenario = "patched") {
         check_command: f.check_command,
         reference_url: f.reference_url,
         data_as_of: "2026-10-19",
+        fixed_in: f.fixed_in,
+        source: f.source,
+        checked_at: f.checked_at,
+        ubuntu_priority: "medium",
+        ubuntu_url: UBUNTU_URL,
       })),
   );
 }
 
-module.exports = { kernelAdvisories, kernelWarningRows };
+module.exports = { kernelAdvisories, kernelCveUbuntuStatus, kernelWarningRows };
