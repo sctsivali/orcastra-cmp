@@ -24,12 +24,10 @@ export interface CpuUsageReading {
 export function CpuUsageGauge({
   reading,
   label,
-  color,
   statusMessage,
 }: {
   reading: CpuUsageReading;
   label: string;
-  color: string;
   statusMessage?: string;
 }) {
   const idle = reading.runningInstances === 0;
@@ -39,7 +37,6 @@ export function CpuUsageGauge({
       <GaugeChart
         value={ready ? reading.busyPercent : null}
         label={label}
-        color={color}
         statusMessage={statusMessage}
         emptyLabel={reading.status === "calculating" ? "Calculating…" : "Unavailable"}
       />

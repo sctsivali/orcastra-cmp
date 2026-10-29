@@ -190,7 +190,7 @@ import {
 import { NodeCard } from "@/components/monitoring/node-card";
 import { severityBucket, warningNodeValue } from "@/lib/warning-facets";
 import { AlarmStatisticsCard } from "./components/alarm-statistics-card";
-import { ResourceUtilizationCard } from "./components/resource-utilization-card";
+import { ResourceUtilizationCard, capacityScope } from "./components/resource-utilization-card";
 import { StoragePoolsCard } from "./components/storage-pools-card";
 
 const CHART_COLORS = {
@@ -199,7 +199,6 @@ const CHART_COLORS = {
   storage: "#f59e0b", // amber
   storageRead: "#f59e0b", // amber
   storageWrite: "#ef4444", // red
-  gpu: "#8b5cf6", // violet
   network: "#8b5cf6", // purple (RX/In)
   networkTx: "#ec4899", // pink (TX/Out)
 };
@@ -1173,7 +1172,8 @@ export default function MonitoringContent() {
         inactive_nodes: dashboardData.inactive_nodes,
         total_nodes: dashboardData.total_nodes,
         // note: the ?? 0 below never reaches a screen. A Tenant's host figures are null and
-        // hostVisible is false, so every section that shows them is not rendered.
+        // hostVisible is false, so every section that shows them is not rendered. The two
+        // percentages stay null: no total reported is not 0%, and the gauges say so.
         hostVisible: dashboardData.total_cpu !== null,
         cpu_usage_percent: singleNode?.cpu_usage_percent ?? dashboardData.cpu_usage_percent ?? 0,
         cpu_reading: {
@@ -1184,8 +1184,8 @@ export default function MonitoringContent() {
           reportingInstances: dashboardData.cpu_reporting_instances ?? 0,
           runningInstances: dashboardData.running_instances,
         } as CpuUsageReading,
-        memory_usage_percent: dashboardData.memory_usage_percent ?? 0,
-        storage_usage_percent: dashboardData.storage_usage_percent ?? 0,
+        memory_usage_percent: dashboardData.memory_usage_percent ?? null,
+        storage_usage_percent: dashboardData.storage_usage_percent ?? null,
         total_cpu: dashboardData.total_cpu ?? 0,
         used_cpu: dashboardData.used_cpu ?? 0,
         total_memory_bytes: dashboardData.total_memory_bytes ?? 0,
@@ -1225,8 +1225,8 @@ export default function MonitoringContent() {
         reportingInstances: node.cpu_reporting_instances ?? 0,
         runningInstances: node.running_instances || 0,
       } as CpuUsageReading,
-      memory_usage_percent: node.memory_usage_percent || 0,
-      storage_usage_percent: node.storage_usage_percent || 0,
+      memory_usage_percent: node.memory_usage_percent ?? null,
+      storage_usage_percent: node.storage_usage_percent ?? null,
       total_cpu: node.cpu_total || 0,
       used_cpu: node.cpu_used || 0,
       total_memory_bytes: node.memory_total_bytes || 0,
@@ -1603,9 +1603,9 @@ export default function MonitoringContent() {
       {filteredStats?.hostVisible && (
         <ResourceUtilizationCard
           stats={filteredStats}
-          selectedNode={selectedNode}
+          scope={capacityScope(data, selectedNode)}
+          scopeLabel={selectedNode}
           isPartner={isPartner}
-          colors={CHART_COLORS}
         />
       )}
 

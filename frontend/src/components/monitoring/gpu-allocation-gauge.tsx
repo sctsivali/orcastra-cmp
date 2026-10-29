@@ -13,9 +13,8 @@ import { GaugeChart } from "./gauge-chart";
 
 interface GpuAllocationGaugeProps {
   stats: { total_gpu: number; used_gpu: number; total_gpu_cards?: number };
-  /** Node name, or "all" for the whole fleet. Used only in the empty copy. */
+  /** What the empty copy calls the scope: a cluster's name, or "all" for the whole fleet. */
   scope: string;
-  color: string;
 }
 
 /**
@@ -25,7 +24,7 @@ interface GpuAllocationGaugeProps {
  * as a failed probe, which is exactly how "0 / 1 GPUs" came to be reported as "the GPU is not
  * detected". State the fact instead, and always show the cards count beside the ratio.
  */
-export function GpuAllocationGauge({ stats, scope, color }: GpuAllocationGaugeProps) {
+export function GpuAllocationGauge({ stats, scope }: GpuAllocationGaugeProps) {
   const gpu = summarizeGpus({
     gpu_total: stats.total_gpu,
     gpu_used: stats.used_gpu,
@@ -53,7 +52,7 @@ export function GpuAllocationGauge({ stats, scope, color }: GpuAllocationGaugePr
 
   return (
     <>
-      <GaugeChart value={gpu.allocationPercent ?? 0} label="GPU Allocation" color={color} />
+      <GaugeChart value={gpu.allocationPercent ?? 0} label="GPU Allocation" />
       <p className="mt-2 text-sm text-muted-foreground">{gpuAllocationCaption(gpu)}</p>
       <p className="mt-0.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
         {cardsCaption}

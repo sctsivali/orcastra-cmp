@@ -19,6 +19,16 @@ export interface UsageTone {
   text: string;
   /** Class for a bar fill. Measured as a graphic, not as text. */
   fill: string;
+  /**
+   * Class for a gauge arc, an SVG stroke over `--card`.
+   *
+   * note: `--status-*`, not the fill tokens. `--success` measures 3.19:1 on `--card` in light
+   * mode and 3.34:1 in dark, too close to the 3:1 graphic floor for a thin arc, and the series
+   * hexes the monitoring gauges used before were worse: #10b981 at 2.43:1 and #f59e0b at 2.06:1
+   * in light mode. The status set measures, light then dark on `--card`: online 4.95 and 7.68,
+   * pending 4.87 and 8.74, offline 6.15 and 4.84.
+   */
+  stroke: string;
 }
 
 export const USAGE_CRITICAL_PERCENT = 90;
@@ -48,10 +58,10 @@ export function usageLevel(percent: number): UsageLevel {
 
 export function usageTone(percent: number): UsageTone {
   if (percent >= USAGE_CRITICAL_PERCENT) {
-    return { text: "text-status-offline", fill: "bg-destructive" };
+    return { text: "text-status-offline", fill: "bg-destructive", stroke: "stroke-status-offline" };
   }
   if (percent >= USAGE_ELEVATED_PERCENT) {
-    return { text: "text-status-pending", fill: "bg-status-pending" };
+    return { text: "text-status-pending", fill: "bg-status-pending", stroke: "stroke-status-pending" };
   }
-  return { text: "text-status-online", fill: "bg-success" };
+  return { text: "text-status-online", fill: "bg-success", stroke: "stroke-status-online" };
 }

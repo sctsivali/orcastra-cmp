@@ -1,4 +1,5 @@
-import { usagePercent } from "@/lib/usage-tone";
+import { cn } from "@/lib/utils";
+import { usagePercent, usageTone } from "@/lib/usage-tone";
 import {
   Tooltip as UITooltip,
   TooltipContent,
@@ -6,13 +7,13 @@ import {
 } from "@/components/ui/tooltip";
 
 interface GaugeChartProps {
-  /** null draws an empty arc with `emptyLabel`, never a zero reading. */
+  /** null draws the empty track with `emptyLabel`, never a zero reading. */
   value: number | null;
   max?: number;
   label: string;
-  color?: string;
   size?: number;
-  statusMessage?: string; // Optional status message to show on hover when value is 0
+  /** Shown on hover when there is no reading, ex; why the cluster did not answer. */
+  statusMessage?: string;
   /** What the gauge says when there is no reading, ex; "Calculating…". */
   emptyLabel?: string;
 }
@@ -21,7 +22,6 @@ export function GaugeChart({
   value,
   max = 100,
   label,
-  color = "#3b82f6",
   size = 120,
   statusMessage,
   emptyLabel = "Unavailable",
@@ -33,13 +33,7 @@ export function GaugeChart({
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * Math.PI; // Half circle
   const offset = circumference - (percentage / 100) * circumference;
-  
-  // Determine color based on percentage
-  const getColor = () => {
-    if (percentage >= 90) return "#ef4444"; // red
-    if (percentage >= 75) return "#f59e0b"; // amber
-    return color;
-  };
+  const arc = `M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`;
 
   // Show tooltip only when value is 0 and we have a status message
   const showTooltip = percentage === 0 && statusMessage;
@@ -49,29 +43,39 @@ export function GaugeChart({
       <svg width={size} height={size / 2 + 20} className="transform">
         {/* Background arc */}
         <path
-          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          d={arc}
           fill="none"
           stroke="currentColor"
           strokeWidth={strokeWidth}
           className="text-muted"
         />
-        {/* Value arc */}
-        <path
-          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
-          fill="none"
-          stroke={getColor()}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          className="transition-all duration-500"
-        />
-        {/* Value text */}
+        {/* Value arc, on the same usage ramp as every usage bar (lib/usage-tone.ts). No arc
+            without a reading: a round cap on a zero-length dash still paints a dot. */}
+        {reported ? (
+          <path
+            d={arc}
+            fill="none"
+            strokeWidth={strokeWidth}
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            className={cn(
+              "transition-all duration-500 motion-reduce:transition-none",
+              usageTone(percentage).stroke,
+            )}
+          />
+        ) : null}
+        {/* Value text. The empty label is a word, not a figure, so it is smaller and muted:
+            "Unavailable" at the figure's 20px bold is wider than the gauge and was clipped. */}
         <text
           x={size / 2}
           y={size / 2}
           textAnchor="middle"
-          className="fill-foreground text-xl font-bold"
+          className={
+            reported
+              ? "fill-foreground text-xl font-bold tabular-nums"
+              : "fill-muted-foreground text-sm font-medium"
+          }
         >
           {reported ? `${percentage.toFixed(1)}%` : emptyLabel}
         </text>
