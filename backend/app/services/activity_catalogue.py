@@ -52,6 +52,11 @@ ACTION_CATEGORIES = {
     "cluster.certificate.cancel": EventCategory.LXD_INFRA,
     "cluster.certificate.regenerate": EventCategory.LXD_INFRA,
     "cluster.certificate.trust_remove": EventCategory.LXD_INFRA,
+    # The cluster's own server certificate as this console pinned it: the first pin, a publicly
+    # trusted renewal accepted without an operator, and an Administrator's deliberate re-pin.
+    "cluster.server_certificate.pin": EventCategory.LXD_INFRA,
+    "cluster.server_certificate.renew": EventCategory.LXD_INFRA,
+    "cluster.server_certificate.repin": EventCategory.LXD_INFRA,
     "instance.create": EventCategory.LXD_INFRA,
     "instance.start": EventCategory.LXD_INFRA,
     "instance.stop": EventCategory.LXD_INFRA,
@@ -265,6 +270,9 @@ HIGH_SEVERITY_ACTIONS = {
     # and a removal revokes a certificate on a live cluster.
     "cluster.certificate.regenerate",
     "cluster.certificate.trust_remove",
+    # Both change which certificate the console accepts as this cluster.
+    "cluster.server_certificate.renew",
+    "cluster.server_certificate.repin",
     "instance.delete",
     "instance.snapshot.restore",
     "instance.snapshot.delete",

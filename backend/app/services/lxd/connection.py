@@ -19,6 +19,7 @@ from urllib3.util.retry import Retry
 from app.core.config import get_settings
 from . import breaker_sync, cert_files, health
 from .cert_rotation import CertificateRotationMixin
+from .pin_enforcement import CertificatePinMixin
 from .exceptions import (
     LXDAuthorizationError,
     LXDConnectionError,
@@ -182,6 +183,22 @@ def require_https_session_fingerprint(
     return adapter
 
 
+def _client_adapter_fingerprint(client: Optional[pylxd.Client]) -> Optional[str]:
+    """The server fingerprint a pooled client's HTTPS adapter asserts on every socket, if any."""
+    api = getattr(client, "api", None)
+    endpoint = getattr(api, "_api_endpoint", None)
+    session = getattr(api, "session", None)
+    if not isinstance(endpoint, str) or session is None:
+        return None
+    try:
+        adapter = session.get_adapter(endpoint)
+    except Exception:
+        return None
+    if not isinstance(adapter, FingerprintHTTPAdapter):
+        return None
+    return normalize_server_fingerprint(adapter.server_fingerprint) or None
+
+
 def require_client_server_fingerprint(client: pylxd.Client, expected_fingerprint: str) -> None:
     """Bind a pylxd client's real session to a persisted migration fingerprint."""
     api = getattr(client, "api", None)
@@ -194,7 +211,7 @@ def require_client_server_fingerprint(client: pylxd.Client, expected_fingerprint
     require_https_session_fingerprint(session, endpoint, expected_fingerprint)
 
 
-class LXDConnectionManager(CertificateRotationMixin):
+class LXDConnectionManager(CertificateRotationMixin, CertificatePinMixin):
     """
     Manages LXD client connections with pooling and automatic reconnection.
     """
@@ -440,103 +457,6 @@ class LXDConnectionManager(CertificateRotationMixin):
         gc.collect()
         logger.debug("Cleared all credentials from memory")
     
-    def _enforce_certificate_pin(
-        self, cluster_id: str, endpoint: str
-    ) -> Optional[str]:
-        """Pin on first sight, refuse on change, and never turn a network fault into an alarm."""
-        from app.core.config import get_settings
-
-        if not get_settings().lxd_pin_server_certificate:
-            return None
-
-        from app.services.lxd_certs.pinning import FINGERPRINT_FIELD, check_or_record_pin
-
-        try:
-            metadata = self._read_cluster_metadata(cluster_id)
-        except Exception as exc:
-            # Vault unreachable is not a certificate problem, and refusing here would make an
-            # outage in one dependency look like an attack on another.
-            logger.warning("Could not read the pin for %s (%s); connecting unpinned", cluster_id, exc)
-            return None
-
-        stored_fingerprint = (metadata or {}).get(FINGERPRINT_FIELD)
-        outcome, fingerprint = check_or_record_pin(
-            cluster_id, endpoint, stored_fingerprint
-        )
-        if outcome == "pinned" and fingerprint:
-            try:
-                self._write_cluster_pin(cluster_id, metadata or {}, fingerprint)
-            except Exception as exc:
-                # Failing to record it means the next connection pins again, which is harmless.
-                logger.warning("Could not record the pin for %s: %s", cluster_id, exc)
-        return fingerprint or (
-            stored_fingerprint if isinstance(stored_fingerprint, str) else None
-        )
-
-    def _enforce_expected_certificate_pin(
-        self,
-        cluster_id: str,
-        endpoint: str,
-        expected_fingerprint: str,
-    ) -> str:
-        """Verify a persisted migration pin before presenting the client certificate."""
-        from app.services.lxd_certs.pinning import fetch_server_fingerprint
-
-        expected = normalize_server_fingerprint(expected_fingerprint)
-        if len(expected) != 64 or any(value not in "0123456789abcdef" for value in expected):
-            raise LXDTransportPinError(
-                "The approved cluster certificate fingerprint is invalid."
-            )
-        parsed = urlparse(endpoint)
-        if (
-            parsed.scheme.lower() != "https"
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
-            raise LXDTransportPinError(
-                "Migration Center requires a registered HTTPS cluster endpoint."
-            )
-        live = fetch_server_fingerprint(endpoint)
-        if live is None:
-            raise LXDTransportPinError(
-                "The cluster certificate could not be verified against the approved fingerprint."
-            )
-        if normalize_server_fingerprint(live) != expected:
-            logger.error(
-                "Migration transport certificate mismatch for %s; refusing the connection",
-                cluster_id,
-            )
-            raise LXDTransportPinError(
-                "The cluster certificate no longer matches the approved fingerprint."
-            )
-        return expected
-
-    def _read_cluster_metadata(self, cluster_id: str) -> dict:
-        from app.core.config import get_settings
-        from app.core.vault_client import get_vault_client
-
-        settings = get_settings()
-        if not (settings.vault_enabled and settings.vault_token):
-            return {}
-        client = get_vault_client(settings.vault_addr, settings.vault_token)
-        return client.vault_read(f"{settings.vault_clusters_path}/{cluster_id}/metadata") or {}
-
-    def _write_cluster_pin(self, cluster_id: str, metadata: dict, fingerprint: str) -> None:
-        from datetime import datetime, timezone
-
-        from app.core.config import get_settings
-        from app.core.vault_client import get_vault_client
-        from app.services.lxd_certs.pinning import FINGERPRINT_FIELD, PINNED_AT_FIELD
-
-        settings = get_settings()
-        client = get_vault_client(settings.vault_addr, settings.vault_token)
-        # Read-modify-write, like every other metadata writer here, so nothing else is dropped.
-        updated = dict(metadata)
-        updated[FINGERPRINT_FIELD] = fingerprint
-        updated[PINNED_AT_FIELD] = datetime.now(timezone.utc).isoformat()
-        client.vault_kv_put(f"{settings.vault_clusters_path}/{cluster_id}/metadata", updated)
-
     def connect_with_vault_cert(
         self,
         cluster_id: str,
@@ -751,6 +671,17 @@ class LXDConnectionManager(CertificateRotationMixin):
                 "Skipping %s: recently unreachable (%s)", cluster_id, health.get_reason(cluster_id)
             )
             return None
+
+        if cluster_id in self._clients and expected_server_fingerprint:
+            cached_pin = _client_adapter_fingerprint(self._clients[cluster_id])
+            if cached_pin and cached_pin != normalize_server_fingerprint(
+                expected_server_fingerprint
+            ):
+                # A client pooled before a public-CA renewal holds the superseded pin. The
+                # reconnect below verifies the live certificate against the expected one before
+                # any client credential is sent, so dropping the stale client is safe.
+                logger.info("Reconnecting %s: its pooled client predates the current pin", cluster_id)
+                self.cleanup_connection(cluster_id)
 
         if cluster_id in self._clients:
             if expected_server_fingerprint:

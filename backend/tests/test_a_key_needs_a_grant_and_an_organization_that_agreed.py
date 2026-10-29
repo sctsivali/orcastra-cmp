@@ -465,7 +465,7 @@ def test_the_gate_consults_all_three_controls() -> None:
     )
     assert _calls(tree, "get_active_key_grant"), "the key's grant is not read"
     assert _calls(tree, "consume"), "the per-target budget is not spent"
-    assert _calls(tree, "cluster_fingerprint"), (
+    assert _calls(tree, "cluster_pin_state"), (
         "the grant is not checked against the cluster's current registration, so a re-registered "
         "cluster of the same name inherits it"
     )

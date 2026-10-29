@@ -3832,11 +3832,11 @@ async def _assert_desktop_allowed(
                 dissenting=dissenting,
             )
 
-        # The pinned certificate is passed so a grant issued against a different registration of
-        # the same cluster id is refused rather than inherited.
-        fingerprint = await break_glass_service.cluster_fingerprint(request.cluster_id)
+        # The pin is passed so a grant issued against a different registration of the same
+        # cluster id is refused rather than inherited, while a public-CA renewal is not.
+        pin_state = await break_glass_service.cluster_pin_state(request.cluster_id)
         grant = await break_glass_service.get_active_key_grant(
-            db, key_id, request.cluster_id, fingerprint=fingerprint
+            db, key_id, request.cluster_id, pin_state=pin_state
         )
         if grant is None:
             _refuse(

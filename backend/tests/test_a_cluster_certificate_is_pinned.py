@@ -20,8 +20,10 @@ from app.core.config import Settings
 from app.services.lxd import connection as connection_module
 from app.services.lxd_certs.pinning import (
     FINGERPRINT_FIELD,
+    TRUST_FIELD,
+    TRUST_TOFU,
     LXDCertificatePinError,
-    check_or_record_pin,
+    decide_pin,
 )
 
 PIN_A = "a" * 64
@@ -33,27 +35,37 @@ def _with_live(monkeypatch, fingerprint):
         "app.services.lxd_certs.pinning.fetch_server_fingerprint",
         lambda endpoint, timeout=5: fingerprint,
     )
+    # A self-signed LXD certificate never verifies against a public CA.
+    monkeypatch.setattr(
+        "app.services.lxd_certs.pinning.fetch_public_ca_fingerprint",
+        lambda endpoint, timeout=5: None,
+    )
+
+
+def _pinned(fingerprint):
+    return {FINGERPRINT_FIELD: fingerprint, TRUST_FIELD: TRUST_TOFU}
 
 
 def test_a_first_connection_records_the_certificate(monkeypatch) -> None:
     _with_live(monkeypatch, PIN_A)
-    outcome, fingerprint = check_or_record_pin("nuc2", "https://host:8443", None)
-    assert outcome == "pinned"
-    assert fingerprint == PIN_A
+    decision = decide_pin("nuc2", "https://host:8443", None)
+    assert decision.outcome == "pinned"
+    assert decision.fingerprint == PIN_A
+    assert decision.update[FINGERPRINT_FIELD] == PIN_A
 
 
 def test_a_matching_certificate_is_accepted(monkeypatch) -> None:
     _with_live(monkeypatch, PIN_A)
-    outcome, fingerprint = check_or_record_pin("nuc2", "https://host:8443", PIN_A)
-    assert outcome == "match"
-    assert fingerprint is None, "a match must not rewrite the stored pin"
+    decision = decide_pin("nuc2", "https://host:8443", _pinned(PIN_A))
+    assert decision.outcome == "match"
+    assert decision.update is None, "a match must not rewrite the stored pin"
 
 
 def test_a_substituted_certificate_is_refused(monkeypatch) -> None:
     """The whole point: a different certificate on a pinned cluster is not a warning."""
     _with_live(monkeypatch, PIN_B)
     with pytest.raises(LXDCertificatePinError) as exc:
-        check_or_record_pin("nuc2", "https://host:8443", PIN_A)
+        decide_pin("nuc2", "https://host:8443", _pinned(PIN_A))
     assert "nuc2" in str(exc.value)
     assert "Re-pin" in str(exc.value), "the refusal must say how a legitimate rotation is accepted"
 
@@ -65,9 +77,9 @@ def test_an_unreachable_endpoint_is_not_reported_as_an_attack(monkeypatch) -> No
     fleet as security incidents every time something polled them.
     """
     _with_live(monkeypatch, None)
-    outcome, fingerprint = check_or_record_pin("nuc2", "https://host:8443", PIN_A)
-    assert outcome == "unavailable"
-    assert fingerprint is None
+    decision = decide_pin("nuc2", "https://host:8443", _pinned(PIN_A))
+    assert decision.outcome == "unavailable"
+    assert decision.update is None
 
 
 def test_the_pin_is_checked_before_the_client_certificate_is_sent() -> None:

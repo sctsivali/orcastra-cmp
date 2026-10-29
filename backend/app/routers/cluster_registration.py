@@ -1735,8 +1735,9 @@ async def repin_cluster_certificate(
     from app.core.vault_client import get_vault_client
     from app.services.lxd_certs.pinning import (
         FINGERPRINT_FIELD,
-        PINNED_AT_FIELD,
+        TRUST_FIELD,
         fetch_server_fingerprint,
+        repin_fields,
     )
 
     vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
@@ -1756,11 +1757,12 @@ async def repin_cluster_certificate(
         )
 
     previous = metadata.get(FINGERPRINT_FIELD)
-    from datetime import datetime, timezone
-    updated = dict(metadata)
-    updated[FINGERPRINT_FIELD] = fingerprint
-    updated[PINNED_AT_FIELD] = datetime.now(timezone.utc).isoformat()
-    vault_client.vault_kv_put(f"{settings.vault_clusters_path}/{cluster_id}/metadata", updated)
+    # A re-pin is a new trust decision: classified like a first sighting, and the renewal lineage
+    # of the old pin is dropped so nothing approved against it still counts as this cluster.
+    fields = await asyncio.to_thread(repin_fields, endpoint_url, fingerprint)
+    vault_client.vault_kv_put(
+        f"{settings.vault_clusters_path}/{cluster_id}/metadata", {**metadata, **fields}
+    )
 
     # The cluster metadata this just rewrote is what the availability and region reads render,
     # and a pooled client built before the re-pin still holds the old pin, so drop both.
@@ -1775,12 +1777,30 @@ async def repin_cluster_certificate(
     get_lxd_service().connection_manager.remove_connection(cluster_id)
 
     logger.warning(
-        "Re-pinned %s from %s… to %s… by %s",
+        "Re-pinned %s from %s… to %s… (%s) by %s",
         cluster_id,
         (previous or "<unpinned>")[:16],
         fingerprint[:16],
+        fields[TRUST_FIELD],
         _rbac.email,
     )
+    try:
+        from app.services.activity_logger import get_activity_logger
+
+        get_activity_logger().log_activity(
+            action="cluster.server_certificate.repin",
+            target_type="cluster",
+            target_id=cluster_id,
+            target_host=endpoint_url,
+            result="success",
+            details={
+                "previous_fingerprint": (previous or "")[:16] or None,
+                "fingerprint": fingerprint[:16],
+                "trust": fields[TRUST_FIELD],
+            },
+        )
+    except Exception:
+        logger.debug("Could not audit the re-pin of %s", cluster_id, exc_info=True)
     return {
         "cluster_id": cluster_id,
         "previous_fingerprint": (previous[:16] + "...") if previous else None,

@@ -185,6 +185,23 @@ def _select_own(rows: List[Dict[str, Any]], prefix: str) -> List[Dict[str, Any]]
     return sorted(mine, key=lambda row: str(row.get("created_at") or ""))
 
 
+def _follow_renewed_pin(schedule: Any, current: Any) -> None:
+    """Move a schedule onto the current pin once a public-CA renewal was accepted.
+
+    A schedule lives longer than the bounded renewal lineage, so it carries the newest pin forward
+    on every run instead of relying on the lineage to remember the one it was created against.
+    The row is committed with the run's outcome.
+    """
+    from app.services.lxd_certs.pinning import PinState
+
+    if isinstance(current, PinState) and schedule.cluster_fingerprint != current.fingerprint:
+        logger.info(
+            "Schedule %s follows the renewed certificate of %s",
+            getattr(schedule, "id", "?"), schedule.cluster_id,
+        )
+        schedule.cluster_fingerprint = current.fingerprint
+
+
 async def run_one(
     db: Any,
     schedule: Any,
@@ -241,12 +258,13 @@ async def _run_one_guarded(
     if refusal is None and schedule.cluster_fingerprint:
         reader = fingerprint_reader
         if reader is None:
-            from app.services.break_glass_service import cluster_fingerprint
+            from app.services.break_glass_service import cluster_pin_state
 
-            reader = cluster_fingerprint
-        refusal = authority.fingerprint_refusal(
-            schedule.cluster_fingerprint, await reader(schedule.cluster_id)
-        )
+            reader = cluster_pin_state
+        current = await reader(schedule.cluster_id)
+        refusal = authority.fingerprint_refusal(schedule.cluster_fingerprint, current)
+        if refusal is None:
+            _follow_renewed_pin(schedule, current)
     if refusal is not None:
         return RunOutcome(result="refused", refusal=refusal, terminal=refusal.terminal)
 

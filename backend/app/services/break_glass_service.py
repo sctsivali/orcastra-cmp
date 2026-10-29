@@ -13,7 +13,7 @@ a grant is live iff ``revoked_at IS NULL AND expires_at > now()`` (status is adv
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select, and_
@@ -27,6 +27,9 @@ from app.core.org_scope import (
     resolve_cluster_org,
 )
 from app.models.db_models import BreakGlassGrant
+
+if TYPE_CHECKING:
+    from app.services.lxd_certs.pinning import PinState
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,12 @@ async def get_active_grant(
 
 
 async def get_active_key_grant(
-    db: AsyncSession, api_key_id: str, cluster_id: str, *, fingerprint: Optional[str] = None
+    db: AsyncSession,
+    api_key_id: str,
+    cluster_id: str,
+    *,
+    fingerprint: Optional[str] = None,
+    pin_state: Optional["PinState"] = None,
 ) -> Optional[BreakGlassGrant]:
     """The live grant (if any) authorizing an INTEGRATION KEY to reach cluster_id.
 
@@ -92,7 +100,16 @@ async def get_active_key_grant(
     grant = await _active_grant_for(db, BreakGlassGrant.api_key_id, api_key_id, cluster_id)
     if grant is None:
         return None
-    if fingerprint and grant.cluster_fingerprint and grant.cluster_fingerprint != fingerprint:
+    if pin_state is not None:
+        # A public-CA cluster renews its certificate without becoming another registration.
+        same_registration = not grant.cluster_fingerprint or pin_state.accepts(
+            grant.cluster_fingerprint
+        )
+    else:
+        same_registration = not (
+            fingerprint and grant.cluster_fingerprint and grant.cluster_fingerprint != fingerprint
+        )
+    if not same_registration:
         logger.warning(
             "Refusing break-glass grant %s for key %s on %s: the cluster's certificate no longer "
             "matches the one the grant was issued against, so this is a different registration",
@@ -178,6 +195,41 @@ async def enforce_sensitive_access(
     )
 
 
+class PinStoreUnavailable(Exception):
+    """Vault could not say whether this cluster has a pin, which is not the same as having none."""
+
+
+async def cluster_pin_state(cluster_id: str, *, strict: bool = False) -> Optional["PinState"]:
+    """The cluster's pin with its trust kind and renewal lineage, or None when nothing is pinned.
+
+    The same None-on-unreadable rule as `cluster_fingerprint` unless ``strict``, which raises
+    `PinStoreUnavailable` instead for a caller that has to tell "no pin" from "could not read".
+    """
+    from app.services.lxd_certs.pinning import PinState
+
+    try:
+        from app.core.config import get_settings
+        from app.core.vault_client import get_vault_client
+
+        settings = get_settings()
+        if not (settings.vault_enabled and settings.vault_token):
+            if strict:
+                raise PinStoreUnavailable("Vault is not configured")
+            return None
+        client = get_vault_client(settings.vault_addr, settings.vault_token)
+        metadata = await asyncio.to_thread(
+            client.vault_read, f"{settings.vault_clusters_path}/{cluster_id}/metadata"
+        )
+    except PinStoreUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read the certificate pin for %s: %s", cluster_id, exc)
+        if strict:
+            raise PinStoreUnavailable(str(exc)) from exc
+        return None
+    return PinState.from_metadata(metadata)
+
+
 async def cluster_fingerprint(cluster_id: str) -> Optional[str]:
     """The cluster's pinned server-certificate fingerprint, or None when nothing is pinned.
 
@@ -192,22 +244,8 @@ async def cluster_fingerprint(cluster_id: str) -> Optional[str]:
     issued before the column existed. Refusing to issue a grant because a pin is missing would
     make an unrelated Vault problem look like an authorisation failure.
     """
-    try:
-        from app.core.config import get_settings
-        from app.core.vault_client import get_vault_client
-        from app.services.lxd_certs.pinning import FINGERPRINT_FIELD
-
-        settings = get_settings()
-        if not (settings.vault_enabled and settings.vault_token):
-            return None
-        client = get_vault_client(settings.vault_addr, settings.vault_token)
-        metadata = await asyncio.to_thread(
-            client.vault_read, f"{settings.vault_clusters_path}/{cluster_id}/metadata"
-        )
-        return (metadata or {}).get(FINGERPRINT_FIELD)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read the certificate pin for %s: %s", cluster_id, exc)
-        return None
+    state = await cluster_pin_state(cluster_id)
+    return state.fingerprint if state else None
 
 
 async def create_grant(

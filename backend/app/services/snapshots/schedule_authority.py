@@ -289,7 +289,7 @@ async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
     )
 
 
-def fingerprint_refusal(stored: Optional[str], current: Optional[str]) -> Optional[Refusal]:
+def fingerprint_refusal(stored: Optional[str], current: Any) -> Optional[Refusal]:
     """Refuse when the cluster behind the name is demonstrably a different registration.
 
     important: `cluster_fingerprint` returns None for BOTH "nothing is pinned" and "Vault could not
@@ -301,10 +301,19 @@ def fingerprint_refusal(stored: Optional[str], current: Optional[str]) -> Option
 
     `cluster_id` is free text with no foreign key in this schema, so the name alone cannot tell a
     cluster from its replacement.
+
+    ``current`` is the cluster's `PinState`, or a bare fingerprint. A public-CA cluster renews its
+    certificate without becoming another registration, so a fingerprint in its renewal lineage is
+    still the same cluster.
     """
+    from app.services.lxd_certs.pinning import PinState
+
     if not stored or not current:
         return None
-    if stored == current:
+    if isinstance(current, PinState):
+        if current.accepts(stored):
+            return None
+    elif stored == current:
         return None
     return Refusal(
         code="cluster_is_a_different_registration",
