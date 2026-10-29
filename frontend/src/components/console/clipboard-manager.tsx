@@ -349,7 +349,7 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
                         onClick={(e) => { e.stopPropagation(); handleCopy(entry); }}
                       >
                         {copiedId === entry.id ? (
-                          <Check className="h-3 w-3 text-green-500" />
+                          <Check className="h-3 w-3 text-status-online" />
                         ) : (
                           <Copy className="h-3 w-3" />
                         )}

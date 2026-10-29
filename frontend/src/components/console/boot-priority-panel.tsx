@@ -273,9 +273,9 @@ export function BootPriorityPanel({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     {entry.instanceType === 'virtual-machine' ? (
-                      <Server className="h-4 w-4 text-blue-500 shrink-0" />
+                      <Server className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
                     ) : (
-                      <Box className="h-4 w-4 text-green-500 shrink-0" />
+                      <Box className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
                     )}
                     <span className="min-w-0 break-words font-medium">{entry.instanceName}</span>
                     <Badge
@@ -308,7 +308,7 @@ export function BootPriorityPanel({
                     onCheckedChange={(checked: boolean) => updateEntry(index, 'autostart', checked)}
                   />
                   {entry.autostart ? (
-                    <Power className="h-4 w-4 text-green-500" />
+                    <Power className="h-4 w-4 text-status-online" />
                   ) : (
                     <PowerOff className="h-4 w-4 text-muted-foreground" />
                   )}

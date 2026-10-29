@@ -483,9 +483,9 @@ export function ConsoleWindow({
         <Grip className="h-4 w-4 text-muted-foreground" />
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {consoleInstance.capabilities?.isVM ? (
-            <Monitor className="h-4 w-4 text-blue-500" />
+            <Monitor className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           ) : (
-            <Terminal className="h-4 w-4 text-green-500" />
+            <Terminal className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           )}
           <span className="font-medium truncate">{consoleInstance.instanceName}</span>
           <Badge variant="outline" className="text-xs">

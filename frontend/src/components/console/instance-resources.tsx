@@ -18,18 +18,19 @@ import {
 } from "@/lib/utils";
 import type { InstanceMetrics } from "@/types";
 
-// note: the console is fixed-dark chrome and keeps its own palette; only the thresholds are
-// shared with the rest of the product, so the bar and the dialog turn amber and red together.
+// note: the console is fixed-dark chrome, so the ramp is the --status-* set read through the
+// terminal-status rebinding (their dark values in either page theme), on the same thresholds as
+// the rest of the product, so the bar and the dialog turn amber and red together.
 function toneFor(percent: number): string {
-  if (percent >= USAGE_CRITICAL_PERCENT) return "text-red-400";
-  if (percent >= USAGE_ELEVATED_PERCENT) return "text-yellow-400";
+  if (percent >= USAGE_CRITICAL_PERCENT) return "terminal-status text-status-offline";
+  if (percent >= USAGE_ELEVATED_PERCENT) return "terminal-status text-status-pending";
   return "text-gray-300";
 }
 
-function barFor(percent: number, calm: string): string {
-  if (percent >= USAGE_CRITICAL_PERCENT) return "bg-red-500";
-  if (percent >= USAGE_ELEVATED_PERCENT) return "bg-yellow-500";
-  return calm;
+function barFor(percent: number): string {
+  if (percent >= USAGE_CRITICAL_PERCENT) return "terminal-status bg-status-offline";
+  if (percent >= USAGE_ELEVATED_PERCENT) return "terminal-status bg-status-pending";
+  return "terminal-status bg-status-online";
 }
 
 function quota({ value, unit }: { value: string; unit: string }): string {
@@ -50,7 +51,7 @@ export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics })
   return (
     <>
       <div className="flex items-center gap-1 text-xs">
-        <Cpu className="h-3 w-3 text-blue-400" aria-hidden="true" />
+        <Cpu className="h-3 w-3 text-gray-400" aria-hidden="true" />
         <span className="sr-only">CPU</span>
         <span className={cn("font-mono", cpu.tone)}>{cpu.text}</span>
       </div>
@@ -58,7 +59,7 @@ export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics })
       <div className="h-3 w-px bg-terminal-border" />
 
       <div className="flex items-center gap-1 text-xs">
-        <Activity className="h-3 w-3 text-green-400" aria-hidden="true" />
+        <Activity className="h-3 w-3 text-gray-400" aria-hidden="true" />
         <span className="sr-only">Memory</span>
         <span className={cn("font-mono", memory && !memory.unlimited ? toneFor(memory.percent) : "text-gray-500")}>
           {memory && memory.unlimited
@@ -107,7 +108,7 @@ export function InstanceResourcesPanel({
       <div>
         <div className="flex justify-between mb-1">
           <span className="text-gray-400 flex items-center gap-1">
-            <Cpu className="h-3 w-3 text-blue-400" aria-hidden="true" /> CPU
+            <Cpu className="h-3 w-3 text-gray-400" aria-hidden="true" /> CPU
           </span>
           <span className={cn("font-mono", cpu.tone)}>
             {cpu.text}
@@ -119,14 +120,14 @@ export function InstanceResourcesPanel({
           </span>
         </div>
         {cpu.percent !== null ? (
-          <ProgressBar value={cpu.percent} color={barFor(cpu.percent, "bg-blue-500")} />
+          <ProgressBar value={cpu.percent} color={barFor(cpu.percent)} />
         ) : null}
       </div>
 
       <div>
         <div className="flex justify-between mb-1">
           <span className="text-gray-400 flex items-center gap-1">
-            <Activity className="h-3 w-3 text-green-400" aria-hidden="true" /> Memory
+            <Activity className="h-3 w-3 text-gray-400" aria-hidden="true" /> Memory
           </span>
           <span className="text-gray-300 font-mono">
             {memory && memory.unlimited
@@ -137,7 +138,7 @@ export function InstanceResourcesPanel({
           </span>
         </div>
         {memory && memory.total > 0 && !memory.unlimited ? (
-          <ProgressBar value={memory.percent} color={barFor(memory.percent, "bg-green-500")} />
+          <ProgressBar value={memory.percent} color={barFor(memory.percent)} />
         ) : null}
         {/* note: without a memory limit "available" is the host's free memory, not this
             instance's headroom, so it is left out. */}
@@ -152,7 +153,7 @@ export function InstanceResourcesPanel({
       {Object.entries(metrics.disk_usage_bytes).map(([device, bytes]) => (
         <div key={device} className="flex justify-between">
           <span className="text-gray-400 flex items-center gap-1">
-            <HardDrive className="h-3 w-3 text-orange-400" aria-hidden="true" /> {device}
+            <HardDrive className="h-3 w-3 text-gray-400" aria-hidden="true" /> {device}
           </span>
           <span className="text-gray-300 font-mono">
             {totals[device] ? quota(formatByteQuota(bytes, totals[device], 1)) : formatBytes(bytes)}
@@ -163,15 +164,15 @@ export function InstanceResourcesPanel({
       {Object.entries(metrics.network_rx_bytes || {}).map(([iface, received]) => (
         <div key={iface} className="flex justify-between">
           <span className="text-gray-400 flex items-center gap-1">
-            <Network className="h-3 w-3 text-purple-400" aria-hidden="true" /> {iface}
+            <Network className="h-3 w-3 text-gray-400" aria-hidden="true" /> {iface}
           </span>
           <span className="text-gray-300 font-mono">
             {ratesReported ? (
               <>
-                <span className="text-green-400">
+                <span>
                   ↓{rx[iface] !== undefined ? formatNetworkRate(rx[iface], 1) : "…"}
                 </span>{" "}
-                <span className="text-blue-400">
+                <span>
                   ↑{tx[iface] !== undefined ? formatNetworkRate(tx[iface], 1) : "…"}
                 </span>
                 <span className="text-gray-500">
@@ -180,8 +181,8 @@ export function InstanceResourcesPanel({
               </>
             ) : (
               <>
-                <span className="text-green-400">↓{formatBytes(received, 1)}</span>{" "}
-                <span className="text-blue-400">↑{formatBytes(metrics.network_tx_bytes?.[iface] ?? 0, 1)}</span>
+                <span>↓{formatBytes(received, 1)}</span>{" "}
+                <span>↑{formatBytes(metrics.network_tx_bytes?.[iface] ?? 0, 1)}</span>
               </>
             )}
           </span>
@@ -192,7 +193,7 @@ export function InstanceResourcesPanel({
 }
 
 /** Thin progress bar widget */
-function ProgressBar({ value, color = "bg-blue-500" }: { value: number; color?: string }) {
+function ProgressBar({ value, color }: { value: number; color: string }) {
   const clamped = Math.min(Math.max(value, 0), 100);
   return (
     <div className="w-full bg-terminal-border rounded-full h-1.5 overflow-hidden">

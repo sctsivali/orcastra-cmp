@@ -308,7 +308,7 @@ export function ISOManagerPanel({
         
         {attachedISO ? (
           <div className="flex items-center gap-3 p-3 rounded-lg border bg-card">
-            <Disc className="h-8 w-8 text-blue-500 shrink-0" />
+            <Disc className="h-8 w-8 text-muted-foreground shrink-0" aria-hidden="true" />
             <div className="flex-1 min-w-0">
               <p className="font-medium">
                 <OverflowText value={attachedISO.source} label="source path for the attached ISO" mono />

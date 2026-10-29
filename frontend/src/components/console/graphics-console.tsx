@@ -886,7 +886,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       if (status === 'error') {
         return (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
-            <AlertCircle className="h-8 w-8 text-red-400" />
+            <AlertCircle className="terminal-status h-8 w-8 text-status-offline" />
             <p className="text-sm text-white/70">{errorMessage || 'Connection failed'}</p>
             <Button
               aria-busy={reconnectPending}
@@ -913,7 +913,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
             <div className="relative">
               <Monitor className="h-12 w-12 text-white/70" />
-              <Wifi className="h-4 w-4 text-blue-400 absolute -top-1 -right-1 animate-pulse" />
+              <Wifi className="terminal-status h-4 w-4 text-status-pending absolute -top-1 -right-1 animate-pulse" />
             </div>
             <p className="text-sm text-white/70">Connecting to {instanceName}...</p>
             <p className="text-xs text-white/50">Establishing SPICE connection</p>

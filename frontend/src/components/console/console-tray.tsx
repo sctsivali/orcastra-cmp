@@ -53,9 +53,9 @@ export function ConsoleTray({
           >
             {/* Icon based on type */}
             {console.instanceType === "virtual-machine" ? (
-              <Monitor className="h-4 w-4 text-blue-500" />
+              <Monitor className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             ) : (
-              <Terminal className="h-4 w-4 text-green-500" />
+              <Terminal className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             )}
 
             {/* Instance name */}
