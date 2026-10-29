@@ -15,6 +15,7 @@ from .billing import (
     billing_override_event,
     enforce_migration_billing_policy,
     report_has_running_source,
+    report_needs_unmeasured_size_consent,
     validate_acknowledgements,
 )
 from .context import (
@@ -535,6 +536,7 @@ async def _admit_worker_run(
         external_cutover_required=job.external_cutover_required,
         acknowledgements=acknowledgements,
         source_running=report_has_running_source(report),
+        unmeasured_size=report_needs_unmeasured_size_consent(report),
     )
     billing_impact_count = await _blocking(
         enforce_migration_billing_policy,

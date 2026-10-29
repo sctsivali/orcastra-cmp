@@ -38,6 +38,7 @@ from .authority import AuthentikAuthorityVerifier
 from .billing import (
     enforce_migration_billing_policy,
     report_has_running_source,
+    report_needs_unmeasured_size_consent,
     validate_acknowledgements,
 )
 from .contracts import (
@@ -858,6 +859,7 @@ class MigrationPlanningMixin:
                 external_cutover_required=request.external_cutover_required,
                 acknowledgements=acknowledgements,
                 source_running=report_has_running_source(report),
+                unmeasured_size=report_needs_unmeasured_size_consent(report),
             )
             source_client, _target_client = await self._clients(
                 request,

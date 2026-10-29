@@ -145,16 +145,57 @@ def test_a_dir_instance_is_bounded_by_its_pool_and_can_move(monkeypatch: pytest.
     assert result.blockers == []
     warning = next(w for w in result.warnings if w["code"] == "source_footprint_bounded_by_pool")
     assert warning["message"].startswith("workload sits on a dir storage pool")
-    assert "5.0 GiB" in warning["message"]
+    # important: a warning is part of the approved report's hash, so it carries no figure that
+    # moves between plan and execute (a pool's usage does).
+    assert not any(char.isdigit() for char in warning["message"])
+    assert not any(w["code"] == "source_size_unmeasured" for w in result.warnings)
 
 
-def test_a_dir_instance_is_refused_when_the_target_cannot_hold_its_pool(
+def test_a_dir_instance_the_target_cannot_bound_asks_for_consent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Pandora's pool holds 105 GB of a 124 GB disk, so a copy within it never fits the bound.
+    The owner chose (2026-10-29) to let an operator accept the unmeasured size instead."""
     result = _capacity(monkeypatch, _dir_client(), source_used=60 * GiB, target_free=50 * GiB)
-    blocker = next(b for b in result.blockers if b["code"] == "target_pool_insufficient_capacity")
-    assert "60.0 GiB" in blocker["message"] and "50.0 GiB" in blocker["message"]
-    assert not any(b["code"] == "source_footprint_unverified" for b in result.blockers)
+    assert result.blockers == []
+    consent = next(w for w in result.warnings if w["code"] == "source_size_unmeasured")
+    assert "workload" in consent["message"] and "'fast'" in consent["message"]
+    assert not any(char.isdigit() for char in consent["message"])
+    assert not any(w["code"] == "source_footprint_bounded_by_pool" for w in result.warnings)
+
+
+def test_measured_instances_that_do_not_fit_are_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _Client(kind="virtual-machine", usage=60 * GiB, root={"pool": "default", "size": "60GiB"})
+    client.api.storage_pools = {"default": _Node({"name": "default", "driver": "zfs", "config": {}})}
+    result = _capacity(monkeypatch, client, source_used=1 * GiB, target_free=50 * GiB)
+    assert any(b["code"] == "target_pool_insufficient_capacity" for b in result.blockers)
+    assert not any(w["code"] == "source_size_unmeasured" for w in result.warnings)
+
+
+def test_unmeasured_size_consent_is_a_required_acknowledgement() -> None:
+    from app.services.migrations.billing import (
+        report_needs_unmeasured_size_consent,
+        required_acknowledgements,
+        validate_acknowledgements,
+    )
+
+    report = {"warnings": [{"code": "source_size_unmeasured", "severity": "warning"}]}
+    assert report_needs_unmeasured_size_consent(report) is True
+    assert report_needs_unmeasured_size_consent({"warnings": []}) is False
+    required = required_acknowledgements(
+        intent="copy", strategy="same_cluster_copy", external_cutover_required=False, unmeasured_size=True
+    )
+    assert "unmeasured-size-accepted" in required
+    with pytest.raises(Exception):
+        validate_acknowledgements(
+            intent="copy", strategy="same_cluster_copy", external_cutover_required=False,
+            acknowledgements=["copy-impact-reviewed", "billing-impact-reviewed"], unmeasured_size=True,
+        )
+    validate_acknowledgements(
+        intent="copy", strategy="same_cluster_copy", external_cutover_required=False,
+        acknowledgements=["copy-impact-reviewed", "billing-impact-reviewed", "unmeasured-size-accepted"],
+        unmeasured_size=True,
+    )
 
 
 def test_one_dir_pool_is_counted_once_for_several_instances(monkeypatch: pytest.MonkeyPatch) -> None:

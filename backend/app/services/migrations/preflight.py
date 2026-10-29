@@ -15,6 +15,7 @@ from app.services.lxd import mobility
 from app.services.lxd.project_usage import parse_lxd_size
 
 from . import project_policy
+from .billing import UNMEASURED_SIZE_WARNING
 from .build_policy import build_verdict
 from .security import (
     MigrationSecurityError,
@@ -505,7 +506,7 @@ def _check_capacity(
             )
             return
         headroom = mobility.pool_headroom(target_client, target_pool)
-    bounds = _bound_unmeasured_footprints(
+    bounds, bounded = _bound_unmeasured_footprints(
         result,
         client=source_client,
         project=source_project,
@@ -541,14 +542,29 @@ def _check_capacity(
         return
     if all(value is not None for value in footprints):
         bound = sum(bounds.values())
-        required = sum(int(value or 0) for value in footprints) + bound
-        if required > int(headroom["free"]):
+        measured = sum(int(value or 0) for value in footprints)
+        free = int(headroom["free"])
+        if bound and measured <= free < measured + bound:
+            # The owner's choice (2026-10-29): a dir pool's bound is everything it holds, which a
+            # copy within a well-filled pool (Pandora's) never fits, so an operator may accept the
+            # unmeasured size instead of being refused. What was measured must still fit.
+            result.warnings[:] = [
+                warning for warning in result.warnings if warning.get("code") != "source_footprint_bounded_by_pool"
+            ]
+            result.warn(
+                UNMEASURED_SIZE_WARNING,
+                f"The size of {', '.join(bounded)} cannot be measured on its dir pool, and target pool "
+                f"'{target_pool}' has less free space than that pool holds in total. The transfer may "
+                "fill the target pool.",
+                "Check the target pool's free space, then confirm the unmeasured size at approval, or "
+                "choose a pool with more room.",
+            )
+        elif measured + bound > free:
             message = f"Target pool '{target_pool}' has insufficient measured free space."
             if bound:
                 message = (
-                    f"Target pool '{target_pool}' has {_gib(int(headroom['free']))} free, and the "
-                    f"transfer is bounded at {_gib(required)} because part of the source sits on a "
-                    "dir pool that cannot report per-instance usage."
+                    f"Target pool '{target_pool}' has {_gib(free)} free, and the measured part of the "
+                    f"transfer alone needs {_gib(measured)}."
                 )
             result.block(
                 "target_pool_insufficient_capacity",
@@ -609,8 +625,11 @@ def _bound_unmeasured_footprints(
     project: str,
     instance_names: list[str],
     footprints: list[Optional[int]],
-) -> dict[tuple[str, str], int]:
-    """Replace unmeasurable dir footprints with their pool's usage, counted once per pool."""
+) -> tuple[dict[tuple[str, str], int], list[str]]:
+    """Replace unmeasurable dir footprints with their pool's usage, counted once per pool.
+
+    Returns the bound per (pool, member) and the instances it stands in for.
+    """
     bounds: dict[tuple[str, str], int] = {}
     bounded: list[str] = []
     for index, name in enumerate(instance_names):
@@ -627,17 +646,18 @@ def _bound_unmeasured_footprints(
         footprints[index] = 0
         bounded.append(name)
     if bounds:
+        # note: no figures in a warning. It is part of the approved report's hash, and a pool's
+        # usage moves between plan and execute, which would ask for a new approval every time.
         pools = ", ".join(sorted({f"'{pool}'" for pool, _member in bounds}))
         result.warn(
             "source_footprint_bounded_by_pool",
             f"{', '.join(bounded)} {'sits' if len(bounded) == 1 else 'sit'} on a dir storage pool, "
             "which does not report how much each "
-            f"instance uses, so the transfer is sized by everything pool {pools} holds "
-            f"({_gib(sum(bounds.values()))}).",
+            f"instance uses, so the transfer is sized by everything pool {pools} holds.",
             "Nothing to do when the target has room for that. A pool that reports usage (zfs, "
             "btrfs, lvm) gives an exact size.",
         )
-    return bounds
+    return bounds, bounded
 
 
 def _instance_transfer_bytes(

@@ -34,6 +34,18 @@ def billing_override_event(
     }
 
 
+UNMEASURED_SIZE_WARNING = "source_size_unmeasured"
+UNMEASURED_SIZE_ACKNOWLEDGEMENT = "unmeasured-size-accepted"
+
+
+def report_needs_unmeasured_size_consent(report: dict[str, Any]) -> bool:
+    """Whether preflight could not bound a dir-pool source within the target's free space."""
+    return any(
+        isinstance(warning, dict) and warning.get("code") == UNMEASURED_SIZE_WARNING
+        for warning in (report or {}).get("warnings") or []
+    )
+
+
 def report_has_running_source(report: dict[str, Any]) -> bool:
     return any(
         resource.get("source_status") == "running"
@@ -48,6 +60,7 @@ def required_acknowledgements(
     strategy: str,
     external_cutover_required: bool,
     source_running: bool = False,
+    unmeasured_size: bool = False,
 ) -> set[str]:
     required = {
         "copy-impact-reviewed" if intent == "copy" else "downtime-reviewed",
@@ -63,6 +76,8 @@ def required_acknowledgements(
         required.add("source-project-deletion-understood")
     if external_cutover_required:
         required.add("external-cutover-owned")
+    if unmeasured_size:
+        required.add(UNMEASURED_SIZE_ACKNOWLEDGEMENT)
     return required
 
 
@@ -73,6 +88,7 @@ def validate_acknowledgements(
     external_cutover_required: bool,
     acknowledgements: list[str],
     source_running: bool = False,
+    unmeasured_size: bool = False,
 ) -> None:
     provided = set(acknowledgements)
     missing = required_acknowledgements(
@@ -80,6 +96,7 @@ def validate_acknowledgements(
         strategy=strategy,
         external_cutover_required=external_cutover_required,
         source_running=source_running,
+        unmeasured_size=unmeasured_size,
     ) - provided
     if missing:
         raise MigrationConflict(

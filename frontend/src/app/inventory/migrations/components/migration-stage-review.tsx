@@ -17,7 +17,7 @@ export const MIGRATION_REASON_MAX = 1000;
 /** Mirrors the server's required acknowledgements (services/migrations/billing.py). */
 export function requiredAcknowledgements(
   draft: MigrationDraftState,
-  plan?: Pick<MigrationPlan, "strategy" | "resources"> | null,
+  plan?: Pick<MigrationPlan, "strategy" | "resources"> & Partial<Pick<MigrationPlan, "warnings">> | null,
 ): string[] {
   const values = [draft.intent === "move" ? "downtime-reviewed" : "copy-impact-reviewed", "billing-impact-reviewed"];
   if (draft.intent === "copy" && plan && planHasRunningSource(plan.resources ?? [])) {
@@ -28,6 +28,9 @@ export function requiredAcknowledgements(
   }
   if (plan?.strategy === "project_relocation") {
     values.push("source-project-deletion-understood");
+  }
+  if (plan?.warnings?.some((warning) => warning.code === "source_size_unmeasured")) {
+    values.push("unmeasured-size-accepted");
   }
   return values;
 }
@@ -45,6 +48,8 @@ const ACK_LABEL: Record<string, string> = {
   "source-project-deletion-understood":
     "I understand that Finalize, or the end of retention, deletes the whole source project: its instances, profiles, and cached images.",
   "billing-impact-reviewed": "I reviewed snapshot schedule and billing impact for every source workload.",
+  "unmeasured-size-accepted":
+    "I accept that this transfer's size cannot be measured on a dir pool and may fill the target pool.",
 };
 
 export function MigrationStageReview({

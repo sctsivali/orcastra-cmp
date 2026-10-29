@@ -451,6 +451,53 @@ test("copy of a running source explains the stop and a failed draft read can ret
   await expectCleanMigrationHarness(api);
 });
 
+test("a dir-pool source the target cannot bound waits for the operator to accept its size", async ({ page }) => {
+  // Owner decision 2026-10-29: Pandora's dir pool holds far more than any target has free, so a copy
+  // there is not refused; Start waits for an explicit acceptance of the unmeasured size.
+  const plan = makePlan(
+    {
+      plan_id: "plan-unmeasured",
+      warnings: [
+        {
+          code: "source_size_unmeasured",
+          severity: "warning",
+          message:
+            "The size of web cannot be measured on its dir pool, and target pool 'fast' has less free space than that pool holds in total. The transfer may fill the target pool.",
+          remediation:
+            "Check the target pool's free space, then confirm the unmeasured size at approval, or choose a pool with more room.",
+        },
+      ],
+    },
+    "copy_running",
+  );
+  await authenticate(page.context(), "partner");
+  const api = await installMigrationFixtures(page, "partner", { plans: [plan] });
+  const dialog = page.getByRole("dialog");
+
+  await page.goto(`/inventory/migrations?plan=${plan.plan_id}`);
+  await expect(dialog.getByText(/cannot be measured on its dir pool/).first()).toBeVisible();
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Confirm the copy outcome" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await expect(dialog.getByRole("heading", { name: "Approve execution" })).toBeVisible();
+
+  await page.getByLabel("Reason for this migration").fill("Copy within Pandora's pool");
+  for (const label of [
+    "I reviewed the transfer impact. The copy is a new, independent instance.",
+    "I reviewed snapshot schedule and billing impact for every source workload.",
+    "I reviewed the downtime. A running source is stopped for the transfer.",
+  ]) {
+    await page.getByLabel(label).check();
+  }
+  const start = dialog.getByRole("button", { name: "Start copy" });
+  await expect(start).toBeDisabled();
+  await page
+    .getByLabel("I accept that this transfer's size cannot be measured on a dir pool and may fill the target pool.")
+    .check();
+  await expect(start).toBeEnabled();
+  await expectCleanMigrationHarness(api);
+});
+
 async function openNewMigration(page) {
   await page.goto("/inventory/migrations");
   const newMigration = page.getByRole("button", { name: "New Migration" });
