@@ -97,6 +97,13 @@ export function ConsoleWindow({ consoleId, onClose, onMinimize, onMaximize, isFu
 
   const width = Math.min(size.width, viewport.width - 16);
   const height = Math.min(size.height, viewport.height - 16);
+  // note: the stored position is where the window sat on the screen it was opened on. Draggable's
+  // bounds apply only while dragging, so on a narrower screen (a phone) the window rendered
+  // mostly off screen with its title bar out of reach; it is clamped here instead.
+  const maxX = Math.max(0, viewport.width - width);
+  const maxY = Math.max(0, viewport.height - height - 48);
+  const x = Math.min(Math.max(0, consoleInstance.position.x), maxX);
+  const y = Math.min(Math.max(0, consoleInstance.position.y), maxY);
 
   const frame = (
     <div
@@ -193,8 +200,8 @@ export function ConsoleWindow({ consoleId, onClose, onMinimize, onMaximize, isFu
       nodeRef={nodeRef}
       handle=".console-drag-handle"
       disabled={isFullPage}
-      bounds={{ left: 0, top: 0, right: Math.max(0, viewport.width - width), bottom: Math.max(0, viewport.height - height - 48) }}
-      position={isFullPage ? { x: 0, y: 0 } : { x: consoleInstance.position.x, y: consoleInstance.position.y }}
+      bounds={{ left: 0, top: 0, right: maxX, bottom: maxY }}
+      position={isFullPage ? { x: 0, y: 0 } : { x, y }}
       onStop={(_e, data) => updateConsolePosition(consoleId, { x: data.x, y: data.y })}
     >
       <div
