@@ -359,6 +359,9 @@ jobs:
       - name: Console guest actions
         run: node scripts/checks/check-console-actions.mjs .
 
+      - name: SPICE client
+        run: node scripts/checks/check-spice-client.mjs .
+
       - name: Task journal behavior
         run: node scripts/checks/check-task-journal-behavior.mjs .
 
