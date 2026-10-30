@@ -110,7 +110,7 @@ export function ConflictNotice({
           other one.
         </p>
         <div className="flex justify-center gap-2 pt-1">
-          <Button variant="outline" size="sm" className="border-white/30 text-white hover:bg-white/10" onClick={onCancel}>
+          <Button variant="outline" size="sm" className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white" onClick={onCancel}>
             Use the Text Tab
           </Button>
           <Button size="sm" onClick={onOpen}>Open Here</Button>

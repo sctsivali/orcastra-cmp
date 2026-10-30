@@ -339,7 +339,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
             <AlertCircle className="terminal-status h-8 w-8 text-status-offline" aria-hidden="true" />
           )}
           <p className="max-w-md text-sm text-white/80">{detail || (status === "ended" ? "The console session ended." : "The console connection failed.")}</p>
-          <Button variant="outline" size="sm" onClick={reconnect} className="border-white/30 text-white hover:bg-white/10">
+          <Button variant="outline" size="sm" onClick={reconnect} className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white">
             <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
             Reconnect
           </Button>
