@@ -1,3 +1,4 @@
+import { toast } from "@/hooks/use-toast";
 import {
   captureExternalMutationContext,
   reconcileExternalMutation,
@@ -41,6 +42,8 @@ let externalContext = captureExternalMutationContext();
 
 onTransfersReset(() => {
   clearManifest();
+  // important: a queued bundle holds its File objects, so it would send them as the next actor.
+  queue.length = 0;
   controllers.forEach((controller) => controller.abort());
   controllers.clear();
   if (reconcileTimer) clearTimeout(reconcileTimer);
@@ -49,6 +52,10 @@ onTransfersReset(() => {
 
 function store() {
   return useTransferStore.getState();
+}
+
+function isWaiting(id: string): boolean {
+  return store().transfers.find((item) => item.id === id)?.state === "queued";
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -96,6 +103,11 @@ async function uploadChunks(transfer: Transfer, file: File, signal: AbortSignal)
     token = created.token;
     offset = 0;
     store().patch(transfer.id, { token });
+    // Cancelled while it was being created, when nothing knew the token to clear what it made.
+    if (signal.aborted) {
+      void instanceFilesAPI.abortUpload(transfer.target, token).catch(() => undefined);
+      return;
+    }
   }
   rememberUpload({ ...transfer, token, sent: offset, lastModified: file.lastModified });
   let chunkSize = START_CHUNK;
@@ -147,6 +159,8 @@ async function uploadChunks(transfer: Transfer, file: File, signal: AbortSignal)
 }
 
 async function runTransfer(transfer: Transfer): Promise<void> {
+  // Cancelling something queued only marks it, since the work is already in the queue.
+  if (!isWaiting(transfer.id)) return;
   const controller = new AbortController();
   controllers.set(transfer.id, controller);
   const file = transferFiles.get(transfer.id);
@@ -172,7 +186,9 @@ interface BundleItem {
   relative: string;
 }
 
-async function runBundle(target: GuestTarget, base: string, items: BundleItem[], folders: string[], onConflict: OnConflict): Promise<void> {
+async function runBundle(target: GuestTarget, base: string, picked: BundleItem[], folders: string[], onConflict: OnConflict): Promise<void> {
+  const items = picked.filter(({ transfer }) => isWaiting(transfer.id));
+  if (items.length === 0 && folders.length === 0) return;
   const controller = new AbortController();
   items.forEach(({ transfer }) => controllers.set(transfer.id, controller));
   items.forEach(({ transfer }) => store().patch(transfer.id, { state: "uploading", startedAt: Date.now() }));
@@ -214,8 +230,14 @@ async function runBundle(target: GuestTarget, base: string, items: BundleItem[],
       items.forEach(({ transfer }) =>
         store().patch(transfer.id, { state: "failed", error: messageOf(error), errorCode: fileErrorCode(error) }),
       );
+      // Folders have no row of their own, so nothing else would say so.
+      if (items.length === 0) toast({ title: "Folders not created", description: messageOf(error), variant: "destructive" });
     }
   } finally {
+    // One request carries them all, so cancelling one stops the rest. What already landed stays.
+    if (controller.signal.aborted) {
+      items.forEach(({ transfer }) => store().patch(transfer.id, { state: "cancelled" }));
+    }
     items.forEach(({ transfer }) => controllers.delete(transfer.id));
   }
 }
@@ -263,6 +285,7 @@ export function enqueueUploads(
   externalContext = captureExternalMutationContext();
   const batch = newId();
   const small: BundleItem[] = [];
+  const large: Work[] = [];
   const created: Transfer[] = [];
   for (const { file, relativePath } of tree.files) {
     const relative = rename.get(relativePath) ?? relativePath;
@@ -270,21 +293,18 @@ export function enqueueUploads(
     transferFiles.set(transfer.id, file);
     created.push(transfer);
     if (file.size <= BUNDLE_FILE_BYTES) small.push({ transfer, file, relative });
-    else queue.push({ run: () => runTransfer(transfer) });
+    else large.push({ run: () => runTransfer(transfer) });
   }
   store().add(created);
 
-  const folders = [...tree.folders];
+  const bundles: Work[] = [];
   let group: BundleItem[] = [];
   let bytes = 0;
   const flush = () => {
     const items = group;
-    const pending = folders.splice(0, 200);
     group = [];
     bytes = 0;
-    if (items.length || pending.length) {
-      queue.unshift({ run: () => runBundle(target, folder, items, pending, onConflict) });
-    }
+    if (items.length) bundles.push({ run: () => runBundle(target, folder, items, [], onConflict) });
   };
   for (const item of small) {
     if (group.length >= BUNDLE_MAX_FILES || bytes + item.file.size > BUNDLE_MAX_BYTES) flush();
@@ -292,7 +312,26 @@ export function enqueueUploads(
     bytes += item.file.size;
   }
   flush();
-  while (folders.length) flush();
+
+  const start = () => {
+    queue.unshift(...bundles);
+    queue.push(...large);
+    pump();
+  };
+  if (tree.folders.length === 0) {
+    start();
+    return;
+  }
+  // important: folders are made first and alone. A new folder takes its parent's owner, so a file
+  // or folder made inside it a moment too early, by a parallel request, stays owned by root.
+  queue.unshift({
+    run: async () => {
+      for (let at = 0; at < tree.folders.length; at += BUNDLE_MAX_FILES) {
+        await runBundle(target, folder, [], tree.folders.slice(at, at + BUNDLE_MAX_FILES), onConflict);
+      }
+      start();
+    },
+  });
   pump();
 }
 

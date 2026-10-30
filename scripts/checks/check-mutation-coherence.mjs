@@ -816,6 +816,11 @@ for (const contract of [
     path: "frontend/src/lib/instance-files/transfer-store.ts",
     markers: ["onAuthActorChanged(() =>"],
   },
+  // A queued bundle holds its File objects, so the queue has to go with the actor as well.
+  {
+    path: "frontend/src/lib/instance-files/transfer-pump.ts",
+    markers: ["queue.length = 0;", "if (!isWaiting(transfer.id)) return;"],
+  },
   // A console closes only its own sockets, which ends its own LXD operations. Closing a window,
   // leaving the page or popping out used to call kill-all-sessions, which cancelled every
   // websocket operation on the instance, other people's shells and consoles included.
