@@ -247,7 +247,8 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
             transform: scale !== 1 ? `scale(${scale})` : undefined,
             visibility: status === "connected" || status === "reconnecting" ? "visible" : "hidden",
             touchAction: "none",
-            cursor: locked ? "none" : undefined,
+            // note: no cursor here. cursor.js sets the guest's shape on this element, and the
+            // browser hides it under pointer lock on its own.
           }}
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
