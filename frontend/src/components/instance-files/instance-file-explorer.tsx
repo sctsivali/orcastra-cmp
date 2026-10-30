@@ -245,7 +245,6 @@ export function InstanceFileExplorer({
         onSelect={(names, anchor, activeName) => dispatch({ type: "select", names, anchor, active: activeName })}
         onActive={(name) => dispatch({ type: "active", name })}
         onAction={runAction}
-        onRowDrag={uploads.setDropTarget}
         focusRequest={state.focusAfterLoad}
         onFocused={() => dispatch({ type: "focused" })}
       />

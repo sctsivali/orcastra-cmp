@@ -21,6 +21,13 @@ interface UploadOptions {
   taken?: GuestEntry[];
 }
 
+/** The folder row under a drag. Read from the event: a highlight set on an earlier one can be stale. */
+function folderRowAt(event: React.DragEvent): string | null {
+  const node = event.target as Node;
+  const element = node instanceof Element ? node : node.parentElement;
+  return element?.closest<HTMLElement>("tr[data-drop-folder]")?.dataset.dropFolder ?? null;
+}
+
 /** Getting files into the queue: pickers, drag and drop, and the questions asked before a byte moves. */
 export function useFileUploads({ target, folder, active, writeReason, taken }: UploadOptions) {
   const queryClient = useQueryClient();
@@ -115,7 +122,8 @@ export function useFileUploads({ target, folder, active, writeReason, taken }: U
     event.stopPropagation();
     dragDepth.current = 0;
     setDragging(false);
-    const into = dropTarget ? joinPath(folder, dropTarget) : folder;
+    const row = folderRowAt(event);
+    const into = row ? joinPath(folder, row) : folder;
     setDropTarget(null);
     if (writeReason) {
       toast({ title: "Upload not available", description: writeReason, variant: "destructive" });
@@ -142,6 +150,7 @@ export function useFileUploads({ target, folder, active, writeReason, taken }: U
       if (!event.dataTransfer.types.includes("Files")) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = writeReason ? "none" : "copy";
+      setDropTarget(folderRowAt(event));
     },
     onDrop: (event: React.DragEvent) => void handleDrop(event),
   };
@@ -150,7 +159,6 @@ export function useFileUploads({ target, folder, active, writeReason, taken }: U
     begin,
     dragging,
     dropTarget,
-    setDropTarget,
     pending,
     applyConflicts,
     cancelPending: () => setPending(null),

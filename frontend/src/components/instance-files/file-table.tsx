@@ -91,14 +91,13 @@ export interface FileTableProps {
   onSelect: (names: string[], anchor?: string | null, active?: string | null) => void;
   onActive: (name: string | null) => void;
   onAction: (action: FileActionId, entries: GuestEntry[]) => void;
-  onRowDrag: (name: string | null) => void;
   focusRequest: string | null;
   onFocused: () => void;
 }
 
 export function FileTable({
   folder, rows, session, mode, writeReason, dropTarget, onSort, onActivate, onSelect, onActive, onAction,
-  onRowDrag, focusRequest, onFocused,
+  focusRequest, onFocused,
 }: FileTableProps) {
   const rowHeight = ROW_HEIGHT[mode];
   const activeIndex = React.useMemo(
@@ -186,6 +185,7 @@ export function FileTable({
         data-row-index={index}
         data-active={active}
         data-drop-target={dropTarget === entry.name}
+        data-drop-folder={isFolder ? entry.name : undefined}
         aria-rowindex={index + 2}
         aria-selected={selected}
         tabIndex={active || (session.active === null && index === 0) ? 0 : -1}
@@ -195,7 +195,6 @@ export function FileTable({
           selected && "bg-muted",
           dropTarget === entry.name && "ring-2 ring-inset ring-primary",
         )}
-        onDragOver={isFolder ? () => onRowDrag(entry.name) : undefined}
       >
         <TableCell className="w-8">
           <Checkbox
