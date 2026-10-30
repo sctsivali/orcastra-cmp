@@ -310,7 +310,8 @@ export function ConsoleResourceBar({
       {/* ====== Compact Bar (always visible) ====== */}
       <div
         className={cn(
-          "flex items-center h-10 min-h-[40px] gap-3 cursor-pointer hover:bg-terminal-raised/60",
+          // One line at any width: below sm the duration and the rates live in the expanded panel.
+          "flex items-center h-10 min-h-[40px] gap-3 overflow-hidden whitespace-nowrap cursor-pointer hover:bg-terminal-raised/60",
           compact ? "px-2" : "px-3"
         )}
         onClick={toggleExpanded}
@@ -338,20 +339,20 @@ export function ConsoleResourceBar({
           </span>
         </div>
 
-        <div className="h-3 w-px bg-terminal-border" />
+        <div className="h-3 w-px shrink-0 bg-terminal-border" />
 
         {/* Duration */}
-        <div className="flex items-center gap-1 text-xs text-gray-400">
+        <div className="hidden items-center gap-1 text-xs text-gray-400 sm:flex">
           <Clock className="h-3 w-3" />
           <span className="font-mono">{formatDuration(displayDuration)}</span>
         </div>
 
-        <div className="h-3 w-px bg-terminal-border" />
+        <div className="hidden h-3 w-px bg-terminal-border sm:block" />
 
         {instanceMetrics && <InstanceResourceChips metrics={instanceMetrics} />}
 
         {/* Network bandwidth */}
-        <div className="flex items-center gap-2 text-xs text-gray-400">
+        <div className="hidden items-center gap-2 text-xs text-gray-400 sm:flex">
           <Network className="h-3 w-3" aria-hidden="true" />
           {/* A direction, not a state: the arrow carries it. */}
           <span className="text-gray-300 font-mono">↓{formatNetworkRate(dlRate, 1)}</span>

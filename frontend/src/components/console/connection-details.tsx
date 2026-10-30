@@ -6,7 +6,7 @@
 "use client";
 
 import * as React from "react";
-import { SignalHigh, SignalLow, SignalMedium, SignalZero } from "lucide-react";
+import { SignalHigh, SignalLow, SignalMedium } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, formatNetworkRate } from "@/lib/utils";
@@ -24,7 +24,7 @@ interface ConnectionDetailsProps {
 
 // Round trips under 80 ms feel local; past 200 ms typing and pointing lag visibly.
 function tone(rtt: number | null): { className: string; Icon: typeof SignalHigh; verdict: string } {
-  if (rtt === null) return { className: "text-muted-foreground", Icon: SignalZero, verdict: "not measured yet" };
+  if (rtt === null) return { className: "text-muted-foreground", Icon: SignalLow, verdict: "not measured yet" };
   if (rtt < 80) return { className: "text-status-online", Icon: SignalHigh, verdict: "good" };
   if (rtt < 200) return { className: "text-status-pending", Icon: SignalMedium, verdict: "fair" };
   return { className: "text-status-offline", Icon: SignalLow, verdict: "slow" };
@@ -52,7 +52,8 @@ export function ConnectionDetails({ status, stats, mouseMode, agentConnected, re
     <Popover>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2 text-xs tabular-nums" aria-label={`Connection details: ${verdict}`}>
-          <Icon className={cn("h-4 w-4", className)} aria-hidden="true" />
+          {/* Bars only once there is a round trip to grade; an empty meter read as a stray dot. */}
+          {rtt !== null && <Icon className={cn("h-4 w-4", className)} aria-hidden="true" />}
           {chip}
         </Button>
       </PopoverTrigger>

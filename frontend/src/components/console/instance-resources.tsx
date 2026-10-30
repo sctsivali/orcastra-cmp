@@ -70,7 +70,8 @@ export function InstanceResourceChips({ metrics }: { metrics: InstanceMetrics })
         </span>
       </div>
 
-      <div className="h-3 w-px bg-terminal-border" />
+      {/* Leads into the network rates, which the resource bar shows from sm up. */}
+      <div className="hidden h-3 w-px bg-terminal-border sm:block" />
     </>
   );
 }
