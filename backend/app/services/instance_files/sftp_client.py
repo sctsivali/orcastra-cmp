@@ -39,6 +39,7 @@ WRITE_CHUNK_BYTES = 128 * 1024
 WRITE_WINDOW = 32
 
 DEFAULT_OP_TIMEOUT = 15.0
+FOLDER_LOOKS = 5
 _DEFAULT_HELD_BYTES = 64 * 1024 * 1024
 
 
@@ -315,18 +316,25 @@ class SftpClient:
         a temp for a link to /etc/shadow between two requests, and a chown by path would hand them
         that file. So whatever changes an existing object goes through a handle checked here. The
         file a swap could aim at has its own mtime, which the swapper cannot forge.
+
+        note: a folder moves by itself. Anything created in it changes its mtime, and on ZFS its
+        size, so parallel uploads into a new folder read as a swap. It gets another look, as strict
+        as the first. A file does not, and neither does a caller who brought its own lstat.
         """
-        before = seen if seen is not None else await self.lstat(path)
-        if is_symlink(before):
-            raise path_changed()
-        handle = await self.open(path, flags)
-        after = await self.fstat(handle)
-        if (before.mode, before.uid, before.gid, before.size, before.mtime) != (
-            after.mode, after.uid, after.gid, after.size, after.mtime,
-        ):
+        for _ in range(FOLDER_LOOKS if seen is None else 1):
+            before = seen if seen is not None else await self.lstat(path)
+            if is_symlink(before):
+                raise path_changed()
+            handle = await self.open(path, flags)
+            after = await self.fstat(handle)
+            if (before.mode, before.uid, before.gid, before.size, before.mtime) == (
+                after.mode, after.uid, after.gid, after.size, after.mtime,
+            ):
+                return handle, after
             await self.close(handle)
-            raise path_changed()
-        return handle, after
+            if not is_directory(before):
+                break
+        raise path_changed()
 
     async def iter_directory(self, path: bytes, budget: Budget) -> AsyncIterator[List[codec.Name]]:
         """Batches of entries, each charged to `budget`, which raises BudgetSpent when it runs out."""

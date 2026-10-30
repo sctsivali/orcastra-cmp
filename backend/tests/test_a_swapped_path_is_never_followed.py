@@ -112,6 +112,74 @@ async def test_a_swap_between_the_look_and_the_open_is_caught_by_the_handle():
     await asyncio.wait_for(task, 1)
 
 
+async def test_a_folder_being_filled_is_not_mistaken_for_a_swap():
+    """A parallel upload moves a new folder's mtime, and on ZFS its size, between the look and the open."""
+    guest = _guest()
+    guest.add_dir(b"/home/lab/new")
+    filled = False
+
+    async def script(packet_type, request_id, cursor):
+        nonlocal filled
+        if packet_type == codec.FXP_OPEN and not filled and cursor.string(9000).endswith(b"/new"):
+            filled = True
+            guest.nodes[b"/home/lab/new"].mtime += 1
+        return None
+
+    guest.script = script
+    client, task = await connected(guest)
+    async with client:
+        await operations._inherit_owner(client, b"/home/lab/new", b"/home/lab", mode=0o755)
+    assert guest.nodes[b"/home/lab/new"].uid == 1000
+    assert guest.handles == {}
+    await asyncio.wait_for(task, 1)
+
+
+async def test_a_folder_that_never_holds_still_is_given_up_on():
+    guest = _guest()
+    guest.add_dir(b"/home/lab/new")
+    opened = 0
+
+    async def script(packet_type, request_id, cursor):
+        nonlocal opened
+        if packet_type == codec.FXP_OPEN and cursor.string(9000).endswith(b"/new"):
+            opened += 1
+            guest.nodes[b"/home/lab/new"].mtime += 1
+        return None
+
+    guest.script = script
+    client, task = await connected(guest)
+    async with client:
+        with pytest.raises(GuestFileError) as refused:
+            await operations._inherit_owner(client, b"/home/lab/new", b"/home/lab", mode=0o755)
+    assert refused.value.code == "path_changed"
+    assert guest.nodes[b"/home/lab/new"].uid == 0
+    assert 1 < opened < 10
+    assert guest.handles == {}
+    await asyncio.wait_for(task, 1)
+
+
+async def test_a_file_that_moves_is_not_looked_at_twice():
+    guest = _guest()
+    guest.add_file(b"/home/lab/f", b"x", mode=0o644)
+    opened = 0
+
+    async def script(packet_type, request_id, cursor):
+        nonlocal opened
+        if packet_type == codec.FXP_OPEN and cursor.string(9000).endswith(b"/f"):
+            opened += 1
+            guest.nodes[b"/home/lab/f"].mtime += 1
+        return None
+
+    guest.script = script
+    client, task = await connected(guest)
+    async with client:
+        with pytest.raises(GuestFileError) as refused:
+            await client.open_unchanged(b"/home/lab/f", codec.PFLAG_READ)
+    assert refused.value.code == "path_changed"
+    assert opened == 1
+    await asyncio.wait_for(task, 1)
+
+
 async def test_a_new_folder_swapped_for_a_link_gives_nothing_away():
     guest = _guest()
 
