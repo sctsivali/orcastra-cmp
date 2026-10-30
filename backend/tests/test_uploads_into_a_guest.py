@@ -338,6 +338,18 @@ async def test_a_bundle_path_cannot_leave_its_folder(name):
     await asyncio.wait_for(task, 1)
 
 
+async def test_a_system_path_cannot_be_reached_from_a_base_of_root():
+    guest = _guest()
+    body = _bundle({"base": "/", "files": [{"path": "proc/x", "size": 1}, {"path": "home/lab/ok", "size": 1}]}, b"x", b"y")
+    client, task = await connected(guest)
+    async with client:
+        result = await bundle.receive_bundle(client, _stream(body), now=int(time.time()))
+    assert [row["error"] for row in result["results"]] == ["protected_path", None]
+    assert b"/proc/x" not in guest.nodes
+    assert guest.nodes[b"/home/lab/ok"].data == b"y"
+    await asyncio.wait_for(task, 1)
+
+
 @pytest.mark.parametrize(
     "manifest",
     [

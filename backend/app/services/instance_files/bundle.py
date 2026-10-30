@@ -44,7 +44,11 @@ def _relative(base: str, relative: str) -> str:
     parts = relative.split("/")
     for part in parts:
         clean_name(part)
-    return clean_path(base.rstrip("/") + "/" + relative)
+    path = clean_path(base.rstrip("/") + "/" + relative)
+    # The base is checked too, but a base of / and a relative proc/x would pass that alone.
+    if is_pseudo(path):
+        raise GuestFileError("protected_path", 409, "Nothing can be uploaded under this system path.")
+    return path
 
 
 def _parse_manifest(raw: bytes) -> Dict[str, Any]:

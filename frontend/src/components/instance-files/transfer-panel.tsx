@@ -7,8 +7,8 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { Progress } from "@/components/ui/progress";
 import { guestText } from "@/lib/instance-files/guest-text";
 import type { GuestTarget } from "@/lib/instance-files/api";
-import { cancelAll, cancelTransfer, discardInterrupted, resumeWithFile, retryTransfer } from "@/lib/instance-files/transfer-pump";
-import { isActive, useTransferStore, type Transfer } from "@/lib/instance-files/transfer-store";
+import { cancelAll, cancelTransfer, discardInterrupted, replaceConflicts, resumeWithFile, skipConflicts, retryTransfer } from "@/lib/instance-files/transfer-pump";
+import { isSameTarget, isActive, useTransferStore, type Transfer } from "@/lib/instance-files/transfer-store";
 import { formatBytes, formatNetworkRate } from "@/lib/utils";
 
 function etaText(remaining: number, rate: number): string {
@@ -105,20 +105,16 @@ function TransferRow({ transfer }: { transfer: Transfer }) {
 /** The queue, for the instance this explorer shows. */
 export function TransferPanel({ target }: { target: GuestTarget }) {
   const all = useTransferStore((state) => state.transfers);
-  const clearFinished = useTransferStore((state) => state.clearFinished);
+  const remove = useTransferStore((state) => state.remove);
   const [expanded, setExpanded] = React.useState(false);
   const transfers = React.useMemo(
     () =>
-      all.filter(
-        (item) =>
-          item.target.host === target.host &&
-          item.target.project === target.project &&
-          item.target.instanceName === target.instanceName,
-      ),
+      all.filter((item) => isSameTarget(item.target, target)),
     [all, target],
   );
   const { active, sent, size, rate, percent } = summarizeTransfers(transfers);
   const needsYou = transfers.filter((item) => ["failed", "conflict", "interrupted"].includes(item.state));
+  const conflicts = transfers.filter((item) => item.state === "conflict").length;
   if (transfers.length === 0) return null;
   const headline = active.length
     ? `Uploading ${active.length} of ${transfers.length}`
@@ -139,9 +135,22 @@ export function TransferPanel({ target }: { target: GuestTarget }) {
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {active.length > 0 ? (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={cancelAll}>Cancel all</Button>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => cancelAll(target)}>Cancel all</Button>
           ) : (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={clearFinished}>Clear</Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => remove(transfers.filter((item) => item.state === "done" || item.state === "cancelled").map((item) => item.id))}
+            >
+              Clear
+            </Button>
+          )}
+          {conflicts > 1 && (
+            <>
+              <Button variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => replaceConflicts(target)}>Replace all</Button>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => skipConflicts(target)}>Skip all</Button>
+            </>
           )}
           <Button
             variant="ghost"

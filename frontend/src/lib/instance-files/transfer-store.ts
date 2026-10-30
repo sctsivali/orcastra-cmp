@@ -8,7 +8,10 @@ export type TransferState =
 export interface Transfer {
   id: string;
   target: GuestTarget;
+  /** The name it lands under, which Keep Both can change. */
   name: string;
+  /** The name it had on the person's disk, which is what a resume has to match. */
+  sourceName?: string;
   dest: string;
   size: number;
   sent: number;
@@ -29,7 +32,6 @@ interface TransferStore {
   add: (items: Transfer[]) => void;
   patch: (id: string, change: Partial<Transfer>) => void;
   remove: (ids: string[]) => void;
-  clearFinished: () => void;
   reset: () => void;
 }
 
@@ -41,14 +43,14 @@ export const useTransferStore = create<TransferStore>((set) => ({
       transfers: state.transfers.map((item) => (item.id === id ? { ...item, ...change } : item)),
     })),
   remove: (ids) => set((state) => ({ transfers: state.transfers.filter((item) => !ids.includes(item.id)) })),
-  clearFinished: () =>
-    set((state) => ({
-      transfers: state.transfers.filter((item) => !["done", "cancelled"].includes(item.state)),
-    })),
   reset: () => set({ transfers: [] }),
 }));
 
 const ACTIVE: readonly TransferState[] = ["queued", "uploading", "finishing"];
+
+export function isSameTarget(a: GuestTarget, b: GuestTarget): boolean {
+  return a.host === b.host && a.project === b.project && a.instanceName === b.instanceName;
+}
 
 export function isActive(transfer: Transfer): boolean {
   return ACTIVE.includes(transfer.state);

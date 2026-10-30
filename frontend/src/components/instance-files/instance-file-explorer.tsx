@@ -20,6 +20,7 @@ import { treeFromInput } from "@/lib/instance-files/drop-entries";
 import { guestText } from "@/lib/instance-files/guest-text";
 import { directoryKey } from "@/lib/instance-files/keys";
 import { joinPath } from "@/lib/instance-files/path";
+import { describeReadError } from "@/lib/read-error";
 import { cn, formatBytes } from "@/lib/utils";
 import { ConflictDialog } from "./conflict-dialog";
 import { ExplorerDialogs, type Prompt } from "./explorer-dialogs";
@@ -83,7 +84,7 @@ export function InstanceFileExplorer({
   const [editingPath, setEditingPath] = React.useState(false);
   const filesInput = React.useRef<HTMLInputElement>(null);
   const folderInput = React.useRef<HTMLInputElement>(null);
-  const uploads = useFileUploads({ target, folder: state.path, active, writeReason, taken: listing.data?.entries });
+  const uploads = useFileUploads({ target, folder: state.path, active, writeReason });
 
   const code = fileErrorCode(listing.error);
   React.useEffect(() => {
@@ -312,11 +313,23 @@ export function InstanceFileExplorer({
           </AlertDescription>
         </Alert>
       )}
+      {data && listing.error && (
+        <Alert className="rounded-none border-x-0 border-t-0 py-1.5">
+          <AlertDescription className="flex flex-wrap items-center gap-2 text-xs">
+            This folder could not be refreshed, so what is shown may be out of date. {describeReadError(listing.error).reason}
+            <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => void listing.refetch()}>Retry</Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {data && data.stale_uploads.length > 0 && !writeReason && (
         <Alert className="rounded-none border-x-0 border-t-0 py-1.5">
           <AlertDescription className="flex flex-wrap items-center gap-2 text-xs">
             {data.stale_uploads.length} unfinished {data.stale_uploads.length === 1 ? "upload left" : "uploads left"} a temporary file here.
-            <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => void actions.purgeUploads(state.path)}>Remove</Button>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => {
+              void actions.purgeUploads(state.path).catch((error: unknown) => {
+                toast({ title: "Temporary files not removed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+              });
+            }}>Remove</Button>
           </AlertDescription>
         </Alert>
       )}

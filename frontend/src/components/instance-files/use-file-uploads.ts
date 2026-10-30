@@ -4,7 +4,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { toast } from "@/hooks/use-toast";
-import { instanceFilesAPI, type GuestEntry, type GuestTarget } from "@/lib/instance-files/api";
+import { instanceFilesAPI, type GuestTarget } from "@/lib/instance-files/api";
 import { treeFromDrop, type PickedTree } from "@/lib/instance-files/drop-entries";
 import { directoryKey } from "@/lib/instance-files/keys";
 import { joinPath, keepBothName } from "@/lib/instance-files/path";
@@ -18,7 +18,6 @@ interface UploadOptions {
   folder: string;
   active: boolean;
   writeReason?: string;
-  taken?: GuestEntry[];
 }
 
 /** The folder row under a drag. Read from the event: a highlight set on an earlier one can be stale. */
@@ -29,12 +28,12 @@ function folderRowAt(event: React.DragEvent): string | null {
 }
 
 /** Getting files into the queue: pickers, drag and drop, and the questions asked before a byte moves. */
-export function useFileUploads({ target, folder, active, writeReason, taken }: UploadOptions) {
+export function useFileUploads({ target, folder, active, writeReason }: UploadOptions) {
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
   const [dragging, setDragging] = React.useState(false);
   const [dropTarget, setDropTarget] = React.useState<string | null>(null);
-  const [pending, setPending] = React.useState<{ tree: PickedTree; folder: string; conflicts: string[] } | null>(null);
+  const [pending, setPending] = React.useState<{ tree: PickedTree; folder: string; conflicts: string[]; taken: string[] } | null>(null);
   const dragDepth = React.useRef(0);
 
   const begin = React.useCallback(
@@ -63,7 +62,7 @@ export function useFileUploads({ target, folder, active, writeReason, taken }: U
             return entry !== undefined && !isDirectoryLike(entry);
           });
         if (conflicts.length) {
-          setPending({ tree, folder: into, conflicts });
+          setPending({ tree, folder: into, conflicts, taken: [...existing.keys()] });
           return;
         }
         enqueueUploads(target, into, tree, "refuse");
@@ -80,9 +79,9 @@ export function useFileUploads({ target, folder, active, writeReason, taken }: U
 
   const applyConflicts = (choices: ReadonlyMap<string, ConflictChoice>) => {
     if (!pending) return;
-    const { tree, folder: into } = pending;
+    const { tree, folder: into, taken } = pending;
     setPending(null);
-    const names = new Set(taken?.map((entry) => entry.name) ?? []);
+    const names = new Set(taken);
     const rename = new Map<string, string>();
     const replacing: PickedTree = { files: [], folders: [] };
     const others: PickedTree = { files: [], folders: tree.folders };
@@ -129,8 +128,11 @@ export function useFileUploads({ target, folder, active, writeReason, taken }: U
       toast({ title: "Upload not available", description: writeReason, variant: "destructive" });
       return;
     }
-    const tree = await treeFromDrop(event.dataTransfer.items);
-    await begin(tree, into);
+    try {
+      await begin(await treeFromDrop(event.dataTransfer.items), into);
+    } catch {
+      toast({ title: "Upload not started", description: "What was dropped could not be read.", variant: "destructive" });
+    }
   };
 
   const dropHandlers = {

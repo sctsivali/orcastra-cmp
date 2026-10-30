@@ -10,6 +10,7 @@ import { joinPath, parentOf } from "./path";
 import { clearManifest, forgetUpload, readManifest, rememberUpload } from "./transfer-manifest";
 import {
   isActive,
+  isSameTarget,
   onTransfersReset,
   transferFiles,
   useTransferStore,
@@ -37,10 +38,12 @@ const FATAL = new Set([
 
 const controllers = new Map<string, AbortController>();
 let running = 0;
+let resets = 0;
 let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 let externalContext = captureExternalMutationContext();
 
 onTransfersReset(() => {
+  resets += 1;
   clearManifest();
   // important: a queued bundle holds its File objects, so it would send them as the next actor.
   queue.length = 0;
@@ -210,7 +213,9 @@ async function runBundle(target: GuestTarget, base: string, picked: BundleItem[]
         items.forEach(({ transfer, relative }, index) => {
           const error = results.find((row) => row.path === relative)?.error ?? results[index]?.error ?? null;
           if (error === "already_exists") {
-            store().patch(transfer.id, { state: "conflict", error: "Something with this name already exists." });
+            // After a failed attempt this can be a file that attempt wrote. The person decides.
+            const note = attempt > 0 ? "This name exists, possibly from the attempt that failed." : "Something with this name already exists.";
+            store().patch(transfer.id, { state: "conflict", error: note });
           } else if (error) {
             store().patch(transfer.id, { state: "failed", error: "This file could not be written.", errorCode: error });
           } else {
@@ -267,11 +272,31 @@ function newId(): string {
   return `${Date.now().toString(36)}-${nextId}`;
 }
 
-function describe(target: GuestTarget, dest: string, size: number, batch: string, onConflict: OnConflict): Transfer {
+function describe(target: GuestTarget, dest: string, file: File, batch: string, onConflict: OnConflict): Transfer {
   return {
-    id: newId(), target, name: dest.slice(dest.lastIndexOf("/") + 1), dest, size, sent: 0,
-    state: "queued", onConflict, rate: 0, batch,
+    id: newId(), target, name: dest.slice(dest.lastIndexOf("/") + 1), sourceName: file.name, dest, size: file.size,
+    sent: 0, state: "queued", onConflict, rate: 0, batch,
   };
+}
+
+/** Small files in requests the server accepts, so a folder does not cost one request per file. */
+function bundlesOf(target: GuestTarget, base: string, small: BundleItem[], onConflict: OnConflict): Work[] {
+  const bundles: Work[] = [];
+  let group: BundleItem[] = [];
+  let bytes = 0;
+  const flush = () => {
+    const items = group;
+    group = [];
+    bytes = 0;
+    if (items.length) bundles.push({ run: () => runBundle(target, base, items, [], onConflict) });
+  };
+  for (const item of small) {
+    if (group.length >= BUNDLE_MAX_FILES || bytes + item.file.size > BUNDLE_MAX_BYTES) flush();
+    group.push(item);
+    bytes += item.file.size;
+  }
+  flush();
+  return bundles;
 }
 
 /** Upload a tree into `folder`. Small files share requests, because a folder must not cost one per file. */
@@ -289,7 +314,7 @@ export function enqueueUploads(
   const created: Transfer[] = [];
   for (const { file, relativePath } of tree.files) {
     const relative = rename.get(relativePath) ?? relativePath;
-    const transfer = describe(target, joinPath(folder, relative), file.size, batch, onConflict);
+    const transfer = describe(target, joinPath(folder, relative), file, batch, onConflict);
     transferFiles.set(transfer.id, file);
     created.push(transfer);
     if (file.size <= BUNDLE_FILE_BYTES) small.push({ transfer, file, relative });
@@ -297,24 +322,8 @@ export function enqueueUploads(
   }
   store().add(created);
 
-  const bundles: Work[] = [];
-  let group: BundleItem[] = [];
-  let bytes = 0;
-  const flush = () => {
-    const items = group;
-    group = [];
-    bytes = 0;
-    if (items.length) bundles.push({ run: () => runBundle(target, folder, items, [], onConflict) });
-  };
-  for (const item of small) {
-    if (group.length >= BUNDLE_MAX_FILES || bytes + item.file.size > BUNDLE_MAX_BYTES) flush();
-    group.push(item);
-    bytes += item.file.size;
-  }
-  flush();
-
   const start = () => {
-    queue.unshift(...bundles);
+    queue.unshift(...bundlesOf(target, folder, small, onConflict));
     queue.push(...large);
     pump();
   };
@@ -324,9 +333,13 @@ export function enqueueUploads(
   }
   // important: folders are made first and alone. A new folder takes its parent's owner, so a file
   // or folder made inside it a moment too early, by a parallel request, stays owned by root.
+  const asked = resets;
   queue.unshift({
     run: async () => {
       for (let at = 0; at < tree.folders.length; at += BUNDLE_MAX_FILES) {
+        // Folders have no transfer to check, so this is what stops them with their files.
+        const abandoned = created.length > 0 && !created.some(({ id }) => isWaiting(id));
+        if (asked !== resets || abandoned) return;
         await runBundle(target, folder, [], tree.folders.slice(at, at + BUNDLE_MAX_FILES), onConflict);
       }
       start();
@@ -344,8 +357,34 @@ export function cancelTransfer(id: string): void {
   if (transfer.token) void instanceFilesAPI.abortUpload(transfer.target, transfer.token).catch(() => undefined);
 }
 
-export function cancelAll(): void {
-  store().transfers.filter(isActive).forEach((transfer) => cancelTransfer(transfer.id));
+export function cancelAll(target: GuestTarget): void {
+  store().transfers
+    .filter((transfer) => isActive(transfer) && isSameTarget(transfer.target, target))
+    .forEach((transfer) => cancelTransfer(transfer.id));
+}
+
+function conflictsOn(target: GuestTarget): Transfer[] {
+  return store().transfers.filter((item) => item.state === "conflict" && isSameTarget(item.target, target));
+}
+
+export function skipConflicts(target: GuestTarget): void {
+  conflictsOn(target).forEach((transfer) => cancelTransfer(transfer.id));
+}
+
+/** One answer for every conflict, since a folder uploaded again can raise hundreds at once. */
+export function replaceConflicts(target: GuestTarget): void {
+  const small: BundleItem[] = [];
+  for (const transfer of conflictsOn(target)) {
+    const file = transferFiles.get(transfer.id);
+    if (file && !transfer.token && file.size <= BUNDLE_FILE_BYTES) {
+      store().patch(transfer.id, { state: "queued", onConflict: "replace", error: undefined, errorCode: undefined });
+      small.push({ transfer, file, relative: transfer.dest.slice(1) });
+    } else {
+      retryTransfer(transfer.id, "replace");
+    }
+  }
+  queue.unshift(...bundlesOf(target, "/", small, "replace"));
+  pump();
 }
 
 export function retryTransfer(id: string, onConflict?: OnConflict): void {
@@ -366,7 +405,7 @@ export function retryTransfer(id: string, onConflict?: OnConflict): void {
 
 export function resumeWithFile(id: string, file: File): boolean {
   const entry = readManifest().find((item) => item.id === id);
-  if (!entry || entry.name !== file.name || entry.size !== file.size || entry.lastModified !== file.lastModified) {
+  if (!entry || (entry.sourceName ?? entry.name) !== file.name || entry.size !== file.size || entry.lastModified !== file.lastModified) {
     return false;
   }
   transferFiles.set(id, file);
