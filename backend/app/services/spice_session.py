@@ -27,6 +27,11 @@ another group's key would decrypt there and hand a stranger's channels the victi
 the record carries its own key and is refused anywhere else, and a joining channel also checks
 the record's instance and operation URL against its own (console_proxy).
 
+QEMU serves one SPICE client per display, and a new one takes the display from the last. The
+store also names each instance's current display (the newest owner's operation), so a viewer
+whose display was taken can tell that apart from a dropped connection and stop, instead of
+taking it back and starting a loop with the other viewer.
+
 note: anything that fails here falls back to the old behaviour, an operation per channel, rather
 than refusing the console.
 """
@@ -60,6 +65,11 @@ _SOCKET_TIMEOUT = 2.0
 
 def new_group() -> str:
     return secrets.token_urlsafe(18)
+
+
+def _display_key(host: str, project: str, instance: str) -> str:
+    digest = hashlib.sha256(f"{host}\x00{project}\x00{instance}".encode("utf-8")).hexdigest()[:40]
+    return f"{KEY_PREFIX}:display:{digest}"
 
 
 def _keys(group: str) -> Tuple[str, str, str]:
@@ -240,6 +250,41 @@ class SpiceSessionStore:
         else:
             values = self._local_get(bytes_key) or {}
         return int(values.get("down", 0) or 0), int(values.get("up", 0) or 0)
+
+    # ── the instance's current display ───────────────────────────────────────────────────────
+
+    async def mark_display(self, host: str, project: str, instance: str, operation_id: str) -> None:
+        """Name ``operation_id`` the instance's display. The newest viewer wins, as in QEMU."""
+        key = _display_key(host, project, instance)
+        if self._client is not None:
+            await self._client.set(key, operation_id, ex=RECORD_TTL_SECONDS)
+        else:
+            self._local_set(key, operation_id, RECORD_TTL_SECONDS)
+
+    async def display_of(self, host: str, project: str, instance: str) -> Optional[str]:
+        key = _display_key(host, project, instance)
+        if self._client is not None:
+            return await self._client.get(key)
+        return self._local_get(key)
+
+    async def keep_display(self, host: str, project: str, instance: str, operation_id: str) -> None:
+        """Renew the mark while it is still ours; a newer viewer's mark is left alone."""
+        if await self.display_of(host, project, instance) != operation_id:
+            return
+        key = _display_key(host, project, instance)
+        if self._client is not None:
+            await self._client.expire(key, RECORD_TTL_SECONDS)
+        else:
+            self._local_set(key, operation_id, RECORD_TTL_SECONDS)
+
+    async def forget_display(self, host: str, project: str, instance: str, operation_id: str) -> None:
+        if await self.display_of(host, project, instance) != operation_id:
+            return
+        key = _display_key(host, project, instance)
+        if self._client is not None:
+            await self._client.delete(key)
+        else:
+            self._local.pop(key, None)
 
     async def retract(self, group: str) -> None:
         keys = _keys(group)

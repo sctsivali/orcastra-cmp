@@ -10,6 +10,7 @@ reconnected into a new one. Every ending now closes with a code that says which 
 - 1012: the instance powered down (a stop, or a restart on its way); reconnect once it runs again.
 - 4404: the session cannot start (not running, not found, not a VM); reconnecting will not help.
 - 4403: access ended mid-session (sent by ws_session_guard).
+- 4409: another viewer opened this display (QEMU serves one); taking it back is the operator's call.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 CLOSE_NORMAL = 1000
 CLOSE_UPSTREAM = 1011
 CLOSE_POWERED_DOWN = 1012
+CLOSE_TAKEN_OVER = 4409
 CLOSE_UNAVAILABLE = 4404
 
 # RFC 6455 caps a close reason at 123 bytes; a longer one makes the close frame itself fail,

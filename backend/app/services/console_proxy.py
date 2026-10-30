@@ -32,6 +32,7 @@ from app.services.console_service import get_console_service
 from app.services.interactive_relay import (
     CLOSE_NORMAL,
     CLOSE_POWERED_DOWN,
+    CLOSE_TAKEN_OVER,
     CLOSE_UNAVAILABLE,
     CLOSE_UPSTREAM,
     OutputWindow,
@@ -86,6 +87,7 @@ class ConsoleProxy:
         self.break_glass_grant_id = break_glass_grant_id
         self.group = group if (share_operation and console_type == "vga") else None
         self._watch_power = watch_power
+        self._operation_id: Optional[str] = None
 
         self.role = "solo"
         self._published = False
@@ -179,6 +181,7 @@ class ConsoleProxy:
                 await self._run_own_operation(started)
                 return
             self.role = "member"
+            self._operation_id = str(record["operation_id"])
             self.data_ws = await open_lxd_socket(record["data_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS)
             self._log_ready(started)
             flush = asyncio.create_task(self._flush_member_bytes(store, group))
@@ -210,6 +213,8 @@ class ConsoleProxy:
             await asyncio.sleep(RENEW_EVERY_SECONDS)
             try:
                 await store.renew(group)
+                if self._operation_id:
+                    await store.keep_display(self.host, self.project, self.instance_name, self._operation_id)
                 await self._fold_member_bytes(store, group)
             except asyncio.CancelledError:
                 raise
@@ -292,6 +297,14 @@ class ConsoleProxy:
                 break_glass_grant_id=self.break_glass_grant_id,
             )
         self._audit("success")
+        self._operation_id = str(info.get("operation_id") or "") or None
+        if self.role == "owner" and self._operation_id:
+            # note: before the sockets. The data socket is what makes QEMU drop the previous
+            # viewer, whose relay then reads this mark to tell a takeover from a lost connection.
+            try:
+                await get_spice_session_store().mark_display(self.host, self.project, self.instance_name, self._operation_id)
+            except Exception as exc:  # noqa: BLE001 - without it a takeover reads as a drop
+                logger.debug("SPICE display mark failed: %s", type(exc).__name__)
 
         _, ssl_context = await session_io(connection_material, self.host, label=f"console.material:{self.host}", host=self.host)
         # note: control first. LXD ends a console operation whose control socket never arrives,
@@ -359,6 +372,9 @@ class ConsoleProxy:
             action = outcome.partition(":")[2]
             await close_browser(self.browser_ws, CLOSE_POWERED_DOWN, _POWER_DOWN_REASONS.get(action, "The instance shut down"))
             return
+        if await self._taken_over():
+            await close_browser(self.browser_ws, CLOSE_TAKEN_OVER, "Another viewer opened this console")
+            return
         if error is None:
             await close_browser(self.browser_ws, CLOSE_NORMAL, "The console session ended")
         else:
@@ -413,6 +429,16 @@ class ConsoleProxy:
             pass
         return "control"
 
+    async def _taken_over(self) -> bool:
+        """Whether the display ended because a newer viewer's operation took it (shared displays only)."""
+        if self.console_type != "vga" or self.role not in ("owner", "member") or not self._operation_id:
+            return False
+        try:
+            current = await get_spice_session_store().display_of(self.host, self.project, self.instance_name)
+        except Exception:  # noqa: BLE001 - unknown reads as a lost connection, as before
+            return False
+        return bool(current) and current != self._operation_id
+
     async def _power_down(self, watch: PowerWatch) -> str:
         try:
             action = await watch(self.host, self.instance_name, self.project)
@@ -455,6 +481,8 @@ class ConsoleProxy:
             try:
                 await self._fold_member_bytes(store, self.group)
                 await store.retract(self.group)
+                if self._operation_id:
+                    await store.forget_display(self.host, self.project, self.instance_name, self._operation_id)
             except Exception as exc:  # noqa: BLE001 - the record expires on its own
                 logger.debug("SPICE session retract failed: %s", type(exc).__name__)
         if self._session is not None:

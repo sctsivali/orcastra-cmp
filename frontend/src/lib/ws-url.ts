@@ -30,6 +30,8 @@ export const WS_CLOSE = {
   UNAVAILABLE: 4404,
   /** The instance powered down (stopped, or on its way through a restart). */
   POWERED_DOWN: 1012,
+  /** Another viewer opened this display (QEMU serves one). Taking it back is the operator's call. */
+  TAKEN_OVER: 4409,
 } as const;
 
 /**

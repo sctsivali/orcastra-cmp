@@ -4,8 +4,8 @@
  *
  * - "connected" means the guest is on screen (the first frame drawn), not that the main channel
  *   linked, which used to lift the overlay onto a blank canvas.
- * - How a session ends decides what happens next: 1000 (another viewer took the console over) and
- *   4403/4404 are final; a dropped connection (1006, 1011) reconnects with backoff, at once when
+ * - How a session ends decides what happens next: 1000, 4409 (another viewer took the display
+ *   over; reconnecting would take it back and start a loop) and 4403/4404 are final; a dropped connection (1006, 1011) reconnects with backoff, at once when
  *   the network or the tab comes back. After the instance powered down (1012, a stop or a
  *   restart), or a drop of a session that was on screen, "not running" means "not yet": it tries
  *   every few seconds until the instance is back, for up to three minutes.
@@ -98,7 +98,10 @@ export interface SpiceConn extends ChannelLike {
 }
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000];
-const FINAL_CODES = new Set([1000, 1008, 4403, 4404]);
+const FINAL_CODES = new Set([1000, 1008, 4403, 4404, 4409]);
+// Retries count again from the first only once a connection has stayed up this long, so two
+// viewers trading one display (one outside the dashboard, say) run out of retries.
+const STABLE_AFTER_MS = 10_000;
 const RESIZE_DEBOUNCE_MS = 350;
 const TYPE_INTERVAL_MS = 8;
 
@@ -108,6 +111,7 @@ function globals(): Globals {
 
 function friendly(error: SpiceErrorLike): string {
   if (error.code === 1000) return "The console session ended. Another viewer may have opened this console.";
+  if (error.code === WS_CLOSE.TAKEN_OVER) return "Another viewer opened this console. Reconnect to take it back.";
   if (error.code === 4403) return "Access to this instance was revoked.";
   if (error.reason) return error.reason;
   const message = error.message || "The console connection failed";
@@ -143,6 +147,7 @@ export class SpiceSession {
   private disposed = false;
   /** When a session that was on screen dropped, or its instance powered down. */
   private droppedAt: number | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     screenId: string,
@@ -245,8 +250,10 @@ export class SpiceSession {
     sc.oncanvasgone = () => this.detachCanvas();
     sc.onfirstdraw = () => {
       if (generation !== this.generation) return;
-      this.attempts = 0;
       this.droppedAt = null;
+      this.stableTimer = setTimeout(() => {
+        this.attempts = 0;
+      }, STABLE_AFTER_MS);
       this.setStatus("connected");
       this.wake();
     };
@@ -273,6 +280,8 @@ export class SpiceSession {
   }
 
   private teardown(): void {
+    if (this.stableTimer) clearTimeout(this.stableTimer);
+    this.stableTimer = null;
     this.stopStats();
     if (this.resizeTimer) clearTimeout(this.resizeTimer);
     this.resizeTimer = null;
@@ -303,7 +312,7 @@ export class SpiceSession {
       this.retryTimer = setTimeout(() => void this.connect(), INSTANCE_RETURN_POLL_MS);
       return;
     }
-    if (error.code === 1000) {
+    if (error.code === 1000 || error.code === WS_CLOSE.TAKEN_OVER) {
       this.setStatus("ended", message);
       return;
     }
