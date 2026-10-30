@@ -180,13 +180,16 @@ export function ConsoleWorkspace({
     };
   }, [activeTab, caps.status, conflict, graphicsCleared, host, instanceName, mounted, project]);
 
-  // The front tab's connection is what the title and tray show.
+  // The front tab's connection is what the title and tray show. No tab mounts while the
+  // capabilities failed, so the failure itself is the status.
+  const capsError = caps.status === "error" ? caps.message : null;
   useEffect(() => {
-    if (activeTab === "graphics") onConnectionStatus?.(graphicsToConnection(graphics.status));
+    if (capsError !== null) onConnectionStatus?.("error", capsError);
+    else if (activeTab === "graphics") onConnectionStatus?.(graphicsToConnection(graphics.status));
     else if (activeTab === "text") onConnectionStatus?.(textStatus);
     else if (activeTab === "serial") onConnectionStatus?.(serialStatus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, graphics.status, textStatus, serialStatus]);
+  }, [activeTab, capsError, graphics.status, textStatus, serialStatus]);
 
   // Keyboard focus follows the front tab.
   useEffect(() => {
