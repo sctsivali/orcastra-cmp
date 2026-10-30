@@ -302,3 +302,22 @@ def test_a_failure_log_never_carries_an_operation_secret():
 
     text = "wss://10.0.0.5:8443/1.0/operations/abc/websocket?secret=3f9a3f9a isn't a valid URI"
     assert "3f9a3f9a" not in redact(text)
+
+
+async def test_a_refused_record_ends_the_wait_at_once(store, caplog):
+    """A record that is there but refused (another display's, or one sealed by an older build)
+    is not waited out for ten seconds, nor logged twenty times a second."""
+    import logging
+    import time as _time
+
+    await store.publish("other-group", {"data_url": "wss://cluster/1.0/operations/op-1/websocket?secret=s",
+                                        "operation_id": "op-1", "host": "nuc2", "project": "default", "instance": "vm-a"})
+    from app.services.spice_session import _keys
+    expiry, sealed = store._local[_keys("other-group")[1]]
+    store._local[_keys(GROUP)[1]] = (expiry, sealed)
+
+    started = _time.monotonic()
+    with caplog.at_level(logging.WARNING, logger="app.services.spice_session"):
+        assert await store.wait_for(GROUP, timeout=5) is None
+    assert _time.monotonic() - started < 1
+    assert len([r for r in caplog.records if "another display" in r.getMessage()]) == 1

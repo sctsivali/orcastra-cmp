@@ -184,7 +184,12 @@ class SpiceSessionStore:
             logger.debug("Could not publish a SPICE session failure: %s", type(exc).__name__)
 
     async def wait_for(self, group: str, timeout: float = ATTACH_WAIT_SECONDS) -> Optional[Dict[str, Any]]:
-        """The owner's record, or None when it did not appear within ``timeout``."""
+        """The owner's record, or None when it did not appear within ``timeout`` or was refused.
+
+        note: a record that is there but refused (another display's, a different SECRET_KEY, one
+        sealed by an older build during a deploy) ends the wait at once and is logged once; the
+        channel then opens its own operation instead of polling it for the whole window.
+        """
         _, op_key, _ = _keys(group)
         deadline = time.monotonic() + timeout
         while True:
@@ -192,9 +197,8 @@ class SpiceSessionStore:
                 sealed = await self._client.get(op_key)
             else:
                 sealed = self._local_get(op_key)
-            record = self._open(sealed, op_key)
-            if record is not None:
-                return record
+            if sealed:
+                return self._open(sealed, op_key)
             if time.monotonic() >= deadline:
                 return None
             await asyncio.sleep(_POLL_SECONDS)
