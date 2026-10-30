@@ -22,6 +22,8 @@ import {
   CardHeader,
   CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TableEmptyValue } from "@/components/ui/table-text";
 import { RowActions, type RowAction } from "@/components/ui/row-actions";
 import { useUpdateProjectTags } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -41,7 +43,13 @@ interface ProjectCardProps {
   projectKey: string;
   /** From useRowFocus: the row key and, briefly after a create, the mark. */
   rowProps: { "data-row-key": string; "data-row-focus"?: "true" | "false" };
-  instanceCount: number;
+  /**
+   * How many instances the project holds, or null when that is not known: the instance list is
+   * still loading (countPending), or this project's cluster did not answer it. Never 0 for
+   * unknown, because 0 enables Delete and reads as an empty project.
+   */
+  instanceCount: number | null;
+  countPending?: boolean;
   isExpanded: boolean;
   instances: VMInfo[];
   stats: { running: number; stopped: number; other: number; total: number };
@@ -63,7 +71,8 @@ interface ProjectCardProps {
 // in-card pager uses, so the two compact pagers do not disagree about what a page is.
 const INSTANCE_PAGE_SIZE = 5;
 
-export function ProjectCard({ project, projectKey, rowProps, instanceCount, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
+export function ProjectCard({ project, projectKey, rowProps, instanceCount, countPending = false, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
+  const count = instanceCount ?? 0;
   const updateProjectTags = useUpdateProjectTags();
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
@@ -296,7 +305,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
                 expanded region, the instance actions and now its pager, was therefore unreachable
                 by keyboard. The badge passes asChild so a span carries the chip styling, because
                 a div inside a button is invalid per the HTML content model. */}
-            {instanceCount > 0 ? (
+            {count > 0 ? (
               <button
                 type="button"
                 onClick={() => toggleProject(projectKey)}
@@ -305,7 +314,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
                 className="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
                 <Badge asChild variant="default" className="hover:bg-primary/80 transition-colors">
-                  <span>{instanceCount}</span>
+                  <span>{count}</span>
                 </Badge>
                 <span className="sr-only">
                   {isExpanded ? "Hide" : "Show"} instances in {project.name} on {project.host}
@@ -316,11 +325,20 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
                   <ChevronDown className="h-4 w-4 text-muted-foreground" />
                 )}
               </button>
+            ) : instanceCount !== null ? (
+              <Badge variant="secondary">{count}</Badge>
+            ) : countPending ? (
+              <>
+                <Skeleton className="h-5 w-7 rounded-sm" aria-hidden="true" />
+                <span className="sr-only">Loading the instance count</span>
+              </>
             ) : (
-              <Badge variant="secondary">{instanceCount}</Badge>
+              <Badge variant="secondary">
+                <TableEmptyValue label="Instance count not read: this cluster's instance list did not answer" />
+              </Badge>
             )}
           </div>
-          {instanceCount > 0 && (
+          {count > 0 && (
             <p className="text-xs text-muted-foreground">
               {[
                 `${stats.running} running`,
@@ -332,7 +350,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
         </div>
 
         {/* Expanded Instance List */}
-        {isExpanded && instanceCount > 0 && (
+        {isExpanded && count > 0 && (
           <div id={instancesRegionId} className="mt-3 pt-3 border-t space-y-2">
             {visibleInstances.map((vm) => (
               <InstanceRow key={vm.name} vm={vm} onTagsUpdate={refetch} isReadOnly={isReadOnly} />

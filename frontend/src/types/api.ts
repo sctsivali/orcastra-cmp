@@ -138,6 +138,11 @@ export interface VMListResponse {
   has_more: boolean;
   /** Clusters that could not answer this inventory read. */
   unreachable_nodes?: string[];
+  /**
+   * Why a cluster in unreachable_nodes is missing, when the server knows: "unreachable: did not
+   * answer within 30 s" for a list that ran past the inventory wall. Absent for Tenant callers.
+   */
+  node_errors?: Record<string, string>;
   /** When the list was read off the clusters; a cached answer keeps its read time. */
   collected_at?: string | null;
 }

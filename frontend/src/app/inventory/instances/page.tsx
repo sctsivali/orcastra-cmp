@@ -349,7 +349,11 @@ function InstancesContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="instances" nodes={unreachableNodes} />
+      <UnreachableNodesBanner
+        noun="instances"
+        nodes={unreachableNodes}
+        reasons={(data as VMListResponse | undefined)?.node_errors}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

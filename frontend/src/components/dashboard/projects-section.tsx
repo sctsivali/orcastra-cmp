@@ -26,6 +26,14 @@ interface ProjectsSectionProps {
   /** The query's own failure, distinct from a fleet that genuinely holds no projects. */
   projectsError: unknown;
   vmsData: VMInfo[];
+  /** The instance list has not answered yet: project cards show their count as loading. */
+  instancesPending?: boolean;
+  /**
+   * Clusters the instance list could not read (its unreachable_nodes), with the reasons when the
+   * server gave them. A project on one of them has an unknown count, not zero.
+   */
+  instancesUnread?: string[];
+  instancesUnreadReasons?: Record<string, string>;
   refetch: () => void;
   lastUpdatedAt: number | null;
   /** The projects query's dataUpdatedAt, what the post-create focus trusts. */
@@ -106,7 +114,7 @@ export function ProjectsSection(props: ProjectsSectionProps) {
   );
 }
 
-function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, vmsData, refetch, lastUpdatedAt, projectsUpdatedAt }: ProjectsSectionProps) {
+function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, vmsData, instancesPending = false, instancesUnread, instancesUnreadReasons, refetch, lastUpdatedAt, projectsUpdatedAt }: ProjectsSectionProps) {
   const lastUpdated = useRelativeTime(lastUpdatedAt);
   const headingId = React.useId();
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
@@ -282,6 +290,14 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
     }
     return out;
   }, [projectsData]);
+  // A cluster whose projects answered while its instance list did not (one past the inventory
+  // wall): its cards are on the grid with an unknown count, so name it. A cluster missing from
+  // both is already in the projects banner above, and naming it twice says nothing new.
+  const unreadInstanceHosts = React.useMemo(() => {
+    const projectsMissing = new Set(unreachableNodes);
+    return (instancesUnread ?? []).filter((host) => !projectsMissing.has(host));
+  }, [instancesUnread, unreachableNodes]);
+  const unreadHostSet = React.useMemo(() => new Set(instancesUnread ?? []), [instancesUnread]);
   // Every host answered and every one of them failed: the fleet is not empty, it is unreadable.
   const allNodesUnreachable =
     (projectsData?.length ?? 0) > 0 && unreachableNodes.length === projectsData!.length;
@@ -370,6 +386,13 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
         nodes={unreachableNodes}
         reasons={unreachableReasons}
       />
+      {!instancesPending && (
+        <UnreachableNodesBanner
+          noun="instances"
+          nodes={unreadInstanceHosts}
+          reasons={instancesUnreadReasons}
+        />
+      )}
 
       {/* important: two-up starts at lg and three-up at xl, not md and lg. Measured live, the
           old thresholds gave a 224px card at both 768 and 1024, which leaves the header's title
@@ -389,7 +412,10 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
           <>
             {visibleProjects.map((project) => {
                   const projectKey = projectRowKey(project.host, project.name);
-                  const instanceCount = projectIndex.get(projectKey)?.count ?? 0;
+                  const instanceCount =
+                    instancesPending || unreadHostSet.has(project.host)
+                      ? null
+                      : projectIndex.get(projectKey)?.count ?? 0;
                   const isExpanded = expandedProjects.has(projectKey);
                   const instances = getProjectInstances(project.host, project.name);
                   const stats = getProjectStats(project.host, project.name);
@@ -401,6 +427,7 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
                       projectKey={projectKey}
                       rowProps={focus.rowProps(projectKey)}
                       instanceCount={instanceCount}
+                      countPending={instancesPending}
                       isExpanded={isExpanded}
                       instances={instances}
                       stats={stats}

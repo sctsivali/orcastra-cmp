@@ -49,7 +49,7 @@ interface ProjectDialogProps {
  * The project card's delete confirm. Mounted for as long as the card is, so Radix keeps its
  * exit fade; the card owns the open flag because its menu sets it.
  */
-export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange, isReadOnly }: ProjectDialogProps & { instanceCount: number }) {
+export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange, isReadOnly }: ProjectDialogProps & { instanceCount: number | null }) {
   const deleteProject = useDeleteProject();
   const [isDeleting, setIsDeleting] = React.useState(false);
 
@@ -97,7 +97,12 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
         <AlertDialogTitle>Delete Project &quot;{project.name}&quot;?</AlertDialogTitle>
         <AlertDialogDescription>
           This will permanently delete the project from {project.host}. 
-          {instanceCount > 0 && (
+          {instanceCount === null ? (
+            <span className="block mt-2 font-medium">
+              The instances in this project could not be counted, so it cannot be deleted from
+              here yet. Refresh the Overview and try again.
+            </span>
+          ) : instanceCount > 0 && (
             <span className="block mt-2 text-destructive font-medium">
               Warning: This project has {instanceCount} instance(s). Delete all instances first.
             </span>
@@ -108,7 +113,7 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
         <AlertDialogCancel>Cancel</AlertDialogCancel>
         <AlertDialogAction
           onClick={handleDelete}
-          disabled={isDeleting || instanceCount > 0}
+          disabled={isDeleting || instanceCount === null || instanceCount > 0}
           className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
         >
           {isDeleting ? (

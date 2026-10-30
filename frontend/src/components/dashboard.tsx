@@ -54,7 +54,11 @@ export function Dashboard() {
     ]);
   }, [queryClient, refreshInstances, scopeKey]);
 
-  const isPrimaryLoading = vmsLoading || projectsLoading || clustersLoading;
+  // important: the page waits for the cluster and project reads only. The instance list waits for
+  // the slowest cluster, up to the backend's 30 s inventory wall, and one slow cluster used to hold
+  // the whole Overview behind the loader and then the retry panel. The instance figures and the
+  // project counts carry their own loading state instead.
+  const isPrimaryLoading = projectsLoading || clustersLoading;
   // important: never hard-block the dashboard forever on a slow/stuck query.
   // After a grace period, surface a retry panel instead of an infinite 95%
   // loader (the backend now responds fast; this is a defensive safety net).
@@ -137,6 +141,9 @@ export function Dashboard() {
         projectsLoading={projectsLoading}
         projectsError={projectsError}
         vmsData={vmsData?.vms || []}
+        instancesPending={vmsLoading}
+        instancesUnread={vmsData?.unreachable_nodes}
+        instancesUnreadReasons={vmsData?.node_errors}
         refetch={refetch}
         lastUpdatedAt={collectedAtMs(vmsData?.collected_at) || dataUpdatedAt}
         projectsUpdatedAt={projectsUpdatedAt}
