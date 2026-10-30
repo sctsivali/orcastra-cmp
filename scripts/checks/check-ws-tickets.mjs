@@ -33,13 +33,13 @@ for (const file of walk(srcDir)) {
   const rel = relative(root, file);
   const text = readFileSync(file, 'utf8');
   if (/[?&]token=/.test(text)) failures.push(`${rel}: builds a URL with a token query parameter`);
-  if (/new WebSocket\(/.test(text) || /new SpiceMainConn\(/.test(text)) {
+  if (/new WebSocket\(/.test(text) || /new (?:G\.)?SpiceMainConn\(/.test(text)) {
     openers += 1;
     if (!/\b(ticketedSocketUrl|spiceSocketUrls)\(/.test(text)) {
       failures.push(`${rel}: opens a socket without minting a ticket through lib/ws-url.ts`);
     }
   }
-  if (/new SpiceMainConn\(/.test(text) && !/channel_uris: urls\.channels/.test(text)) {
+  if (/new (?:G\.)?SpiceMainConn\(/.test(text) && !/channel_uris: urls\.channels/.test(text)) {
     failures.push(`${rel}: a SPICE session must hand its channels their own ticketed URIs`);
   }
 }
@@ -65,7 +65,11 @@ if (!/String\(e\.target\.url\)\.split\("\?"\)\[0\]/.test(spiceConn) || !/String\
 }
 if (!/code === 4403/.test(spiceConn)) failures.push('frontend/public/spice-html5/spiceconn.js: a 4403 close must say access was revoked');
 
-if (openers < 7) failures.push(`expected at least 7 socket openers, found ${openers}`);
+// note: the floor guards against an opener moving somewhere this scan cannot see. It was 7 while
+// four components each built their own terminal socket; one hook (lib/use-terminal-socket.ts)
+// replaced them in the console overhaul (2026-10-30), with the monitoring, events and task feeds
+// and the SPICE session the rest.
+if (openers < 5) failures.push(`expected at least 5 socket openers, found ${openers}`);
 
 if (failures.length > 0) {
   console.error(`WebSocket tickets: ${failures.length} failure(s)`);

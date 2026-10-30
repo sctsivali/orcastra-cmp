@@ -80,7 +80,7 @@ export function ISOManagerPanel({
   const [confirmEject, setConfirmEject] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const { setAttachedISO } = useConsoleStore();
+  const setAttachedISO = useConsoleStore((s) => s.setAttachedISO);
   const queryClient = useQueryClient();
   const { scopeKey } = useActorQueryScope();
   const target = JSON.stringify([consoleId, host, project, instanceName, scopeKey]);

@@ -1,20 +1,14 @@
 /**
- * Console Tabs - Tab navigation for console window.
- * Switches between text console, graphics console, and ISO management.
- * Note: Boot Order tab is hidden/commented out.
+ * Console Tabs: Graphics (a VM's display), Text (a shell, needs the VM agent), Serial (the serial
+ * console, needs neither the agent nor networking) and ISO (a VM's boot media).
  */
 
 "use client";
 
 import * as React from "react";
-import {
-  Terminal,
-  Monitor,
-  // ListOrdered, // Uncomment if re-enabling Boot Order tab
-  Disc,
-} from "lucide-react";
+import { Disc, Monitor, Terminal, TerminalSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ConsoleTab, ConsoleCapabilities } from "@/lib/console-store";
+import type { ConsoleCapabilities, ConsoleTab } from "@/lib/console-store";
 
 interface ConsoleTabsProps {
   activeTab: ConsoleTab;
@@ -29,78 +23,90 @@ interface TabConfig {
   label: string;
   icon: React.ReactNode;
   available: boolean;
-  tooltip?: string;
+  description: string;
 }
 
-export function ConsoleTabs({
-  activeTab,
-  onTabChange,
-  instanceType,
-  capabilities,
-  className,
-}: ConsoleTabsProps) {
-  const isVM = instanceType === 'virtual-machine';
-  
+export function ConsoleTabs({ activeTab, onTabChange, instanceType, capabilities, className }: ConsoleTabsProps) {
+  const isVM = instanceType === "virtual-machine";
   const tabs: TabConfig[] = [
     {
-      id: 'text',
-      label: 'Text',
-      icon: <Terminal className="h-4 w-4" />,
-      available: true,
-      tooltip: 'Text/Shell Console',
-    },
-    {
-      id: 'graphics',
-      label: 'Graphics',
-      icon: <Monitor className="h-4 w-4" />,
+      id: "graphics",
+      label: "Graphics",
+      icon: <Monitor className="h-4 w-4" aria-hidden="true" />,
       available: isVM && (capabilities?.graphicsConsole ?? isVM),
-      tooltip: isVM ? 'VGA Graphics Console' : 'Graphics console only available for VMs',
+      description: isVM ? "The VM's display" : "Only virtual machines have a display",
     },
-    // Boot Order tab is hidden (commented out) as per user request
-    // Uncomment below to re-enable the Boot Order tab
-    // {
-    //   id: 'boot',
-    //   label: 'Boot Order',
-    //   icon: <ListOrdered className="h-4 w-4" />,
-    //   available: true,
-    //   tooltip: 'Startup Order Configuration',
-    // },
     {
-      id: 'iso',
-      label: 'ISO',
-      icon: <Disc className="h-4 w-4" />,
+      id: "text",
+      label: "Text",
+      icon: <Terminal className="h-4 w-4" aria-hidden="true" />,
+      available: true,
+      description: isVM ? "A shell on the VM (needs its agent)" : "A shell in the container",
+    },
+    {
+      id: "serial",
+      label: "Serial",
+      icon: <TerminalSquare className="h-4 w-4" aria-hidden="true" />,
+      available: true,
+      description: "The serial console: boot output and a login prompt, no agent needed",
+    },
+    {
+      id: "iso",
+      label: "ISO",
+      icon: <Disc className="h-4 w-4" aria-hidden="true" />,
       available: isVM,
-      tooltip: isVM ? 'ISO/Image Management' : 'ISO management only available for VMs',
+      description: isVM ? "Boot media" : "Only virtual machines take boot media",
     },
   ];
+  // A container has no display and no boot media: those tabs are left out rather than greyed.
+  const visible = tabs.filter((tab) => tab.available || isVM);
 
   return (
-    <div 
+    <div
+      role="tablist"
+      aria-label="Console views"
       className={cn("flex border-b bg-muted/20 touch-manipulation", className)}
       onMouseDown={(e) => e.stopPropagation()}
       onTouchStart={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+        const enabled = visible.filter((t) => t.available);
+        const index = enabled.findIndex((t) => t.id === activeTab);
+        const next = enabled[(index + (e.key === "ArrowRight" ? 1 : enabled.length - 1)) % enabled.length];
+        if (next) {
+          e.preventDefault();
+          onTabChange(next.id);
+        }
+      }}
     >
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => tab.available && onTabChange(tab.id)}
-          onTouchEnd={(e) => { e.preventDefault(); if (tab.available) onTabChange(tab.id); }}
-          disabled={!tab.available}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-sm font-medium transition-colors relative",
-            "border-b-2 -mb-px active:scale-95",
-            activeTab === tab.id
-              ? "text-primary border-primary bg-background"
-              : "text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50",
-            !tab.available && "opacity-50 cursor-not-allowed"
-          )}
-          title={tab.tooltip}
-        >
-          {tab.icon}
-          <span className="hidden sm:inline">{tab.label}</span>
-        </button>
-      ))}
+      {visible.map((tab) => {
+        const selected = activeTab === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-label={tab.label}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => tab.available && onTabChange(tab.id)}
+            disabled={!tab.available}
+            title={tab.description}
+            className={cn(
+              "relative -mb-px flex min-h-[40px] items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              selected
+                ? "border-primary bg-background text-primary"
+                : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+              !tab.available && "cursor-not-allowed opacity-50",
+            )}
+          >
+            {tab.icon}
+            <span className="hidden sm:inline">{tab.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

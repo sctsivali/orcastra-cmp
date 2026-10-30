@@ -812,14 +812,28 @@ for (const contract of [
     ],
     forbidden: ['/file-transfer/push?', 'method: "POST"'],
   },
+  // A console closes only its own sockets, which ends its own LXD operations. Closing a window,
+  // leaving the page or popping out used to call kill-all-sessions, which cancelled every
+  // websocket operation on the instance, other people's shells and consoles included.
   {
     path: "frontend/src/app/console/[id]/page.tsx",
-    markers: [
-      "tasksAPI.killConsoleSession",
-      "tasksAPI.killAllConsoleSessionsOnUnload",
-      'reconcileMutationImpact(queryClient, "task.session")',
-    ],
-    forbidden: ["navigator.sendBeacon"],
+    markers: ["<ConsoleWorkspace"],
+    forbidden: ["navigator.sendBeacon", "killAllConsoleSessions", "kill-all-sessions"],
+  },
+  {
+    path: "frontend/src/components/console/console-workspace.tsx",
+    markers: ["consoleAPI.getActiveSessions"],
+    forbidden: ["killAllConsoleSessions", "kill-all-sessions"],
+  },
+  {
+    path: "frontend/src/components/console/console-window.tsx",
+    markers: ["closeConsole(consoleId)"],
+    forbidden: ["killAllConsoleSessions", "kill-all-sessions"],
+  },
+  {
+    path: "frontend/src/lib/console-store.ts",
+    markers: ["closeConsole: (id) =>"],
+    forbidden: ["killAllConsoleSessions", "kill-all-sessions"],
   },
 ]) {
   const source = readFileSync(join(root, contract.path), "utf8");

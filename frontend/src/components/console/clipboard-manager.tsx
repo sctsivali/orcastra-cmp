@@ -1,7 +1,10 @@
 /**
  * Clipboard Manager - Side panel for managing clipboard entries.
  * Supports adding text, viewing history, and inserting into console.
- * History is persisted to localStorage.
+ *
+ * important: history lives in memory for this page only. It used to be persisted to
+ * localStorage, where pasted passwords and keys stayed in plain text after the tab closed; the
+ * old key is removed on first use. Text the guest copies (through its agent) is added here too.
  */
 
 "use client";
@@ -44,38 +47,47 @@ interface ClipboardManagerProps {
   className?: string;
 }
 
-const STORAGE_KEY = 'orcastra-clipboard-history';
+const LEGACY_STORAGE_KEY = 'orcastra-clipboard-history';
 const MAX_HISTORY = 50;
 
+// One history for every console panel on the page, gone when the page goes.
+let sessionHistory: ClipboardEntry[] = [];
+const listeners = new Set<(entries: ClipboardEntry[]) => void>();
+
+function publish(entries: ClipboardEntry[]): void {
+  sessionHistory = entries.slice(0, MAX_HISTORY);
+  listeners.forEach((listener) => listener(sessionHistory));
+}
+
+/** Adds text to the history (for example what the guest copied); a repeat moves to the top. */
+export function rememberClipboard(text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const entry: ClipboardEntry = { id: `clip_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`, text: trimmed, createdAt: Date.now() };
+  publish([entry, ...sessionHistory.filter((e) => e.text !== trimmed)]);
+}
+
 export function ClipboardManager({ onInsert, onClose, className }: ClipboardManagerProps) {
-  const [entries, setEntries] = useState<ClipboardEntry[]>([]);
+  const [entries, setEntries] = useState<ClipboardEntry[]>(sessionHistory);
   const [newText, setNewText] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Load history from localStorage
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          setEntries(parsed);
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load clipboard history:', e);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    } catch {
+      // storage unavailable; nothing to clean
     }
+    listeners.add(setEntries);
+    return () => {
+      listeners.delete(setEntries);
+    };
   }, []);
 
-  // Save history to localStorage
   const saveHistory = useCallback((newEntries: ClipboardEntry[]) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newEntries.slice(0, MAX_HISTORY)));
-    } catch (e) {
-      console.error('Failed to save clipboard history:', e);
-    }
+    publish(newEntries);
   }, []);
 
   // Add new entry

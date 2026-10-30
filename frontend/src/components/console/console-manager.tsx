@@ -1,14 +1,15 @@
 /**
- * Console Manager - Orchestrates multiple console windows.
- * Renders floating console windows and minimized tray.
- * 
- * This component should be placed in the main layout to enable
- * console windows across the entire application.
+ * Console Manager: every console window of the page, and the tray of minimized ones.
+ *
+ * All windows render from one list whatever their state, so a window keeps its sessions when it
+ * is minimized, restored or taken to full page (each used to remount it in another subtree).
  */
 
 "use client";
 
 import * as React from "react";
+import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useConsoleStore } from "@/lib/console-store";
 import { ConsoleWindow } from "./console-window";
 import { ConsoleTray } from "./console-tray";
@@ -19,127 +20,72 @@ interface ConsoleManagerProps {
 }
 
 export function ConsoleManager({ className }: ConsoleManagerProps) {
-  const {
-    consoles,
-    focusedConsoleId,
-    closeConsole,
-    minimizeConsole,
-    restoreConsole,
-    toggleFullPage,
-    maximizeConsole,
-    restoreFromMaximize,
-    zIndexOrder,
-    ensureWithinViewport,
-  } = useConsoleStore();
+  // Only the shape of the list: a status or position change inside a window does not re-render
+  // every window (each window reads its own entry).
+  const windows = useConsoleStore(
+    useShallow((s) => s.consoles.map((c) => `${c.id}|${c.minimized ? 1 : 0}|${c.fullPage ? 1 : 0}|${c.maximized ? 1 : 0}`)),
+  );
+  const minimizedConsoles = useConsoleStore(useShallow((s) => s.consoles.filter((c) => c.minimized)));
+  const closeConsole = useConsoleStore((s) => s.closeConsole);
+  const minimizeConsole = useConsoleStore((s) => s.minimizeConsole);
+  const restoreConsole = useConsoleStore((s) => s.restoreConsole);
+  const toggleFullPage = useConsoleStore((s) => s.toggleFullPage);
+  const restoreFromMaximize = useConsoleStore((s) => s.restoreFromMaximize);
+  const ensureWithinViewport = useConsoleStore((s) => s.ensureWithinViewport);
+  const [mounted, setMounted] = useState(false);
 
-  const [mounted, setMounted] = React.useState(false);
+  useEffect(() => setMounted(true), []);
 
-  // Client-side mount detection
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Handle viewport resize (orientation change, window resize)
-  React.useEffect(() => {
+  useEffect(() => {
     if (!mounted) return;
-
-    // Debounce resize handler
-    let resizeTimer: NodeJS.Timeout;
-    const handleResize = () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        ensureWithinViewport();
-      }, 150);
+    let timer: ReturnType<typeof setTimeout>;
+    const onResize = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => ensureWithinViewport(), 150);
     };
-
-    // Listen for resize and orientation change
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-    
-    // Also check on initial mount
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
     ensureWithinViewport();
-
     return () => {
-      clearTimeout(resizeTimer);
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
+      clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
     };
   }, [mounted, ensureWithinViewport]);
 
-  // Filter visible (non-minimized) consoles
-  const visibleConsoles = consoles.filter((c) => !c.minimized);
-  const minimizedConsoles = consoles.filter((c) => c.minimized);
+  if (!mounted) return null;
 
-  // Get z-index for each console
-  const getZIndex = (consoleId: string) => {
-    const index = zIndexOrder.indexOf(consoleId);
-    return index >= 0 ? 1000 + index : 1000;
-  };
-
-  // Check if any console is in full page mode
-  const fullPageConsole = consoles.find((c) => c.fullPage && !c.minimized);
+  const entries = windows.map((key) => {
+    const [id, minimized, fullPage, maximized] = key.split("|");
+    return { id, minimized: minimized === "1", fullPage: fullPage === "1", maximized: maximized === "1" };
+  });
+  const fullPageId = entries.find((e) => e.fullPage && !e.minimized)?.id ?? null;
 
   return (
     <>
-      {/* Floating windows container */}
-      <div
-        className={cn(
-          "fixed inset-0 pointer-events-none z-[999]",
-          fullPageConsole && "pointer-events-auto",
-          className
-        )}
-      >
-        {/* Full page overlay */}
-        {fullPageConsole && (
-          <div className="absolute inset-0 bg-background z-[2000]">
+      <div className={cn("pointer-events-none fixed inset-0 z-[999] overflow-hidden", className)}>
+        {entries.map((entry) => (
+          <div key={entry.id} className="pointer-events-auto">
             <ConsoleWindow
-              consoleId={fullPageConsole.id}
-              isFullPage={true}
-              onClose={() => closeConsole(fullPageConsole.id)}
+              consoleId={entry.id}
+              isFullPage={entry.fullPage && !entry.minimized}
+              visible={!entry.minimized && (fullPageId === null || fullPageId === entry.id)}
+              onClose={() => closeConsole(entry.id)}
               onMinimize={() => {
-                toggleFullPage(fullPageConsole.id);
-                minimizeConsole(fullPageConsole.id);
+                if (entry.fullPage) toggleFullPage(entry.id);
+                minimizeConsole(entry.id);
               }}
-              onMaximize={() => toggleFullPage(fullPageConsole.id)}
+              onMaximize={() => {
+                if (entry.maximized) restoreFromMaximize(entry.id);
+                else toggleFullPage(entry.id);
+              }}
             />
           </div>
-        )}
-
-        {/* Floating windows (when not in full page mode) */}
-        {!fullPageConsole && (
-          <div className="absolute inset-0 overflow-hidden">
-            {visibleConsoles.map((console) => (
-              <div
-                key={console.id}
-                className="pointer-events-auto"
-                style={{ zIndex: getZIndex(console.id) }}
-              >
-                <ConsoleWindow
-                  consoleId={console.id}
-                  isFullPage={false}
-                  onClose={() => closeConsole(console.id)}
-                  onMinimize={() => minimizeConsole(console.id)}
-                  onMaximize={() => {
-                    if (console.maximized) {
-                      restoreFromMaximize(console.id);
-                    } else {
-                      toggleFullPage(console.id);
-                    }
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-        )}
+        ))}
       </div>
 
-      {/* Minimized consoles tray */}
-      {minimizedConsoles.length > 0 && !fullPageConsole && (
-        <ConsoleTray
-          consoles={minimizedConsoles}
-          onRestore={(id) => restoreConsole(id)}
-          onClose={(id) => closeConsole(id)}
-        />
+      {minimizedConsoles.length > 0 && fullPageId === null && (
+        <ConsoleTray consoles={minimizedConsoles} onRestore={(id) => restoreConsole(id)} onClose={(id) => closeConsole(id)} />
       )}
     </>
   );

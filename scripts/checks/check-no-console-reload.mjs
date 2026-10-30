@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Structural guard: nothing in the console or terminal surface may reload the document.
 //
-// `app/console/[id]/page.tsx` registers a `beforeunload` handler that beacons kill-all-sessions,
-// so a document reload anywhere in this surface tears down every other live console and terminal
-// the operator has open, not just the panel that failed. A retry button that reloads to recover
-// one dead panel therefore takes out the rest of the workspace with it.
+// A document reload anywhere in this surface ends every live console and terminal session the
+// page holds, not just the panel that failed. A retry button that reloads to recover one dead
+// panel therefore takes out the rest of the workspace with it.
 //
 // Two of these shipped and were removed: the console window's retry and the ISO panel's. The
 // comment left behind at components/console/console-window.tsx explains why the fetch is re-run

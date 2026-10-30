@@ -28,8 +28,10 @@ for (const file of walk(join(root, "frontend/src"))) {
     `${file}: calls the broken vendored or nonexistent sendCtrlAltDel; use sendCombo(conn, COMBO_BY_ID["ctrl-alt-del"])`);
 }
 
+// Both the console window and the full page render ConsoleWorkspace, which mounts the actions.
+assert.match(read("frontend/src/components/console/console-workspace.tsx"), /<ConsoleActions\b/, "the shared console actions are not mounted");
 for (const surface of ["frontend/src/components/console/console-window.tsx", "frontend/src/app/console/[id]/page.tsx"]) {
-  assert.match(read(surface), /<ConsoleActions\b/, `${surface}: the shared console actions are not mounted`);
+  assert.match(read(surface), /<(?:Memo)?(?:ConsoleWorkspace|Workspace)\b/, `${surface}: does not render the shared console workspace`);
 }
 
 const keys = read("frontend/src/lib/spice/keys.ts");

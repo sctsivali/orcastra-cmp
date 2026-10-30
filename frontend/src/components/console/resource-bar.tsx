@@ -155,9 +155,13 @@ export function ConsoleResourceBar({
     });
   }, []);
 
-  // Keyboard shortcut: Ctrl+I to toggle
+  // Keyboard shortcut: Ctrl+I to toggle.
+  // important: never while a terminal or the guest display has focus. Ctrl+I is Tab in a shell
+  // and a key the guest's own programs use; taking it there broke both.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.(".xterm, [role='application'], input, textarea, [contenteditable='true']")) return;
       if (e.ctrlKey && e.key === "i" && !e.shiftKey && !e.altKey) {
         e.preventDefault();
         toggleExpanded();
@@ -201,6 +205,8 @@ export function ConsoleResourceBar({
     }
 
     const fetchStats = async () => {
+      // Nobody reads the bar of a hidden tab; the next visible beat catches up.
+      if (document.hidden) return;
       try {
         const { getAccessToken } = await import("@/lib/api");
         const token = getAccessToken();
@@ -230,7 +236,7 @@ export function ConsoleResourceBar({
             const sessions = await response.json();
             // Pick the most recent active session for this instance
             if (sessions.length > 0) {
-              const latest = sessions.sort(
+              const latest = [...sessions].sort(
                 (a: SessionStats, b: SessionStats) => b.started_at - a.started_at
               )[0];
               setSessionStats(latest);

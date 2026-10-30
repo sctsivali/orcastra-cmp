@@ -384,11 +384,7 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
   "task.session": {
     completion: "response",
     queryFamilies: ["tasks", "instances", "instanceDetails"],
-    apiCalls: [
-      "tasksAPI.killConsoleSession",
-      "tasksAPI.killAllConsoleSessions",
-      "tasksAPI.killAllConsoleSessionsOnUnload",
-    ],
+    apiCalls: ["tasksAPI.killConsoleSession"],
   },
   "file-transfer.push": {
     completion: "response",

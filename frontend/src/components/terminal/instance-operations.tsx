@@ -56,6 +56,8 @@ interface ConfirmDialogState {
   description: string;
 }
 
+
+const PAST_TENSE: Record<string, string> = { start: "started", stop: "stopped", restart: "restarted" };
 export function InstanceOperations({
   terminalId,
   instanceName,
@@ -127,7 +129,7 @@ export function InstanceOperations({
       }
       
       toast({
-        title: `Instance ${operation}ed successfully`,
+        title: `Instance ${PAST_TENSE[operation]}`,
         description: `${instanceName} is now ${newStatus.toLowerCase()}`,
       });
       

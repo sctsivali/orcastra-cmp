@@ -48,18 +48,18 @@ interface TerminalWindowProps {
 }
 
 export function TerminalWindow({ terminal }: TerminalWindowProps) {
-  const {
-    closeTerminal,
-    minimizeTerminal,
-    focusTerminal,
-    updateTerminalPosition,
-    bringToFront,
-    maximizeTerminal,
-    restoreFromMaximize,
-    arrangeAllTerminals,
-    terminals,
-    toggleStickyTerminal,
-  } = useTerminalStore();
+  // Selectors, not the whole store: another terminal's status or position no longer re-renders
+  // this window (and its xterm).
+  const closeTerminal = useTerminalStore((s) => s.closeTerminal);
+  const minimizeTerminal = useTerminalStore((s) => s.minimizeTerminal);
+  const focusTerminal = useTerminalStore((s) => s.focusTerminal);
+  const updateTerminalPosition = useTerminalStore((s) => s.updateTerminalPosition);
+  const bringToFront = useTerminalStore((s) => s.bringToFront);
+  const maximizeTerminal = useTerminalStore((s) => s.maximizeTerminal);
+  const restoreFromMaximize = useTerminalStore((s) => s.restoreFromMaximize);
+  const arrangeAllTerminals = useTerminalStore((s) => s.arrangeAllTerminals);
+  const toggleStickyTerminal = useTerminalStore((s) => s.toggleStickyTerminal);
+  const visibleTerminalCount = useTerminalStore((s) => s.terminals.filter((t) => !t.minimized).length);
 
   const zIndex = useTerminalZIndex(terminal.id);
   const [showSearch, setShowSearch] = useState(false);
@@ -254,7 +254,8 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
       // For unpinned terminals, apply scroll offset to simulate scrolling with page
       position={displayPosition}
       size={{ width: terminal.position.width, height: terminal.position.height }}
-      minWidth={400}
+      // A phone is narrower than 400 px; the store clamps the window to the viewport, so must this.
+      minWidth={typeof window !== "undefined" ? Math.min(400, window.innerWidth - 20) : 400}
       minHeight={250}
       dragHandleClassName="terminal-drag-handle"
       onDragStart={handleFocus}
@@ -325,7 +326,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
 
             <TooltipProvider delayDuration={100}>
               {/* Arrange All Terminals - only show if more than 1 active terminal */}
-              {terminals.filter(t => !t.minimized).length > 1 && (
+              {visibleTerminalCount > 1 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

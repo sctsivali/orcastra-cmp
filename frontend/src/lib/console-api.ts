@@ -78,8 +78,42 @@ function requireSuccess<T extends { success: boolean; error?: string | null; mes
   return result;
 }
 
+export interface ConsoleCapabilitiesResponse {
+  instance_name: string;
+  instance_type: string;
+  host: string;
+  project: string;
+  text_console: boolean;
+  graphics_console: boolean;
+  graphics_type: "spice" | "vnc" | "none";
+  graphics_address?: string | null;
+  graphics_port?: number | null;
+  audio_enabled: boolean;
+  usb_redirect: boolean;
+  state: string;
+}
+
+export interface ActiveConsoleSession {
+  operation_id: string;
+  instance_name: string;
+  description: string;
+  created_at: string;
+  may_cancel: boolean;
+}
+
 /** Typed console HTTP surface. WebSocket session creation remains owned by the console clients. */
 export const consoleAPI = {
+  getCapabilities: (instanceName: string, host: string, project: string): Promise<ConsoleCapabilitiesResponse> =>
+    fetchAPI<ConsoleCapabilitiesResponse>(`/console/${segment(instanceName)}/capabilities?${scopedQuery(host, project)}`),
+
+  /** Console operations (VGA and serial) open on the instance; exec shells are not listed. */
+  getActiveSessions: async (instanceName: string, host: string, project: string): Promise<ActiveConsoleSession[]> => {
+    const result = await fetchAPI<{ has_active_session: boolean; sessions: ActiveConsoleSession[] }>(
+      `/console/${segment(instanceName)}/active-sessions?${scopedQuery(host, project)}`,
+    );
+    return result.sessions ?? [];
+  },
+
   getAttachedISO: async (
     instanceName: string,
     host: string,

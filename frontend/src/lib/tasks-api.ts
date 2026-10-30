@@ -137,45 +137,4 @@ export const tasksAPI = {
       throw new Error(result.error || result.message || "The cluster did not end the session");
     }
   },
-
-  killAllConsoleSessions: async (
-    instanceName: string,
-    host: string,
-    project: string,
-  ): Promise<void> => {
-    const result = await fetchAPI<{ success?: boolean; error?: string | null; message?: string | null }>(
-      `/console/${seg(instanceName)}/kill-all-sessions` +
-        `?host=${seg(host)}&project=${seg(project || "default")}`,
-      { method: "POST" },
-      undefined,
-      false,
-      { retryAfterAuthRefresh: false },
-    );
-    if (result && result.success === false) {
-      throw new Error(result.error || result.message || "The cluster did not end the sessions");
-    }
-  },
-
-  /** Best-effort authenticated cleanup that the browser may finish after page teardown. */
-  killAllConsoleSessionsOnUnload: async (
-    instanceName: string,
-    host: string,
-    project: string,
-  ): Promise<void> => {
-    const result = await fetchAPI<{
-      success?: boolean;
-      error?: string | null;
-      message?: string | null;
-    }>(
-      `/console/${seg(instanceName)}/kill-all-sessions` +
-        `?host=${seg(host)}&project=${seg(project || "default")}`,
-      { method: "POST", keepalive: true },
-      undefined,
-      false,
-      { retryAfterAuthRefresh: false },
-    );
-    if (result.success === false) {
-      throw new Error(result.error || result.message || "The cluster did not end the sessions");
-    }
-  },
 };

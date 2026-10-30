@@ -1,352 +1,72 @@
 /**
- * Text Console - xterm.js wrapper for shell access.
- * Provides interactive terminal access to containers and VMs.
+ * Text Console: the console window's shell on the instance (an exec, which needs the VM agent).
+ * The Serial tab is the instance's serial console instead (serial-console.tsx).
  */
 
 "use client";
 
 import * as React from "react";
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { SearchAddon } from "@xterm/addon-search";
+import { forwardRef, useImperativeHandle, useRef } from "react";
 import { useConsoleStore } from "@/lib/console-store";
-import "@xterm/xterm/css/xterm.css";
-import { TERMINAL_THEME } from "@/lib/terminal-theme";
+import { TerminalView, asConnectionStatus, type TerminalViewHandle } from "@/components/terminal/terminal-view";
 
 interface TextConsoleProps {
   consoleId: string;
   instanceName: string;
   host: string;
   project: string;
+  fontSize?: number;
+  /** Report status into the console store (floating windows); the full page passes false. */
+  reportToStore?: boolean;
+  onStatus?: (status: ReturnType<typeof asConnectionStatus>, detail?: string) => void;
+  onSessionId?: (sessionId: string) => void;
   onReady?: () => void;
-  onError?: (error: string) => void;
-  onClose?: () => void;
 }
 
 export interface TextConsoleHandle {
-  search: (term: string, findNext?: boolean) => void;
+  search: (term: string, findNext?: boolean) => boolean;
   focus: () => void;
   paste: (text: string) => void;
+  sendRaw: (data: string) => void;
+  reconnect: () => void;
+  setFontSize: (px: number) => number;
 }
 
-// WebSocket URL builder - shared utility for proxy-safe, ticketed URLs
-import { ACCESS_REVOKED_MESSAGE, WS_CLOSE, mintFailureMessage, ticketedSocketUrl } from "@/lib/ws-url";
-
-export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(function TextConsole({
-  consoleId,
-  instanceName,
-  host,
-  project,
-  onReady,
-  onError,
-  onClose,
-}, ref) {
-  const terminalRef = useRef<HTMLDivElement>(null);
-  const xtermRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const searchAddonRef = useRef<SearchAddon | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const reconnectAttempts = useRef(0);
-  const maxReconnectAttempts = 10;
-  const isMountedRef = useRef(true);
-  const isConnectingRef = useRef(false);
-  const isInitializedRef = useRef(false); // Track if already initialized
-  
-  // Store callbacks in refs to avoid dependency changes
-  const onReadyRef = useRef(onReady);
-  const onErrorRef = useRef(onError);
-  const onCloseRef = useRef(onClose);
-  
-  // Update refs when callbacks change
-  useEffect(() => {
-    onReadyRef.current = onReady;
-    onErrorRef.current = onError;
-    onCloseRef.current = onClose;
-  }, [onReady, onError, onClose]);
-
-  // Use stable store actions (get them once, they don't change)
+export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(function TextConsole(
+  { consoleId, instanceName, host, project, fontSize, reportToStore = true, onStatus, onSessionId, onReady },
+  ref,
+) {
+  const viewRef = useRef<TerminalViewHandle | null>(null);
   const updateConnectionStatus = useConsoleStore((s) => s.updateConnectionStatus);
   const setConsoleSessionId = useConsoleStore((s) => s.setConsoleSessionId);
 
-  // Initialize terminal
-  const initTerminal = useCallback(() => {
-    if (!terminalRef.current || xtermRef.current) return;
-
-    const term = new Terminal({
-      cursorBlink: true,
-      cursorStyle: "block",
-      fontSize: 14,
-      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
-      theme: TERMINAL_THEME,
-      allowProposedApi: true,
-      scrollback: 10000,
-      convertEol: true,
-    });
-
-    const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
-    const searchAddon = new SearchAddon();
-
-    term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
-    term.loadAddon(searchAddon);
-
-    term.open(terminalRef.current);
-    fitAddon.fit();
-
-    xtermRef.current = term;
-    fitAddonRef.current = fitAddon;
-    searchAddonRef.current = searchAddon;
-
-    // Handle user input
-    term.onData((data) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "input", data }));
-      }
-    });
-
-    // Handle resize
-    term.onResize(({ cols, rows }) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "resize", width: cols, height: rows }));
-      }
-    });
-
-    // Welcome message
-    const boxWidth = 50;
-    const innerWidth = boxWidth - 4;
-    const title = "Orcastra Console";
-    const connectText = `Connecting to ${instanceName} ...`;
-    const titlePadding = Math.max(0, innerWidth - title.length);
-    const connectPadding = Math.max(0, innerWidth - connectText.length);
-    const topBorder = "┌" + "─".repeat(boxWidth - 2) + "┐";
-    const bottomBorder = "└" + "─".repeat(boxWidth - 2) + "┘";
-    
-    term.writeln("\x1b[1;34m" + topBorder + "\x1b[0m");
-    term.writeln("\x1b[1;34m│\x1b[0m \x1b[1;36m" + title + "\x1b[0m" + " ".repeat(titlePadding + 1) + "\x1b[1;34m│\x1b[0m");
-    term.writeln("\x1b[1;34m│\x1b[0m " + connectText + " ".repeat(connectPadding + 1) + "\x1b[1;34m│\x1b[0m");
-    term.writeln("\x1b[1;34m" + bottomBorder + "\x1b[0m");
-    term.writeln("");
-
-    return term;
-  }, [instanceName]);
-
-  // Connect WebSocket. A ticket is minted first; the console may unmount while it is.
-  const connect = useCallback(async (): Promise<void> => {
-    // Prevent connection if component is unmounted or already connecting/connected
-    if (!isMountedRef.current) return;
-    if (isConnectingRef.current) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN || 
-        wsRef.current?.readyState === WebSocket.CONNECTING) return;
-
-    isConnectingRef.current = true;
-    updateConnectionStatus(consoleId, "connecting");
-    let wsUrl: string;
-    try {
-      wsUrl = await ticketedSocketUrl({ kind: "terminal", host, project, instance: instanceName });
-    } catch (error) {
-      isConnectingRef.current = false;
-      if (!isMountedRef.current) return;
-      const message = mintFailureMessage(error);
-      xtermRef.current?.writeln(`\x1b[1;31m✗ ${message}\x1b[0m`);
-      updateConnectionStatus(consoleId, "error", message);
-      onErrorRef.current?.(message);
-      return;
-    }
-    if (!isMountedRef.current) {
-      isConnectingRef.current = false;
-      return;
-    }
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      isConnectingRef.current = false;
-      if (!isMountedRef.current) {
-        ws.close(1000, "Component unmounted");
-        return;
-      }
-      reconnectAttempts.current = 0;
-      if (xtermRef.current) {
-        const { cols, rows } = xtermRef.current;
-        ws.send(JSON.stringify({ width: cols, height: rows }));
-      }
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        switch (msg.type) {
-          case "session":
-            setConsoleSessionId(consoleId, msg.session_id);
-            xtermRef.current?.writeln(`\x1b[1;32m✓ Session established: ${msg.session_id}\x1b[0m`);
-            break;
-
-          case "ready":
-            updateConnectionStatus(consoleId, "connected");
-            xtermRef.current?.writeln("\x1b[1;32m✓ Terminal ready\x1b[0m\n");
-            reconnectAttempts.current = 0;
-            onReadyRef.current?.();
-            break;
-
-          case "output":
-            if (msg.encoding === "base64") {
-              const decoded = atob(msg.data);
-              xtermRef.current?.write(decoded);
-            } else {
-              xtermRef.current?.write(msg.data);
-            }
-            break;
-
-          case "error":
-            xtermRef.current?.writeln(`\x1b[1;31m✗ Error: ${msg.message}\x1b[0m`);
-            updateConnectionStatus(consoleId, "error", msg.message);
-            onErrorRef.current?.(msg.message);
-            break;
-
-          case "closed":
-            xtermRef.current?.writeln("\x1b[1;33m⚠ Connection closed\x1b[0m");
-            updateConnectionStatus(consoleId, "disconnected");
-            onCloseRef.current?.();
-            break;
-        }
-      } catch {
-        // Binary data - write directly
-        xtermRef.current?.write(event.data);
-      }
-    };
-
-    ws.onerror = (error) => {
-      isConnectingRef.current = false;
-      // Skip error handling if component is unmounted (expected during cleanup)
-      if (!isMountedRef.current) return;
-      // Only log error once, don't spam console
-      if (reconnectAttempts.current === 0) {
-        console.error("[TextConsole] WebSocket error:", error);
-      }
-      updateConnectionStatus(consoleId, "error", "Connection error");
-    };
-
-    ws.onclose = (event) => {
-      isConnectingRef.current = false;
-      // Skip close handling if component is unmounted (expected during cleanup)
-      if (!isMountedRef.current) return;
-      if (event.code === WS_CLOSE.ACCESS_REVOKED) {
-        // Revoked while open: reconnecting would only be refused again.
-        xtermRef.current?.writeln(`\n\x1b[1;31m✗ ${ACCESS_REVOKED_MESSAGE}\x1b[0m`);
-        updateConnectionStatus(consoleId, "error", ACCESS_REVOKED_MESSAGE);
-        onErrorRef.current?.(ACCESS_REVOKED_MESSAGE);
-        return;
-      }
-      updateConnectionStatus(consoleId, "disconnected");
-      
-      // Only attempt reconnect if not a clean close and within retry limit
-      // Use longer initial delay to avoid rapid reconnection loops
-      if (!event.wasClean && reconnectAttempts.current < maxReconnectAttempts) {
-        reconnectAttempts.current++;
-        // Start with 2 seconds, then exponential backoff up to 30 seconds
-        const delay = Math.min(2000 * Math.pow(2, reconnectAttempts.current - 1), 30000);
-        xtermRef.current?.writeln(`\x1b[1;33m⚠ Reconnecting in ${delay / 1000}s (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})...\x1b[0m`);
-        
-        reconnectTimeoutRef.current = setTimeout(() => {
-          void connect();
-        }, delay);
-      } else if (reconnectAttempts.current >= maxReconnectAttempts) {
-        xtermRef.current?.writeln(`\x1b[1;31m✗ Max reconnection attempts reached. Please try reconnecting manually.\x1b[0m`);
-      }
-    };
-  }, [consoleId, instanceName, host, project, updateConnectionStatus, setConsoleSessionId]);
-
-  // Expose methods
   useImperativeHandle(ref, () => ({
-    search: (term: string, findNext = true) => {
-      if (findNext) {
-        searchAddonRef.current?.findNext(term);
-      } else {
-        searchAddonRef.current?.findPrevious(term);
-      }
-    },
-    focus: () => {
-      xtermRef.current?.focus();
-    },
-    paste: (text: string) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "input", data: text }));
-      }
-    },
+    search: (term, findNext = true) => viewRef.current?.search(term, findNext) ?? false,
+    focus: () => viewRef.current?.focus(),
+    paste: (text) => viewRef.current?.paste(text),
+    sendRaw: (data) => viewRef.current?.sendRaw(data),
+    reconnect: () => viewRef.current?.reconnect(),
+    setFontSize: (px) => viewRef.current?.setFontSize(px) ?? px,
   }), []);
 
-  // Handle resize
-  useEffect(() => {
-    const handleResize = () => {
-      fitAddonRef.current?.fit();
-    };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  // Initialize and connect with proper mounting guard
-  // Only run once per consoleId to prevent reconnection loops
-  useEffect(() => {
-    // Skip if already initialized for this session
-    if (isInitializedRef.current) return;
-    
-    isMountedRef.current = true;
-    isConnectingRef.current = false;
-    isInitializedRef.current = true;
-    
-    initTerminal();
-    
-    // Small delay before connecting to avoid race conditions with React StrictMode
-    // and tab switching. This prevents "WebSocket closed before established" error.
-    const connectTimer = setTimeout(() => {
-      if (isMountedRef.current) {
-        void connect();
-      }
-    }, 100);
-
-    return () => {
-      isMountedRef.current = false;
-      isInitializedRef.current = false;
-      clearTimeout(connectTimer);
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close(1000, "Component unmounting");
-        wsRef.current = null;
-      }
-      xtermRef.current?.dispose();
-      xtermRef.current = null;
-      isConnectingRef.current = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [consoleId]);
-
-  // Fit on container resize
-  useEffect(() => {
-    const observer = new ResizeObserver(() => {
-      fitAddonRef.current?.fit();
-    });
-
-    if (terminalRef.current) {
-      observer.observe(terminalRef.current);
-    }
-
-    return () => observer.disconnect();
-  }, []);
-
   return (
-    <div
-      ref={terminalRef}
-      className="w-full h-full min-h-[300px] bg-terminal"
-      style={{ padding: "4px" }}
+    <TerminalView
+      ref={viewRef}
+      kind="shell"
+      instanceName={instanceName}
+      host={host}
+      project={project}
+      fontSize={fontSize}
+      onStatus={(status, detail) => {
+        const mapped = asConnectionStatus(status);
+        if (reportToStore) updateConnectionStatus(consoleId, mapped, status === "error" ? detail : undefined);
+        onStatus?.(mapped, detail);
+      }}
+      onSessionId={(sessionId) => {
+        if (reportToStore) setConsoleSessionId(consoleId, sessionId);
+        onSessionId?.(sessionId);
+      }}
+      onReady={onReady}
     />
   );
 });

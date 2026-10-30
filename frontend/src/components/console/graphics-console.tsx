@@ -1,1040 +1,351 @@
 /**
- * Graphics Console - SPICE client wrapper for VGA console access.
- * Provides graphics console access to VMs via SPICE protocol.
- * 
- * LXD/Incus uses QEMU with SPICE for VM graphics console.
- * This component uses spice-html5 to render the SPICE stream in browser.
+ * Graphics Console: a VM's display over SPICE (spice-html5 driven by lib/spice/session.ts).
+ *
+ * The picture fits the space it is given (shrinking only, so it stays sharp), or follows a manual
+ * zoom. With the guest agent running the guest's resolution follows the space instead, which is
+ * what keeps text crisp. The session stays connected while its tab is hidden.
  */
 
 "use client";
 
 import * as React from "react";
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useState } from "react";
-import { useConsoleStore } from "@/lib/console-store";
-import { Loader2, AlertCircle, Monitor, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { AlertCircle, FileUp, Loader2, Monitor, MousePointer2, RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { cn } from "@/lib/utils";
-import { useManualRefresh } from "@/hooks/use-manual-refresh";
+import { sendCombo, type SpiceInputConnection } from "@/lib/spice/input";
+import type { KeyCombo } from "@/lib/spice/keys";
+import {
+  SpiceSession,
+  type CursorShape,
+  type FileTransferEvent,
+  type SpiceStats,
+  type SpiceStatus,
+} from "@/lib/spice/session";
+import type { MouseMode } from "@/lib/spice/pointer";
 
-interface GraphicsConsoleProps {
+export type ConsoleZoom = "fit" | number;
+
+export interface GraphicsConsoleProps {
   consoleId: string;
   instanceName: string;
   host: string;
   project: string;
-  width?: number;
-  height?: number;
-  zoom?: number; // Zoom percentage (100 = 100%)
-  onReady?: () => void;
-  onError?: (error: string) => void;
-  onClose?: () => void;
+  /** "fit" shrinks the picture into the space; a number is a fixed zoom in percent. */
+  zoom?: ConsoleZoom;
+  /** Let the guest's resolution follow the console's size when its agent runs. */
+  resizeGuest?: boolean;
+  /** False while the tab is hidden: the session stays open, the guest is not resized. */
+  active?: boolean;
+  onStatus?: (status: SpiceStatus, detail?: string) => void;
+  onStats?: (stats: SpiceStats) => void;
+  onAgent?: (connected: boolean) => void;
+  onMouseMode?: (mode: MouseMode) => void;
+  onGuestClipboard?: (text: string) => void;
+  /** The guest's resolution and the scale it is shown at, for the connection details. */
+  onView?: (view: { surface: { width: number; height: number } | null; scale: number }) => void;
   className?: string;
 }
 
 export interface GraphicsConsoleHandle {
   focus: () => void;
-  sendCtrlAltDel: () => void;
-  sendKeys: (keys: string) => void;
-  sendKeyWithModifiers: (key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => void;
-  sendKeyCode: (keyCode: number) => boolean;
-  pasteText: (text: string) => Promise<void>;
-  getSpiceConnection: () => any;
-  getCanvas: () => HTMLCanvasElement | null;
-  screenshot: () => string | null;
   reconnect: () => void;
   disconnect: () => void;
+  sendCombo: (combo: Pick<KeyCombo, "keys">) => Promise<boolean>;
+  /** A named key ("F2") or one character, with optional modifiers. */
+  sendKey: (key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => boolean;
+  typeText: (text: string, options?: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<number>;
+  /** Puts text on the guest's clipboard through its agent; false without an agent. */
+  setGuestClipboard: (text: string) => boolean;
+  sendFiles: (files: FileList | File[]) => number;
+  getSpiceConnection: () => SpiceInputConnection | null;
+  getCanvas: () => HTMLCanvasElement | null;
+  screenshot: () => string | null;
+  /** The guest's resolution, or null before the first frame. */
+  surfaceSize: () => { width: number; height: number } | null;
 }
 
-// SPICE connection instance type
-interface SpiceConnection {
-  stop: () => void;
-  sendCtrlAltDel?: () => void;
-}
+const OVERLAY = "absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/95 px-6 text-center";
 
-// WebSocket URL builder - uses NEXT_PUBLIC_API_URL so connections
-// work through reverse proxies / tunnels (not just localhost:4050)
-import { mintFailureMessage, spiceSocketUrls } from "@/lib/ws-url";
-import { COMBO_BY_ID, KEY_CODES, characterKey } from "@/lib/spice/keys";
-import { sendCombo, type SpiceInputConnection } from "@/lib/spice/input";
+export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsoleProps>(function GraphicsConsole(
+  {
+    consoleId,
+    instanceName,
+    host,
+    project,
+    zoom = "fit",
+    resizeGuest = true,
+    active = true,
+    onStatus,
+    onStats,
+    onAgent,
+    onMouseMode,
+    onGuestClipboard,
+    onView,
+    className,
+  },
+  ref,
+) {
+  const screenId = `spice-screen-${consoleId}`;
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const sessionRef = useRef<SpiceSession | null>(null);
+  const [status, setStatus] = useState<SpiceStatus>("loading");
+  const [detail, setDetail] = useState<string>("");
+  const [surface, setSurface] = useState<{ width: number; height: number } | null>(null);
+  const [viewport, setViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [mouseMode, setMouseMode] = useState<MouseMode>("client");
+  const [locked, setLocked] = useState(false);
+  const [agent, setAgent] = useState(false);
+  const [cursor, setCursor] = useState<{ shape: CursorShape | null; x: number; y: number }>({ shape: null, x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const [transfers, setTransfers] = useState<FileTransferEvent[]>([]);
 
-// Correct script loading order for spice-html5
-// Based on spice-html5-rails.js manifest
-// IMPORTANT: main.js must be loaded AFTER all channel implementations
-const SPICE_SCRIPTS = [
-  // Core dependencies first
-  'enums.js',
-  'atKeynames.js',
-  'utils.js',
-  'png.js',
-  'lz.js',
-  'quic.js',
-  'bitmap.js',
-  // SPICE data handling
-  'spicearraybuffer.js',
-  'spicedataview.js',
-  'spicetype.js',
-  'spicemsg.js',
-  'wire.js',
-  'spiceconn.js',
-  // Channel implementations (must be before main.js)
-  'display.js',
-  'inputs.js',
-  'cursor.js',
-  'simulatecursor.js',
-  'playback.js',
-  'port.js',
-  // Third party crypto
-  'thirdparty/jsbn.js',
-  'thirdparty/rsa.js',
-  'thirdparty/prng4.js',
-  'thirdparty/rng.js',
-  'thirdparty/sha1.js',
-  // Authentication
-  'ticket.js',
-  // Main connection (uses all channel classes above)
-  'main.js',
-  // Additional features
-  'filexfer.js',
-  'resize.js',
-  'webm.js',
-];
+  // Latest callbacks without re-creating the session.
+  const callbacks = useRef({ onStatus, onStats, onAgent, onMouseMode, onGuestClipboard, onView });
+  callbacks.current = { onStatus, onStats, onAgent, onMouseMode, onGuestClipboard, onView };
 
-// Track if SPICE is loading or loaded
-let spiceLoadingPromise: Promise<void> | null = null;
-let spiceLoaded = false;
-
-// Load all SPICE scripts
-async function loadSpiceScripts(): Promise<void> {
-  if (spiceLoaded) return;
-  
-  if (spiceLoadingPromise) {
-    return spiceLoadingPromise;
-  }
-  
-  spiceLoadingPromise = (async () => {
-    const basePath = '/spice-html5';
-    
-    // Load scripts sequentially in correct order
-    for (const script of SPICE_SCRIPTS) {
-      await new Promise<void>((resolve) => {
-        // Check if already loaded
-        const existingScript = document.querySelector(`script[src*="${script}"]`);
-        if (existingScript) {
-          resolve();
-          return;
-        }
-        
-        const el = document.createElement('script');
-        el.src = `${basePath}/${script}`;
-        el.async = false; // Important: maintain order
-        
-        el.onload = () => {
-          resolve();
-        };
-        
-        el.onerror = () => {
-          console.warn(`[SPICE] Failed to load: ${script}`);
-          resolve(); // Continue loading other scripts
-        };
-        
-        document.head.appendChild(el);
-      });
-    }
-    
-    // Load CSS
-    if (!document.querySelector('link[href*="spice.css"]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = `${basePath}/spice.css`;
-      document.head.appendChild(link);
-    }
-    
-    // Wait a bit for scripts to initialize
-    await new Promise(r => setTimeout(r, 200));
-    
-    // Verify SpiceMainConn is available
-    if (typeof (window as any).SpiceMainConn === 'undefined') {
-      throw new Error('SpiceMainConn not available after loading scripts');
-    }
-    
-    spiceLoaded = true;
-  })();
-  
-  return spiceLoadingPromise;
-}
-
-export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsoleProps>(
-  function GraphicsConsole(
-    {
-      consoleId,
-      instanceName,
-      host,
-      project,
-      width = 1024,
-      height = 768,
-      zoom = 100,
-      onReady,
-      onError,
-      onClose,
-      className,
-    },
-    ref
-  ) {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const screenRef = useRef<HTMLDivElement>(null);
-    const spiceConnectionRef = useRef<SpiceConnection | null>(null);
-    const [status, setStatus] = useState<'loading' | 'connecting' | 'connected' | 'error' | 'disconnected'>('loading');
-    const [errorMessage, setErrorMessage] = useState<string>('');
-    const [scriptsReady, setScriptsReady] = useState(false);
-    const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-    
-    // Connection attempt tracking
-    const connectionAttemptRef = useRef(0);
-    const isConnectingRef = useRef(false);
-    // Bumped by every connect and by disconnect, so a ticket that arrives late opens nothing.
-    const connectGenerationRef = useRef(0);
-    // Track if connection is stabilized (after 500ms delay post-connect)
-    const isStabilizedRef = useRef(false);
-    const MAX_CONNECTION_ATTEMPTS = 3;
-
-    const { updateConnectionStatus } = useConsoleStore();
-
-    // Generate unique screen ID
-    const screenId = `spice-screen-${consoleId}`;
-    
-    // Calculate scale factor for zoom
-    const scale = zoom / 100;
-
-    // Track canvas size changes for proper scaling container sizing
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      const updateCanvasSize = () => {
-        const canvas = screen.querySelector('canvas') as HTMLCanvasElement;
-        if (canvas) {
-          // Get the native canvas dimensions (not CSS dimensions)
-          const nativeWidth = canvas.width;
-          const nativeHeight = canvas.height;
-          if (nativeWidth > 0 && nativeHeight > 0) {
-            setCanvasSize({ width: nativeWidth, height: nativeHeight });
-          }
-        }
-      };
-      
-      // Initial check
-      updateCanvasSize();
-      
-      // Use MutationObserver to detect when canvas is added or resized
-      const observer = new MutationObserver(() => {
-        updateCanvasSize();
-      });
-      
-      observer.observe(screen, { childList: true, subtree: true, attributes: true });
-      
-      // Also check periodically for size changes (canvas might be resized by SPICE)
-      const interval = setInterval(updateCanvasSize, 1000);
-      
-      return () => {
-        observer.disconnect();
-        clearInterval(interval);
-      };
-    }, [status, screenId]);
-
-    // Apply zoom by scaling canvas CSS dimensions (preserves mouse coordinate accuracy)
-    useEffect(() => {
-      if (status !== 'connected' || canvasSize.width === 0) return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      const canvas = screen.querySelector('canvas') as HTMLCanvasElement;
-      if (!canvas) return;
-      
-      // Set CSS dimensions to scaled size - browser handles mouse coord transformation
-      canvas.style.width = `${canvasSize.width * scale}px`;
-      canvas.style.height = `${canvasSize.height * scale}px`;
-    }, [status, screenId, scale, canvasSize]);
-
-    // DISABLED: Touch-to-mouse translation - replaced by OnScreenCursor feature
-    // The OnScreenCursor provides better control for mobile users with explicit click modes
-    /*
-    // Touch event support for mobile - SPICE only listens for mouse events
-    // We need to translate touch events to mouse events for mobile drag to work inside the console
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      // Canvas might not be available immediately after connection
-      // Use MutationObserver to detect when canvas is added
-      let canvas: HTMLCanvasElement | null = screen.querySelector('canvas');
-      let cleanupFn: (() => void) | null = null;
-      
-      const setupTouchHandlers = (canvasEl: HTMLCanvasElement) => {
-        // Track if we're currently in a touch sequence
-        let isTouching = false;
-        let lastTouchX = 0;
-        let lastTouchY = 0;
-      
-        const handleTouchStart = (e: TouchEvent) => {
-          if (e.touches.length !== 1) return; // Only handle single touch
-          e.preventDefault(); // Prevent scrolling/zooming
-          e.stopPropagation(); // Prevent parent handlers
-          isTouching = true;
-        
-          const touch = e.touches[0];
-          lastTouchX = touch.clientX;
-          lastTouchY = touch.clientY;
-          
-          // Dispatch mouse event at touch position
-          const mouseEvent = new MouseEvent('mousedown', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            button: 0,
-            buttons: 1,
-          });
-          canvasEl.dispatchEvent(mouseEvent);
-        };
-      
-        const handleTouchMove = (e: TouchEvent) => {
-          if (!isTouching || e.touches.length !== 1) return;
-          e.preventDefault();
-          e.stopPropagation();
-        
-          const touch = e.touches[0];
-          lastTouchX = touch.clientX;
-          lastTouchY = touch.clientY;
-          
-          const mouseEvent = new MouseEvent('mousemove', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            button: 0,
-            buttons: 1,
-          });
-          canvasEl.dispatchEvent(mouseEvent);
-        };
-      
-        const handleTouchEnd = (e: TouchEvent) => {
-          if (!isTouching) return;
-          e.preventDefault();
-          e.stopPropagation();
-          isTouching = false;
-        
-          // Use last known position for end event
-          const mouseEvent = new MouseEvent('mouseup', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: lastTouchX,
-            clientY: lastTouchY,
-            button: 0,
-            buttons: 0,
-          });
-          canvasEl.dispatchEvent(mouseEvent);
-        };
-      
-        // Add touch listeners with passive: false to allow preventDefault
-        canvasEl.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true });
-        canvasEl.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
-        canvasEl.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
-        canvasEl.addEventListener('touchcancel', handleTouchEnd, { passive: false, capture: true });
-        
-        return () => {
-          canvasEl.removeEventListener('touchstart', handleTouchStart, { capture: true });
-          canvasEl.removeEventListener('touchmove', handleTouchMove, { capture: true });
-          canvasEl.removeEventListener('touchend', handleTouchEnd, { capture: true });
-          canvasEl.removeEventListener('touchcancel', handleTouchEnd, { capture: true });
-        };
-      };
-      
-      if (canvas) {
-        cleanupFn = setupTouchHandlers(canvas);
-      } else {
-        // Wait for canvas to be added
-        const observer = new MutationObserver(() => {
-          const newCanvas = screen.querySelector('canvas') as HTMLCanvasElement;
-          if (newCanvas && !canvas) {
-            canvas = newCanvas;
-            cleanupFn = setupTouchHandlers(newCanvas);
-            observer.disconnect();
-          }
-        });
-        observer.observe(screen, { childList: true, subtree: true });
-        
-        return () => {
-          observer.disconnect();
-          cleanupFn?.();
-        };
-      }
-      
-      return () => {
-        cleanupFn?.();
-      };
-    }, [status, screenId]);
-    */
-
-    // Block keyboard events on canvas during stabilization period
-    // This intercepts events BEFORE SPICE's native handlers to prevent backtick spam
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      const canvas = screen.querySelector('canvas') as HTMLCanvasElement;
-      if (!canvas) return;
-      
-      // Block ALL keyboard events until stabilized
-      const blockKeyboard = (e: KeyboardEvent) => {
-        if (!isStabilizedRef.current) {
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          return false;
-        }
-      };
-      
-      // Capture phase to intercept before SPICE handlers
-      canvas.addEventListener('keydown', blockKeyboard, { capture: true });
-      canvas.addEventListener('keyup', blockKeyboard, { capture: true });
-      canvas.addEventListener('keypress', blockKeyboard, { capture: true });
-      
-      return () => {
-        canvas.removeEventListener('keydown', blockKeyboard, { capture: true });
-        canvas.removeEventListener('keyup', blockKeyboard, { capture: true });
-        canvas.removeEventListener('keypress', blockKeyboard, { capture: true });
-      };
-    }, [status, screenId]);
-
-    // Window-level keyboard listener - captures keys even without focus on console
-    // IMPORTANT: Only handles keys when console canvas is NOT focused
-    // When canvas is focused, SPICE's native handlers process keyboard events
-    // This prevents double key registration (especially noticeable in BIOS)
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      // Add stabilization delay after connection to prevent spurious key events
-      // This fixes backtick spam on console open
-      let stabilized = false;
-      const stabilizeTimer = setTimeout(() => {
-        stabilized = true;
-      }, 500);
-      
-      const handleWindowKeyDown = (e: KeyboardEvent) => {
-        // Don't process until connection is stabilized
-        if (!stabilized) return;
-        
-        // Get fresh reference to SPICE connection
-        const sc = spiceConnectionRef.current as any;
-        if (!sc || !sc.inputs || sc.inputs.state !== 'ready') return;
-        
-        // Skip if user is typing in an input field
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-          return;
-        }
-        
-        // CRITICAL: Check if the SPICE screen or its canvas is the target
-        // If so, SPICE's native handlers will process it - don't double-send
-        const screen = document.getElementById(screenId);
-        if (screen && (target === screen || screen.contains(target))) {
-          // Canvas/screen is focused, SPICE handles it natively
-          // Only prevent backtick spam
-          if (e.repeat && (e.key === '`' || e.key === '~')) {
-            e.preventDefault();
-          }
-          return;
-        }
-        
-        // Prevent backtick key repeat spam
-        if (e.repeat && (e.key === '`' || e.key === '~')) {
-          e.preventDefault();
-          return;
-        }
-        
-        // Console is not focused, so SPICE won't receive this event
-        // Send it via SPICE's handler manually
-        const win = window as any;
-        if (win.handle_keydown) {
-          win.handle_keydown.call({ sc }, e);
-        }
-      };
-      
-      const handleWindowKeyUp = (e: KeyboardEvent) => {
-        // Don't process until connection is stabilized
-        if (!stabilized) return;
-        
-        const sc = spiceConnectionRef.current as any;
-        if (!sc || !sc.inputs || sc.inputs.state !== 'ready') return;
-        
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-          return;
-        }
-        
-        // CRITICAL: Skip if SPICE screen is the target - native handlers will process
-        const screen = document.getElementById(screenId);
-        if (screen && (target === screen || screen.contains(target))) {
-          return;
-        }
-        
-        const win = window as any;
-        if (win.handle_keyup) {
-          win.handle_keyup.call({ sc }, e);
-        }
-      };
-      
-      // Capture phase to get keys before other handlers
-      window.addEventListener('keydown', handleWindowKeyDown, true);
-      window.addEventListener('keyup', handleWindowKeyUp, true);
-      
-      return () => {
-        clearTimeout(stabilizeTimer);
-        window.removeEventListener('keydown', handleWindowKeyDown, true);
-        window.removeEventListener('keyup', handleWindowKeyUp, true);
-      };
-    }, [status, screenId]);
-
-    // Load SPICE scripts on mount
-    useEffect(() => {
-      let mounted = true;
-      
-      loadSpiceScripts()
-        .then(() => {
-          if (mounted) {
-            setScriptsReady(true);
-          }
-        })
-        .catch((err) => {
-          if (mounted) {
-            console.error('[GraphicsConsole] Failed to load SPICE:', err);
-            setStatus('error');
-            setErrorMessage('Failed to load SPICE client');
-          }
-        });
-      
-      return () => {
-        mounted = false;
-      };
-    }, []);
-
-    // Opens SPICE with minted URLs, unless a disconnect came first.
-    const startSpice = useCallback((urls: { main: string; channels: string[] }, generation: number): void => {
-      if (generation !== connectGenerationRef.current) {
-        isConnectingRef.current = false;
-        return;
-      }
-      try {
-        const SpiceMainConn = (window as any).SpiceMainConn;
-
-        if (!SpiceMainConn) {
-          isConnectingRef.current = false;
-          throw new Error('SpiceMainConn not available');
-        }
-
-        // Reset stabilization flag - will be set after 500ms delay
-        isStabilizedRef.current = false;
-
-        // Create SPICE connection
-        // LXD console doesn't require password (auth is done via LXD)
-        const sc = new SpiceMainConn({
-          uri: urls.main,
-          channel_uris: urls.channels,
-          screen_id: screenId,
-          password: '',  // LXD handles auth
-          onerror: (e: Error | string) => {
-            isConnectingRef.current = false;
-            isStabilizedRef.current = false;
-            let msg = typeof e === 'string' ? e : e?.message || 'Connection error';
-            
-            // Translate SPICE error messages to user-friendly messages
-            if (msg.includes('Unexpected protocol mismatch')) {
-              msg = 'Console connection failed. The VM may not be running or graphics console is unavailable.';
-            } else if (msg.includes('Connection refused')) {
-              msg = 'Cannot connect to console server. Please check if the backend is running.';
-            } else if (msg.includes('Bad password')) {
-              msg = 'Authentication failed for console session.';
-            } else if (msg.includes('Permission denied')) {
-              msg = 'Console session expired or access denied. Please reconnect.';
-            }
-            
-            console.error('[GraphicsConsole] SPICE error:', msg);
-            setStatus('error');
-            setErrorMessage(msg);
-            updateConnectionStatus(consoleId, 'error', msg);
-            onError?.(msg);
-          },
-          onsuccess: () => {
-            isConnectingRef.current = false;
-            connectionAttemptRef.current = 0; // Reset on success
-            setStatus('connected');
-            updateConnectionStatus(consoleId, 'connected');
-            
-            // Set stabilization flag after 500ms to prevent backtick spam on first input
-            setTimeout(() => {
-              isStabilizedRef.current = true;
-            }, 500);
-            
-            onReady?.();
-          },
-          onagent: () => {
-            // SPICE agent connected
-          },
-        });
-
-        spiceConnectionRef.current = sc;
-
-      } catch (error) {
-        isConnectingRef.current = false;
-        const msg = error instanceof Error ? error.message : 'Failed to connect';
-        console.error('[GraphicsConsole] Connection error:', error);
-        setStatus('error');
-        setErrorMessage(msg);
-        updateConnectionStatus(consoleId, 'error', msg);
-        onError?.(msg);
-      }
-    }, [consoleId, screenId, updateConnectionStatus, onReady, onError]);
-
-    // Connect to graphics console
-    const connect = useCallback(() => {
-      const screen = document.getElementById(screenId);
-      if (!scriptsReady || !screen) {
-        console.warn('[GraphicsConsole] Not ready - scriptsReady:', scriptsReady, 'screen:', !!screen);
-        return;
-      }
-      
-      // Prevent multiple simultaneous connection attempts
-      if (isConnectingRef.current) {
-        console.warn('[GraphicsConsole] Already connecting, skipping');
-        return;
-      }
-      
-      // Check connection attempt limit
-      if (connectionAttemptRef.current >= MAX_CONNECTION_ATTEMPTS) {
-        console.error('[GraphicsConsole] Max connection attempts reached');
-        setStatus('error');
-        setErrorMessage(`Connection failed after ${MAX_CONNECTION_ATTEMPTS} attempts. Click Reconnect to try again.`);
-        updateConnectionStatus(consoleId, 'error', 'Max connection attempts reached');
-        return;
-      }
-      
-      connectionAttemptRef.current += 1;
-      isConnectingRef.current = true;
-
-      // Disconnect any existing connection
-      if (spiceConnectionRef.current) {
-        try {
-          spiceConnectionRef.current.stop();
-        } catch (e) {
-          // Ignore
-        }
-        spiceConnectionRef.current = null;
-      }
-
-      setStatus('connecting');
-      updateConnectionStatus(consoleId, 'connecting');
-      setErrorMessage('');
-
-      const generation = ++connectGenerationRef.current;
-      // note: one ticket per SPICE channel. The main channel opens with the first and hands the
-      // others to its display, inputs and cursor sockets (the vendored main.js channel_uris).
-      spiceSocketUrls(instanceName, host, project).then(
-        (urls) => startSpice(urls, generation),
-        (mintError: unknown) => {
-          isConnectingRef.current = false;
-          if (generation !== connectGenerationRef.current) return;
-          const msg = mintFailureMessage(mintError);
-          setStatus('error');
-          setErrorMessage(msg);
-          updateConnectionStatus(consoleId, 'error', msg);
-          onError?.(msg);
-        },
-      );
-    }, [consoleId, instanceName, host, project, scriptsReady, screenId, updateConnectionStatus, onError, startSpice]);
-
-    // Disconnect
-    const disconnect = useCallback(() => {
-      connectGenerationRef.current += 1;
-      isConnectingRef.current = false;
-      isStabilizedRef.current = false; // Reset stabilization on disconnect
-      if (spiceConnectionRef.current) {
-        try {
-          spiceConnectionRef.current.stop();
-        } catch (e) {
-          // Ignore
-        }
-        spiceConnectionRef.current = null;
-      }
-      setStatus('disconnected');
-      updateConnectionStatus(consoleId, 'disconnected');
-    }, [consoleId, updateConnectionStatus]);
-
-    // Reconnect - resets attempt counter for manual reconnect
-    const reconnect = useCallback(() => {
-      connectionAttemptRef.current = 0; // Reset counter on manual reconnect
-      disconnect();
-      setTimeout(() => connect(), 200);
-    }, [connect, disconnect]);
-
-    // important: guarded. Both overlay buttons below call this, and repeated
-    // clicks used to stack disconnect/connect cycles on top of each other.
-    const { pending: reconnectPending, run: runReconnect } = useManualRefresh(
-      reconnect,
-      { errorTitle: "Reconnect failed" },
-    );
-
-    // Helper to send key via SPICE input channel using scancodes
-    // This directly sends to the SPICE connection, bypassing DOM events
-    const sendSpiceKey = useCallback((keyCode: number, press: boolean = true, release: boolean = true) => {
-      const sc = spiceConnectionRef.current as any;
-      if (!sc || !sc.inputs || sc.inputs.state !== 'ready') return false;
-      
-      // Don't send keys until connection is stabilized (prevents backtick spam on open)
-      if (!isStabilizedRef.current) {
-        return false;
-      }
-      
-      const win = window as any;
-      if (!win.keycode_to_start_scan || !win.SpiceMsgcKeyDown || !win.SpiceMiniData) {
-        console.warn('[GraphicsConsole] SPICE functions not available');
-        return false;
-      }
-      
-      try {
-        if (press) {
-          const keyDown = new win.SpiceMsgcKeyDown();
-          keyDown.code = win.keycode_to_start_scan(keyCode);
-          const msgDown = new win.SpiceMiniData();
-          msgDown.build_msg(win.SPICE_MSGC_INPUTS_KEY_DOWN, keyDown);
-          sc.inputs.send_msg(msgDown);
-        }
-        
-        if (release) {
-          const keyUp = new win.SpiceMsgcKeyUp();
-          keyUp.code = win.keycode_to_end_scan(keyCode);
-          const msgUp = new win.SpiceMiniData();
-          msgUp.build_msg(win.SPICE_MSGC_INPUTS_KEY_UP, keyUp);
-          sc.inputs.send_msg(msgUp);
-        }
-        
-        return true;
-      } catch (e) {
-        console.error('[GraphicsConsole] Failed to send key:', e);
-        return false;
-      }
-    }, []);
-
-    // Expose methods via ref
-    useImperativeHandle(ref, () => ({
-      focus: () => {
-        const screen = document.getElementById(screenId);
-        screen?.focus();
-        const canvas = screen?.querySelector('canvas');
-        if (canvas) (canvas as HTMLCanvasElement).focus();
+  useEffect(() => {
+    const session = new SpiceSession(screenId, { instanceName, host, project }, {
+      onStatus: (next, why) => {
+        setStatus(next);
+        setDetail(why ?? "");
+        callbacks.current.onStatus?.(next, why);
       },
-      // important: the vendored global sendCtrlAltDel assigns an undeclared `sc` and throws, so
-      // Ctrl+Alt+Del never reached a guest. Combinations go as scancodes (lib/spice/input.ts).
-      sendCtrlAltDel: () => {
-        void sendCombo(spiceConnectionRef.current as SpiceInputConnection | null, COMBO_BY_ID["ctrl-alt-del"]);
+      onSurface: (width, height) => setSurface({ width, height }),
+      onStats: (stats) => callbacks.current.onStats?.(stats),
+      onMouseMode: (mode) => {
+        setMouseMode(mode);
+        callbacks.current.onMouseMode?.(mode);
       },
-      sendKeys: (keys: string) => {
-        if (keys.toLowerCase() === 'ctrl+alt+del') {
-          void sendCombo(spiceConnectionRef.current as SpiceInputConnection | null, COMBO_BY_ID["ctrl-alt-del"]);
-          return;
-        }
-        // A named key (Escape, F2, Delete...) goes as one key press.
-        if (KEY_CODES[keys] && keys.length > 1) {
-          sendSpiceKey(KEY_CODES[keys]);
-          return;
-        }
-        // Otherwise type the characters, with Shift where the US layout needs it.
-        for (const char of keys) {
-          const typed = characterKey(char) ?? { keyCode: char.toUpperCase().charCodeAt(0), shift: false };
-          if (typed.shift) sendSpiceKey(16, true, false);
-          sendSpiceKey(typed.keyCode);
-          if (typed.shift) sendSpiceKey(16, false, true);
-        }
+      onPointerLock: setLocked,
+      onAgent: (connected) => {
+        setAgent(connected);
+        callbacks.current.onAgent?.(connected);
       },
-      // Send a key with explicit modifiers (Ctrl, Alt, Shift, Meta)
-      sendKeyWithModifiers: (key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => {
-        const named = key.length > 1 ? KEY_CODES[key] : undefined;
-        const typed = named !== undefined ? { keyCode: named, shift: false } : characterKey(key);
-        const keyCode = typed?.keyCode ?? key.toUpperCase().charCodeAt(0);
-        const needsShift = Boolean(modifiers?.shift || typed?.shift);
-
-        // Press modifier keys
-        if (needsShift) sendSpiceKey(16, true, false);  // Shift down
-        if (modifiers?.ctrl) sendSpiceKey(17, true, false);   // Ctrl down
-        if (modifiers?.alt) sendSpiceKey(18, true, false);    // Alt down
-        if (modifiers?.meta) sendSpiceKey(91, true, false);   // Meta/Win down
-
-        sendSpiceKey(keyCode);
-
-        // Release modifier keys (reverse order)
-        if (modifiers?.meta) sendSpiceKey(91, false, true);   // Meta/Win up
-        if (modifiers?.alt) sendSpiceKey(18, false, true);    // Alt up
-        if (modifiers?.ctrl) sendSpiceKey(17, false, true);   // Ctrl up
-        if (needsShift) sendSpiceKey(16, false, true);  // Shift up
-      },
-      // Send a single key by JavaScript keyCode (for BIOS spam, etc.)
-      sendKeyCode: (keyCode: number) => {
-        return sendSpiceKey(keyCode);
-      },
-      pasteText: async (text: string) => {
-        // Paste text by typing it via the SPICE input channel
-        for (let i = 0; i < text.length; i++) {
-          const char = text[i];
-          const mapping = characterKey(char);
-          if (mapping) {
-            if (mapping.shift) sendSpiceKey(16, true, false); // Shift down
-            sendSpiceKey(mapping.keyCode);
-            if (mapping.shift) sendSpiceKey(16, false, true); // Shift up
-          } else {
-            console.warn(`[pasteText] No mapping for character: '${char}' (code: ${char.charCodeAt(0)})`);
-          }
-          // Small delay between characters for reliability
-          if (i < text.length - 1) {
-            await new Promise(r => setTimeout(r, 15));
-          }
-        }
-      },
-      // Get the spice connection reference for direct access
-      getSpiceConnection: () => spiceConnectionRef.current,
-      getCanvas: () => document.getElementById(screenId)?.querySelector('canvas') ?? null,
-      screenshot: () => {
-        const screen = document.getElementById(screenId);
-        const canvas = screen?.querySelector('canvas');
-        if (canvas) {
-          try {
-            return canvas.toDataURL('image/png');
-          } catch {
-            return null;
-          }
-        }
-        return null;
-      },
-      reconnect,
-      disconnect,
-    }), [screenId, reconnect, disconnect]);
-
-    // Connect when scripts are ready - with robust DOM check for mobile
-    useEffect(() => {
-      if (!scriptsReady || status !== 'loading') return;
-      
-      // Check for screen element with retry for mobile devices
-      // On mobile, the DOM might not be ready immediately due to different rendering timing
-      let connectAttempted = false;
-      let retryCount = 0;
-      const maxRetries = 10; // Maximum 10 retries (1 second total)
-      
-      const attemptConnect = () => {
-        if (connectAttempted || status !== 'loading') return;
-        
-        const screenEl = document.getElementById(screenId);
-        if (screenEl) {
-          connectAttempted = true;
-          // Use requestAnimationFrame to ensure DOM is painted
-          requestAnimationFrame(() => {
-            if (status === 'loading') {
-              connect();
-            }
-          });
-        } else if (retryCount < maxRetries) {
-          retryCount++;
-          // Retry with exponential backoff (100ms, 100ms, 100ms... up to 1 second)
-          setTimeout(attemptConnect, 100);
-        } else {
-          console.error('[GraphicsConsole] Screen element not found after retries');
-        }
-      };
-      
-      // Start connection attempt
-      attemptConnect();
-      
-      return () => {
-        connectAttempted = true; // Prevent connection after unmount
-      };
-    }, [scriptsReady, status, connect, screenId]);
-
-    // Cleanup on unmount
-    useEffect(() => {
-      return () => {
-        disconnect();
-      };
-    }, [disconnect]);
-
-    // Overlay component for status display
-    const StatusOverlay = () => {
-      if (status === 'loading') {
-        return (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
-            <Loader2 className="h-8 w-8 animate-spin text-white/70" />
-            <p className="text-sm text-white/70">Loading SPICE client...</p>
-          </div>
-        );
-      }
-
-      if (status === 'error') {
-        return (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
-            <AlertCircle className="terminal-status h-8 w-8 text-status-offline" />
-            <p className="text-sm text-white/70">{errorMessage || 'Connection failed'}</p>
-            <Button
-              aria-busy={reconnectPending}
-              variant="outline"
-              size="sm"
-              disabled={reconnectPending}
-              onClick={() => void runReconnect()}
-              className="text-white border-white/30 hover:bg-white/10"
-            >
-              <RefreshCw
-                className={cn(
-                  "h-4 w-4 mr-2",
-                  reconnectPending && "animate-spin motion-reduce:animate-none",
-                )}
-              />
-              Reconnect
-            </Button>
-          </div>
-        );
-      }
-
-      if (status === 'connecting') {
-        return (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
-            <div className="relative">
-              <Monitor className="h-12 w-12 text-white/70" />
-              <Wifi className="terminal-status h-4 w-4 text-status-pending absolute -top-1 -right-1 animate-pulse" />
-            </div>
-            <p className="text-sm text-white/70">Connecting to {instanceName}...</p>
-            <p className="text-xs text-white/50">Establishing SPICE connection</p>
-          </div>
-        );
-      }
-
-      if (status === 'disconnected') {
-        return (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
-            <div className="relative">
-              <Monitor className="h-12 w-12 text-white/50" />
-              <WifiOff className="h-4 w-4 text-white/50 absolute -top-1 -right-1" />
-            </div>
-            <p className="text-sm text-white/70">Disconnected from {instanceName}</p>
-            <Button
-              aria-busy={reconnectPending}
-              variant="outline"
-              size="sm"
-              disabled={reconnectPending}
-              onClick={() => void runReconnect()}
-              className="text-white border-white/30 hover:bg-white/10"
-            >
-              <RefreshCw
-                className={cn(
-                  "h-4 w-4 mr-2",
-                  reconnectPending && "animate-spin motion-reduce:animate-none",
-                )}
-              />
-              Reconnect
-            </Button>
-          </div>
-        );
-      }
-
-      return null; // Connected - no overlay
+      onCursor: (shape, x, y) => setCursor({ shape, x, y }),
+      onGuestClipboard: (text) => callbacks.current.onGuestClipboard?.(text),
+      onFileTransfer: (event) =>
+        setTransfers((list) => {
+          const others = list.filter((t) => t.id !== event.id);
+          return event.state === "sending" ? [...others, event] : [...others, event].slice(-5);
+        }),
+    });
+    sessionRef.current = session;
+    void session.connect();
+    return () => {
+      session.dispose();
+      sessionRef.current = null;
     };
+  }, [screenId, instanceName, host, project]);
 
-    // Always render screen div, overlay status on top
-    // Mouse coordinates are calculated using getBoundingClientRect in modified spicemsg.js
-    return (
+  // The space the picture gets: drives fit and the guest's resolution.
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setViewport((prev) =>
+        Math.abs(prev.width - width) < 1 && Math.abs(prev.height - height) < 1 ? prev : { width, height },
+      );
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!active || zoom !== "fit" || viewport.width < 100 || viewport.height < 100) return;
+    sessionRef.current?.requestGuestSize(viewport.width, viewport.height, resizeGuest);
+  }, [active, zoom, resizeGuest, viewport.width, viewport.height, agent]);
+
+  // Finished transfers leave the list after a moment.
+  useEffect(() => {
+    if (!transfers.some((t) => t.state !== "sending")) return;
+    const timer = window.setTimeout(() => setTransfers((list) => list.filter((t) => t.state === "sending")), 4000);
+    return () => window.clearTimeout(timer);
+  }, [transfers]);
+
+  const scale = (() => {
+    if (!surface) return 1;
+    if (zoom !== "fit") return zoom / 100;
+    if (!viewport.width || !viewport.height) return 1;
+    return Math.min(1, viewport.width / surface.width, viewport.height / surface.height);
+  })();
+
+  useEffect(() => {
+    callbacks.current.onView?.({ surface, scale });
+  }, [surface, scale]);
+
+  const focus = useCallback(() => sessionRef.current?.focus(), []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus,
+      reconnect: () => sessionRef.current?.reconnect(),
+      disconnect: () => sessionRef.current?.dispose(),
+      sendCombo: async (combo) => {
+        const ok = await sendCombo(sessionRef.current?.connection as SpiceInputConnection | null, combo);
+        return ok;
+      },
+      sendKey: (key, modifiers) => sessionRef.current?.sendNamedOrCharacter(key, modifiers) ?? false,
+      typeText: (text, options) => sessionRef.current?.typeText(text, options) ?? Promise.resolve(text.length),
+      setGuestClipboard: (text) => sessionRef.current?.setGuestClipboard(text) ?? false,
+      sendFiles: (files) => sessionRef.current?.sendFiles(files) ?? 0,
+      getSpiceConnection: () => (sessionRef.current?.connection as SpiceInputConnection | null) ?? null,
+      getCanvas: () => sessionRef.current?.surface ?? null,
+      screenshot: () => sessionRef.current?.screenshot() ?? null,
+      surfaceSize: () => surface,
+    }),
+    [focus, surface],
+  );
+
+  const reconnect = () => sessionRef.current?.reconnect();
+  const scaledWidth = surface ? Math.round(surface.width * scale) : 0;
+  const scaledHeight = surface ? Math.round(surface.height * scale) : 0;
+  const canDrop = agent && status === "connected";
+
+  return (
+    <div
+      ref={viewportRef}
+      className={cn(
+        "relative h-full w-full bg-black focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring",
+        zoom === "fit" ? "overflow-hidden" : "overflow-auto",
+        className,
+      )}
+      onDragOver={(event) => {
+        if (!canDrop || !event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
+      onDrop={(event) => {
+        if (!canDrop) return;
+        event.preventDefault();
+        setDragging(false);
+        sessionRef.current?.sendFiles(event.dataTransfer.files);
+      }}
+    >
       <div
-        ref={containerRef}
-        className={cn("w-full h-full bg-black relative", className)}
+        className="relative"
         style={{
-          overflow: 'auto', // Allow scrolling if canvas is larger than container
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'flex-start',
-        }}
-        onClick={(e) => {
-          // Focus the screen on click for keyboard input
-          const screen = document.getElementById(screenId);
-          if (screen) {
-            screen.focus();
-            const canvas = screen.querySelector('canvas');
-            if (canvas) {
-              (canvas as HTMLCanvasElement).focus();
-            }
-          }
+          width: scaledWidth || "100%",
+          height: scaledHeight || "100%",
+          // Centered when it is smaller than the space; scrolls from the corner when larger.
+          margin: zoom === "fit" || (scaledWidth < viewport.width && scaledHeight < viewport.height) ? "0 auto" : undefined,
+          top: zoom === "fit" && scaledHeight && scaledHeight < viewport.height ? (viewport.height - scaledHeight) / 2 : 0,
         }}
       >
-        {/* Status overlay - positioned absolutely over everything */}
-        <StatusOverlay />
-        
-        {/* SPICE screen container - canvas rendered by spice-html5 */}
         <div
-          ref={screenRef}
           id={screenId}
-          className="spice-screen"
+          className="spice-screen absolute left-0 top-0 origin-top-left"
           style={{
-            position: 'relative',
-            visibility: status === 'connected' ? 'visible' : 'hidden',
-            outline: 'none',
-            touchAction: 'none', // Disable browser touch gestures, let SPICE handle
+            transform: scale !== 1 ? `scale(${scale})` : undefined,
+            visibility: status === "connected" || status === "reconnecting" ? "visible" : "hidden",
+            touchAction: "none",
+            cursor: locked ? "none" : undefined,
           }}
-          tabIndex={0}
-          onMouseDown={(e) => {
-            // Stop propagation to prevent draggable from capturing mouse events
-            e.stopPropagation();
-          }}
-          onTouchStart={(e) => {
-            // Stop propagation to prevent draggable from capturing touch events
-            // This fixes mobile drag issue - allows dragging inside console (file manager, etc.)
-            e.stopPropagation();
-          }}
-          onTouchMove={(e) => {
-            // Allow touch move inside console without moving the window
-            e.stopPropagation();
-          }}
-          onPointerDown={(e) => {
-            // Stop pointer events from propagating to draggable
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            const canvas = e.currentTarget.querySelector('canvas');
-            if (canvas) {
-              (canvas as HTMLCanvasElement).focus();
-            }
-          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onTouchStart={(event) => event.stopPropagation()}
         />
-        
-        {/* SPICE canvas styling */}
-        <style jsx global>{`
-          .spice-screen {
-            pointer-events: auto;
-          }
-          .spice-screen canvas {
-            display: block;
-            outline: none;
-            cursor: default;
-            pointer-events: auto;
-          }
-          .spice-screen canvas:focus {
-            outline: none;
-          }
-        `}</style>
+        {locked && cursor.shape?.url && (
+          // The guest's own pointer, where the guest says it is (server mouse mode).
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            alt=""
+            aria-hidden="true"
+            src={cursor.shape.url}
+            width={cursor.shape.width}
+            height={cursor.shape.height}
+            className="pointer-events-none absolute left-0 top-0 z-[1]"
+            style={{
+              transform: `translate(${(cursor.x - cursor.shape.hotX) * scale}px, ${(cursor.y - cursor.shape.hotY) * scale}px) scale(${scale})`,
+              transformOrigin: "0 0",
+            }}
+          />
+        )}
       </div>
-    );
-  }
-);
+
+      {status === "connected" && mouseMode === "server" && !locked && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-[2] -translate-x-1/2 rounded bg-black/80 px-3 py-1.5 text-xs text-white/90">
+          <MousePointer2 className="mr-1.5 inline h-3.5 w-3.5" aria-hidden="true" />
+          Click the screen to control the mouse. Press Esc to release it.
+        </div>
+      )}
+
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-md border-2 border-dashed border-white/60 bg-black/60 text-sm text-white">
+          <FileUp className="mr-2 h-5 w-5" aria-hidden="true" />
+          Drop files to copy them to the guest
+        </div>
+      )}
+
+      {transfers.length > 0 && (
+        <ul className="absolute bottom-3 right-3 z-20 w-64 space-y-1.5" aria-live="polite">
+          {transfers.map((t) => (
+            <li key={t.id} className="rounded bg-black/85 px-3 py-2 text-xs text-white/90">
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0">
+                  <OverflowText value={t.name} label="file name" tone="chrome" copy="none" />
+                </span>
+                <span className="shrink-0 tabular-nums text-white/70">
+                  {t.state === "sending" ? `${Math.round((t.sent / Math.max(1, t.size)) * 100)}%` : t.state === "done" ? "Copied" : t.state === "cancelled" ? "Cancelled" : "Failed"}
+                </span>
+              </div>
+              {t.state === "sending" && (
+                <div className="mt-1 h-1 overflow-hidden rounded bg-white/20">
+                  <div className="h-full bg-primary" style={{ width: `${Math.round((t.sent / Math.max(1, t.size)) * 100)}%` }} />
+                </div>
+              )}
+              {t.state === "error" && t.error && <p className="mt-1 text-white/60">{t.error}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(status === "loading" || status === "connecting") && (
+        <div className={OVERLAY} role="status" aria-live="polite">
+          <Loader2 className="h-7 w-7 animate-spin text-white/70 motion-reduce:animate-none" aria-hidden="true" />
+          <p className="text-sm text-white/80">
+            {status === "loading" ? "Loading the console…" : `Connecting to ${instanceName}…`}
+          </p>
+        </div>
+      )}
+
+      {status === "reconnecting" && (
+        <div className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-2 rounded bg-black/85 px-3 py-1.5 text-xs text-white/90" role="status" aria-live="polite">
+          <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          Reconnecting…
+          <button type="button" className="underline underline-offset-2 hover:text-white" onClick={reconnect}>
+            Now
+          </button>
+        </div>
+      )}
+
+      {(status === "ended" || status === "error") && (
+        <div className={OVERLAY} role="alert">
+          {status === "ended" ? (
+            <div className="relative">
+              <Monitor className="h-10 w-10 text-white/50" aria-hidden="true" />
+              <WifiOff className="absolute -right-1 -top-1 h-4 w-4 text-white/50" aria-hidden="true" />
+            </div>
+          ) : (
+            <AlertCircle className="terminal-status h-8 w-8 text-status-offline" aria-hidden="true" />
+          )}
+          <p className="max-w-md text-sm text-white/80">{detail || (status === "ended" ? "The console session ended." : "The console connection failed.")}</p>
+          <Button variant="outline" size="sm" onClick={reconnect} className="border-white/30 text-white hover:bg-white/10">
+            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+            Reconnect
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+});
 
 export default GraphicsConsole;

@@ -23,8 +23,6 @@ import {
   STORAGE_KEYS,
 } from './storage-utils';
 import { useBreakGlassStore } from './break-glass-store';
-import { reconcileExternalMutation } from './mutation-coherence';
-import { tasksAPI } from './tasks-api';
 
 // Console window position and size
 export interface ConsolePosition {
@@ -45,7 +43,7 @@ export type ConsoleType = 'text' | 'graphics';
 export type GraphicsType = 'spice' | 'vnc' | 'none';
 
 // Active tab in console window
-export type ConsoleTab = 'text' | 'graphics' | 'boot' | 'iso';
+export type ConsoleTab = 'text' | 'graphics' | 'serial' | 'boot' | 'iso';
 
 // LXD instance status
 export type InstanceStatus = 'Running' | 'Stopped' | 'Frozen' | 'Error' | 'Unknown' | 'Starting' | 'Stopping' | 'Restarting';
@@ -146,7 +144,7 @@ interface ConsoleState {
     project?: string;
     fullPage?: boolean;
   }) => Promise<ConsoleInstance | null>;
-  closeConsole: (id: string, cancelOperation?: boolean) => void;
+  closeConsole: (id: string) => void;
   closeAllConsoles: () => void;
   minimizeConsole: (id: string) => void;
   restoreConsole: (id: string) => void;
@@ -292,22 +290,10 @@ export const useConsoleStore = create<ConsoleState>()(
         return newConsole;
       },
       
-      // Close console and optionally cancel LXD operation
-      closeConsole: (id, cancelOperation = true) => {
-        const state = get();
-        const consoleToClose = state.consoles.find(c => c.id === id);
-        
-        // Kill all sessions for this instance if requested
-        if (cancelOperation && consoleToClose?.instanceName && consoleToClose?.host) {
-          void tasksAPI.killAllConsoleSessions(
-            consoleToClose.instanceName,
-            consoleToClose.host,
-            consoleToClose.project || "default",
-          ).then(() => reconcileExternalMutation("task.session")).catch(() => {
-            // Silent fail - sessions might already be closed.
-          });
-        }
-        
+      // Close a console window. Its sockets close as it unmounts, which ends its own LXD
+      // operations. important: closing used to cancel every websocket operation on the
+      // instance, other people's shells and consoles included.
+      closeConsole: (id) => {
         set((s) => {
           const newConsoles = s.consoles.filter(c => c.id !== id);
           const newZOrder = s.zIndexOrder.filter(zid => zid !== id);

@@ -22,6 +22,12 @@ export const WS_CLOSE = {
   SESSION_ENDED: 4401,
   /** A shell or console lost its access while open. It must not reconnect on its own. */
   ACCESS_REVOKED: 4403,
+  /** The shell, console or display ended on the instance side (exit, power off, taken over). */
+  NORMAL: 1000,
+  /** The connection to the instance broke; reconnecting may work. */
+  UPSTREAM_FAILED: 1011,
+  /** The session cannot start (not running, not found, no agent); reconnecting will not help. */
+  UNAVAILABLE: 4404,
 } as const;
 
 export const ACCESS_REVOKED_MESSAGE = "Access to this instance was revoked.";

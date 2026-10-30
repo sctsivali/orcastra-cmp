@@ -47,10 +47,11 @@ for (const key of routeFiles) {
   }
 }
 
-// All three write URLs live in tasksAPI now: kill one, kill all, and keepalive kill all.
-// Call sites pass typed project arguments instead of rebuilding endpoint strings themselves.
-if (calls !== 3) {
-  offenders.push(`expected 3 centralized console cancellation URL builders, found ${calls}`);
+// The one write URL lives in tasksAPI: kill one operation, from the Sessions and task views.
+// note: kill-all is gone from the browser. Closing a console closes its own sockets, which ends
+// its own operations; kill-all cancelled every websocket operation on the instance.
+if (calls !== 1) {
+  offenders.push(`expected 1 centralized console cancellation URL builder, found ${calls}`);
 }
 if (!/project:\s*string/.test(bodies.taskHook) ||
     !/killConsoleSession\(instanceName, operationId, host, project\)/.test(bodies.taskHook)) {
@@ -59,13 +60,9 @@ if (!/project:\s*string/.test(bodies.taskHook) ||
 if (!/project:\s*task\.project\s*\|\|\s*["']default["']/.test(bodies.taskDialog)) {
   offenders.push(`${files.taskDialog}: task detail does not pass its recorded project`);
 }
-for (const [key, marker] of [
-  ["page", "tasksAPI.killConsoleSession(instanceName, operationId, host, project)"],
-  ["page", "tasksAPI.killAllConsoleSessionsOnUnload(instanceName, host, project)"],
-  ["window", "consoleInstance.project || \"default\""],
-]) {
-  if (!bodies[key].includes(marker)) {
-    offenders.push(`${files[key]}: missing project-scoped centralized cancellation marker ${marker}`);
+for (const key of ["store", "page", "window"]) {
+  if (/kill-all-sessions|killAllConsoleSessions/.test(bodies[key])) {
+    offenders.push(`${files[key]}: a console surface must not cancel other sessions on close`);
   }
 }
 

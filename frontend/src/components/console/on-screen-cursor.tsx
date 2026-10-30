@@ -141,7 +141,10 @@ export function OnScreenCursor({
     const mode = clickModeRef.current;
     const buttonState = isHoldingRef.current ? (mode === "left" ? 1 : 2) : 0;
 
-    const event = new MouseEvent("mousemove", {
+    const event = new PointerEvent("pointermove", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       bubbles: true,
       cancelable: true,
       view: window,
@@ -174,7 +177,10 @@ export function OnScreenCursor({
     const buttons = mode === "left" ? 1 : 2;
 
     // First position the cursor with a plain mousemove
-    const moveEvent = new MouseEvent("mousemove", {
+    const moveEvent = new PointerEvent("pointermove", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       bubbles: true,
       cancelable: true,
       view: window,
@@ -186,7 +192,10 @@ export function OnScreenCursor({
     canvas.dispatchEvent(moveEvent);
 
     // Then mousedown
-    const downEvent = new MouseEvent("mousedown", {
+    const downEvent = new PointerEvent("pointerdown", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       bubbles: true,
       cancelable: true,
       view: window,
@@ -210,7 +219,10 @@ export function OnScreenCursor({
     const mode = clickModeRef.current;
     const button = mode === "left" ? 0 : 2;
 
-    const upEvent = new MouseEvent("mouseup", {
+    const upEvent = new PointerEvent("pointerup", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       bubbles: true,
       cancelable: true,
       view: window,
@@ -250,7 +262,10 @@ export function OnScreenCursor({
     const buttons = mode === "left" ? 1 : 2;
 
     // Move -> Down -> Up sequence
-    const moveEvent = new MouseEvent("mousemove", {
+    const moveEvent = new PointerEvent("pointermove", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       bubbles: true,
       cancelable: true,
       view: window,
@@ -262,7 +277,10 @@ export function OnScreenCursor({
     canvas.dispatchEvent(moveEvent);
 
     setTimeout(() => {
-      const downEvent = new MouseEvent("mousedown", {
+      const downEvent = new PointerEvent("pointerdown", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
         bubbles: true,
         cancelable: true,
         view: window,
@@ -274,7 +292,10 @@ export function OnScreenCursor({
       canvas.dispatchEvent(downEvent);
 
       setTimeout(() => {
-        const upEvent = new MouseEvent("mouseup", {
+        const upEvent = new PointerEvent("pointerup", {
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
           bubbles: true,
           cancelable: true,
           view: window,
@@ -344,6 +365,11 @@ export function OnScreenCursor({
    * - No dependency on previous frame's position
    * - Cursor follows mouse exactly, even if frames are dropped
    */
+  const positionFrameRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (positionFrameRef.current !== null) cancelAnimationFrame(positionFrameRef.current);
+  }, []);
+
   const updateCursorPosition = useCallback((clientX: number, clientY: number) => {
     const container = containerRef.current;
     if (!container) return;
@@ -373,9 +399,15 @@ export function OnScreenCursor({
 
     const newPos = { x: clampedX, y: clampedY };
 
-    // Update both ref and state
+    // The ref updates on every move; the render at most once a frame (it used to re-render the
+    // whole overlay on every pointer event).
     positionRef.current = newPos;
-    setPosition(newPos);
+    if (positionFrameRef.current === null) {
+      positionFrameRef.current = requestAnimationFrame(() => {
+        positionFrameRef.current = null;
+        setPosition(positionRef.current);
+      });
+    }
 
     // If holding, send mousemove to SPICE for window dragging
     if (isHoldingRef.current) {
@@ -476,6 +508,9 @@ export function OnScreenCursor({
       if (!isDraggingRef.current) return;
       if (e.changedTouches.length < 1) return;
       
+      // The browser follows a tap with compatibility mousedown/mouseup, which re-entered the drag
+      // handlers and clicked the guest twice. Cancelling the touchend suppresses them.
+      if (e.cancelable) e.preventDefault();
       const touch = e.changedTouches[0];
       endDrag(touch.clientX, touch.clientY);
     };
@@ -663,8 +698,10 @@ export function OnScreenCursor({
           isDragging && "scale-110"
         )}
         style={{
-          left: position.x,
-          top: position.y,
+          // translate, not left/top: moving it composites instead of laying the page out again
+          left: 0,
+          top: 0,
+          translate: `${position.x}px ${position.y}px`,
           touchAction: "none",
           transition: isDragging ? "none" : "transform 0.1s ease-out",
         }}
@@ -733,8 +770,9 @@ export function OnScreenCursor({
       <div
         className="absolute pointer-events-none"
         style={{
-          left: position.x + 20,
-          top: position.y + 8,
+          left: 0,
+          top: 0,
+          translate: `${position.x + 20}px ${position.y + 8}px`,
           transform: "translate(-50%, -50%)",
         }}
       >
