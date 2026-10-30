@@ -799,6 +799,16 @@ class Settings(BaseSettings):
         description="Base64-encoded Fernet encryption key for Redis cache. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
     )
 
+    # One LXD console operation per graphical console: the four SPICE channels of a display meet
+    # in Redis (services/spice_session.py) instead of each creating an operation of its own.
+    # Off restores an operation per channel, which is what a channel falls back to anyway when
+    # the shared record does not appear.
+    console_shared_spice_operation: bool = Field(
+        default=True,
+        alias="CONSOLE_SHARED_SPICE_OPERATION",
+        description="Share one LXD console operation between the SPICE channels of a display",
+    )
+
     # Live console/terminal sessions are shared across uvicorn workers through Redis,
     # because a WebSocket pins to one worker while the REST poll that lists sessions
     # does not. These two tune that share.

@@ -18,6 +18,8 @@ class SessionProtocol(str, Enum):
     """Protocol type for the session."""
     TERMINAL = "websocket-terminal"
     GRAPHICS = "spice-graphics"
+    # The instance's serial console (LXD console type "console"), for a VM or a container.
+    SERIAL = "serial-console"
     # An agent driving a guest's graphical session through the MCP surface. Distinct from
     # GRAPHICS because the actor is a key rather than a person, and a tenant reading the session
     # list needs to be able to tell those apart at a glance.

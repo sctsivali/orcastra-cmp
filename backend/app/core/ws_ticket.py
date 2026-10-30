@@ -55,6 +55,9 @@ class TicketClaims:
     claims: Dict[str, Any]
     session_exp: Optional[float]
     minted_at: float
+    # One random id shared by the tickets of one SPICE display, so its channels can find the one
+    # LXD operation they share (services/spice_session.py). Signed with the rest of the claims.
+    group: Optional[str] = None
 
     def to_json(self) -> str:
         body = asdict(self)
@@ -77,6 +80,7 @@ class TicketClaims:
             claims=dict(body.get("claims") or {}),
             session_exp=float(exp) if isinstance(exp, (int, float)) else None,
             minted_at=float(body["minted_at"]),
+            group=str(body["group"]) if body.get("group") else None,
         )
 
     def user(self) -> AuthenticatedUser:

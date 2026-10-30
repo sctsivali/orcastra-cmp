@@ -665,6 +665,16 @@ async def lifespan(app: FastAPI):
     except Exception as ticket_err:
         logger.error("WebSocket ticket store did not start: %s", ticket_err)
 
+    # The channels of one SPICE display meet here to share one LXD operation. Without Redis a
+    # channel that cannot find its display's operation opens its own, as before.
+    try:
+        from app.services.spice_session import get_spice_session_store
+
+        if settings.redis_url:
+            await get_spice_session_store().connect(settings.redis_url)
+    except Exception as spice_err:
+        logger.warning("SPICE session store did not start: %s", spice_err)
+
     # Initialize default tag categories
     try:
         from app.core.database import async_session_maker
@@ -821,8 +831,10 @@ async def lifespan(app: FastAPI):
         tracker.stop_publisher()
         await get_session_registry().aclose()
         from app.core.ws_ticket_store import get_ws_ticket_store
+        from app.services.spice_session import get_spice_session_store
 
         await get_ws_ticket_store().aclose()
+        await get_spice_session_store().aclose()
         logger.info("Session tracker cleanup and publisher stopped")
     except Exception:
         pass

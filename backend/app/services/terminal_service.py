@@ -3,11 +3,9 @@ Terminal Service - LXD Exec WebSocket Handler.
 Provides interactive terminal access to LXD instances via WebSocket.
 """
 
-import json
 import logging
 import ssl
-import websockets
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -98,128 +96,75 @@ class TerminalService:
         """Fallback shell when smart detection fails."""
         return ["/bin/sh"]
     
-    async def create_exec_session(
+    def open_exec_operation(
         self,
         instance_name: str,
         host: str,
         project: str = "default",
         width: int = 120,
         height: int = 40,
-        shell: Optional[list] = None
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        shell: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Start an interactive exec and return where its sockets are. Blocking.
+
+        Raises SessionSetupError. The result carries the per-fd secrets, so it never leaves
+        this process.
         """
-        Create an exec session for interactive terminal access.
-        """
-        try:
-            # Ensure connection to the host
-            if not self.lxd_service.ensure_connection(host):
-                return None, f"Cannot connect to host: {host}"
-            
-            # Get client
-            client = self.lxd_service.get_client_with_reconnect(host)
-            if not client:
-                return None, f"No connection to host: {host}"
-            
-            # Get instance
-            try:
-                # For non-default projects, use raw API to get instance
-                # pylxd's instances.get() doesn't support project parameter directly
-                if project and project != "default":
-                    # Use API directly with project parameter
-                    response = client.api.instances[safe_segment(instance_name)].get(params={"project": project})
-                    instance_data = response.json().get("metadata", {})
-                    instance_status = instance_data.get("status", "Unknown")
-                    instance_type = instance_data.get("type", "container")
-                    
-                    # Check status
-                    if instance_status != "Running":
-                        return None, f"Instance must be running. Current status: {instance_status}"
-                else:
-                    instance = client.instances.get(safe_segment(instance_name))
-                    instance_status = instance.status
-                    instance_type = instance.type
-                    
-                    if instance_status != "Running":
-                        return None, f"Instance must be running. Current status: {instance_status}"
-            except Exception as e:
-                return None, f"Instance not found: {instance_name} - {str(e)}"
-            
-            # Determine shell command
-            if shell is None:
-                shell = self.get_shell_command(instance_type if project and project != "default" else instance.type)
-            
-            # Get cluster endpoint
-            cluster_info = self.cert_manager.get_cluster_info(host)
-            endpoint = cluster_info.get("metadata", {}).get("endpoint", "")
-            
-            # Parse endpoint for WebSocket URL
-            # Remove trailing slash to avoid double slashes in URL
-            ws_endpoint = endpoint.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
-            
-            # Create exec operation via LXD API
-            # Using raw API call for exec with WebSocket
-            exec_data = {
-                "command": shell,
-                "environment": {
-                    "TERM": "xterm-256color",
-                    "HOME": "/root",
-                    "USER": "root",
-                    "SHELL": shell[0],
-                    "LANG": "C.UTF-8",
-                },
-                "wait-for-websocket": True,
-                "interactive": True,
-                "width": width,
-                "height": height,
-                "record-output": False,  # Don't record, pure interactive
-            }
-            
-            # Execute via pylxd raw API (include project parameter for non-default projects)
-            if project and project != "default":
-                response = client.api.instances[safe_segment(instance_name)].exec.post(
-                    json=exec_data,
-                    params={"project": project}
+        from app.services.lxd_ws import SessionSetupError, connection_material, lxd_client, operation_urls, read_instance
+
+        instance = read_instance(host, project, instance_name)
+        status = instance.get("status", "Unknown")
+        if status != "Running":
+            raise SessionSetupError(f"The instance is not running (status: {status})", retryable=False)
+        if shell is None:
+            shell = self.get_shell_command(instance.get("type", "container"))
+
+        client = lxd_client(host)
+        if client is None:
+            raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True)
+        exec_data = {
+            "command": shell,
+            "environment": {
+                "TERM": "xterm-256color",
+                "HOME": "/root",
+                "USER": "root",
+                "SHELL": shell[0],
+                "LANG": "C.UTF-8",
+            },
+            "wait-for-websocket": True,
+            "interactive": True,
+            "width": width,
+            "height": height,
+            "record-output": False,
+        }
+        response = client.api.instances[safe_segment(instance_name)].exec.post(
+            json=exec_data, params={"project": project or "default"}
+        )
+        operation = response.json()
+        if response.status_code >= 400 or operation.get("type") == "error":
+            message = str(operation.get("error") or response.status_code)
+            # note: an exec into a VM needs its lxd-agent; say so rather than the daemon's wording.
+            if "agent" in message.lower():
+                raise SessionSetupError(
+                    "The VM agent is not running, so a shell cannot open. Use the Serial or Graphics console.",
+                    retryable=False,
                 )
-            else:
-                response = client.api.instances[safe_segment(instance_name)].exec.post(json=exec_data)
-            
-            # Get operation details
-            operation = response.json()
-            if operation.get("type") == "error":
-                error_msg = operation.get("error", "Unknown error")
-                return None, f"Exec failed: {error_msg}"
-            
-            # Extract WebSocket metadata
-            metadata = operation.get("metadata", {})
-            operation_id = metadata.get("id", "")
-            ws_metadata = metadata.get("metadata", {})
-            
-            # Get secrets for WebSocket connections
-            fds = ws_metadata.get("fds", {})
-            control_fd = fds.get("control", "")
-            stdio_fd = fds.get("0", "")  # stdin/stdout/stderr combined for interactive
-            
-            # Build WebSocket URLs
-            ws_base = f"{ws_endpoint}/1.0/operations/{operation_id}/websocket"
-            
-            session_info = {
-                "operation_id": operation_id,
-                "instance_name": instance_name,
-                "host": host,
-                "project": project,
-                "ws_url": f"{ws_base}?secret={stdio_fd}",
-                "control_url": f"{ws_base}?secret={control_fd}",
-                "endpoint": endpoint,
-                "shell": shell,
-            }
-            
-            logger.info(f"Created exec session for {instance_name}@{host}: {operation_id}")
-            return session_info, None
-            
-        except Exception as e:
-            logger.error(f"Error creating exec session: {e}")
-            return None, str(e)
-    
+            raise SessionSetupError(f"The cluster refused the shell: {message}", retryable=False)
+        base, _ssl = connection_material(host)
+        operation_id, data_url, control_url = operation_urls(base, operation)
+        if not operation_id:
+            raise SessionSetupError("The cluster did not return an exec operation", retryable=True)
+        logger.info("Exec operation %s for %s@%s", operation_id, instance_name, host)
+        return {
+            "operation_id": operation_id,
+            "instance_name": instance_name,
+            "host": host,
+            "project": project,
+            "ws_url": data_url,
+            "control_url": control_url,
+            "shell": shell,
+        }
+
     def get_ssl_context(self, host: str) -> ssl.SSLContext:
         """
         Create SSL context for WebSocket connection to LXD.
@@ -233,34 +178,6 @@ class TerminalService:
         
         return create_lxd_ssl_context(cert_data)
     
-    async def resize_terminal(
-        self,
-        control_url: str,
-        host: str,
-        width: int,
-        height: int
-    ) -> bool:
-        """
-        Send resize signal to terminal via control WebSocket.
-        """
-        try:
-            ssl_context = self.get_ssl_context(host)
-            
-            async with websockets.connect(
-                control_url,
-                ssl=ssl_context,
-                close_timeout=5
-            ) as ws:
-                resize_msg = json.dumps({
-                    "command": "window-resize",
-                    "args": {"width": width, "height": height}
-                })
-                await ws.send(resize_msg)
-                return True
-        except Exception as e:
-            logger.error(f"Error resizing terminal: {e}")
-            return False
-
 
 # Singleton instance
 _terminal_service: Optional[TerminalService] = None

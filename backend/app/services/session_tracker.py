@@ -83,11 +83,13 @@ def dedupe_sessions(sessions: List[SessionInfo]) -> List[SessionInfo]:
     proxy up until the browser's close finally arrives.
 
     The key is exactly the tuple register() matches on, so the two cannot disagree.
-    Note protocol is deliberately NOT in it, mirroring register(): a terminal and a
-    graphics console on the same instance already suppress each other, and quietly
-    "improving" that here would make the two paths diverge.
+
+    note: the protocol is part of it. A console window keeps its Graphics, Text and Serial tabs
+    connected side by side, so a shell and a display on one instance are two live sessions, not
+    a reconnect of one. Without the protocol each suppressed the other: the list showed one, and
+    the suppressed one later lost its disconnect audit row when the cleanup loop dropped it.
     """
-    newest: Dict[Tuple[str, str, str], SessionInfo] = {}
+    newest: Dict[Tuple[str, str, str, SessionProtocol], SessionInfo] = {}
     passthrough: List[SessionInfo] = []
     for s in sessions:
         # an empty email is not an identity: without this every anonymous session on
@@ -95,7 +97,7 @@ def dedupe_sessions(sessions: List[SessionInfo]) -> List[SessionInfo]:
         if not s.user_email:
             passthrough.append(s)
             continue
-        key = (s.instance_name, s.host, s.user_email)
+        key = (s.instance_name, s.host, s.user_email, s.protocol)
         current = newest.get(key)
         if current is None or s.started_at > current.started_at:
             newest[key] = s
@@ -134,12 +136,13 @@ class SessionTracker:
         break_glass_grant_id: Optional[int] = None,
     ) -> SessionInfo:
         """Register a new session and start tracking."""
-        # close any existing session for the same instance+user+host
+        # close any existing session of the same kind for the same instance+user+host
         # (prevents stale sessions from piling up on reconnect)
         for sid, s in list(self._sessions.items()):
             if (s.instance_name == instance_name
                     and s.host == host
                     and s.user_email == user_email
+                    and s.protocol == protocol
                     and s.status != SessionStatus.DISCONNECTED):
                 logger.info(
                     f"Closing stale session {sid[:12]}... "

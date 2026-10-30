@@ -60,13 +60,23 @@ def test_sessions_without_an_email_are_never_collapsed():
     assert {s.session_id for s in kept} == {"op-a", "op-b"}
 
 
-def test_a_terminal_and_a_console_still_suppress_each_other():
-    # protocol is deliberately NOT in the key, mirroring register(). Documented here so
-    # that if someone "fixes" it they change this test on purpose rather than by accident.
+def test_a_terminal_and_a_console_are_two_sessions():
+    # The protocol is in the key, as in register(). A console window keeps its Graphics, Text
+    # and Serial tabs connected side by side, so a shell and a display on one instance are two
+    # live sessions. Collapsing them hid one and later lost its disconnect audit row.
     term = _session("op-term", 100.0)
     console = _session("op-console", 200.0)
     console.protocol = SessionProtocol.GRAPHICS
 
     kept = dedupe_sessions([term, console])
 
-    assert [s.session_id for s in kept] == ["op-console"]
+    assert {s.session_id for s in kept} == {"op-term", "op-console"}
+
+
+def test_a_reconnect_of_the_same_kind_still_shows_once():
+    old = _session("op-old", 100.0)
+    new = _session("op-new", 200.0)
+
+    kept = dedupe_sessions([old, new])
+
+    assert [s.session_id for s in kept] == ["op-new"]

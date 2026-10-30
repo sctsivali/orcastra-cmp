@@ -111,6 +111,10 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 # --limit-concurrency: memory guard. Beyond this uvicorn returns 503 instead of queueing
 #   without bound. Sized high because WebSocket connections occupy the same budget.
 #   note: this does NOT rescue a wedged worker, a blocked loop cannot return a 503 either.
+# --ws-per-message-deflate false: SPICE frames arrive already compressed (QUIC, LZ, JPEG), and
+#   zlib over every 32 KiB frame ran on the event loop, adding latency to the console's display
+#   and input for no size gain. The JSON feeds are small enough not to need it.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", \
      "--timeout-graceful-shutdown", "20", \
-     "--limit-concurrency", "200"]
+     "--limit-concurrency", "200", \
+     "--ws-per-message-deflate", "false"]

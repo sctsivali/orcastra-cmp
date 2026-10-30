@@ -50,6 +50,9 @@ async def _redeemed(kind: str, websocket: WebSocket, ticket: str) -> Optional[Au
     if claims.session_exp is not None and claims.session_exp <= time.time():
         logger.warning("WebSocket refused: the %s ticket's session has ended", kind)
         return None
+    # note: the display group rides on the socket, not on the identity: the console endpoint
+    # reads it to join the channels of one SPICE display to one LXD operation.
+    websocket.state.ws_ticket_group = claims.group
     return claims.user()
 
 

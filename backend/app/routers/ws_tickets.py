@@ -8,6 +8,7 @@ names its kind and target, so it cannot be spent on any other socket.
 
 import logging
 import time
+from dataclasses import replace
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
@@ -18,6 +19,8 @@ from app.core.instance_access import verify_instance_access
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.core.ws_ticket import FEED_KINDS, SPICE_CHANNELS, TICKET_TTL_SECONDS, WsTarget, claims_for
 from app.core.ws_ticket_store import TicketBudgetExceeded, TicketStoreUnavailable, get_ws_ticket_store
+from app.services.migration_fence import MigrationFenceConflict, assert_instance_not_migration_fenced
+from app.services.spice_session import new_group
 from app.models.ws_ticket_schemas import (
     ConsoleTicketRequest,
     EventsTicketRequest,
@@ -74,8 +77,16 @@ async def _target(body: WsTicketRequest, user: Optional[AuthenticatedUser]) -> W
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This session carries no email address, so a shell or console opened with it could not be re-checked",
             )
-        verify_instance_access(body.host, body.project, body.instance, "console")
+        bound_project = verify_instance_access(body.host, body.project, body.instance, "console")
         await _session_gate(user, body.host)
+        # note: the socket refuses a fenced instance before accept, where the browser cannot
+        # read why. Refusing the ticket here says it in words the page can show.
+        try:
+            await assert_instance_not_migration_fenced(
+                cluster_id=body.host, project=bound_project, instance_name=body.instance,
+            )
+        except MigrationFenceConflict as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.detail) from exc
         console_type = body.console_type if isinstance(body, ConsoleTicketRequest) else None
         # note: the project as the page sends it, which is what its socket URL will carry.
         return WsTarget(host=body.host, project=body.project, instance=body.instance, console_type=console_type)
@@ -98,8 +109,12 @@ async def mint_ws_ticket(
             headers={"WWW-Authenticate": "Bearer"},
         )
     target = await _target(body, user)
-    claims = claims_for(body.kind, target, user).to_json()
-    count = SPICE_CHANNELS if isinstance(body, ConsoleTicketRequest) and body.console_type == "vga" else 1
+    spice = isinstance(body, ConsoleTicketRequest) and body.console_type == "vga"
+    claims = claims_for(body.kind, target, user)
+    if spice:
+        claims = replace(claims, group=new_group())
+    claims = claims.to_json()
+    count = SPICE_CHANNELS if spice else 1
     store = get_ws_ticket_store()
     user_key = user.user_id if user is not None else "anonymous"
     try:

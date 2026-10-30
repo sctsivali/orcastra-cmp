@@ -56,29 +56,6 @@ def test_the_shared_project_gate_refuses_a_foreign_project():
     assert exc.value.status_code == 403
 
 
-def test_console_session_denies_before_console_service(monkeypatch):
-    monkeypatch.setattr(
-        console,
-        "get_console_service",
-        lambda: pytest.fail("foreign project reached the console service"),
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(
-            console.create_console_session(
-                instance_name=NAME,
-                host=HOST,
-                project="other-org",
-                console_type="vga",
-                width=1024,
-                height=768,
-                _rbac=SimpleNamespace(email="partner@example.test"),
-            )
-        )
-
-    assert exc.value.status_code == 403
-
-
 @pytest.mark.parametrize(
     "handler,body",
     [

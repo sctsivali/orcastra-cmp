@@ -13,13 +13,11 @@ from fastapi import HTTPException
 
 from app.models.migration_schemas import MigrationPlanCreateRequest
 from app.routers import (
-    console,
     image_uploads,
     image_uploads_dashboard,
     instance_mobility,
     iso_uploads,
     iso_uploads_dashboard,
-    terminal,
 )
 from app.services.migration_fence import (
     MIGRATION_CLUSTER_FENCE_UNAVAILABLE_DETAIL,
@@ -451,6 +449,8 @@ async def test_interactive_session_releases_admission_before_websocket_lifetime(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
 ) -> None:
+    from app.services import console_proxy, terminal_proxy
+
     held = False
     events: list[str] = []
     tracker = _Tracker(events)
@@ -467,12 +467,15 @@ async def test_interactive_session_releases_admission_before_websocket_lifetime(
             events.append("guard:exit")
 
     class _Browser:
-        async def receive_json(self) -> dict[str, int]:
-            return {"width": 120, "height": 40}
+        def __init__(self) -> None:
+            self.state = SimpleNamespace()
+
+        async def receive(self) -> dict[str, Any]:
+            return {"type": "websocket.receive", "text": '{"width": 120, "height": 40, "binary": true}'}
 
         async def send_json(self, _payload: Any) -> None:
             assert held is False
-            events.append("browser:session")
+            events.append("browser:message")
 
         async def send_text(self, _payload: str) -> None:
             events.append("browser:error")
@@ -481,41 +484,42 @@ async def test_interactive_session_releases_admission_before_websocket_lifetime(
             events.append("browser:close")
 
     class _Service:
-        async def create_console_session(self, **_kwargs: Any) -> tuple[dict[str, str], None]:
+        def open_console_operation(self, *_args: Any) -> dict[str, str]:
             assert held
             events.append("daemon:submit")
-            return {
-                "operation_id": "console-op",
-                "control_url": "wss://cluster/control",
-                "ws_url": "wss://cluster/data",
-            }, None
+            return {"operation_id": "console-op", "control_url": "wss://cluster/control", "ws_url": "wss://cluster/data"}
 
-        async def create_exec_session(self, **_kwargs: Any) -> tuple[dict[str, str], None]:
+        def open_exec_operation(self, *_args: Any) -> dict[str, str]:
             assert held
             events.append("daemon:submit")
-            return {
-                "operation_id": "terminal-op",
-                "control_url": "wss://cluster/control",
-                "ws_url": "wss://cluster/data",
-            }, None
+            return {"operation_id": "terminal-op", "control_url": "wss://cluster/control", "ws_url": "wss://cluster/data"}
 
-        def get_ssl_context(self, _host: str) -> Any:
-            assert held is False
-            events.append("websocket:begin")
-            raise RuntimeError("stop after admission")
+    def material(_host: str) -> Any:
+        assert held is False
+        events.append("websocket:begin")
+        raise RuntimeError("stop after admission")
+
+    async def inline(fn: Any, *args: Any, label: str, host: str, **kwargs: Any) -> Any:
+        return fn(*args, **kwargs)
+
+    class _Activity:
+        def log_activity(self, **_kwargs: Any) -> None:
+            pass
 
     service = _Service()
     browser = _Browser()
+    module = console_proxy if kind == "console" else terminal_proxy
+    monkeypatch.setattr(module, "guard_instance_mutation", guarded)
+    monkeypatch.setattr(module, "get_session_tracker", lambda: tracker)
+    monkeypatch.setattr(module, "session_io", inline)
+    monkeypatch.setattr(module, "connection_material", material)
     if kind == "console":
-        monkeypatch.setattr(console, "guard_instance_mutation", guarded)
-        monkeypatch.setattr(console, "get_console_service", lambda: service)
-        monkeypatch.setattr(console, "get_session_tracker", lambda: tracker)
-        proxy = console.ConsoleProxy(browser, "workload", "cluster-a", "project-a")
+        monkeypatch.setattr(console_proxy, "get_console_service", lambda: service)
+        monkeypatch.setattr(console_proxy, "get_activity_logger", lambda: _Activity())
+        proxy = console_proxy.ConsoleProxy(browser, "workload", "cluster-a", "project-a")
     else:
-        monkeypatch.setattr(terminal, "guard_instance_mutation", guarded)
-        monkeypatch.setattr(terminal, "get_terminal_service", lambda: service)
-        monkeypatch.setattr(terminal, "get_session_tracker", lambda: tracker)
-        proxy = terminal.TerminalProxy(browser, "workload", "cluster-a", "project-a")
+        monkeypatch.setattr(terminal_proxy, "get_terminal_service", lambda: service)
+        proxy = terminal_proxy.TerminalProxy(browser, "workload", "cluster-a", "project-a")
 
     await proxy.run()
 

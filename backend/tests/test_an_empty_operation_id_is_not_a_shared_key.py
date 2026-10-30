@@ -18,7 +18,9 @@ from pathlib import Path
 
 from app.services.session_models import new_session_id
 
-ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
+SERVICES = Path(__file__).resolve().parents[1] / "app" / "services"
+# The routers hand the socket to these; the session id is derived where the operation is created.
+PROXIES = (SERVICES / "terminal_proxy.py", SERVICES / "console_proxy.py")
 
 
 def test_a_real_operation_id_is_used_as_is():
@@ -33,13 +35,14 @@ def test_an_empty_or_blank_id_becomes_a_unique_one():
         assert first != second, "two sessions must not share a generated id"
 
 
-def test_neither_router_keys_a_session_on_a_memory_address():
+def test_neither_proxy_keys_a_session_on_a_memory_address():
     # id(self) is not an identity: it is reused after collection and means nothing in
     # another process. Structural, because the failure is invisible at runtime until two
     # sessions happen to land on the same address. Matched on the AST rather than the
     # text, so the comment explaining this defect does not trip its own guard.
-    for name in ("terminal.py", "console.py"):
-        tree = ast.parse((ROUTERS / name).read_text())
+    for path in PROXIES:
+        tree = ast.parse(path.read_text())
+        name = path.name
         offenders = [
             node for node in ast.walk(tree)
             if isinstance(node, ast.Call)
@@ -49,11 +52,12 @@ def test_neither_router_keys_a_session_on_a_memory_address():
         assert not offenders, f"{name} still keys on a memory address"
 
 
-def test_both_routers_derive_the_session_id_through_the_guard():
+def test_both_proxies_derive_the_session_id_through_the_guard():
     # the guard only helps where it is actually used, and this is the kind of call that
     # gets quietly inlined again during a later edit.
-    for name in ("terminal.py", "console.py"):
-        tree = ast.parse((ROUTERS / name).read_text())
+    for path in PROXIES:
+        tree = ast.parse(path.read_text())
+        name = path.name
         calls = [
             node for node in ast.walk(tree)
             if isinstance(node, ast.Call)

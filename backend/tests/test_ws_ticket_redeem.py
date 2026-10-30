@@ -39,7 +39,8 @@ def _ticket(kind: str, target: WsTarget = WsTarget(), user: AuthenticatedUser = 
 
 
 def _socket(query: dict, path: dict = None) -> SimpleNamespace:
-    return SimpleNamespace(query_params=query, path_params=path or {})
+    # `state` as on a Starlette WebSocket: the redeem leaves the SPICE display group there.
+    return SimpleNamespace(query_params=query, path_params=path or {}, state=SimpleNamespace())
 
 
 def _open(kind: str, socket: SimpleNamespace, tokens: bool = False):

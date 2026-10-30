@@ -7,7 +7,6 @@ The console data is streamed as SPICE protocol via WebSocket.
 
 Endpoints:
 - GET  /console/{instance}/capabilities - Get console capabilities
-- GET  /console/{instance}/session - Create console session
 - WS   /console/{instance}/ws - WebSocket for graphics console (SPICE)
 - GET  /console/startup-order - Get startup order for instances
 - PUT  /console/startup-order - Update startup order
@@ -23,11 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Callable, Dict, List, Optional, TypeVar
 from urllib.parse import parse_qs, unquote, urlsplit
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends, Response
+from fastapi import APIRouter, WebSocket, Query, HTTPException, Depends, Response
 from pydantic import BaseModel, Field
-import websockets
-from websockets import State as WebSocketState
-from websockets.exceptions import ConnectionClosed
 
 from app.core.cache import get_cache_manager
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -44,10 +40,10 @@ from app.core.org_scope import (
     verify_project_access,
     verify_tenant_permission,
 )
-from app.services.console_service import get_console_service, public_session_info
+from app.services.console_service import get_console_service
+from app.services.console_proxy import ConsoleProxy
 from app.services.activity_logger import get_activity_logger
-from app.services.session_tracker import get_session_tracker, SessionProtocol
-from app.services.session_models import new_session_id
+from app.services.session_tracker import get_session_tracker
 from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
@@ -56,7 +52,6 @@ from app.core.lxd_names import LXD_NAME_PATTERN
 from app.services.migration_fence import (
     MigrationFenceConflict,
     assert_instance_not_migration_fenced,
-    guard_instance_mutation,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +75,28 @@ async def _console_io(call: Callable[[], _ConsoleResult], *, label: str) -> _Con
         executor=_console_operation_executor,
         max_in_flight=_CONSOLE_OPERATION_MAX_IN_FLIGHT,
     )
+
+
+async def _console_call(call: Callable[[], _ConsoleResult], *, label: str, write: bool = False) -> _ConsoleResult:
+    """``_console_io`` for a request handler: a saturated pool or a slow cluster is a 503/504.
+
+    note: these service calls used to be awaited inline although nothing in them awaits, so each
+    one parked the whole event loop for its LXD round trips (every console, terminal and feed on
+    the worker froze with it). A write that outlives its budget keeps running; the 504 says so,
+    and the instance caches are cleared when it really finishes.
+    """
+    try:
+        return await _console_io(call, label=label)
+    except BlockingPoolFull as exc:
+        raise HTTPException(status_code=503, detail="The console service is busy. Retry shortly.") from exc
+    except BlockingTimeout as exc:
+        if write:
+            exc.when_finished(get_cache_manager().invalidate_instance_cache)
+            raise HTTPException(
+                status_code=504,
+                detail="The cluster is still applying the change. Check again in a moment.",
+            ) from exc
+        raise HTTPException(status_code=504, detail="The cluster did not answer in time.") from exc
 
 
 def _operation_targets_instance(
@@ -129,6 +146,18 @@ def _operation_targets_instance(
             if effective_project == project:
                 return True
     return False
+
+
+def _is_console_operation(operation: object) -> bool:
+    """Whether a websocket operation is a console (VGA or serial) rather than an exec shell.
+
+    LXD describes a console operation as "Showing console" and an exec as "Executing command".
+    The conflict check and kill-all are about consoles: QEMU's SPICE server takes one client at a
+    time, while any number of shells coexist, and killing those ended other people's terminals.
+    """
+    if not isinstance(operation, dict):
+        return False
+    return "console" in str(operation.get("description") or "").lower()
 
 
 def _operation_metadata(response: object) -> Optional[dict]:
@@ -272,13 +301,6 @@ class ActiveConsoleCheckResponse(BaseModel):
     """Response for checking active console sessions."""
     has_active_session: bool
     sessions: List[ActiveConsoleSession] = []
-
-
-class ConsoleSessionResponse(BaseModel):
-    """Response for console session creation."""
-    success: bool
-    session: Optional[dict] = None
-    error: Optional[str] = None
 
 
 class StartupOrderEntry(BaseModel):
@@ -631,10 +653,14 @@ async def get_capabilities(
     project = _verify_instance_access(host, project, instance_name, "view")
     console_service = get_console_service()
     
-    caps, error = await console_service.get_instance_capabilities(
-        instance_name=instance_name,
-        host=host,
-        project=project,
+    caps, error = await _console_call(
+        partial(
+            console_service.get_instance_capabilities,
+            instance_name=instance_name,
+            host=host,
+            project=project,
+        ),
+        label=f"console.capabilities:{host}",
     )
     
     if error:
@@ -643,83 +669,11 @@ async def get_capabilities(
     return ConsoleCapabilitiesResponse(**caps.to_dict())
 
 
-@router.get(
-    "/{instance_name}/session",
-    response_model=ConsoleSessionResponse,
-    summary="Create console session",
-    description="Create a new graphics console session for a VM.",
-    dependencies=[Depends(org_scope_dependency)],
-)
-async def create_console_session(
-    instance_name: str,
-    host: str = Query(..., description="Target cluster"),
-    project: str = Query("default", description="LXD project name"),
-    console_type: str = Query("vga", description="Console type: vga or console"),
-    width: int = Query(1024, ge=640, le=4096, description="Console width"),
-    height: int = Query(768, ge=480, le=2160, description="Console height"),
-    _rbac: AuthenticatedUser = Depends(require_tenant()),
-):
-    """Create a graphics console session."""
-    project = _verify_instance_access(host, project, instance_name, "console")
-    # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
-    # active grant (raises 403 break_glass_required otherwise). In-scope self-service and
-    # local dev are unaffected.
-    from app.services.break_glass_service import enforce_sensitive_access
-    from app.core.org_scope import resolve_cluster_org
-    async with async_session_maker() as _bg_db:
-        _bg_grant = await enforce_sensitive_access(_rbac, host, _bg_db)
-        _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
-    _bg_grant_id = _bg_grant.id if _bg_grant else None
-
-    console_service = get_console_service()
-    try:
-        # Release the private advisory-lock transaction as soon as LXD returns the operation.
-        # The long-lived client WebSocket must never own a database transaction.
-        async with guard_instance_mutation(
-            cluster_id=host,
-            project=project,
-            instance_name=instance_name,
-        ):
-            session_info, error = await console_service.create_console_session(
-                instance_name=instance_name,
-                host=host,
-                project=project,
-                console_type=console_type,
-                width=width,
-                height=height,
-            )
-    except MigrationFenceConflict as exc:
-        raise HTTPException(status_code=409, detail=exc.detail) from exc
-
-    if error:
-        # Log activity: console session creation failure (HIGH SEVERITY - security audit)
-        activity_logger.log_activity(
-            action="console.session.create",
-            target_type="instance",
-            target_id=instance_name,
-            target_host=host,
-            target_project=project,
-            result="failure",
-            error_message=error,
-            target_organization_id=_target_org_id,
-            target_organization_slug=_target_org_slug,
-        )
-        return ConsoleSessionResponse(success=False, error=error)
-
-    # Log activity: console session creation success (HIGH SEVERITY - security audit)
-    activity_logger.log_activity(
-        action="console.session.create",
-        target_type="instance",
-        target_id=instance_name,
-        target_host=host,
-        target_project=project,
-        result="success",
-        details={"console_type": console_type, "width": width, "height": height, "break_glass_grant_id": _bg_grant_id},
-        target_organization_id=_target_org_id,
-        target_organization_slug=_target_org_slug,
-    )
-    
-    return ConsoleSessionResponse(success=True, session=public_session_info(session_info))
+# note: `GET /console/{name}/session` used to live here. It created a real VGA operation and, since
+# its secrets could not be handed out, returned only the operation id, so nothing could ever
+# connect to what it made: every call left an orphaned operation on the cluster. No caller existed
+# (frontend, MCP or integrations). The console runs on the WebSocket below, which creates its
+# own operation and never discloses it. Removed for the same reason as its terminal twin.
 
 
 @router.get(
@@ -738,9 +692,13 @@ async def get_startup_order(
     project = verify_project_access(host, project)
     console_service = get_console_service()
     
-    entries, error = await console_service.get_startup_order(
-        host=host,
-        project=project,
+    entries, error = await _console_call(
+        partial(
+            console_service.get_startup_order,
+            host=host,
+            project=project,
+        ),
+        label=f"console.startup_order.read:{host}",
     )
     
     if error:
@@ -798,10 +756,15 @@ async def update_startup_order(
     
     updates = [u.model_dump(exclude_none=True) for u in request.updates]
     
-    success, error = await console_service.update_startup_order(
-        host=host,
-        project=project,
-        updates=updates,
+    success, error = await _console_call(
+        partial(
+            console_service.update_startup_order,
+            host=host,
+            project=project,
+            updates=updates,
+        ),
+        label=f"console.startup_order.write:{host}",
+        write=True,
     )
     
     if not success:
@@ -860,10 +823,14 @@ async def get_attached_iso(
     project = _verify_instance_access(host, project, instance_name, "view")
     console_service = get_console_service()
     
-    attached, error = await console_service.get_instance_iso(
-        instance_name=instance_name,
-        host=host,
-        project=project,
+    attached, error = await _console_call(
+        partial(
+            console_service.get_instance_iso,
+            instance_name=instance_name,
+            host=host,
+            project=project,
+        ),
+        label=f"console.iso.read:{host}",
     )
     
     if error:
@@ -909,14 +876,19 @@ async def attach_iso(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     console_service = get_console_service()
     
-    success, message = await console_service.attach_iso(
-        instance_name=instance_name,
-        host=host,
-        project=project,
-        pool=request.pool,
-        volume=request.volume,
-        device_name=request.device_name,
-        boot_priority=request.boot_priority,
+    success, message = await _console_call(
+        partial(
+            console_service.attach_iso,
+            instance_name=instance_name,
+            host=host,
+            project=project,
+            pool=request.pool,
+            volume=request.volume,
+            device_name=request.device_name,
+            boot_priority=request.boot_priority,
+        ),
+        label=f"console.iso.attach:{host}",
+        write=True,
     )
     
     if not success:
@@ -955,11 +927,16 @@ async def eject_iso(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     console_service = get_console_service()
     
-    success, message = await console_service.eject_iso(
-        instance_name=instance_name,
-        host=host,
-        project=project,
-        device_name=device_name,
+    success, message = await _console_call(
+        partial(
+            console_service.eject_iso,
+            instance_name=instance_name,
+            host=host,
+            project=project,
+            device_name=device_name,
+        ),
+        label=f"console.iso.eject:{host}",
+        write=True,
     )
     
     if not success:
@@ -1022,7 +999,7 @@ async def check_active_sessions(
                     op,
                     instance_name=instance_name,
                     project=project,
-                ):
+                ) and _is_console_operation(op):
                     active_sessions.append(ActiveConsoleSession(
                         operation_id=op.get('id', ''),
                         instance_name=instance_name,
@@ -1053,7 +1030,7 @@ async def check_active_sessions(
     "/{instance_name}/kill-all-sessions",
     response_model=ActionResponse,
     summary="Kill all active console sessions",
-    description="Kill all active console operations for an instance. Used when closing console tab.",
+    description="Kill the console operations (VGA and serial) of an instance; exec shells are left alone.",
     dependencies=[Depends(org_scope_dependency)],
 )
 async def kill_all_sessions(
@@ -1100,7 +1077,7 @@ async def kill_all_sessions(
                     op,
                     instance_name=instance_name,
                     project=project,
-                ):
+                ) and _is_console_operation(op):
                     op_id = op.get('id', '')
                     if not op_id:
                         continue
@@ -1272,360 +1249,6 @@ async def kill_active_session(
 
 # ============ WebSocket Endpoint ============
 
-class ConsoleProxy:
-    """
-    Manages bidirectional WebSocket proxy between browser and LXD VGA console.
-    
-    Architecture:
-    Browser <--WS--> FastAPI <--WS (control)--> LXD
-                             <--WS (data)----> LXD (SPICE protocol)
-    
-    LXD VGA console requires TWO WebSocket connections:
-    1. Control socket - for lifecycle management (must connect first)
-    2. Data socket - for SPICE protocol data (triggers SPICE socket creation)
-    
-    When data socket connects, LXD creates a SPICE connection to QEMU.
-    Data is then mirrored bidirectionally between WebSocket and SPICE socket.
-    
-    IMPORTANT: SPICE HTML5 client expects raw binary SPICE protocol immediately.
-    We cannot send JSON handshake messages as SPICE client will interpret them
-    as corrupted SPICE data.
-    """
-    
-    def __init__(
-        self,
-        browser_ws: WebSocket,
-        instance_name: str,
-        host: str,
-        project: str,
-        console_type: str = "vga",
-        user_id: str = "anonymous",
-        user_email: str = "",
-        user_role: str = "unknown",
-        target_organization_id: Optional[int] = None,
-        target_org_slug: Optional[str] = None,
-        break_glass_grant_id: Optional[int] = None,
-    ):
-        self.browser_ws = browser_ws
-        self.instance_name = instance_name
-        self.host = host
-        self.project = project
-        self.console_type = console_type
-        self.user_id = user_id
-        self.user_email = user_email
-        self.user_role = user_role
-        self.target_organization_id = target_organization_id
-        self.target_org_slug = target_org_slug
-        self.break_glass_grant_id = break_glass_grant_id
-
-        self.lxd_data_ws = None  # Data socket for SPICE data
-        self.lxd_control_ws = None  # Control socket for lifecycle
-        self._shutdown = asyncio.Event()
-        self._session = None  # SessionInfo from tracker
-    
-    async def _send_error(self, message: str):
-        """Send error message to browser as JSON before closing.
-        
-        SPICE HTML5 client will see this as corrupted data and report an error,
-        but we prefix with a special marker so frontend can detect it.
-        """
-        try:
-            # send as text for clear error detection
-            # prefix with marker so frontend can parse it
-            error_payload = f"__CONSOLE_ERROR__:{message}"
-            await self.browser_ws.send_text(error_payload)
-        except Exception:
-            pass
-    
-    async def run(self):
-        """Main entry point - runs the console proxy."""
-        console_service = get_console_service()
-        tracker = get_session_tracker()
-        
-        try:
-            try:
-                # Hold the migration admission lock only through daemon submission and tracker
-                # registration. The authoritative daemon operation then blocks fresh preflight;
-                # the interactive WebSocket lifetime never holds a database transaction.
-                async with guard_instance_mutation(
-                    cluster_id=self.host,
-                    project=self.project,
-                    instance_name=self.instance_name,
-                ):
-                    session_info, error = await console_service.create_console_session(
-                        instance_name=self.instance_name,
-                        host=self.host,
-                        project=self.project,
-                        console_type=self.console_type,
-                        width=1024,
-                        height=768,
-                    )
-
-                    if error:
-                        logger.error(f"Console session error: {error}")
-                        await self._send_error(error)
-                        return
-
-                    # Register before releasing admission. Migration can only acquire the lock
-                    # after the daemon operation is both authoritative and locally tracked.
-                    session_id = new_session_id(
-                        session_info.get("operation_id"),
-                        "console",
-                    )
-                    if session_id != session_info.get("operation_id"):
-                        logger.warning(
-                            f"LXD returned no operation id for {self.instance_name}@{self.host}; "
-                            f"tracking under {session_id}"
-                        )
-                    self._session = tracker.register(
-                        session_id=session_id,
-                        instance_name=self.instance_name,
-                        host=self.host,
-                        project=self.project,
-                        protocol=SessionProtocol.GRAPHICS,
-                        user_id=self.user_id,
-                        user_email=self.user_email,
-                        user_role=self.user_role,
-                        target_organization_id=self.target_organization_id,
-                        target_org_slug=self.target_org_slug,
-                        break_glass_grant_id=self.break_glass_grant_id,
-                    )
-            except MigrationFenceConflict as exc:
-                await self._send_error(exc.detail)
-                return
-
-            ssl_context = console_service.get_ssl_context(self.host)
-            
-            # LXD VGA console requires BOTH control and data sockets
-            # Control socket must be connected for the operation to work
-            try:
-                # 1. Connect to CONTROL socket first (required by LXD)
-                control_url = session_info.get("control_url", "")
-                if control_url:
-                    self.lxd_control_ws = await asyncio.wait_for(
-                        websockets.connect(
-                            control_url,
-                            ssl=ssl_context,
-                            close_timeout=10,
-                            ping_interval=None,
-                            ping_timeout=None,
-                        ),
-                        timeout=10.0
-                    )
-                    logger.info(f"Connected to LXD control socket: {self.instance_name}")
-                
-                # 2. Connect to DATA socket (this triggers SPICE socket creation)
-                self.lxd_data_ws = await asyncio.wait_for(
-                    websockets.connect(
-                        session_info["ws_url"],
-                        ssl=ssl_context,
-                        close_timeout=10,
-                        ping_interval=None,  # LXD doesn't support ping
-                        ping_timeout=None,
-                        max_size=10 * 1024 * 1024,
-                        compression=None,  # No compression for binary data
-                    ),
-                    timeout=15.0
-                )
-                logger.info(f"Connected to LXD data socket: {self.instance_name}")
-                
-                # Mark session as connected after both sockets are ready.
-                # via the tracker, not the SessionInfo: a console registers as
-                # CONNECTING and only lands here after two LXD connects with 10s and
-                # 15s timeouts, so this edge has to reach the other workers now rather
-                # than at the next heartbeat.
-                if self._session:
-                    get_session_tracker().mark_connected(self._session.session_id)
-                
-                # Note: SPICE doesn't send initial data - it waits for client handshake
-                # We immediately start the proxy to avoid any timeout issues
-                
-            except asyncio.TimeoutError:
-                error_msg = f"Timeout connecting to LXD console for {self.instance_name}"
-                logger.error(error_msg)
-                await self._send_error(error_msg)
-                return
-            except Exception as e:
-                error_msg = f"Failed to connect to LXD console: {e}"
-                logger.error(error_msg)
-                await self._send_error(error_msg)
-                return
-            
-            # Run bidirectional proxy - pure binary, no JSON
-            await self._run_proxy()
-            
-        except WebSocketDisconnect:
-            logger.info(f"Console WebSocket disconnected: {self.instance_name}")
-        except Exception as e:
-            logger.error(f"Console proxy error: {e}")
-        finally:
-            await self._cleanup()
-    
-    async def _run_proxy(self):
-        """Run bidirectional binary data forwarding."""
-        
-        async def browser_to_lxd():
-            """Forward browser input to LXD data socket."""
-            first_message = True
-            try:
-                while not self._shutdown.is_set():
-                    try:
-                        # Receive any type of message from browser
-                        message = await asyncio.wait_for(
-                            self.browser_ws.receive(),
-                            timeout=0.5
-                        )
-                        
-                        if message["type"] == "websocket.disconnect":
-                            self._shutdown.set()
-                            break
-                        
-                        # Log first message from browser (SPICE handshake)
-                        if first_message:
-                            first_message = False
-                            if "bytes" in message and message["bytes"]:
-                                logger.debug(f"Browser SPICE handshake ({len(message['bytes'])} bytes)")
-                        
-                        # Forward bytes to LXD data socket
-                        has_bytes = "bytes" in message and message["bytes"]
-                        is_open = self.lxd_data_ws and self.lxd_data_ws.state == WebSocketState.OPEN
-                        
-                        if has_bytes:
-                            if is_open:
-                                try:
-                                    await asyncio.wait_for(
-                                        self.lxd_data_ws.send(message["bytes"]),
-                                        timeout=5.0
-                                    )
-                                    # Track upload bytes
-                                    if self._session:
-                                        self._session.add_upload_bytes(len(message["bytes"]))
-                                except asyncio.TimeoutError:
-                                    logger.error("TIMEOUT sending to LXD data socket")
-                                    self._shutdown.set()
-                                    break
-                                except Exception as send_err:
-                                    logger.error(f"Failed to forward to LXD: {type(send_err).__name__}: {send_err}")
-                                    self._shutdown.set()
-                                    break
-                            else:
-                                logger.warning(f"LXD data socket not open (state={self.lxd_data_ws.state if self.lxd_data_ws else 'None'})")
-                        elif "text" in message and message["text"]:
-                            # Convert text to bytes if needed
-                            if self.lxd_data_ws and self.lxd_data_ws.state == WebSocketState.OPEN:
-                                encoded = message["text"].encode('utf-8')
-                                await self.lxd_data_ws.send(encoded)
-                                # Track upload bytes
-                                if self._session:
-                                    self._session.add_upload_bytes(len(encoded))
-                                logger.info(f"FORWARDED {len(message['text'])} text chars to LXD data socket")
-                                
-                    except asyncio.TimeoutError:
-                        continue
-                    except Exception as e:
-                        if "disconnect" not in str(e).lower():
-                            logger.debug(f"Browser to LXD: {e}")
-                        self._shutdown.set()
-                        break
-            except Exception as e:
-                logger.debug(f"Browser to LXD loop error: {e}")
-                self._shutdown.set()
-        
-        async def lxd_to_browser():
-            """Forward LXD data socket output to browser."""
-            first_message = True
-            try:
-                while not self._shutdown.is_set():
-                    try:
-                        data = await asyncio.wait_for(
-                            self.lxd_data_ws.recv(),
-                            timeout=0.5
-                        )
-                        
-                        # Log first SPICE response
-                        if first_message:
-                            first_message = False
-                            if isinstance(data, bytes):
-                                logger.debug(f"LXD SPICE response ({len(data)} bytes)")
-                        
-                        # Send as binary to browser + track download bytes
-                        if isinstance(data, bytes):
-                            await self.browser_ws.send_bytes(data)
-                            if self._session:
-                                self._session.add_download_bytes(len(data))
-                        else:
-                            encoded = data.encode('utf-8')
-                            await self.browser_ws.send_bytes(encoded)
-                            if self._session:
-                                self._session.add_download_bytes(len(encoded))
-                            
-                    except asyncio.TimeoutError:
-                        continue
-                    except ConnectionClosed:
-                        logger.info(f"LXD connection closed: {self.instance_name}")
-                        self._shutdown.set()
-                        break
-                    except Exception as e:
-                        logger.debug(f"LXD to browser: {e}")
-                        self._shutdown.set()
-                        break
-            except Exception as e:
-                logger.debug(f"LXD to browser loop error: {e}")
-                self._shutdown.set()
-        
-        async def consume_control():
-            """Consume control socket messages (keeps connection alive)."""
-            try:
-                while not self._shutdown.is_set():
-                    if self.lxd_control_ws:
-                        try:
-                            await asyncio.wait_for(
-                                self.lxd_control_ws.recv(),
-                                timeout=0.5
-                            )
-                        except asyncio.TimeoutError:
-                            continue
-                        except ConnectionClosed:
-                            logger.info(f"Control socket closed: {self.instance_name}")
-                            self._shutdown.set()
-                            break
-                        except Exception:
-                            pass
-                    else:
-                        await asyncio.sleep(0.5)
-            except Exception:
-                pass
-        
-        # Run all tasks concurrently
-        await asyncio.gather(
-            browser_to_lxd(),
-            lxd_to_browser(),
-            consume_control(),
-            return_exceptions=True
-        )
-    
-    async def _cleanup(self):
-        """Clean up connections."""
-        self._shutdown.set()
-        
-        # Unregister session from tracker
-        if self._session:
-            tracker = get_session_tracker()
-            tracker.unregister(self._session.session_id)
-        
-        if self.lxd_data_ws:
-            try:
-                await self.lxd_data_ws.close()
-            except:
-                pass
-        
-        if self.lxd_control_ws:
-            try:
-                await self.lxd_control_ws.close()
-            except:
-                pass
-
-
 @router.websocket("/{instance_name}/ws")
 async def console_websocket(
     websocket: WebSocket,
@@ -1636,14 +1259,16 @@ async def console_websocket(
     user: Optional[AuthenticatedUser] = Depends(ws_user("console")),
 ):
     """
-    WebSocket endpoint for graphics console.
-    
-    LXD/Incus streams SPICE protocol data via WebSocket for VGA consoles.
-    The client should use spice-html5 or similar SPICE client to render.
-    
-    IMPORTANT: spice-html5 requires 'binary' subprotocol to be accepted.
-    Opened with a ticket from POST /ws-tickets (one per SPICE channel), re-authorized every minute.
+    WebSocket for an instance console: the SPICE display (``vga``) or the serial console (``console``).
+
+    A SPICE display opens one socket per channel, each with its own ticket from POST /ws-tickets;
+    the tickets of one display share a group, and its channels share one LXD operation. Binary
+    frames carry the protocol; a serial console also takes JSON text frames for resize and ACKs.
+    Re-authorized every minute while open.
     """
+    if console_type not in ("vga", "console"):
+        await websocket.close(code=1008, reason="Unknown console type")
+        return
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
     _settings = _gs()
@@ -1701,9 +1326,10 @@ async def console_websocket(
         await websocket.close(code=1008, reason="Instance fenced by Migration Center")
         return
 
-    # Accept with 'binary' subprotocol - required by spice-html5
-    # spice-html5 uses: new WebSocket(uri, 'binary')
-    await websocket.accept(subprotocol="binary")
+    # spice-html5 opens its sockets with the 'binary' subprotocol and fails one that does not
+    # echo it; a serial client asks for none, and answering one it did not offer fails it too.
+    offered = websocket.scope.get("subprotocols") or []
+    await websocket.accept(subprotocol="binary" if "binary" in offered else None)
 
     # Extract user details for session tracking
     user_id = user.user_id if user else "anonymous"
@@ -1729,6 +1355,8 @@ async def console_websocket(
         target_organization_id=_target_org_id,
         target_org_slug=_target_org_slug,
         break_glass_grant_id=_bg_grant_id,
+        group=getattr(websocket.state, "ws_ticket_group", None),
+        share_operation=_settings.console_shared_spice_operation,
     )
     
     # A break-glass session must not outlive the grant that authorized it: the gate
