@@ -811,14 +811,10 @@ for (const contract of [
     ],
     forbidden: ['method: "PUT"', 'method: "DELETE"'],
   },
+  // Queued transfers carry one actor's files, so a change of actor has to drop them.
   {
-    path: "frontend/src/components/terminal/file-upload-dialog.tsx",
-    markers: [
-      "fileTransferAPI.push",
-      'reconcileMutationImpact(queryClient, "file-transfer.push")',
-      "isAuthActorSynchronized(actorScope)",
-    ],
-    forbidden: ['/file-transfer/push?', 'method: "POST"'],
+    path: "frontend/src/lib/instance-files/transfer-store.ts",
+    markers: ["onAuthActorChanged(() =>"],
   },
   // A console closes only its own sockets, which ends its own LXD operations. Closing a window,
   // leaving the page or popping out used to call kill-all-sessions, which cancelled every
