@@ -1,18 +1,24 @@
 import { onAuthActorChanged } from "@/lib/api";
 
-/** Unsaved text, kept past a dialog tab unmounting the editor. Memory only, never a disk. */
-const drafts = new Map<string, string>();
+/** Unsaved text and the version of the file it was written against. */
+export interface Draft {
+  text: string;
+  etag: string;
+}
+
+/** Kept past a dialog tab unmounting the editor. Memory only, never a disk. */
+const drafts = new Map<string, Draft>();
 
 export function draftKey(host: string, project: string, instance: string, path: string): string {
   return JSON.stringify([host, project, instance, path]);
 }
 
-export function readDraft(key: string): string | undefined {
+export function readDraft(key: string): Draft | undefined {
   return drafts.get(key);
 }
 
-export function writeDraft(key: string, text: string): void {
-  drafts.set(key, text);
+export function writeDraft(key: string, draft: Draft): void {
+  drafts.set(key, draft);
 }
 
 export function clearDraft(key: string): void {

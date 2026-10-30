@@ -40,6 +40,13 @@ interface FileViewerPaneProps {
   onDownload: (path: string) => void;
 }
 
+/** What the editor opened on. `version` changes only when the editor should start again. */
+interface OpenedText {
+  text: string;
+  etag: string;
+  version: number;
+}
+
 /** The file instead of the list, inside the explorer, so it never fights the console for a layer. */
 export function FileViewerPane({ target, file, writeReason, onClose, onDownload }: FileViewerPaneProps) {
   const { scopeKey } = useActorQueryScope();
@@ -54,25 +61,43 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
     staleTime: Infinity,
     gcTime: 0,
   });
-  const [etag, setEtag] = React.useState<string | null>(null);
-  const [dirty, setDirty] = React.useState(() => readDraft(key) !== undefined);
+  const [opened, setOpened] = React.useState<OpenedText | null>(null);
+  const [dirty, setDirtyState] = React.useState(() => readDraft(key) !== undefined);
+  const dirtyRef = React.useRef(dirty);
   const [saving, setSaving] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [changedOnDisk, setChangedOnDisk] = React.useState<string | null>(null);
   const [offerInPlace, setOfferInPlace] = React.useState(false);
-  const [confirmDiscard, setConfirmDiscard] = React.useState(false);
+  const [confirmDiscard, setConfirmDiscard] = React.useState<"leave" | "reload" | null>(null);
   const inFlight = React.useRef(false);
 
+  const setDirty = React.useCallback((value: boolean) => {
+    dirtyRef.current = value;
+    setDirtyState(value);
+  }, []);
+
+  // important: any change to a file in this guest refetches this query. Following it blindly moved
+  // the etag under a draft, so Save overwrote a change nobody had seen, and remounted the editor.
   React.useEffect(() => {
-    if (content.data) setEtag(content.data.etag);
-  }, [content.data]);
+    const data = content.data;
+    if (!data) return;
+    setOpened((current) => {
+      if (current?.etag === data.etag || (current && dirtyRef.current)) return current;
+      const draft = readDraft(key);
+      return {
+        text: draft?.text ?? data.text,
+        etag: draft?.etag ?? data.etag,
+        version: (current?.version ?? 0) + 1,
+      };
+    });
+  }, [content.data, key]);
 
   const name = guestText(baseName(file.path));
   const readOnly = Boolean(writeReason) || Boolean(content.data?.read_only);
 
   const save = React.useCallback(
     async (overrideEtag?: string, allowInPlace = false) => {
-      const useEtag = overrideEtag ?? etag;
+      const useEtag = overrideEtag ?? opened?.etag;
       const text = editorRef.current?.value();
       if (readOnly || !useEtag || text === undefined || inFlight.current) return;
       inFlight.current = true;
@@ -83,9 +108,15 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
       try {
         const saved = await actions.save(file.path, text, useEtag, allowInPlace);
         if (saved) {
-          setEtag(saved.etag);
-          setDirty(false);
-          clearDraft(key);
+          setOpened((current) => current && { ...current, text, etag: saved.etag });
+          // What was typed while this was on its way is unsaved, against the file just written.
+          const now = editorRef.current?.value() ?? text;
+          if (now === text) {
+            setDirty(false);
+            clearDraft(key);
+          } else {
+            writeDraft(key, { text: now, etag: saved.etag });
+          }
         }
       } catch (error) {
         const code = fileErrorCode(error);
@@ -98,12 +129,24 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
         setSaving(false);
       }
     },
-    [actions, etag, file.path, key, readOnly],
+    [actions, file.path, key, opened?.etag, readOnly, setDirty],
   );
 
   const leave = () => {
-    if (dirty) setConfirmDiscard(true);
+    if (dirty) setConfirmDiscard("leave");
     else onClose();
+  };
+
+  const showDiskVersion = async () => {
+    const { data, error } = await content.refetch();
+    if (!data || error) {
+      setSaveError(error instanceof Error ? error.message : "This file could not be read.");
+      return;
+    }
+    clearDraft(key);
+    setDirty(false);
+    setChangedOnDisk(null);
+    setOpened((current) => ({ text: data.text, etag: data.etag, version: (current?.version ?? 0) + 1 }));
   };
 
   const code = fileErrorCode(content.error);
@@ -137,7 +180,7 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
         <Alert className="rounded-none border-x-0 border-t-0 py-2">
           <AlertDescription className="flex flex-wrap items-center gap-2">
             This file changed after you opened it.
-            <Button size="sm" variant="outline" className="h-7" onClick={() => { void content.refetch(); clearDraft(key); setDirty(false); setChangedOnDisk(null); }}>View disk version</Button>
+            <Button size="sm" variant="outline" className="h-7" onClick={() => setConfirmDiscard("reload")}>View disk version</Button>
             <Button size="sm" variant="destructive" className="h-7" onClick={() => void save(changedOnDisk)}>Overwrite</Button>
           </AlertDescription>
         </Alert>
@@ -156,11 +199,20 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
       <div className="min-h-0 flex-1">
         {file.kind === "image" ? (
           <ImagePreview target={target} path={file.path} alt={name} />
-        ) : content.isLoading ? (
-          <div className="flex h-full items-center justify-center" role="status">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden="true" />
-            <span className="sr-only">Loading the file</span>
-          </div>
+        ) : opened ? (
+          <CodeEditor
+            key={opened.version}
+            ref={editorRef}
+            fileName={baseName(file.path)}
+            initial={readDraft(key)?.text ?? opened.text}
+            readOnly={readOnly}
+            ariaLabel={`Contents of ${name}`}
+            onChange={(text) => {
+              setDirty(true);
+              writeDraft(key, { text, etag: opened.etag });
+            }}
+            onSave={() => void save()}
+          />
         ) : content.error ? (
           code === "too_large" ? (
             <EmptyState icon={FileWarning} title="This file is too large to open here" description="Download it instead." />
@@ -169,33 +221,29 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
           ) : (
             <EmptyState icon={FileX2} title="This file could not be opened" description={describeReadError(content.error).reason} />
           )
-        ) : content.data ? (
-          <CodeEditor
-            key={content.dataUpdatedAt}
-            ref={editorRef}
-            fileName={baseName(file.path)}
-            initial={readDraft(key) ?? content.data.text}
-            readOnly={readOnly}
-            ariaLabel={`Contents of ${name}`}
-            onChange={(text) => {
-              setDirty(true);
-              writeDraft(key, text);
-            }}
-            onSave={() => void save()}
-          />
-        ) : null}
+        ) : (
+          <div className="flex h-full items-center justify-center" role="status">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden="true" />
+            <span className="sr-only">Loading the file</span>
+          </div>
+        )}
       </div>
       <DestructiveConfirmDialog
-        open={confirmDiscard}
-        onOpenChange={setConfirmDiscard}
+        open={confirmDiscard !== null}
+        onOpenChange={(next) => !next && setConfirmDiscard(null)}
         title="Discard Changes"
         description={`Your edits to ${name} have not been saved.`}
         confirmLabel="Discard"
         pendingLabel="Discarding"
         pending={false}
         onConfirm={() => {
+          const then = confirmDiscard;
+          setConfirmDiscard(null);
+          if (then === "reload") {
+            void showDiskVersion();
+            return;
+          }
           clearDraft(key);
-          setConfirmDiscard(false);
           onClose();
         }}
       />

@@ -62,7 +62,7 @@ const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(function 
 
   React.useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
-    value: () => viewRef.current?.state.doc.toString() ?? initial,
+    value: () => viewRef.current?.state.sliceDoc() ?? initial,
   }), [initial]);
 
   React.useEffect(() => {
@@ -100,7 +100,9 @@ const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(function 
             indentWithTab,
           ]),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) callbacks.current.onChange(update.state.doc.toString());
+            // important: `doc.toString()` joins with \n whatever the separator, which rewrote
+            // every line of a Windows file on save.
+            if (update.docChanged) callbacks.current.onChange(update.state.sliceDoc());
           }),
         ],
       }),
