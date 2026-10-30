@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
-from app.routers import file_transfer, integrations, tags, tenant_access
+from app.routers import integrations, tags, tenant_access
 from app.services import migration_fence
 from app.services.lxd import instance as instance_module
 from app.services.lxd.instance import InstanceManager
@@ -369,45 +369,6 @@ def test_raw_proxy_recognizes_project_dependency_writes() -> None:
     )
     assert integrations._raw_proxy_has_cluster_wide_write(pool_update) is True
     assert integrations._raw_proxy_has_cluster_wide_write(instance_stop) is False
-
-
-@pytest.mark.asyncio
-async def test_dashboard_file_upload_checks_fence_before_reading_body(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _UnreadUpload:
-        filename = "payload.txt"
-
-        async def read(self, _limit: int) -> bytes:
-            pytest.fail("request body was read after migration fence refusal")
-
-    monkeypatch.setattr(
-        file_transfer,
-        "verify_instance_view_access",
-        lambda _host, project, _name: project,
-    )
-
-    async def _fenced(**_kwargs: Any) -> None:
-        raise MigrationFenceConflict()
-
-    monkeypatch.setattr(file_transfer, "assert_instance_not_migration_fenced", _fenced)
-
-    with pytest.raises(HTTPException) as exc:
-        await file_transfer.push_file_to_instance(
-            file=_UnreadUpload(),
-            host="cluster-a",
-            instance_name="web-01",
-            project="tenant-a",
-            dest_path="/tmp/payload.txt",
-            mode="0644",
-            uid=0,
-            gid=0,
-            lxd_service=SimpleNamespace(),
-            _=None,
-        )
-
-    assert exc.value.status_code == 409
-    assert exc.value.detail == MIGRATION_FENCE_DETAIL
 
 
 @pytest.mark.asyncio

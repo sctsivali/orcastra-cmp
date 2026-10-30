@@ -1,4 +1,4 @@
-"""File transfer and resource tags must authorize the exact project they act on."""
+"""Resource tags must authorize the exact project they act on."""
 
 import asyncio
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.core import org_scope
 from app.core.config import get_settings
 from app.models.schemas import BulkTagAssignRequest
-from app.routers import file_transfer, tags
+from app.routers import tags
 
 
 HOST = "shared-cluster"
@@ -29,18 +29,6 @@ def partner_scope():
         org_scope._tenant_acl_var.reset(acl)
         org_scope._visible_projects_var.reset(projects)
         org_scope._allowed_clusters_var.reset(allowed)
-
-
-class _Upload:
-    filename = "payload.bin"
-
-    def __init__(self, payload: bytes = b"payload") -> None:
-        self.payload = payload
-        self.read_sizes: list[int] = []
-
-    async def read(self, size: int = -1) -> bytes:
-        self.read_sizes.append(size)
-        return self.payload[:size]
 
 
 class _TagService:
@@ -81,81 +69,6 @@ def _bulk(
         resource_host=host,
         resource_project=project,
     )
-
-
-def test_file_upload_denies_a_foreign_project_before_reading_the_body():
-    upload = _Upload()
-
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(
-            file_transfer.push_file_to_instance(
-                file=upload,
-                host=HOST,
-                instance_name=INSTANCE,
-                project=FOREIGN_PROJECT,
-                dest_path="/tmp/payload.bin",
-                mode="0644",
-                uid=0,
-                gid=0,
-                lxd_service=SimpleNamespace(),
-                _=None,
-            )
-        )
-
-    assert exc.value.status_code == 403
-    assert upload.read_sizes == []
-
-
-def test_file_upload_carries_one_normalized_project_and_bounds_the_read(monkeypatch):
-    upload = _Upload()
-    pushed: list[tuple] = []
-    audit: list[dict] = []
-
-    monkeypatch.setattr(
-        file_transfer,
-        "_push_file_to_instance",
-        lambda *args: pushed.append(args) or {"status": "ok"},
-    )
-    monkeypatch.setattr(
-        file_transfer.activity_logger,
-        "log_activity",
-        lambda **kwargs: audit.append(kwargs),
-    )
-
-    response = asyncio.run(
-        file_transfer.push_file_to_instance(
-            file=upload,
-            host=HOST,
-            instance_name=INSTANCE,
-            project=f" {OWN_PROJECT} ",
-            dest_path="/tmp/payload.bin",
-            mode="0644",
-            uid=0,
-            gid=0,
-            lxd_service=SimpleNamespace(),
-            _=None,
-        )
-    )
-
-    assert response["success"] is True
-    assert upload.read_sizes == [file_transfer.MAX_UPLOAD_SIZE + 1]
-    assert pushed[0][3] == OWN_PROJECT
-    assert len(audit) == 1
-    assert audit[0]["target_project"] == OWN_PROJECT
-
-
-def test_file_upload_accepts_the_exact_decimal_100_mb_boundary():
-    assert file_transfer.MAX_UPLOAD_SIZE == 100_000_000
-
-    file_transfer._validate_upload_size(100_000_000)
-
-
-def test_file_upload_rejects_one_byte_over_the_decimal_100_mb_boundary():
-    with pytest.raises(HTTPException) as exc:
-        file_transfer._validate_upload_size(100_000_001)
-
-    assert exc.value.status_code == 413
-    assert exc.value.detail == "File too large. Maximum size is 100 MB."
 
 
 def test_tag_body_cannot_bypass_the_shared_cluster_project_bound():

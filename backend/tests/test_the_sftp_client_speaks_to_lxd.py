@@ -3,13 +3,14 @@
 import asyncio
 import hashlib
 import stat
+import struct
 
 import pytest
 
 from app.services.instance_files import sftp_codec as codec
 from app.services.instance_files.errors import GuestFileError, from_sftp_status
 from app.services.instance_files.sftp_client import is_directory, is_regular, is_symlink
-from tests._fake_sftp_server import FakeGuest, connected
+from tests._fake_sftp_server import FakeGuest, connected, frame, status_body
 
 
 async def test_a_directory_is_read_in_batches_with_its_attributes():
@@ -67,12 +68,10 @@ async def test_a_short_read_is_filled_before_later_bytes_are_given_out():
 
     async def script(packet_type, request_id, cursor):
         if packet_type == codec.FXP_READ:
-            handle = cursor.string(256)
+            cursor.string(256)
             offset = cursor.u64()
             length = min(cursor.u32(), 1000)
             piece = payload[offset : offset + length]
-            import struct
-            from tests._fake_sftp_server import frame, status_body
 
             if not piece:
                 return frame(status_body(request_id, codec.FX_EOF))

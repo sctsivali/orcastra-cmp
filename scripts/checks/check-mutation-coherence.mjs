@@ -422,13 +422,6 @@ const RAW_FETCH_WRITE_ALLOWLIST = [
     endpointMarker: "/instance-files/preview-image",
     markers: ["response.blob()", "getAccessToken()", "response.ok"],
   },
-  {
-    id: "multipart-guest-file-push",
-    path: "frontend/src/lib/file-transfer-api.ts",
-    method: "POST",
-    endpointMarker: "/file-transfer/push",
-    markers: ["new FormData()", "getAccessToken()", "response.ok"],
-  },
 ];
 const seenRawFetchWrites = new Set();
 

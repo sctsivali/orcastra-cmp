@@ -1134,9 +1134,6 @@ Ensure your client certificates are properly configured.
     app.include_router(monitoring_ws_router, prefix=settings.api_prefix)
     
     # File Transfer Router (Upload files to LXD instances)
-    from app.routers.file_transfer import router as file_transfer_router
-    app.include_router(file_transfer_router, prefix=settings.api_prefix)
-
     from app.routers.instance_file_transfer import (
         router as instance_file_transfer_router,
         ticket_router as instance_file_ticket_router,

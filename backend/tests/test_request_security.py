@@ -72,7 +72,7 @@ class RequestSecurityInspectionTests(unittest.TestCase):
     def test_allows_lxd_dest_path_query(self) -> None:
         decision = inspect_request_target(
             "POST",
-            "/api/v1/file-transfer/push",
+            "/api/v1/instance-files/uploads",
             "dest_path=%2Froot%2F..%2Ftmp%2Fupload.txt",
         )
 

@@ -27,7 +27,6 @@ APP = Path(__file__).resolve().parents[1] / "app"
 # when you convert a site; never raise one.
 BASELINE: Dict[str, int] = {
     "routers/cluster_registration.py": 2,
-    "routers/file_transfer.py": 1,
     "routers/image_uploads.py": 3,
     "routers/ipam.py": 1,
     "routers/iso_uploads.py": 3,

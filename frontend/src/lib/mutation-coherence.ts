@@ -388,11 +388,6 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     queryFamilies: ["tasks", "instances", "instanceDetails"],
     apiCalls: ["tasksAPI.killConsoleSession"],
   },
-  "file-transfer.push": {
-    completion: "response",
-    queryFamilies: ["instanceDetails", "tasks"],
-    apiCalls: ["fileTransferAPI.push"],
-  },
   // The answer is Vault's: progress moves at once, and an unseal hands the notice a fresh status.
   "vault.unseal": {
     completion: "response",

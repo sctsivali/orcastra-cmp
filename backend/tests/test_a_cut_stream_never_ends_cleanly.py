@@ -7,7 +7,6 @@ a browser reports as a finished download of a corrupt file. Live on 2026-10-30 w
 killed mid-archive: 44 MB of gzip with no end marker, terminal chunk present.
 """
 
-import pytest
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse

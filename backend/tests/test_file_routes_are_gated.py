@@ -286,3 +286,28 @@ async def test_a_missing_instance_is_an_answer_not_a_fault(monkeypatch):
         await tunnel._running_record(HOST, "default", "gone")
     assert refused.value.code == "instance_not_found"
     assert refused.value.status == 404
+
+
+async def test_a_chunk_for_a_fenced_instance_is_refused_before_its_body_is_read(monkeypatch):
+    from app.services.migration_fence import MigrationFenceConflict
+
+    class _Unread:
+        def stream(self):
+            pytest.fail("the body was read after the fence refused")
+
+    async def fenced(**kwargs):
+        raise MigrationFenceConflict("Migration Center owns this instance")
+
+    async def no_grant(user, host):
+        return None
+
+    monkeypatch.setattr(transfer, "verify_file_access", lambda host, project, name: project)
+    monkeypatch.setattr(transfer, "_session_of", lambda *args: SimpleNamespace())
+    monkeypatch.setattr(file_session, "sensitive_gate", no_grant)
+    monkeypatch.setattr(file_session, "assert_instance_not_migration_fenced", fenced)
+    with pytest.raises(HTTPException) as refused:
+        await transfer.write_upload_chunk(
+            request=_Unread(), host=HOST, project="default", instance_name=INSTANCE,
+            upload_token="t", upload_offset=0, content_length=1, user=None,
+        )
+    assert refused.value.detail["error"] == "migration_fenced"

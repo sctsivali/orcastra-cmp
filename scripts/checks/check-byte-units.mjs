@@ -107,21 +107,12 @@ const operationSummary = readFileSync(
 if (!operationSummary.includes("formatLxdLimit(disk)")) {
   failures.push("instance specification root-disk readback must preserve the LXD binary unit");
 }
-const fileTransfer = readFileSync(
-  join(root, "backend", "app", "routers", "file_transfer.py"),
+const fileLimits = readFileSync(
+  join(root, "backend", "app", "core", "config.py"),
   "utf8",
 );
-for (const snippet of [
-  "MAX_UPLOAD_SIZE_MB = 100",
-  "MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_MB * 1_000_000",
-  'detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE_MB} MB."',
-]) {
-  if (!fileTransfer.includes(snippet)) {
-    failures.push(`backend/app/routers/file_transfer.py: missing decimal file-size contract ${JSON.stringify(snippet)}`);
-  }
-}
-if (/MAX_UPLOAD_SIZE\s*=\s*100\s*\*\s*1024/.test(fileTransfer)) {
-  failures.push("backend/app/routers/file_transfer.py: MB-labelled upload limit must use decimal bytes");
+if (!fileLimits.includes("default=20_000_000_000,")) {
+  failures.push("the file explorer transfer limit must stay in decimal bytes, matching its label");
 }
 const extensionManifest = readFileSync(
   join(root, "backend", "app", "core", "extension_manifest.py"),
