@@ -54,6 +54,10 @@ export function forgetUpload(id: string): void {
 }
 
 export function clearManifest(): void {
+  // important: the first sign-in of a page load arrives as an actor change too, and clearing then
+  // would destroy what a reload exists to resume. Only an actor who was here is forgotten.
+  if (!currentActor) return;
+  currentActor = "";
   try {
     window.sessionStorage.removeItem(KEY);
   } catch {
