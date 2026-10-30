@@ -60,6 +60,10 @@ _POLL_SECONDS = 0.05
 _SEAL_TTL_SECONDS = 120
 _KEY_CONTEXT = b"orcastra:spice-session:v1"
 _CONNECT_TIMEOUT = 2.0
+# Compare and act in one step: a GET followed by EXPIRE or DEL let a leaving viewer delete the mark
+# a newer viewer had written in between.
+_KEEP_IF_OURS = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('EXPIRE', KEYS[1], ARGV[2]) end return 0"
+_FORGET_IF_OURS = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0"
 _SOCKET_TIMEOUT = 2.0
 
 
@@ -269,21 +273,17 @@ class SpiceSessionStore:
 
     async def keep_display(self, host: str, project: str, instance: str, operation_id: str) -> None:
         """Renew the mark while it is still ours; a newer viewer's mark is left alone."""
-        if await self.display_of(host, project, instance) != operation_id:
-            return
         key = _display_key(host, project, instance)
         if self._client is not None:
-            await self._client.expire(key, RECORD_TTL_SECONDS)
-        else:
+            await self._client.eval(_KEEP_IF_OURS, 1, key, operation_id, RECORD_TTL_SECONDS)
+        elif self._local_get(key) == operation_id:
             self._local_set(key, operation_id, RECORD_TTL_SECONDS)
 
     async def forget_display(self, host: str, project: str, instance: str, operation_id: str) -> None:
-        if await self.display_of(host, project, instance) != operation_id:
-            return
         key = _display_key(host, project, instance)
         if self._client is not None:
-            await self._client.delete(key)
-        else:
+            await self._client.eval(_FORGET_IF_OURS, 1, key, operation_id)
+        elif self._local_get(key) == operation_id:
             self._local.pop(key, None)
 
     async def retract(self, group: str) -> None:

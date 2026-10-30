@@ -357,11 +357,16 @@ class ConsoleProxy:
             tasks.add(asyncio.create_task(self._drain_control(), name="console.control"))
         if self._watch_power is not None:
             tasks.add(asyncio.create_task(self._power_down(self._watch_power), name="console.power"))
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        self._window.release()
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # note: asyncio.wait leaves its tasks running when the relay itself is cancelled, and
+            # the power watch would then hold its events subscription until the instance next
+            # powered down.
+            self._window.release()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         ended = next(iter(done))
         error = ended.exception() if not ended.cancelled() else None
@@ -481,10 +486,15 @@ class ConsoleProxy:
             try:
                 await self._fold_member_bytes(store, self.group)
                 await store.retract(self.group)
-                if self._operation_id:
-                    await store.forget_display(self.host, self.project, self.instance_name, self._operation_id)
             except Exception as exc:  # noqa: BLE001 - the record expires on its own
                 logger.debug("SPICE session retract failed: %s", type(exc).__name__)
+        if self.role == "owner" and self._operation_id:
+            # Also when setup failed after the mark was written: a stale mark would read a later
+            # drop of the real viewer as a takeover and end it on 4409.
+            try:
+                await get_spice_session_store().forget_display(self.host, self.project, self.instance_name, self._operation_id)
+            except Exception as exc:  # noqa: BLE001 - the mark expires on its own
+                logger.debug("SPICE display mark cleanup failed: %s", type(exc).__name__)
         if self._session is not None:
             get_session_tracker().unregister(self._session.session_id)
 

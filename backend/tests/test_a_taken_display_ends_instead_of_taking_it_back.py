@@ -44,6 +44,7 @@ class Cluster:
         self.events: List[str] = []
         self.sockets: Dict[str, List[FakeLxdSocket]] = {}
         self.count = 0
+        self.refuse_data = False
 
     def open_console_operation(self, instance, host, project, console_type, width, height):
         self.count += 1
@@ -56,6 +57,8 @@ class Cluster:
 
     async def open_socket(self, url: str, _ssl: Any, *, timeout: float, max_size: Any = None) -> FakeLxdSocket:
         self.events.append(f"socket {url.rsplit('secret=', 1)[-1]}")
+        if self.refuse_data and "secret=data" in url:
+            raise ConnectionError("LXD refused the data socket")
         socket = FakeLxdSocket(url)
         self.sockets.setdefault(url, []).append(socket)
         return socket
@@ -176,3 +179,64 @@ async def test_a_viewer_without_a_display_group_never_claims_a_takeover(cluster)
     await task
 
     assert browser.closed[0] == 1011
+
+
+async def test_an_owner_whose_setup_failed_leaves_no_mark(cluster):
+    """The mark goes in before the sockets; a failed connect must not leave it behind for 60 s."""
+    cluster.refuse_data = True
+    browser = FakeBrowser()
+
+    await viewer(browser, "group-a").run()
+
+    assert "mark op-1" in cluster.events
+    assert browser.closed[0] == 1011
+    assert await cluster.store.display_of("nuc2", "default", "vm-a") is None
+
+
+async def test_a_cancelled_relay_stops_its_power_watch(cluster):
+    watching = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def watch(host, instance, project):
+        watching.set()
+        try:
+            await asyncio.get_running_loop().create_future()
+        finally:
+            stopped.set()
+
+    browser = FakeBrowser()
+    proxy = console_proxy.ConsoleProxy(browser, "vm-a", "nuc2", "default", "vga", group="group-a", watch_power=watch)
+    task = asyncio.create_task(proxy.run())
+    await asyncio.wait_for(watching.wait(), 2)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert stopped.is_set(), "the power watch outlived its relay"
+
+
+async def test_the_mark_is_renewed_and_forgotten_in_one_redis_step():
+    """GET then EXPIRE or DEL let a leaving viewer delete a newer viewer's mark in between."""
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls: List[tuple] = []
+
+        async def eval(self, script, numkeys, *args):
+            self.calls.append((script, numkeys, args))
+            return 1
+
+        def __getattr__(self, name):
+            raise AssertionError(f"a separate {name} call is not atomic")
+
+    store = SpiceSessionStore()
+    store._client = Client()
+    await store.keep_display("nuc2", "default", "vm-a", "op-1")
+    await store.forget_display("nuc2", "default", "vm-a", "op-1")
+
+    (keep, forget) = store._client.calls
+    assert "GET" in keep[0] and "EXPIRE" in keep[0] and keep[1] == 1 and keep[2][1:] == ("op-1", 60)
+    assert "GET" in forget[0] and "DEL" in forget[0] and forget[2][1:] == ("op-1",)
+    assert keep[2][0] == forget[2][0] and keep[2][0].startswith("orcastra:spice:display:")
+
