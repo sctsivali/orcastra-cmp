@@ -320,3 +320,121 @@ async def test_a_chunk_for_a_fenced_instance_is_refused_before_its_body_is_read(
             upload_token="t", upload_offset=0, upload_length=1, user=None,
         )
     assert refused.value.detail["error"] == "migration_fenced"
+
+
+@pytest.mark.parametrize(
+    "method,interactive,refused",
+    [
+        pytest.param("POST", False, True, id="a POST read is a change"),
+        pytest.param("GET", True, True, id="the ticket route redeems as interactive"),
+        pytest.param("GET", False, False, id="why reads are not GET: this one would pass"),
+    ],
+)
+def test_a_cluster_past_its_paid_term_refuses_files_like_a_console(partner_scope, monkeypatch, method, interactive, refused):
+    from app.core import request_context
+
+    context = SimpleNamespace(method=method, path="/api/v1/instance-files/list")
+    monkeypatch.setattr(request_context, "get_request_context", lambda: context)
+    frozen = org_scope._read_only_clusters_var.set(frozenset({HOST}))
+    flag = org_scope._interactive_var.set(interactive)
+    try:
+        if refused:
+            with pytest.raises(HTTPException) as denied:
+                verify_file_access(HOST, OWN_PROJECT, INSTANCE)
+            assert denied.value.status_code == 403
+        else:
+            assert verify_file_access(HOST, OWN_PROJECT, INSTANCE) == OWN_PROJECT
+    finally:
+        org_scope._interactive_var.reset(flag)
+        org_scope._read_only_clusters_var.reset(frozen)
+
+
+@pytest.mark.parametrize(
+    "server,version,supported",
+    [
+        ("lxd", "5.21.8", True),
+        ("lxd", "5.21.6", True),
+        ("lxd", "5.21.5", False),
+        ("lxd", "5.0.8", True),
+        ("lxd", "5.0.7", False),
+        ("lxd", "4.0.12", True),
+        ("lxd", "6.9", True),
+        ("lxd", "6.8", False),
+        ("incus", "7.3.0", True),
+        ("incus", "6.0.7", False),
+        ("lxd", "not-a-version", False),
+        ("", "", False),
+    ],
+)
+def test_only_a_patched_daemon_is_reached(server, version, supported):
+    from app.services.instance_files.tunnel import is_supported_server
+
+    assert is_supported_server(server, version) is supported
+
+
+async def test_a_read_under_a_grant_always_leaves_a_record(monkeypatch):
+    written = []
+
+    async def grant(user, host):
+        return 77
+
+    async def no_fence(*args):
+        return None
+
+    async def record(action, **kwargs):
+        written.append((action, kwargs["details"]))
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def fake_guest(*args, **kwargs):
+        yield object()
+
+    monkeypatch.setattr(file_session, "sensitive_gate", grant)
+    monkeypatch.setattr(file_session, "fence_gate", no_fence)
+    monkeypatch.setattr(file_session, "write", record)
+    monkeypatch.setattr(file_session, "open_guest", fake_guest)
+    async with file_session.guest_session(SimpleNamespace(user_id="admin"), HOST, "default", INSTANCE, route="stat"):
+        pass
+    assert written == [("file.browse.granted", {"route": "stat", "break_glass_grant_id": 77})]
+
+
+def test_every_change_writes_an_audit_record():
+    unaudited = {"list_directory", "stat_path", "summarize", "create_download", "redeem_download", "upload_status", "write_upload_chunk"}
+    for filename in ("instance_files.py", "instance_file_transfer.py"):
+        for node in _handlers(filename):
+            if node.name not in unaudited:
+                assert "audited(" in ast.unparse(node), node.name
+
+
+def test_a_nul_in_a_path_is_refused_before_anything_is_audited():
+    from pydantic import ValidationError
+
+    from app.models.instance_file_schemas import RenameBody
+
+    with pytest.raises(ValidationError):
+        PathBody(path="/x\x00")
+    with pytest.raises(ValidationError):
+        RenameBody(source="/a", target="/b\x00")
+
+
+def test_the_journal_never_holds_a_nul():
+    from app.services.task_journal.vocabulary import bounded_json
+
+    assert bounded_json({"path": "/x\x00y", "nested": {"a": ["\x00b"]}}) == {"path": "/xy", "nested": {"a": ["b"]}}
+
+
+async def test_a_selection_cannot_become_a_ticket_that_fills_redis():
+    from pydantic import ValidationError
+
+    from app.models.instance_file_schemas import DownloadBody
+
+    # Each private code point counts once here and takes 12 bytes as JSON.
+    with pytest.raises(ValidationError):
+        DownloadBody(paths=["/" + "\U0010fc80" * 8000] * 100, archive=True)
+    user = SimpleNamespace(user_id="u1", email="u@x", name="U", groups=[], roles=[], raw_claims={}, session_exp=None)
+    with pytest.raises(file_ticket.TicketTooLarge):
+        await file_ticket.mint(
+            user, host=HOST, project="default", instance=INSTANCE, paths=["/" + "\U0010fc80" * 4000] * 10,
+            archive=True, name="x", size=None, op_id="op",
+        )

@@ -15,8 +15,9 @@ import hashlib
 import logging
 import re
 import ssl
+import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout
@@ -42,6 +43,13 @@ _MAX_ERROR_BODY_BYTES = 8 * 1024
 _STATUS_LINE = re.compile(rb"^HTTP/1\.[01] (\d{3})")
 _CONTENT_LENGTH = re.compile(rb"(?im)^content-length:\s*(\d+)\s*$")
 
+# Releases carrying the image-symlink fixes (Canonical advisory of 2026-07-31; Incus 7.3.0).
+_LXD_LTS_FLOORS = {(4, 0): (4, 0, 12), (5, 0): (5, 0, 8), (5, 21): (5, 21, 6)}
+_LXD_FLOOR = (6, 9, 0)
+_INCUS_FLOOR = (7, 3, 0)
+_SERVER_CHECK_SECONDS = 600.0
+_server_checks: Dict[str, Tuple[float, bool]] = {}
+
 
 async def _running_record(host: str, project: str, instance_name: str) -> Dict[str, Any]:
     from app.services.lxd_ws import SessionSetupError, read_instance, session_io
@@ -64,6 +72,56 @@ async def _running_record(host: str, project: str, instance_name: str) -> Dict[s
     if record.get("status_code") != STATUS_RUNNING:
         raise not_running(str(record.get("status") or ""))
     return record
+
+
+def parse_version(text: str) -> Optional[Tuple[int, ...]]:
+    match = re.match(r"^\s*(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    return tuple(int(part or 0) for part in match.groups()) if match else None
+
+
+def is_supported_server(server: str, version: str) -> bool:
+    """Whether this daemon carries the fixes for files reached through a symlink in an image.
+
+    Stopped instances are refused, but a stop can race the upgrade, so a daemon that follows such a
+    link from the host must not be reachable through here at all.
+    """
+    parsed = parse_version(version)
+    if parsed is None:
+        return False
+    line = parsed[:2]
+    if server == "incus":
+        return parsed >= _INCUS_FLOOR
+    if line in _LXD_LTS_FLOORS:
+        return parsed >= _LXD_LTS_FLOORS[line]
+    return parsed >= _LXD_FLOOR
+
+
+async def _require_supported_server(host: str) -> None:
+    from app.services.lxd_ws import lxd_client, session_io
+
+    cached = _server_checks.get(host)
+    now = time.monotonic()
+    if cached is None or now - cached[0] > _SERVER_CHECK_SECONDS:
+
+        def read() -> bool:
+            client = lxd_client(host)
+            if client is None:
+                raise ValueError("no client")
+            environment = (client.api.get().json().get("metadata") or {}).get("environment") or {}
+            return is_supported_server(str(environment.get("server") or ""), str(environment.get("server_version") or ""))
+
+        try:
+            supported = await session_io(read, label="file_server_version", host=host)
+        except BlockingPoolFull as exc:
+            raise busy() from exc
+        except Exception as exc:  # noqa: BLE001 - not knowing is not a yes
+            raise cluster_unreachable() from exc
+        cached = (now, supported)
+        _server_checks[host] = cached
+    if not cached[1]:
+        raise GuestFileError(
+            "unsupported_server", 503, "This cluster runs a version too old for safe file access. Upgrade LXD."
+        )
 
 
 async def _material(host: str) -> Tuple[str, ssl.SSLContext, str]:
@@ -152,6 +210,7 @@ async def open_guest(
     op_timeout: float = DEFAULT_OP_TIMEOUT,
 ) -> AsyncIterator[SftpClient]:
     """An SFTP client into a Running instance. Leaving the block ends the connection."""
+    await _require_supported_server(host)
     record = await _running_record(host, project, instance_name)
     base, context, pin = await _material(host)
     target = urlsplit(base)
@@ -171,12 +230,15 @@ async def open_guest(
         logger.info("File tunnel to %s did not connect: %s", host, type(exc).__name__)
         raise cluster_unreachable() from exc
     try:
-        # important: before a byte of HTTP. The client certificate has been shown by now, which is
-        # public, but no request naming a guest leaves until the peer is proved.
+        # important: before a byte of HTTP on this socket. The client certificate has been shown by
+        # now, which is public, and nothing that opens a guest leaves until the peer is proved.
         if not _matches_pin(writer, pin):
             logger.warning("File tunnel to %s refused: certificate does not match the pin", host)
             raise cluster_not_pinned()
         await _upgrade(reader, writer, target.netloc, project, instance_name, record)
+        # note: LXD has started its side by now, so this narrows a stop racing the upgrade rather
+        # than closing it, and the supported-version floor is what makes that race harmless.
+        await _running_record(host, project, instance_name)
         async with SftpClient(reader, writer, op_timeout=op_timeout) as client:
             yield client
     finally:

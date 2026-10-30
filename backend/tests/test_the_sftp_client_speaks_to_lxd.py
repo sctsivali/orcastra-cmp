@@ -9,8 +9,12 @@ import pytest
 
 from app.services.instance_files import sftp_codec as codec
 from app.services.instance_files.errors import GuestFileError, from_sftp_status
-from app.services.instance_files.sftp_client import is_directory, is_regular, is_symlink
+from app.services.instance_files.sftp_client import Budget, is_directory, is_regular, is_symlink
 from tests._fake_sftp_server import FakeGuest, connected, frame, status_body
+
+
+def _budget() -> Budget:
+    return Budget(entries=10_000, seconds=30)
 
 
 async def test_a_directory_is_read_in_batches_with_its_attributes():
@@ -20,7 +24,7 @@ async def test_a_directory_is_read_in_batches_with_its_attributes():
         guest.add_file(b"/big/f%03d" % index, b"x" * index)
     client, task = await connected(guest)
     async with client:
-        batches = [batch async for batch in client.iter_directory(b"/big")]
+        batches = [batch async for batch in client.iter_directory(b"/big", _budget())]
     names = [entry for batch in batches for entry in batch]
     assert len(batches) == 3
     assert len(names) == 250
@@ -36,7 +40,7 @@ async def test_stopping_a_listing_early_closes_its_handle():
         guest.add_file(b"/big/f%03d" % index)
     client, task = await connected(guest)
     async with client:
-        stream = client.iter_directory(b"/big")
+        stream = client.iter_directory(b"/big", _budget())
         await stream.__anext__()
         await stream.aclose()
         attrs = await client.lstat(b"/big")

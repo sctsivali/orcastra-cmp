@@ -7,13 +7,12 @@ the client calls again. The tree itself is the progress record, which is why the
 
 import asyncio
 import logging
-import time
 from contextlib import aclosing
 from typing import Any, Dict, List
 
 from .errors import GuestFileError
-from .paths import from_guest, is_safe_entry, refuse_protected, to_guest
-from .sftp_client import SftpClient, is_directory
+from .paths import MAX_PATH_BYTES, from_guest, is_safe_entry, refuse_protected, to_guest
+from .sftp_client import Budget, BudgetSpent, SftpClient, is_directory
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +38,16 @@ async def delete_path(
         await guest.rmdir(raw)
         return {"deleted": 1, "failed": [], "failed_count": 0, "remaining": False}
 
-    deadline = time.monotonic() + budget_seconds
+    budget = Budget(entries=max_deletions * 2, seconds=budget_seconds)
     gate = asyncio.Semaphore(_PARALLEL)
     deleted = 0
     failed: List[str] = []
     failed_count = 0
     remaining = False
     visited: List[bytes] = []
-    stack = [raw]
+    # The real path, so a folder swapped for a link during the walk can be told from the original.
+    base = await guest.realpath(raw)
+    stack = [base]
 
     def note_failure(target: bytes) -> None:
         nonlocal failed_count
@@ -66,25 +67,37 @@ async def delete_path(
                 if failure.code != "not_found":
                     note_failure(target)
 
-    while stack:
-        if time.monotonic() >= deadline or deleted >= max_deletions:
-            remaining = True
-            break
-        folder = stack.pop()
-        visited.append(folder)
-        children: List[bytes] = []
-        async with aclosing(guest.iter_directory(folder)) as batches:
-            async for batch in batches:
-                for item in batch:
-                    if not is_safe_entry(item.filename):
-                        continue
-                    child = folder.rstrip(b"/") + b"/" + item.filename
-                    # note: a link is removed, never entered: readdir reports it as a link.
-                    if is_directory(item.attrs):
-                        stack.append(child)
-                    else:
-                        children.append(child)
-        await asyncio.gather(*(remove(child) for child in children))
+    try:
+        while stack:
+            if deleted >= max_deletions:
+                raise BudgetSpent()
+            folder = stack.pop()
+            # important: LXD's server follows links in the middle of a path, so `rm -rf`'s classic
+            # race applies: a folder swapped for a link to /etc would have /etc emptied. SFTP has no
+            # unlinkat, so this narrows that window to one directory rather than closing it.
+            if await guest.realpath(folder) != folder:
+                note_failure(folder)
+                continue
+            visited.append(folder)
+            children: List[bytes] = []
+            async with aclosing(guest.iter_directory(folder, budget)) as batches:
+                async for batch in batches:
+                    for item in batch:
+                        if not is_safe_entry(item.filename):
+                            continue
+                        child = folder.rstrip(b"/") + b"/" + item.filename
+                        if len(child) > MAX_PATH_BYTES:
+                            note_failure(folder)
+                            continue
+                        budget.hold(len(child))
+                        # note: a link is removed, never entered: readdir reports it as a link.
+                        if is_directory(item.attrs):
+                            stack.append(child)
+                        else:
+                            children.append(child)
+            await asyncio.gather(*(remove(child) for child in children))
+    except BudgetSpent:
+        remaining = True
 
     for folder in reversed(visited):
         try:

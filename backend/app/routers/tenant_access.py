@@ -12,7 +12,7 @@ Permissions model:
   - operate:       Start, stop, restart, freeze/unfreeze VMs
   - console:       Open graphical console or terminal
   - snapshot:      Create, restore, delete snapshots
-  - file_transfer: Upload/download files to/from VM
+  - file_transfer: Browse, change, upload and download files in an instance, as root
 """
 
 import logging

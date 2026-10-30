@@ -155,3 +155,32 @@ async def test_a_link_chosen_as_the_root_means_its_target():
     guest.add_link(b"/chosen", b"/real")
     archive = await _archive(guest, ["/chosen"])
     assert archive.extractfile("chosen/inside").read() == b"data"
+
+
+async def test_two_links_that_each_pass_cannot_chain_out(tmp_path):
+    """Found by the security review with GNU tar: `esc` walked through `up` and left the tree."""
+    guest = FakeGuest()
+    guest.add_dir(b"/top")
+    guest.add_dir(b"/top/a")
+    guest.add_dir(b"/top/a/b")
+    guest.add_dir(b"/top/a/b/c")
+    guest.add_link(b"/top/a/b/c/up", b"../../..")
+    guest.add_link(b"/top/a/b/c/esc", b"up/../../../../outside-secret")
+    archive = await _archive(guest, ["/top"])
+    assert "top/a/b/c/esc" not in archive.getnames()
+
+
+@pytest.mark.parametrize("target", [b"../../..\x00/x", b"..\\..\\x", b"C:\\Windows\\System32", b"\\\\evil\\share", b"a/../../b"])
+def test_a_link_target_a_reader_could_split_is_refused(target):
+    assert not _link_stays_inside(b"top/a/link", target)
+
+
+async def test_a_name_an_extractor_on_windows_would_split_is_left_out():
+    guest = FakeGuest()
+    guest.add_dir(b"/app")
+    guest.add_file(b"/app/..\\..\\evil.bat", b"x")
+    guest.add_file(b"/app/line\nbreak", b"x")
+    guest.add_file(b"/app/fine", b"x")
+    archive = await _archive(guest, ["/app"])
+    assert archive.getnames()[:2] == ["app", "app/fine"]
+    assert "unsafe entry name" in archive.extractfile("SKIPPED.txt").read().decode()

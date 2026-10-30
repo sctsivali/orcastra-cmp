@@ -7,14 +7,14 @@ the deployment. The body here is `<u32 manifest length><manifest JSON><file byte
 
 import json
 import struct
-from typing import Any, AsyncIterator, Dict, List, Set
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Set
 
 from . import sftp_codec as codec
 from .errors import GuestFileError, invalid_path, too_large
 from .operations import make_directory
 from .paths import clean_name, clean_path, is_pseudo, to_guest
 from .sftp_client import SftpClient
-from .uploads import commit_temp
+from .uploads import BODY_STALL_SECONDS, commit_open_temp, stalled_after
 from .uploads_temp import TEMP_LIFETIME_SECONDS, temp_name
 
 MAX_BUNDLE_FILES = 256
@@ -58,9 +58,14 @@ def _parse_manifest(raw: bytes) -> Dict[str, Any]:
 
 
 async def receive_bundle(
-    guest: SftpClient, stream: AsyncIterator[bytes], *, now: int
+    guest: SftpClient,
+    stream: AsyncIterator[bytes],
+    *,
+    now: int,
+    still_allowed: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
-    body = _Body(stream)
+    """Write a bundle. `still_allowed` runs between files, since a slow body can outlast a fence."""
+    body = _Body(stalled_after(stream, BODY_STALL_SECONDS))
     length = struct.unpack(">I", await body.read(4))[0]
     if length > MAX_MANIFEST_BYTES:
         raise too_large(MAX_MANIFEST_BYTES)
@@ -93,6 +98,8 @@ async def receive_bundle(
         # The bytes are read first: a refused file must not shift every later file's offset.
         payload = await body.read(entry["size"])
         name = str(entry.get("path") or "")
+        if still_allowed is not None:
+            await still_allowed()
         try:
             dest = _relative(base, name)
             await ensure_folder(dest.rsplit("/", 1)[0] or "/")
@@ -119,10 +126,13 @@ async def _place(guest: SftpClient, dest: str, payload: bytes, *, replace: bool,
     handle = await guest.open(temp, codec.PFLAG_WRITE | codec.PFLAG_CREAT | codec.PFLAG_EXCL, mode=0o600)
     try:
         await guest.write_all(handle, 0, payload)
-        await guest.close(handle)
-        await commit_temp(guest, temp, to_guest(dest), replace=replace)
+        await commit_open_temp(guest, handle, temp, to_guest(dest), replace=replace)
     except GuestFileError as failure:
         if failure.status < 500 or failure.code == "no_space":
+            try:
+                await guest.close(handle)
+            except GuestFileError:
+                pass
             try:
                 await guest.remove(temp)
             except GuestFileError:

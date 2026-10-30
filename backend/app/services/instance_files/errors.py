@@ -109,6 +109,10 @@ def no_space() -> GuestFileError:
     return GuestFileError("no_space", 507, "The guest does not have enough free space.")
 
 
+def path_changed() -> GuestFileError:
+    return GuestFileError("path_changed", 409, "This path changed while it was being used. Nothing was altered.")
+
+
 def protected_path() -> GuestFileError:
     return GuestFileError("protected_path", 409, "This system path cannot be changed from here.")
 

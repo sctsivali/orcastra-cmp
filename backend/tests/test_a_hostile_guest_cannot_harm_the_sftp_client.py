@@ -14,6 +14,7 @@ import pytest
 
 from app.services.instance_files import sftp_codec as codec
 from app.services.instance_files.errors import GuestFileError
+from app.services.instance_files.sftp_client import Budget
 from tests._fake_sftp_server import FakeGuest, connected, frame, status_body
 
 
@@ -148,7 +149,7 @@ async def test_a_stall_at_any_operation_times_out_and_ends_the_connection(stalle
             if stalled == codec.FXP_LSTAT:
                 await client.lstat(b"/f")
             elif stalled == codec.FXP_OPENDIR:
-                async for _ in client.iter_directory(b"/"):
+                async for _ in client.iter_directory(b"/", Budget(entries=100, seconds=30)):
                     pass
             elif stalled == codec.FXP_READ:
                 async for _ in client.read_stream(handle, limit=10):
@@ -207,7 +208,7 @@ async def test_an_empty_directory_batch_is_refused_so_a_listing_cannot_spin():
     client, task = await connected(FakeGuest(script=script))
     async with client:
         with pytest.raises(GuestFileError) as refused:
-            async for _ in client.iter_directory(b"/"):
+            async for _ in client.iter_directory(b"/", Budget(entries=100, seconds=30)):
                 pass
         assert refused.value.code == "guest_protocol_error"
     await asyncio.wait_for(task, 1)

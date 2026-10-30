@@ -12,6 +12,7 @@ import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 
 const LISTING_STALE_MS = 5_000;
 const LISTING_GC_MS = 60_000;
+const MAX_DELETE_SLICES = 2_000;
 
 // A refusal is an answer: asking a stopped instance again in a second tells nobody anything.
 function retryListing(failures: number, error: unknown): boolean {
@@ -97,7 +98,9 @@ export function useFileActions(target: GuestTarget) {
           let deleted = 0;
           const failed: string[] = [];
           let failedCount = 0;
-          for (;;) {
+          // Each slice makes progress or the server refuses, so this ends; the cap is for a guest
+          // that claims to delete forever.
+          for (let slices = 0; slices < MAX_DELETE_SLICES; slices += 1) {
             const slice = await instanceFilesAPI.delete(target, path, recursive);
             deleted += slice.deleted;
             failedCount += slice.failed_count;

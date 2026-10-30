@@ -6,7 +6,7 @@ import { APIError } from "@/types/api";
 import { fileErrorCode, instanceFilesAPI, type GuestTarget, type OnConflict } from "./api";
 import type { PickedTree } from "./drop-entries";
 import { joinPath, parentOf } from "./path";
-import { readManifest, rememberUpload, forgetUpload } from "./transfer-manifest";
+import { clearManifest, forgetUpload, readManifest, rememberUpload } from "./transfer-manifest";
 import {
   isActive,
   onTransfersReset,
@@ -40,6 +40,7 @@ let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 let externalContext = captureExternalMutationContext();
 
 onTransfersReset(() => {
+  clearManifest();
   controllers.forEach((controller) => controller.abort());
   controllers.clear();
   if (reconcileTimer) clearTimeout(reconcileTimer);
@@ -338,7 +339,7 @@ export function restoreInterrupted(): void {
   const known = new Set(store().transfers.map((item) => item.id));
   const restored = readManifest().filter((item) => !known.has(item.id));
   if (restored.length) {
-    store().add(restored.map(({ lastModified: _ignored, ...item }) => ({ ...item, state: "interrupted", rate: 0 })));
+    store().add(restored.map(({ lastModified: _modified, actor: _actor, ...item }) => ({ ...item, state: "interrupted", rate: 0 })));
   }
 }
 

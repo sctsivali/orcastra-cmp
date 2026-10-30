@@ -10,14 +10,24 @@ import type { Transfer } from "./transfer-store";
  * note: sessionStorage, so it ends with the tab. It holds a signed upload token, which is useless
  * without the same signed-in person's bearer.
  */
-export type ManifestEntry = Transfer & { lastModified: number };
+export type ManifestEntry = Transfer & { lastModified: number; actor?: string };
 
 const KEY = "orcastra.instance-files.uploads";
+
+// The person these entries belong to. A tab outlives a sign-in, and the next person must not see
+// the last one's hosts, instances and paths.
+let currentActor = "";
+
+export function setManifestActor(actor: string): void {
+  currentActor = actor;
+  write(read());
+}
 
 function read(): ManifestEntry[] {
   try {
     const raw = window.sessionStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as ManifestEntry[]) : [];
+    const entries = raw ? (JSON.parse(raw) as ManifestEntry[]) : [];
+    return entries.filter((entry) => entry.actor === currentActor);
   } catch {
     return [];
   }
@@ -36,7 +46,7 @@ export function readManifest(): ManifestEntry[] {
 }
 
 export function rememberUpload(entry: ManifestEntry): void {
-  write([...read().filter((item) => item.id !== entry.id), entry]);
+  write([...read().filter((item) => item.id !== entry.id), { ...entry, actor: currentActor }]);
 }
 
 export function forgetUpload(id: string): void {

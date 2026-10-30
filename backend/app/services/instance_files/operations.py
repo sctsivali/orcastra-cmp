@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import sftp_codec as codec
 from .errors import GuestFileError, already_exists, invalid_path, not_regular_file
-from .paths import clean_name, from_guest, is_pseudo, is_safe_entry, join, refuse_protected, to_guest
-from .sftp_client import SftpClient, is_directory, is_symlink
+from .paths import MAX_PATH_BYTES, clean_name, from_guest, is_pseudo, is_safe_entry, join, refuse_protected, to_guest
+from .sftp_client import Budget, BudgetSpent, SftpClient, is_directory, is_symlink
 from .uploads_temp import is_expired_temp, is_upload_temp
 
 # The interface renders 20,000 rows without strain; a directory past that is a dump, not a listing.
@@ -18,6 +18,9 @@ MAX_LIST_ENTRIES = 20_000
 # Names are guest-controlled, so count their bytes too: 20,000 entries of 8 KiB each is 160 MB.
 MAX_LIST_BYTES = 16 * 1024 * 1024
 MAX_RESOLVED_LINKS = 2_000
+MAX_STALE_LISTED = 256
+LIST_SECONDS = 12.0
+WALK_ENTRIES = 200_000
 _PARALLEL = 32
 # JSON numbers lose integers past 2^53, and a guest can state any 64-bit size.
 _MAX_SAFE_INTEGER = 2**53 - 1
@@ -97,25 +100,30 @@ async def list_directory(guest: SftpClient, path: str) -> Dict[str, Any]:
     dropped = 0
     held = 0
     now = time.time()
-    async with aclosing(guest.iter_directory(to_guest(path))) as batches:
-        async for batch in batches:
-            for item in batch:
-                if not is_safe_entry(item.filename):
-                    dropped += 1
-                    continue
-                name = from_guest(item.filename)
-                if is_upload_temp(name):
-                    if is_expired_temp(name, now):
-                        stale.append(name)
-                    continue
-                # One past the cap before calling it truncated: a folder of exactly the limit is whole.
-                if len(entries) >= MAX_LIST_ENTRIES or held >= MAX_LIST_BYTES:
-                    truncated = True
+    # Twice the rows, so names that are hidden or dropped cost what they cost and no more.
+    budget = Budget(entries=MAX_LIST_ENTRIES * 2, seconds=LIST_SECONDS, held_bytes=MAX_LIST_BYTES * 2)
+    try:
+        async with aclosing(guest.iter_directory(to_guest(path), budget)) as batches:
+            async for batch in batches:
+                for item in batch:
+                    if not is_safe_entry(item.filename):
+                        dropped += 1
+                        continue
+                    name = from_guest(item.filename)
+                    if is_upload_temp(name):
+                        if is_expired_temp(name, now) and len(stale) < MAX_STALE_LISTED:
+                            stale.append(name)
+                        continue
+                    # One past the cap before calling it truncated: a folder of exactly the limit is whole.
+                    if len(entries) >= MAX_LIST_ENTRIES or held >= MAX_LIST_BYTES:
+                        truncated = True
+                        break
+                    entries.append(_entry(name, item.attrs, item.longname))
+                    held += len(item.filename) + len(item.longname)
+                if truncated:
                     break
-                entries.append(_entry(name, item.attrs, item.longname))
-                held += len(item.filename) + len(item.longname)
-            if truncated:
-                break
+    except BudgetSpent:
+        truncated = True
     gate = asyncio.Semaphore(_PARALLEL)
     links = [entry for entry in entries if entry["type"] == "symlink"][:MAX_RESOLVED_LINKS]
     await asyncio.gather(*(_resolve_link(guest, path, entry, gate) for entry in links))
@@ -125,7 +133,7 @@ async def list_directory(guest: SftpClient, path: str) -> Dict[str, Any]:
         "entries": entries,
         "truncated": truncated,
         "dropped": dropped,
-        "stale_uploads": stale[:256],
+        "stale_uploads": stale,
         "free_bytes": free,
         "total_bytes": total,
     }
@@ -151,7 +159,11 @@ async def stat_path(guest: SftpClient, path: str) -> Dict[str, Any]:
 async def _inherit_owner(guest: SftpClient, path: bytes, parent: bytes, *, mode: int) -> None:
     """Give a new object its folder's owner: this service writes as root, and the person does not."""
     folder = await guest.lstat(parent)
-    await guest.setstat(path, codec.encode_attrs(uid=folder.uid, gid=folder.gid, mode=mode))
+    handle, _ = await guest.open_unchanged(path, codec.PFLAG_READ)
+    try:
+        await guest.fsetstat(handle, codec.encode_attrs(uid=folder.uid, gid=folder.gid, mode=mode))
+    finally:
+        await guest.close(handle)
 
 
 async def make_directory(guest: SftpClient, path: str, *, parents: bool = False) -> Dict[str, Any]:
@@ -189,11 +201,14 @@ async def create_file(guest: SftpClient, path: str) -> Dict[str, Any]:
     if is_pseudo(path):
         raise invalid_path("Nothing can be created under this system path.")
     raw = to_guest(path)
+    folder = await guest.lstat(to_guest(path.rsplit("/", 1)[0] or "/"))
     handle = await guest.open(
         raw, codec.PFLAG_WRITE | codec.PFLAG_CREAT | codec.PFLAG_EXCL, mode=0o644
     )
-    await guest.close(handle)
-    await _inherit_owner(guest, raw, to_guest(path.rsplit("/", 1)[0] or "/"), mode=0o644)
+    try:
+        await guest.fsetstat(handle, codec.encode_attrs(uid=folder.uid, gid=folder.gid, mode=0o644))
+    finally:
+        await guest.close(handle)
     return await stat_path(guest, path)
 
 
@@ -270,11 +285,12 @@ async def set_attributes(
 ) -> Dict[str, Any]:
     """chmod or chown. A slice stops at its budget, and running it again skips what already matches.
 
-    important: symlinks are never followed. SFTP has no lsetstat and SETSTAT goes through a link, so
-    a link in a tree would change whatever it points at, which can be outside that tree.
+    important: every change goes through `open_unchanged`, so a link is never followed, whether the
+    tree held it from the start or somebody swapped it in during the walk. Pipes, sockets and
+    devices are skipped: opening a pipe can hang the agent.
     """
     refuse_protected([path])
-    attrs_bytes = codec.encode_attrs(mode=mode, uid=uid, gid=gid)
+    change = codec.encode_attrs(mode=mode, uid=uid, gid=gid)
     raw = to_guest(path)
     root = await guest.lstat(raw)
     if is_symlink(root):
@@ -293,7 +309,11 @@ async def set_attributes(
         nonlocal changed, skipped
         async with gate:
             try:
-                await guest.setstat(target, attrs_bytes)
+                handle, _ = await guest.open_unchanged(target, codec.PFLAG_READ)
+                try:
+                    await guest.fsetstat(handle, change)
+                finally:
+                    await guest.close(handle)
                 changed += 1
             except GuestFileError as failure:
                 if failure.status >= 500:
@@ -301,31 +321,34 @@ async def set_attributes(
                 skipped += 1
 
     if not matches(root):
-        await guest.setstat(raw, attrs_bytes)
-        changed += 1
+        await apply(raw)
     if recursive and is_directory(root):
-        deadline = time.monotonic() + budget_seconds
+        budget = Budget(entries=WALK_ENTRIES, seconds=budget_seconds)
         stack = [raw]
-        while stack:
-            if time.monotonic() >= deadline:
-                remaining = True
-                break
-            folder = stack.pop()
-            todo: List[bytes] = []
-            async with aclosing(guest.iter_directory(folder)) as batches:
-                async for batch in batches:
-                    for item in batch:
-                        if not is_safe_entry(item.filename) or is_symlink(item.attrs):
-                            continue
-                        child = folder.rstrip(b"/") + b"/" + item.filename
-                        if len(child) > 4096:
-                            skipped += 1
-                            continue
-                        if is_directory(item.attrs):
-                            stack.append(child)
-                        if not matches(item.attrs):
-                            todo.append(child)
-            await asyncio.gather(*(apply(child) for child in todo))
+        try:
+            while stack:
+                folder = stack.pop()
+                todo: List[bytes] = []
+                async with aclosing(guest.iter_directory(folder, budget)) as batches:
+                    async for batch in batches:
+                        for item in batch:
+                            if not is_safe_entry(item.filename) or is_symlink(item.attrs):
+                                continue
+                            child = folder.rstrip(b"/") + b"/" + item.filename
+                            if len(child) > MAX_PATH_BYTES:
+                                skipped += 1
+                                continue
+                            budget.hold(len(child))
+                            if is_directory(item.attrs):
+                                stack.append(child)
+                            elif not stat_module.S_ISREG(item.attrs.mode or 0):
+                                skipped += 1
+                                continue
+                            if not matches(item.attrs):
+                                todo.append(child)
+                await asyncio.gather(*(apply(child) for child in todo))
+        except BudgetSpent:
+            remaining = True
     return {"changed": changed, "skipped": skipped, "remaining": remaining}
 
 
@@ -336,7 +359,7 @@ async def summarize(
     files = folders = 0
     total = 0
     complete = True
-    deadline = time.monotonic() + budget_seconds
+    budget = Budget(entries=max_entries, seconds=budget_seconds)
     stack: List[bytes] = []
     for path in paths:
         raw = to_guest(path)
@@ -347,26 +370,31 @@ async def summarize(
         else:
             files += 1
             total += attrs.size or 0
-    while stack:
-        if time.monotonic() >= deadline or files + folders >= max_entries:
-            complete = False
-            break
-        folder = stack.pop()
-        try:
-            async with aclosing(guest.iter_directory(folder)) as batches:
-                async for batch in batches:
-                    for item in batch:
-                        if not is_safe_entry(item.filename):
-                            continue
-                        if is_directory(item.attrs):
-                            folders += 1
-                            stack.append(folder.rstrip(b"/") + b"/" + item.filename)
-                        else:
-                            files += 1
-                            if stat_module.S_ISREG(item.attrs.mode or 0):
-                                total += item.attrs.size or 0
-        except GuestFileError as failure:
-            if failure.status >= 500:
-                raise
-            complete = False
+    try:
+        while stack:
+            folder = stack.pop()
+            try:
+                async with aclosing(guest.iter_directory(folder, budget)) as batches:
+                    async for batch in batches:
+                        for item in batch:
+                            if not is_safe_entry(item.filename):
+                                continue
+                            if is_directory(item.attrs):
+                                folders += 1
+                                child = folder.rstrip(b"/") + b"/" + item.filename
+                                if len(child) > MAX_PATH_BYTES:
+                                    complete = False
+                                    continue
+                                budget.hold(len(child))
+                                stack.append(child)
+                            else:
+                                files += 1
+                                if stat_module.S_ISREG(item.attrs.mode or 0):
+                                    total += min(item.attrs.size or 0, _MAX_SAFE_INTEGER)
+            except GuestFileError as failure:
+                if failure.status >= 500:
+                    raise
+                complete = False
+    except BudgetSpent:
+        complete = False
     return {"files": files, "folders": folders, "bytes": total, "complete": complete}

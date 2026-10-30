@@ -61,8 +61,15 @@ async def pump_guarded(
         nonlocal sent
         with anyio.fail_after(stall_seconds):
             await send({"type": "http.response.start", "status": status, "headers": headers})
-        async for piece in body:
+        stream = body.__aiter__()
+        while True:
+            # A guest can keep a walk busy without ever producing a byte, so waiting on the body
+            # counts as much as waiting on the client.
             with anyio.fail_after(stall_seconds):
+                try:
+                    piece = await stream.__anext__()
+                except StopAsyncIteration:
+                    break
                 await send({"type": "http.response.body", "body": piece, "more_body": True})
             sent += len(piece)
             on_bytes(len(piece))

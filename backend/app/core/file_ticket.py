@@ -20,8 +20,13 @@ from app.core.ws_ticket import TICKET_TTL_SECONDS, TicketClaims, WsTarget, claim
 from app.core.ws_ticket_store import WsTicketStore
 
 KIND = "instance_file_download"
+MAX_TICKET_BYTES = 256 * 1024
 _BUDGET_PER_MINUTE = 120
 _CLOCK_SKEW_SECONDS = 5.0
+
+
+class TicketTooLarge(Exception):
+    """This selection would not fit a ticket."""
 
 
 @dataclass(frozen=True)
@@ -108,7 +113,13 @@ async def mint(
 ) -> str:
     identity = claims_for(KIND, WsTarget(host=host, project=project, instance=instance), user)
     download = FileDownload(identity, tuple(paths), archive, name, size, op_id)
-    return await get_file_ticket_store().mint(identity.user_id, _encode(download))
+    encoded = _encode(download)
+    # important: this store is the Redis every tenant's cache and socket tickets live in, under
+    # allkeys-lru. A private code point costs 12 bytes of JSON, so a modest request could stand for
+    # tens of megabytes and evict everyone else's keys.
+    if len(encoded) > MAX_TICKET_BYTES:
+        raise TicketTooLarge()
+    return await get_file_ticket_store().mint(identity.user_id, encoded)
 
 
 async def redeem(ticket: str) -> Optional[FileDownload]:

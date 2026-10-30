@@ -5,19 +5,43 @@ looks like /etc/shadow, .ssh or anything ending .conf, which is ordinary here, a
 records query strings.
 """
 
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 OnConflict = Literal["refuse", "replace"]
+MAX_PATH_CHARS = 8192
+# Past this a request is not a selection a person made. It also bounds a download ticket, which is
+# held in the same Redis as every tenant's cache and WebSocket tickets.
+MAX_SELECTION_BYTES = 128 * 1024
+
+
+def _no_nul(value: str) -> str:
+    # important: at the schema, before anything is audited. Postgres refuses \u0000 in jsonb, so
+    # one such path in an audit record would take a whole journal batch down with it.
+    if "\x00" in value:
+        raise ValueError("a path cannot contain a null byte")
+    return value
+
+
+GuestPath = Annotated[str, Field(min_length=1, max_length=MAX_PATH_CHARS), AfterValidator(_no_nul)]
+
+
+def _bounded_selection(paths: List[str]) -> List[str]:
+    if sum(len(path.encode("utf-8", "surrogatepass")) for path in paths) > MAX_SELECTION_BYTES:
+        raise ValueError("this selection is too large")
+    return paths
+
+
+Selection = Annotated[List[GuestPath], Field(min_length=1, max_length=1000), AfterValidator(_bounded_selection)]
 
 
 class PathBody(BaseModel):
-    path: str = Field(min_length=1, max_length=8192)
+    path: GuestPath
 
 
 class PathsBody(BaseModel):
-    paths: List[str] = Field(min_length=1, max_length=1000)
+    paths: Selection
 
 
 class FileEntry(BaseModel):
@@ -65,7 +89,7 @@ class ReadTextResponse(BaseModel):
 
 
 class WriteTextBody(BaseModel):
-    path: str = Field(min_length=1, max_length=8192)
+    path: GuestPath
     text: str = Field(max_length=2_000_000)
     etag: str = Field(min_length=64, max_length=64)
     allow_in_place: bool = False
@@ -78,24 +102,24 @@ class WriteTextResponse(BaseModel):
 
 
 class MakeDirectoryBody(BaseModel):
-    path: str = Field(min_length=1, max_length=8192)
+    path: GuestPath
     parents: bool = False
 
 
 class RenameBody(BaseModel):
-    source: str = Field(min_length=1, max_length=8192)
-    target: str = Field(min_length=1, max_length=8192)
+    source: GuestPath
+    target: GuestPath
     on_conflict: OnConflict = "refuse"
 
 
 class ChmodBody(BaseModel):
-    path: str = Field(min_length=1, max_length=8192)
+    path: GuestPath
     mode: int = Field(ge=0, le=0o7777)
     recursive: bool = False
 
 
 class ChownBody(BaseModel):
-    path: str = Field(min_length=1, max_length=8192)
+    path: GuestPath
     uid: int = Field(ge=0, le=4_294_967_294)
     gid: int = Field(ge=0, le=4_294_967_294)
     recursive: bool = False
@@ -108,7 +132,7 @@ class AttributesResponse(BaseModel):
 
 
 class DeleteBody(BaseModel):
-    path: str = Field(min_length=1, max_length=8192)
+    path: GuestPath
     recursive: bool = False
     op_id: Optional[str] = Field(default=None, max_length=64)
 
@@ -125,7 +149,7 @@ class PurgeResponse(BaseModel):
 
 
 class DownloadBody(BaseModel):
-    paths: List[str] = Field(min_length=1, max_length=1000)
+    paths: Selection
     archive: bool = False
 
 
@@ -137,7 +161,7 @@ class DownloadResponse(BaseModel):
 
 
 class CreateUploadBody(BaseModel):
-    dest: str = Field(min_length=1, max_length=8192)
+    dest: GuestPath
     size: int = Field(ge=0)
     on_conflict: OnConflict = "refuse"
 
@@ -149,7 +173,7 @@ class CreateUploadResponse(BaseModel):
 
 
 class UploadTokenBody(BaseModel):
-    token: str = Field(min_length=1, max_length=32768)
+    token: str = Field(min_length=1, max_length=32768, pattern=r"^[A-Za-z0-9_\-=.]+$")
 
 
 class UploadStatusResponse(BaseModel):

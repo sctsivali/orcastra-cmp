@@ -8,27 +8,47 @@ token already proves. The client keeps the offset, because after a failed chunk 
 was acknowledged: pipelined writes leave holes, so the temp's size proves nothing.
 """
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import stat
 import time
 from contextlib import aclosing
 from dataclasses import asdict, dataclass
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from . import sftp_codec as codec
 from .errors import GuestFileError, already_exists, no_space, too_large
 from .operations import _move_without_replacing, make_directory, stat_path
 from .paths import clean_name, clean_path, is_pseudo, is_safe_entry, from_guest, to_guest
-from .sftp_client import SftpClient, is_directory, is_symlink
+from .sftp_client import Budget, BudgetSpent, SftpClient, is_directory, is_symlink
 from .uploads_temp import TEMP_LIFETIME_SECONDS, is_expired_temp, is_upload_temp, temp_name
 
 MAX_CHUNK_BYTES = 32 * 1024 * 1024
 CHUNK_HINT_BYTES = 8 * 1024 * 1024
 MAX_SESSIONS_PER_FOLDER = 8
 _FLUSH_BYTES = 2 * 1024 * 1024
+BODY_STALL_SECONDS = 30.0
+_SWEEP_ENTRIES = 40_000
+_SWEEP_SECONDS = 8.0
+_SWEEP_REMOVALS = 256
 _MAC_CONTEXT = b"orcastra:instance-file-upload:v1"
+
+
+async def stalled_after(body: AsyncIterator[bytes], seconds: float) -> AsyncIterator[bytes]:
+    """A request body that may not go quiet: a client dribbling one holds a transfer slot."""
+    stream = body.__aiter__()
+    while True:
+        try:
+            async with asyncio.timeout(seconds):
+                piece = await stream.__anext__()
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            raise GuestFileError("upload_stalled", 408, "The upload stopped sending data.") from None
+        yield piece
 
 
 def session_lost() -> GuestFileError:
@@ -80,25 +100,31 @@ def unseal(token: str, *, user: str, host: str, project: str, instance: str) -> 
     return session
 
 
+async def _temps(guest: SftpClient, folder: bytes) -> Tuple[List[bytes], int]:
+    """The expired temps in a folder and how many others are live, as far as the budget reaches."""
+    now = time.time()
+    expired: List[bytes] = []
+    active = 0
+    budget = Budget(entries=_SWEEP_ENTRIES, seconds=_SWEEP_SECONDS)
+    try:
+        async with aclosing(guest.iter_directory(folder, budget)) as batches:
+            async for batch in batches:
+                for item in batch:
+                    name = from_guest(item.filename)
+                    if is_upload_temp(name) and is_safe_entry(item.filename):
+                        if is_expired_temp(name, now):
+                            expired.append(item.filename)
+                        else:
+                            active += 1
+    except BudgetSpent:
+        pass
+    return expired, active
+
+
 async def sweep_temps(guest: SftpClient, folder: bytes) -> int:
     """Remove temps past their expiry here and report how many are still in use."""
-    now = time.time()
-    active = 0
-    expired = []
-    seen = 0
-    async with aclosing(guest.iter_directory(folder)) as batches:
-        async for batch in batches:
-            for item in batch:
-                seen += 1
-                name = from_guest(item.filename)
-                if is_upload_temp(name) and is_safe_entry(item.filename):
-                    if is_expired_temp(name, now):
-                        expired.append(item.filename)
-                    else:
-                        active += 1
-            if seen >= 20_000:
-                break
-    for filename in expired:
+    expired, active = await _temps(guest, folder)
+    for filename in expired[:_SWEEP_REMOVALS]:
         try:
             await guest.remove(folder.rstrip(b"/") + b"/" + filename)
         except GuestFileError as failure:
@@ -109,20 +135,10 @@ async def sweep_temps(guest: SftpClient, folder: bytes) -> int:
 
 async def purge_temps(guest: SftpClient, path: str) -> Dict[str, Any]:
     raw = to_guest(path)
-    before = time.time()
-    removed = 0
-    expired = []
-    async with aclosing(guest.iter_directory(raw)) as batches:
-        async for batch in batches:
-            expired += [
-                item.filename
-                for item in batch
-                if is_safe_entry(item.filename) and is_expired_temp(from_guest(item.filename), before)
-            ]
-    for filename in expired:
+    expired, _ = await _temps(guest, raw)
+    for filename in expired[:_SWEEP_REMOVALS]:
         await guest.remove(raw.rstrip(b"/") + b"/" + filename)
-        removed += 1
-    return {"removed": removed}
+    return {"removed": min(len(expired), _SWEEP_REMOVALS)}
 
 
 async def _existing(guest: SftpClient, raw: bytes) -> Optional[codec.Attrs]:
@@ -140,29 +156,66 @@ def _check_destination(dest: str) -> None:
     clean_name(dest.rsplit("/", 1)[-1])
 
 
-async def commit_temp(guest: SftpClient, temp: bytes, dest: bytes, *, replace: bool) -> None:
-    """Put a finished temp in place, with a sensible owner, atomically.
+async def _final_attrs(guest: SftpClient, dest: bytes, existing: Optional[codec.Attrs]) -> bytes:
+    """Owner and mode a finished file gets.
 
     important: this service writes as root and the person is usually not root. A file uploaded to
     /home/lab left owned by root is one they cannot edit, so a new file takes its folder's owner
     and a replaced file keeps the owner and mode it had.
     """
+    keep = existing if existing is not None and not is_symlink(existing) else None
+    if keep is not None:
+        return codec.encode_attrs(uid=keep.uid, gid=keep.gid, mode=(keep.mode or 0) & 0o7777)
+    folder = await guest.lstat(dest.rsplit(b"/", 1)[0] or b"/")
+    return codec.encode_attrs(uid=folder.uid, gid=folder.gid, mode=0o644)
+
+
+async def _check_destination_state(guest: SftpClient, dest: bytes, *, replace: bool) -> Optional[codec.Attrs]:
     existing = await _existing(guest, dest)
     if existing is not None and is_directory(existing):
         raise GuestFileError("is_a_directory", 409, "A folder already has this name.")
     if existing is not None and not replace:
         raise already_exists()
-    keep = existing if existing is not None and not is_symlink(existing) else None
-    if keep is not None:
-        attrs = codec.encode_attrs(uid=keep.uid, gid=keep.gid, mode=(keep.mode or 0) & 0o7777)
-    else:
-        folder = await guest.lstat(dest.rsplit(b"/", 1)[0] or b"/")
-        attrs = codec.encode_attrs(uid=folder.uid, gid=folder.gid, mode=0o644)
-    await guest.setstat(temp, attrs)
+    return existing
+
+
+async def _place(guest: SftpClient, temp: bytes, dest: bytes, existing: Optional[codec.Attrs]) -> None:
     if existing is not None:
         await guest.replace(temp, dest)
     else:
         await _move_without_replacing(guest, temp, dest)
+
+
+async def commit_open_temp(guest: SftpClient, handle: bytes, temp: bytes, dest: bytes, *, replace: bool) -> None:
+    """Finish a temp this request created and still holds open."""
+    existing = await _check_destination_state(guest, dest, replace=replace)
+    await guest.fsetstat(handle, await _final_attrs(guest, dest, existing))
+    await guest.close(handle)
+    await _place(guest, temp, dest, existing)
+
+
+async def commit_temp(guest: SftpClient, temp: bytes, dest: bytes, *, replace: bool) -> None:
+    """Put a finished temp from an earlier request in place, atomically."""
+    existing = await _check_destination_state(guest, dest, replace=replace)
+    handle, _ = await _reopen_temp(guest, temp)
+    try:
+        await guest.fsetstat(handle, await _final_attrs(guest, dest, existing))
+    finally:
+        await guest.close(handle)
+    await _place(guest, temp, dest, existing)
+
+
+async def _reopen_temp(guest: SftpClient, temp: bytes) -> Tuple[bytes, codec.Attrs]:
+    """Open a temp that sat between requests, in a folder its owner may be able to write to.
+
+    important: the temp is root's and 0600 until commit, so anything else at its name is a swap.
+    `open_unchanged` then proves the handle is that same file before a byte changes.
+    """
+    attrs = await guest.lstat(temp)
+    mode = attrs.mode or 0
+    if not stat.S_ISREG(mode) or attrs.uid != 0 or stat.S_IMODE(mode) != 0o600:
+        raise session_lost()
+    return await guest.open_unchanged(temp, codec.PFLAG_WRITE, attrs)
 
 
 async def _ensure_folder(guest: SftpClient, folder: str, raw_folder: bytes) -> None:
@@ -242,12 +295,12 @@ async def write_chunk(
         raise GuestFileError("offset_conflict", 409, "This chunk does not fit the upload.")
     temp = to_guest(session.temp)
     try:
-        handle = await guest.open(temp, codec.PFLAG_WRITE)
+        handle, attrs = await _reopen_temp(guest, temp)
     except GuestFileError as failure:
-        if failure.code == "not_found":
+        if failure.code in ("not_found", "path_changed"):
             raise session_lost() from None
         raise
-    held = (await guest.fstat(handle)).size or 0
+    held = attrs.size or 0
     if offset > held:
         raise GuestFileError("offset_conflict", 409, "This chunk does not fit the upload.", {"temp_size": held})
     if offset < held:
@@ -256,7 +309,7 @@ async def write_chunk(
     at = offset
     received = 0
     buffered = bytearray()
-    async for piece in body:
+    async for piece in stalled_after(body, BODY_STALL_SECONDS):
         received += len(piece)
         if received > length:
             raise too_large(length)

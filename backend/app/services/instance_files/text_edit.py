@@ -80,8 +80,8 @@ async def _atomic_replace(
         return False
     try:
         await guest.write_all(handle, 0, payload)
+        await guest.fsetstat(handle, codec.encode_attrs(uid=attrs.uid, gid=attrs.gid, mode=(attrs.mode or 0) & 0o7777))
         await guest.close(handle)
-        await guest.setstat(temp, codec.encode_attrs(uid=attrs.uid, gid=attrs.gid, mode=(attrs.mode or 0) & 0o7777))
         await guest.replace(temp, target)
     except GuestFileError as failure:
         try:
@@ -120,8 +120,9 @@ async def write_text(
         )
     parent = raw.rsplit(b"/", 1)[0] or b"/"
     if allow_in_place:
-        handle = await guest.open(raw, codec.PFLAG_WRITE | codec.PFLAG_TRUNC)
+        handle, _ = await guest.open_unchanged(raw, codec.PFLAG_WRITE, attrs)
         try:
+            await guest.fsetstat(handle, codec.encode_attrs(size=0))
             await guest.write_all(handle, 0, payload)
         finally:
             await guest.close(handle)

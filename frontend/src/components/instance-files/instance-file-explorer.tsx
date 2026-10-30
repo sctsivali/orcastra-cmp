@@ -174,7 +174,9 @@ export function InstanceFileExplorer({
         case "delete": return setPrompt({ kind: "delete", entries });
         case "properties": return setPrompt({ kind: "properties", entry: first });
         case "copy-path":
-          return void copyText(path).then(() => toast({ title: "Path copied" }));
+          // note: escaped, as shown. A name holding a newline and a command would otherwise run
+          // when pasted into a shell.
+          return void copyText(guestText(path)).then(() => toast({ title: "Path copied" }));
       }
     },
     [activate, dispatch, startDownload, state.path],

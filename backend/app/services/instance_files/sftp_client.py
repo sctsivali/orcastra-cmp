@@ -14,12 +14,20 @@ import asyncio
 import logging
 import stat as stat_module
 import struct
+import time
 from collections import deque
 from types import TracebackType
 from typing import AsyncIterator, Deque, Dict, List, Optional, Set, Tuple, Type
 
 from . import sftp_codec as codec
-from .errors import GuestFileError, from_sftp_status, guest_disconnected, guest_timeout, protocol_error
+from .errors import (
+    GuestFileError,
+    from_sftp_status,
+    guest_disconnected,
+    guest_timeout,
+    path_changed,
+    protocol_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +39,36 @@ WRITE_CHUNK_BYTES = 128 * 1024
 WRITE_WINDOW = 32
 
 DEFAULT_OP_TIMEOUT = 15.0
+_DEFAULT_HELD_BYTES = 64 * 1024 * 1024
+
+
+class BudgetSpent(Exception):
+    """A walk used what it was given. What that means is the caller's to say."""
+
+
+class Budget:
+    """How much of a directory walk one request may cost: entries, bytes held and wall clock.
+
+    important: charged inside the read loop, for every consumer. A guest's READDIR need never
+    return end of file, and each batch can be a fresh megabyte of names, so a cap checked between
+    directories is never reached and a worker's memory grows until it dies, taking every other
+    tenant's consoles with it.
+    """
+
+    def __init__(self, *, entries: int, seconds: float, held_bytes: int = _DEFAULT_HELD_BYTES) -> None:
+        self._entries = entries
+        self._held = held_bytes
+        self._deadline = time.monotonic() + seconds
+
+    def charge(self, batch: List[codec.Name]) -> None:
+        self._entries -= len(batch)
+        self.hold(sum(len(name.filename) + len(name.longname) for name in batch))
+
+    def hold(self, size: int) -> None:
+        """Count something the caller keeps, such as a path waiting on a stack."""
+        self._held -= size
+        if self._entries < 0 or self._held < 0 or time.monotonic() >= self._deadline:
+            raise BudgetSpent()
 
 
 class SftpClient:
@@ -267,8 +305,31 @@ class SftpClient:
     async def close(self, handle: bytes) -> None:
         await self._expect_ok(codec.FXP_CLOSE, codec.string(handle))
 
-    async def iter_directory(self, path: bytes) -> AsyncIterator[List[codec.Name]]:
-        """Batches of entries. The caller decides when enough is enough and stops iterating."""
+    async def open_unchanged(
+        self, path: bytes, flags: int, seen: Optional[codec.Attrs] = None
+    ) -> Tuple[bytes, codec.Attrs]:
+        """Open `path`, proving the handle is the object an lstat saw.
+
+        important: this service is root, it acts by path, and OPEN and SETSTAT follow links, while
+        SFTP has no O_NOFOLLOW and no lsetstat. An unprivileged user who owns the folder can swap
+        a temp for a link to /etc/shadow between two requests, and a chown by path would hand them
+        that file. So whatever changes an existing object goes through a handle checked here. The
+        file a swap could aim at has its own mtime, which the swapper cannot forge.
+        """
+        before = seen if seen is not None else await self.lstat(path)
+        if is_symlink(before):
+            raise path_changed()
+        handle = await self.open(path, flags)
+        after = await self.fstat(handle)
+        if (before.mode, before.uid, before.gid, before.size, before.mtime) != (
+            after.mode, after.uid, after.gid, after.size, after.mtime,
+        ):
+            await self.close(handle)
+            raise path_changed()
+        return handle, after
+
+    async def iter_directory(self, path: bytes, budget: Budget) -> AsyncIterator[List[codec.Name]]:
+        """Batches of entries, each charged to `budget`, which raises BudgetSpent when it runs out."""
         body = await self._expect(codec.FXP_HANDLE, codec.FXP_OPENDIR, codec.string(path))
         handle = codec.decode_handle(body)
         try:
@@ -286,6 +347,7 @@ class SftpClient:
                 names = codec.decode_names(payload)
                 if not names:
                     raise protocol_error("empty directory batch")
+                budget.charge(names)
                 yield names
         finally:
             if self._failure is None:

@@ -2869,7 +2869,7 @@ export const TENANT_PERMISSION_DESCRIPTIONS: Record<TenantPermission, string> = 
   operate: "Start, stop, restart, freeze/unfreeze VMs",
   console: "Open graphical console or terminal to VM",
   snapshot: "Create, restore, and delete snapshots",
-  file_transfer: "Upload and download files to/from VM",
+  file_transfer: "Browse, change, upload and download files in the instance, as root",
 };
 
 export const ALL_TENANT_PERMISSIONS: TenantPermission[] = [

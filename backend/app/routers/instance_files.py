@@ -9,6 +9,8 @@ A session JWT is required: nothing here is reachable with an integration key, wh
 door in `instance.files`.
 """
 
+import asyncio
+import json
 import logging
 from typing import Optional
 
@@ -44,6 +46,8 @@ from app.services.instance_files.paths import clean_path
 from app.services.instance_files.session import guest_session, http_failures
 
 logger = logging.getLogger(__name__)
+
+_SERIALIZE_OFF_LOOP_ENTRIES = 2_000
 
 
 async def require_files_enabled() -> None:
@@ -91,7 +95,10 @@ async def list_directory(
     async with guest_session(user, host, bound, instance_name, record=record) as guest:
         listing = await operations.list_directory(guest, path)
     await record_browse(user, host, bound, instance_name, record.get("break_glass_grant_id"), path)
-    return listing
+    if len(listing["entries"]) < _SERIALIZE_OFF_LOOP_ENTRIES:
+        return listing
+    # note: 20,000 rows cost about 160 ms to encode, on the loop every other request shares.
+    return Response(content=await asyncio.to_thread(json.dumps, listing), media_type="application/json")
 
 
 @router.post("/stat", response_model=StatResponse, summary="Read one path's metadata")
@@ -103,7 +110,7 @@ async def stat_path(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ):
     bound = verify_file_access(host, project, instance_name)
-    async with guest_session(user, host, bound, instance_name) as guest:
+    async with guest_session(user, host, bound, instance_name, route="stat") as guest:
         return await operations.stat_path(guest, clean_path(body.path))
 
 
@@ -116,7 +123,7 @@ async def summarize(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ):
     bound = verify_file_access(host, project, instance_name)
-    async with guest_session(user, host, bound, instance_name) as guest:
+    async with guest_session(user, host, bound, instance_name, route="summarize") as guest:
         return await operations.summarize(guest, [clean_path(path) for path in body.paths])
 
 

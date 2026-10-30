@@ -94,18 +94,20 @@ async def create_upload(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ):
     bound = verify_file_access(host, project, instance_name)
-    async with guest_session(user, host, bound, instance_name) as guest:
-        return await uploads.create(
-            guest,
-            user=user_key(user),
-            host=host,
-            project=bound,
-            instance=instance_name,
-            dest=body.dest,
-            size=body.size,
-            on_conflict=body.on_conflict,
-            max_bytes=get_settings().instance_files_max_transfer_bytes,
-        )
+    details = {"path": body.dest, "size": body.size, "on_conflict": body.on_conflict}
+    async with audited("file.upload.start", host=host, project=bound, instance=instance_name, details=details) as record:
+        async with guest_session(user, host, bound, instance_name, record=record) as guest:
+            return await uploads.create(
+                guest,
+                user=user_key(user),
+                host=host,
+                project=bound,
+                instance=instance_name,
+                dest=body.dest,
+                size=body.size,
+                on_conflict=body.on_conflict,
+                max_bytes=get_settings().instance_files_max_transfer_bytes,
+            )
 
 
 @router.patch(
@@ -131,7 +133,7 @@ async def write_upload_chunk(
         session = _session_of(upload_token, user, host, bound, instance_name)
     # note: the body is read only from here on. FastAPI parses nothing for a raw stream, so a caller
     # refused above has made this server hold none of it.
-    async with guest_session(user, host, bound, instance_name, transfer=True, op_timeout=30.0) as guest:
+    async with guest_session(user, host, bound, instance_name, transfer=True, op_timeout=30.0, route="uploads") as guest:
         offset = await uploads.write_chunk(
             guest, session, offset=upload_offset, length=upload_length, body=request.stream()
         )
@@ -154,7 +156,7 @@ async def upload_status(
     bound = verify_file_access(host, project, instance_name)
     async with http_failures():
         session = _session_of(body.token, user, host, bound, instance_name)
-    async with guest_session(user, host, bound, instance_name) as guest:
+    async with guest_session(user, host, bound, instance_name, route="uploads/status") as guest:
         return await uploads.status(guest, session)
 
 
@@ -198,8 +200,9 @@ async def abort_upload(
     bound = verify_file_access(host, project, instance_name)
     async with http_failures():
         session = _session_of(body.token, user, host, bound, instance_name)
-    async with guest_session(user, host, bound, instance_name) as guest:
-        await uploads.abort(guest, session)
+    async with audited("file.upload.abort", host=host, project=bound, instance=instance_name, details={"path": session.dest}) as record:
+        async with guest_session(user, host, bound, instance_name, record=record) as guest:
+            await uploads.abort(guest, session)
     return Response(status_code=204)
 
 
@@ -217,8 +220,11 @@ async def purge_uploads(
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ):
     bound = verify_file_access(host, project, instance_name)
-    async with guest_session(user, host, bound, instance_name) as guest:
-        return await uploads.purge_temps(guest, clean_path(body.path))
+    async with audited("file.upload.purge", host=host, project=bound, instance=instance_name, details={"path": body.path}) as record:
+        async with guest_session(user, host, bound, instance_name, record=record) as guest:
+            result = await uploads.purge_temps(guest, clean_path(body.path))
+        record["removed"] = result["removed"]
+        return result
 
 
 @router.post(
@@ -237,7 +243,12 @@ async def upload_bundle(
     bound = verify_file_access(host, project, instance_name)
     async with audited("file.upload", host=host, project=bound, instance=instance_name, details={"bundle": True}) as record:
         async with guest_session(user, host, bound, instance_name, transfer=True, record=record, op_timeout=30.0) as guest:
-            result = await bundle.receive_bundle(guest, request.stream(), now=int(time.time()))
+            result = await bundle.receive_bundle(
+                guest,
+                request.stream(),
+                now=int(time.time()),
+                still_allowed=lambda: fence_gate(host, bound, instance_name),
+            )
         record["paths"] = [item["path"] for item in result["results"] if item["error"] is None]
         record["refused"] = sum(1 for item in result["results"] if item["error"] is not None)
         return result
@@ -271,7 +282,7 @@ async def create_download(
         paths = [clean_path(path) for path in body.paths]
         if any(is_pseudo(path) for path in paths) and body.archive:
             raise GuestFileError("protected_path", 409, "System paths cannot be archived.")
-    async with guest_session(user, host, bound, instance_name) as guest:
+    async with guest_session(user, host, bound, instance_name, route="downloads") as guest:
         if body.archive:
             summary = await operations.summarize(guest, paths)
             if summary["bytes"] > limit or summary["files"] + summary["folders"] > _MAX_ARCHIVE_ENTRIES:
@@ -296,6 +307,8 @@ async def create_download(
             size=size,
             op_id=secrets.token_hex(8),
         )
+    except file_ticket.TicketTooLarge:
+        raise too_large(file_ticket.MAX_TICKET_BYTES).to_http() from None
     except TicketBudgetExceeded:
         raise GuestFileError("busy", 429, "Too many downloads were started.", {"retry_after": 30}).to_http() from None
     except TicketStoreUnavailable:
@@ -373,6 +386,12 @@ class GuestDownload(Response):
         }
         started = time.monotonic()
         result, code = "failure", None
+        # important: written now, not only at the end. A six-hour download a crash cuts short
+        # would otherwise leave no trace that it ever began.
+        await write(
+            "file.download.start", host=download.host, project=download.project, instance=download.instance,
+            result="success", details=dict(record),
+        )
 
         def count(sent: int) -> None:
             record["bytes"] += sent

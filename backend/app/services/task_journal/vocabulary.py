@@ -390,11 +390,26 @@ REQUESTOR_KEYS = ("protocol", "username", "address")
 METADATA_LIMIT = 8192
 
 
+def _without_nul(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, Mapping):
+        return {_without_nul(key): _without_nul(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_without_nul(item) for item in value]
+    return value
+
+
 def bounded_json(obj: Any, limit: int = METADATA_LIMIT) -> Dict[str, Any]:
     """A JSON object no larger than `limit` bytes; oversize values are replaced, never truncated
-    mid-token, so the stored document always parses."""
+    mid-token, so the stored document always parses.
+
+    important: no NUL anywhere. Postgres refuses \\u0000 in jsonb, and the writer inserts in
+    batches, so one such string would cost every record beside it.
+    """
     if not isinstance(obj, Mapping):
         return {}
+    obj = _without_nul(obj)
     out: Dict[str, Any] = {}
     for key, value in obj.items():
         candidate = dict(out)

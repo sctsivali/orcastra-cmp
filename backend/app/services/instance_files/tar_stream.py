@@ -7,9 +7,11 @@ validated part by part, a duplicate is dropped, ownership and special bits are r
 kept only when it stays inside the archive, and what was left out is listed in SKIPPED.txt.
 """
 
+import itertools
 import logging
 import posixpath
 import stat as stat_module
+import re
 import tarfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor
@@ -20,15 +22,19 @@ from app.core.blocking import run_blocking
 
 from . import sftp_codec as codec
 from .errors import GuestFileError, too_large
-from .paths import from_guest, is_pseudo, is_safe_entry, to_guest
-from .sftp_client import SftpClient, is_directory, is_symlink
+from .paths import MAX_PATH_BYTES, from_guest, is_pseudo, is_safe_entry, to_guest
+from .sftp_client import Budget, BudgetSpent, SftpClient, is_directory, is_symlink
 
 logger = logging.getLogger(__name__)
 
 _BLOCK = 512
 _COMPRESS_BYTES = 1024 * 1024
 _MAX_SKIPPED_LINES = 1_000
-_MAX_ENTRIES = 500_000
+_MAX_ENTRIES = 200_000
+_MAX_WALK_SECONDS = 6 * 3600.0
+_MAX_HELD_BYTES = 128 * 1024 * 1024
+# An extractor on Windows splits on a backslash, so `..\\..\\evil.bat` is a traversal there.
+_UNSAFE_NAME = re.compile(rb"[\x00-\x1f\x7f\\]")
 _compress_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="file_archive")
 
 
@@ -71,8 +77,18 @@ def _header(name: bytes, *, kind: bytes, size: int, mode: int, mtime: int, link:
 
 
 def _link_stays_inside(entry: bytes, target: bytes) -> bool:
-    """Whether a link at archive path `entry` resolves inside the archive's own top folder."""
-    if target.startswith(b"/") or not target:
+    """Whether a link at archive path `entry` resolves inside the archive's own top folder.
+
+    important: `..` only as leading components. The check is lexical, and two links that each pass
+    it can chain out: `up -> ../../..` and then `esc -> up/../../../../secret` walks through the
+    first one's real location. With `..` only at the front, a link cannot step back through another
+    link. A NUL or a backslash is refused because a reader may cut or split on them.
+    """
+    if target.startswith(b"/") or not target or b"\x00" in target or b"\\" in target:
+        return False
+    parts = target.split(b"/")
+    climbing = list(itertools.takewhile(lambda part: part == b"..", parts))
+    if b".." in parts[len(climbing):]:
         return False
     top = entry.split(b"/", 1)[0]
     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(entry), target))
@@ -85,8 +101,8 @@ async def tar_gz_stream(
     gzip = _Gzip()
     seen: Set[bytes] = set()
     skipped: List[str] = []
-    budget = max_bytes
-    entries = 0
+    remaining_bytes = max_bytes
+    walk = Budget(entries=_MAX_ENTRIES, seconds=_MAX_WALK_SECONDS, held_bytes=_MAX_HELD_BYTES)
 
     def skip(path: bytes, why: str) -> None:
         if len(skipped) < _MAX_SKIPPED_LINES:
@@ -110,9 +126,6 @@ async def tar_gz_stream(
 
     while stack:
         path, arcname, attrs = stack.pop()
-        entries += 1
-        if entries > _MAX_ENTRIES:
-            raise too_large(max_bytes)
         if arcname in seen:
             skip(path, "duplicate name")
             continue
@@ -126,19 +139,24 @@ async def tar_gz_stream(
             async for out in emit(_header(arcname + b"/", kind=tarfile.DIRTYPE, size=0, mode=mode, mtime=mtime)):
                 yield out
             try:
-                async with aclosing(guest.iter_directory(path)) as batches:
+                async with aclosing(guest.iter_directory(path, walk)) as batches:
                     async for batch in batches:
                         for item in sorted(batch, key=lambda entry: entry.filename, reverse=True):
-                            if not is_safe_entry(item.filename):
+                            child = path.rstrip(b"/") + b"/" + item.filename
+                            if not is_safe_entry(item.filename) or _UNSAFE_NAME.search(item.filename):
                                 skip(path, "unsafe entry name")
                                 continue
-                            stack.append(
-                                (path.rstrip(b"/") + b"/" + item.filename, arcname + b"/" + item.filename, item.attrs)
-                            )
+                            if len(child) > MAX_PATH_BYTES:
+                                skip(path, "path too long")
+                                continue
+                            walk.hold(len(child) + len(arcname) + len(item.filename) + 1)
+                            stack.append((child, arcname + b"/" + item.filename, item.attrs))
             except GuestFileError as failure:
                 if failure.status >= 500:
                     raise
                 skip(path, "could not be read")
+            except BudgetSpent:
+                raise too_large(max_bytes) from None
         elif is_symlink(attrs):
             try:
                 target = await guest.readlink(path)
@@ -154,7 +172,7 @@ async def tar_gz_stream(
                 yield out
         elif stat_module.S_ISREG(mode):
             stated = attrs.size or 0
-            if stated > budget:
+            if stated > remaining_bytes:
                 raise too_large(max_bytes)
             try:
                 handle = await guest.open(path, codec.PFLAG_READ)
@@ -182,7 +200,7 @@ async def tar_gz_stream(
             if padding:
                 async for out in emit(b"\0" * padding):
                     yield out
-            budget -= stated
+            remaining_bytes -= stated
         else:
             skip(path, "not a regular file")
 

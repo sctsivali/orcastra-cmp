@@ -20,6 +20,9 @@ TRANSFERS_PER_USER = 4
 TRANSFERS_PER_CLUSTER = 16
 TRANSFERS_PER_WORKER = 16
 SHORT_OPS_PER_INSTANCE = 8
+SHORT_OPS_PER_USER = 16
+SHORT_OPS_PER_CLUSTER = 32
+SHORT_OPS_PER_WORKER = 48
 
 _counts: Dict[Tuple[str, ...], int] = Counter()
 
@@ -56,8 +59,15 @@ async def transfer_slot(host: str, project: str, instance: str, user: str) -> As
 
 
 @asynccontextmanager
-async def short_slot(host: str, project: str, instance: str) -> AsyncIterator[None]:
-    claims = [(("short-instance", host, project, instance), SHORT_OPS_PER_INSTANCE)]
+async def short_slot(host: str, project: str, instance: str, user: str) -> AsyncIterator[None]:
+    # important: more than per instance. `--limit-concurrency` is 200 a worker and counts every
+    # connection, so 25 hostile VMs each answering just under the timeout would refuse everyone.
+    claims = [
+        (("short-instance", host, project, instance), SHORT_OPS_PER_INSTANCE),
+        (("short-user", user), SHORT_OPS_PER_USER),
+        (("short-cluster", host), SHORT_OPS_PER_CLUSTER),
+        (("short-worker",), SHORT_OPS_PER_WORKER),
+    ]
     _take(claims)
     try:
         yield

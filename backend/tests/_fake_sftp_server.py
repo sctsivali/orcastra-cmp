@@ -151,6 +151,10 @@ class FakeGuest:
             path = cursor.string(9000)
             flags = cursor.u32()
             attrs = codec.decode_attrs(cursor)
+            # Like the real server, OPEN follows a link.
+            resolved = self.resolve(path) if path in self.nodes else None
+            if resolved is not None:
+                path = resolved
             node = self.nodes.get(path)
             if node is None:
                 if not flags & codec.PFLAG_CREAT:
