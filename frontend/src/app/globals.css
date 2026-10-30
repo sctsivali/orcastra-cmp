@@ -12,6 +12,14 @@
     background-color: hsl(var(--background));
   }
 
+  /* note: the task dock is sticky at the bottom of the page, and a browser scrolls a focused
+     control (or one a script scrolls to) only as far as the viewport's bottom edge, which is
+     under the dock: on a phone the last row's action menu could not be reached. The dock sets
+     --dock-height on the root (task-panel.tsx). */
+  html {
+    scroll-padding-bottom: var(--dock-height, 0px);
+  }
+
   :root {
     --background: 220 13% 96%;
     --foreground: 222 47% 11%;
