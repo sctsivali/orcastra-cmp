@@ -15,8 +15,11 @@ from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.services.lxd_ssl import create_lxd_ssl_context
 from app.core.lxd_path import safe_segment
+from app.services.lxd.instance_metrics_sections import guest_agent_status
 
 logger = logging.getLogger(__name__)
+
+_NO_AGENT_MESSAGE = "The VM agent is not running, so a shell cannot open. Use the Serial or Graphics console."
 
 
 class ControlCode(IntEnum):
@@ -96,6 +99,22 @@ class TerminalService:
         """Fallback shell when smart detection fails."""
         return ["/bin/sh"]
     
+    @staticmethod
+    def _vm_agent_unreachable(client: Any, instance: Dict[str, Any], instance_name: str, project: str) -> bool:
+        """Whether a VM's agent is known to be down. An unread state is not proof, so it says no."""
+        instance_type = instance.get("type")
+        if instance_type != "virtual-machine":
+            return False
+        try:
+            response = client.api.instances[safe_segment(instance_name)].state.get(
+                params={"project": project or "default"}
+            )
+            state = response.json().get("metadata") or {}
+        except Exception as exc:  # noqa: BLE001 - this is only a better error, never a new failure
+            logger.info("State read before exec on %s failed: %s", instance_name, type(exc).__name__)
+            return False
+        return guest_agent_status(instance_type, instance.get("expanded_config"), state) == "unreachable"
+
     def open_exec_operation(
         self,
         instance_name: str,
@@ -122,6 +141,10 @@ class TerminalService:
         client = lxd_client(host)
         if client is None:
             raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True)
+        # important: LXD accepts an exec on a VM whose agent is down and only then drops its
+        # sockets, so the reason has to be found before submitting it.
+        if self._vm_agent_unreachable(client, instance, instance_name, project):
+            raise SessionSetupError(_NO_AGENT_MESSAGE, retryable=False)
         exec_data = {
             "command": shell,
             "environment": {
@@ -145,10 +168,7 @@ class TerminalService:
             message = str(operation.get("error") or response.status_code)
             # note: an exec into a VM needs its lxd-agent; say so rather than the daemon's wording.
             if "agent" in message.lower():
-                raise SessionSetupError(
-                    "The VM agent is not running, so a shell cannot open. Use the Serial or Graphics console.",
-                    retryable=False,
-                )
+                raise SessionSetupError(_NO_AGENT_MESSAGE, retryable=False)
             raise SessionSetupError(f"The cluster refused the shell: {message}", retryable=False)
         base, _ssl = connection_material(host)
         operation_id, data_url, control_url = operation_urls(base, operation)
