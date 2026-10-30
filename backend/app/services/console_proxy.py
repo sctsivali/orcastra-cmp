@@ -8,6 +8,9 @@ Roles of one socket:
   operation, as every channel did before.
 - A serial console (``console_type=console``) is one operation with a control socket for resize.
 
+Every role also watches its instance's power (``watch_power``, see instance_power_watch): a
+restart left the serial console attached to a QEMU process that no longer existed.
+
 important: setup runs through ``session_io`` and never on the event loop, and the migration
 admission lock is held only around the operation POST and the tracker registration, exactly as
 before. The relay is event driven (no polling timeouts), and whichever side ends first tears the
@@ -20,7 +23,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import WebSocket
 
@@ -28,6 +31,7 @@ from app.services.activity_logger import get_activity_logger
 from app.services.console_service import get_console_service
 from app.services.interactive_relay import (
     CLOSE_NORMAL,
+    CLOSE_POWERED_DOWN,
     CLOSE_UNAVAILABLE,
     CLOSE_UPSTREAM,
     OutputWindow,
@@ -46,6 +50,9 @@ _MEMBER_FLUSH_SECONDS = 2.0
 # How long the owner waits, after closing the operation, for the other channels' last byte counts.
 _MEMBER_SETTLE_SECONDS = 1.0
 _SERIAL_INIT_TIMEOUT_SECONDS = 5.0
+_POWER_DOWN_REASONS = {"instance-stopped": "The instance stopped"}
+
+PowerWatch = Callable[[str, str, str], Awaitable[str]]
 
 
 class ConsoleProxy:
@@ -64,6 +71,7 @@ class ConsoleProxy:
         break_glass_grant_id: Optional[int] = None,
         group: Optional[str] = None,
         share_operation: bool = True,
+        watch_power: Optional[PowerWatch] = None,
     ) -> None:
         self.browser_ws = browser_ws
         self.instance_name = instance_name
@@ -77,6 +85,7 @@ class ConsoleProxy:
         self.target_org_slug = target_org_slug
         self.break_glass_grant_id = break_glass_grant_id
         self.group = group if (share_operation and console_type == "vga") else None
+        self._watch_power = watch_power
 
         self.role = "solo"
         self._published = False
@@ -333,6 +342,8 @@ class ConsoleProxy:
         }
         if self.control_ws is not None:
             tasks.add(asyncio.create_task(self._drain_control(), name="console.control"))
+        if self._watch_power is not None:
+            tasks.add(asyncio.create_task(self._power_down(self._watch_power), name="console.power"))
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         self._window.release()
         for task in pending:
@@ -343,6 +354,10 @@ class ConsoleProxy:
         error = ended.exception() if not ended.cancelled() else None
         outcome = None if error else ended.result()
         if outcome == "browser":
+            return
+        if isinstance(outcome, str) and outcome.startswith("power:"):
+            action = outcome.partition(":")[2]
+            await close_browser(self.browser_ws, CLOSE_POWERED_DOWN, _POWER_DOWN_REASONS.get(action, "The instance shut down"))
             return
         if error is None:
             await close_browser(self.browser_ws, CLOSE_NORMAL, "The console session ended")
@@ -397,6 +412,16 @@ class ConsoleProxy:
         async for _message in self.control_ws:
             pass
         return "control"
+
+    async def _power_down(self, watch: PowerWatch) -> str:
+        try:
+            action = await watch(self.host, self.instance_name, self.project)
+        except Exception as exc:  # noqa: BLE001 - the console works without its watch
+            logger.info("Power watch for %s unavailable: %s", self._label, type(exc).__name__)
+            # Never end the relay from here: wait until a real ending cancels this task.
+            await asyncio.get_running_loop().create_future()
+            raise
+        return f"power:{action}"
 
     def _count(self, down: int = 0, up: int = 0) -> None:
         if self.role == "member":

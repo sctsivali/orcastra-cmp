@@ -42,6 +42,7 @@ from app.core.org_scope import (
 )
 from app.services.console_service import get_console_service
 from app.services.console_proxy import ConsoleProxy
+from app.services.instance_power_watch import wait_for_power_down
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker
 from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
@@ -1357,6 +1358,7 @@ async def console_websocket(
         break_glass_grant_id=_bg_grant_id,
         group=getattr(websocket.state, "ws_ticket_group", None),
         share_operation=_settings.console_shared_spice_operation,
+        watch_power=wait_for_power_down,
     )
     
     # A break-glass session must not outlive the grant that authorized it: the gate

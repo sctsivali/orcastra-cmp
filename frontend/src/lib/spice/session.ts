@@ -4,14 +4,16 @@
  *
  * - "connected" means the guest is on screen (the first frame drawn), not that the main channel
  *   linked, which used to lift the overlay onto a blank canvas.
- * - How a session ends decides what happens next: 1000 (the instance closed it, or another viewer
- *   took the console over) and 4403/4404 are final; a dropped connection (1006, 1011) reconnects
- *   with backoff, at once when the network or the tab comes back.
+ * - How a session ends decides what happens next: 1000 (another viewer took the console over) and
+ *   4403/4404 are final; a dropped connection (1006, 1011) reconnects with backoff, at once when
+ *   the network or the tab comes back. After the instance powered down (1012, a stop or a
+ *   restart), or a drop of a session that was on screen, "not running" means "not yet": it tries
+ *   every few seconds until the instance is back, for up to three minutes.
  * - With the guest agent running, the guest's resolution follows the console's size, and the
  *   clipboard and file drops work both ways. Without it the console scales the picture instead.
  */
 
-import { spiceSocketUrls } from "@/lib/ws-url";
+import { INSTANCE_RETURN_POLL_MS, INSTANCE_RETURN_WINDOW_MS, WAITING_FOR_INSTANCE, WS_CLOSE, spiceSocketUrls } from "@/lib/ws-url";
 import { loadSpice } from "./loader";
 import { KeyboardBridge, downCode, keyForCharacter, upCode, NAMED_KEYS } from "./keyboard";
 import { PointerBridge, type MouseMode } from "./pointer";
@@ -139,6 +141,8 @@ export class SpiceSession {
   private cursorShape: CursorShape | null = null;
   private cursorAt = { x: 0, y: 0 };
   private disposed = false;
+  /** When a session that was on screen dropped, or its instance powered down. */
+  private droppedAt: number | null = null;
 
   constructor(
     screenId: string,
@@ -242,6 +246,7 @@ export class SpiceSession {
     sc.onfirstdraw = () => {
       if (generation !== this.generation) return;
       this.attempts = 0;
+      this.droppedAt = null;
       this.setStatus("connected");
       this.wake();
     };
@@ -284,9 +289,20 @@ export class SpiceSession {
   }
 
   private onError(error: SpiceErrorLike): void {
+    // Every channel reports the same ending; the first one tears the connection down.
+    if (!this.sc) return;
+    if (this.status === "connected" || error.code === WS_CLOSE.POWERED_DOWN) this.droppedAt ??= Date.now();
     const final = error.code !== undefined && FINAL_CODES.has(error.code);
     const message = friendly(error);
     this.teardown();
+    if (this.awaitsInstance(error.code)) {
+      this.clearRetry();
+      this.retryable = true;
+      this.attempts = Math.max(this.attempts, 1); // connect() keeps showing "reconnecting"
+      this.setStatus("reconnecting", WAITING_FOR_INSTANCE);
+      this.retryTimer = setTimeout(() => void this.connect(), INSTANCE_RETURN_POLL_MS);
+      return;
+    }
     if (error.code === 1000) {
       this.setStatus("ended", message);
       return;
@@ -294,7 +310,14 @@ export class SpiceSession {
     this.fail(message, !final);
   }
 
+  /** The instance went away under a session that was on screen, recently enough to wait for it. */
+  private awaitsInstance(code: number | undefined): boolean {
+    if (code !== WS_CLOSE.POWERED_DOWN && code !== WS_CLOSE.UNAVAILABLE) return false;
+    return this.droppedAt !== null && Date.now() - this.droppedAt < INSTANCE_RETURN_WINDOW_MS;
+  }
+
   private fail(message: string, retryable: boolean): void {
+    this.clearRetry();
     this.retryable = retryable;
     if (!retryable || this.attempts >= RECONNECT_DELAYS_MS.length) {
       this.setStatus("error", message);

@@ -103,6 +103,8 @@ export function ConsoleWorkspace({
   const graphicsRef = useRef<GraphicsConsoleHandle | null>(null);
   const textRef = useRef<TextConsoleHandle | null>(null);
   const serialRef = useRef<SerialConsoleHandle | null>(null);
+  // Read by the power follow-up timer, which outlives the render it was scheduled in.
+  const liveRef = useRef<{ graphics: boolean; serial: boolean }>({ graphics: false, serial: false });
   const rootRef = useRef<HTMLDivElement>(null);
 
   const [caps, setCaps] = useState<CapsState>({ status: "loading" });
@@ -250,11 +252,13 @@ export function ConsoleWorkspace({
 
   const onPowerDone = useCallback((operation: PowerOperation) => {
     if (operation === "stop") return;
-    // The VM's display and serial line belong to the new QEMU process now. A shell waits for the
-    // agent, so the Text tab offers a new session instead (Enter or the button).
+    // The display and the serial line follow a restart on their own (the relay closes with 1012
+    // when the instance powers down). This brings back a tab that is not back yet, a display in
+    // its backoff or a serial console that ended, without dropping one that already is. A shell
+    // waits for the agent, so the Text tab offers a new session instead (Enter or the button).
     window.setTimeout(() => {
-      graphicsRef.current?.reconnect();
-      serialRef.current?.reconnect();
+      if (!liveRef.current.graphics) graphicsRef.current?.reconnect();
+      if (!liveRef.current.serial) serialRef.current?.reconnect();
     }, 2500);
   }, []);
 
@@ -393,7 +397,10 @@ export function ConsoleWorkspace({
                   zoom={zoom}
                   resizeGuest={resizeGuest}
                   active={visible && isGraphics}
-                  onStatus={(status) => setGraphics((g) => ({ ...g, status }))}
+                  onStatus={(status) => {
+                    liveRef.current.graphics = status === "connected";
+                    setGraphics((g) => ({ ...g, status }));
+                  }}
                   onStats={(stats) => setGraphics((g) => ({ ...g, stats }))}
                   onAgent={(agent) => setGraphics((g) => ({ ...g, agent }))}
                   onMouseMode={(mouseMode) => setGraphics((g) => ({ ...g, mouseMode }))}
@@ -439,7 +446,10 @@ export function ConsoleWorkspace({
                 host={host}
                 project={project}
                 fontSize={Math.round((DEFAULT_FONT_SIZE * textZoom) / 100)}
-                onStatus={setSerialStatus}
+                onStatus={(status) => {
+                  liveRef.current.serial = status === "connected";
+                  setSerialStatus(status);
+                }}
               />
             </div>
           )}

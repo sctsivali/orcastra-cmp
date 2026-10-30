@@ -7,6 +7,7 @@ reconnected into a new one. Every ending now closes with a code that says which 
 
 - 1000: the session ended on the instance side; do not reconnect on your own.
 - 1011: the connection to the instance broke; reconnecting may work.
+- 1012: the instance powered down (a stop, or a restart on its way); reconnect once it runs again.
 - 4404: the session cannot start (not running, not found, not a VM); reconnecting will not help.
 - 4403: access ended mid-session (sent by ws_session_guard).
 """
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 CLOSE_NORMAL = 1000
 CLOSE_UPSTREAM = 1011
+CLOSE_POWERED_DOWN = 1012
 CLOSE_UNAVAILABLE = 4404
 
 # RFC 6455 caps a close reason at 123 bytes; a longer one makes the close frame itself fail,

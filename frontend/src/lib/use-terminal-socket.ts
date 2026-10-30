@@ -6,9 +6,11 @@
  * both ways, so xterm's streaming decoder stitches characters split across frames; text frames
  * are JSON control (resize, ack, ping out; session, ready, error, closed, pong in).
  *
- * How a session ended decides what follows: 1000 (the shell exited, the VM stopped) waits for the
- * operator, Enter starts a new session; 4403 / 4404 / 1008 are final; anything else (a dropped
- * network, a backend restart) reconnects with backoff, at once when the network or tab returns.
+ * How a session ended decides what follows: 1000 (the shell exited) waits for the operator, Enter
+ * starts a new session; 4403 / 4404 / 1008 are final; anything else (a dropped network, a backend
+ * restart) reconnects with backoff, at once when the network or tab returns. After the instance
+ * powered down (1012) or a live session dropped, "not running" (4404) means "not yet": it tries
+ * every few seconds until the instance is back, so the serial console follows a reboot.
  */
 
 "use client";
@@ -16,7 +18,16 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { createXterm, terminalFontReady, type XtermBundle } from "@/lib/xterm-setup";
-import { ACCESS_REVOKED_MESSAGE, WS_CLOSE, mintFailureMessage, ticketedSocketUrl, type WsTicketRequest } from "@/lib/ws-url";
+import {
+  ACCESS_REVOKED_MESSAGE,
+  INSTANCE_RETURN_POLL_MS,
+  INSTANCE_RETURN_WINDOW_MS,
+  WAITING_FOR_INSTANCE,
+  WS_CLOSE,
+  mintFailureMessage,
+  ticketedSocketUrl,
+  type WsTicketRequest,
+} from "@/lib/ws-url";
 
 export type TerminalKind = "shell" | "serial";
 export type TerminalSessionStatus = "connecting" | "connected" | "reconnecting" | "ended" | "error";
@@ -106,6 +117,8 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
   const attemptsRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedByUsRef = useRef(false);
+  // When a live session dropped or its instance powered down; null while connected.
+  const droppedAtRef = useRef<number | null>(null);
   const lastPongRef = useRef(Date.now());
   const pendingRef = useRef<Uint8Array[]>([]);
   const writingRef = useRef(false);
@@ -228,6 +241,7 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
           break;
         case "ready":
           attemptsRef.current = 0;
+          droppedAtRef.current = null;
           setStatus("connected");
           callbacks.current.onReady?.();
           break;
@@ -247,6 +261,21 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
       if (closedByUsRef.current) return;
       const term = bundleRef.current?.term;
       const reason = event.reason || "";
+      const wasLive = statusRef.current === "connected";
+      if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) droppedAtRef.current ??= Date.now();
+      const droppedAt = droppedAtRef.current;
+      if (
+        (event.code === WS_CLOSE.POWERED_DOWN || event.code === WS_CLOSE.UNAVAILABLE) &&
+        droppedAt !== null &&
+        Date.now() - droppedAt < INSTANCE_RETURN_WINDOW_MS
+      ) {
+        // Said once as the wait begins, not on every poll while the instance is down.
+        if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) note(term, `${reason || "The instance went away"}. Reconnecting when it starts again…`, "\x1b[33m");
+        attemptsRef.current = Math.max(attemptsRef.current, 1); // connect() keeps "reconnecting"
+        setStatus("reconnecting", WAITING_FOR_INSTANCE);
+        retryTimerRef.current = setTimeout(() => connectRef.current(), INSTANCE_RETURN_POLL_MS);
+        return;
+      }
       if (event.code === WS_CLOSE.NORMAL) {
         attemptsRef.current = 0;
         setStatus("ended", reason || "The session ended");

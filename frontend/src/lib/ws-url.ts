@@ -28,7 +28,18 @@ export const WS_CLOSE = {
   UPSTREAM_FAILED: 1011,
   /** The session cannot start (not running, not found, no agent); reconnecting will not help. */
   UNAVAILABLE: 4404,
+  /** The instance powered down (stopped, or on its way through a restart). */
+  POWERED_DOWN: 1012,
 } as const;
+
+/**
+ * A console that was on screen keeps trying for this long after its instance powered down or its
+ * connection dropped: a restart passes through Stopped, so "not running" (4404) inside the window
+ * means "not yet". Outside it, or before the first connect, 4404 stays final.
+ */
+export const INSTANCE_RETURN_WINDOW_MS = 180_000;
+export const INSTANCE_RETURN_POLL_MS = 3_000;
+export const WAITING_FOR_INSTANCE = "The instance is not running. The console reconnects when it starts again.";
 
 export const ACCESS_REVOKED_MESSAGE = "Access to this instance was revoked.";
 
