@@ -34,6 +34,7 @@ SESSION_ENDED = 4401
 ACCESS_REVOKED = 4403
 REAUTHORIZE_SECONDS = 60.0
 MAX_CONSECUTIVE_ERRORS = 5
+COULD_NOT_CHECK = "Could not re-authorize this session"
 
 AccessCheck = Callable[[AuthenticatedUser], Awaitable[None]]
 
@@ -69,6 +70,29 @@ async def reauthorize_while_open(
     interval: float = REAUTHORIZE_SECONDS,
 ) -> None:
     """For an interactive socket: re-check the account, scope and access every `interval`."""
+
+    async def refused(reason: str) -> None:
+        if reason == COULD_NOT_CHECK:
+            await _close(websocket, 1011, "Could not re-authorize this session")
+        else:
+            await _close(websocket, ACCESS_REVOKED, "Access revoked")
+
+    await reauthorize_until(user, check, refused, label=label, interval=interval)
+
+
+async def reauthorize_until(
+    user: Optional[AuthenticatedUser],
+    check: AccessCheck,
+    refused: Callable[[str], Awaitable[None]],
+    *,
+    label: str,
+    interval: float = REAUTHORIZE_SECONDS,
+) -> None:
+    """Re-check `user` every `interval` until they lose access, then call `refused(reason)` once.
+
+    A long transfer holds what a shell holds, so it keeps to the same rules: an expired token does
+    not end it, an Authentik outage does not end it, and five failed checks in a row do.
+    """
     if user is None:
         return
     opened_as = get_highest_role(roles_for_group_names(list(user.groups)))
@@ -79,21 +103,21 @@ async def reauthorize_while_open(
             identity = await check_identity(user)
             if identity.ended:
                 logger.warning("Closing %s: the account %s (%s)", label, user.user_id, identity.reason)
-                await _close(websocket, ACCESS_REVOKED, "Access revoked")
+                await refused("Access revoked")
                 return
             if identity.roles is not None and get_highest_role(list(identity.roles)) != opened_as:
                 logger.warning("Closing %s: the role of %s changed since it opened", label, user.user_id)
-                await _close(websocket, ACCESS_REVOKED, "Access revoked")
+                await refused("Access revoked")
                 return
-            # Only console and terminal sockets use this loop, and both drive a guest: a paid term
-            # that ends while one is open closes it like any other change (core/sale_term.py).
+            # Only sessions that drive a guest use this loop: a paid term that ends while one is
+            # open closes it like any other change (core/sale_term.py).
             await set_org_scope_for_ws(user, interactive=True)
             await check(user)
             errors = 0
         except HTTPException as exc:
             if exc.status_code in (401, 403, 404):
                 logger.warning("Closing %s: access ended for %s (%s)", label, user.user_id, exc.status_code)
-                await _close(websocket, ACCESS_REVOKED, "Access revoked")
+                await refused("Access revoked")
                 return
             errors += 1
         except asyncio.CancelledError:
@@ -102,7 +126,7 @@ async def reauthorize_while_open(
             errors += 1
             logger.warning("Could not re-authorize %s (%d in a row): %s", label, errors, str(exc)[:200])
         if errors >= MAX_CONSECUTIVE_ERRORS:
-            await _close(websocket, 1011, "Could not re-authorize this session")
+            await refused(COULD_NOT_CHECK)
             return
 
 
@@ -115,6 +139,21 @@ def instance_session_check(host: str, project: str, instance_name: str) -> Acces
         from app.services.break_glass_service import enforce_sensitive_access
 
         verify_instance_access(host, project, instance_name, "console")
+        async with async_session_maker() as db:
+            await enforce_sensitive_access(user, host, db)
+
+    return check
+
+
+def file_session_check(host: str, project: str, instance_name: str) -> AccessCheck:
+    """The same rule for a guest's files: the file gate, then ownership or a live grant."""
+
+    async def check(user: AuthenticatedUser) -> None:
+        from app.core.database import async_session_maker
+        from app.core.instance_access import verify_file_access
+        from app.services.break_glass_service import enforce_sensitive_access
+
+        verify_file_access(host, project, instance_name)
         async with async_session_maker() as db:
             await enforce_sensitive_access(user, host, db)
 

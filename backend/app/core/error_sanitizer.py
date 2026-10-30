@@ -95,6 +95,11 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "snapshot_outcome_unknown": "Check this instance's snapshots before trying again.",
         "snapshot_terminal_failure": "The cluster did not complete the snapshot.",
         "vault_error": "Vault refused the unseal request.",
+        # services/instance_files/errors.py: the file explorer branches on these.
+        "guest_protocol_error": "The guest answered in a way this service does not accept.",
+        "guest_io_error": "The guest could not complete this operation.",
+        "read_only_fs": "This filesystem is read only.",
+        "cluster_refused": "The cluster refused this service's certificate.",
     },
     503: {
         "authority_unavailable": "Current access could not be verified. Retry shortly.",
@@ -109,6 +114,18 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "vault_unreachable": "Vault did not answer. Check the progress before entering the key again.",
         "vault_unconfirmed": "Vault did not confirm the request. Check the progress before entering the key again.",
         "unseal_busy": "Another unseal request is still being processed. Try again in a moment.",
+        "agent_unavailable": "The guest agent is not reachable inside this virtual machine.",
+        "cluster_unreachable": "The cluster did not answer.",
+        "cluster_not_pinned": "This cluster's certificate could not be confirmed, so nothing was sent.",
+        "unsupported_server": "This cluster does not offer file access.",
+        "feature_disabled": "File access is turned off on this deployment.",
+        "guest_disconnected": "The connection to the guest closed. The instance may have stopped.",
+    },
+    504: {
+        "guest_timeout": "The guest did not answer in time. It may be busy or still starting.",
+    },
+    507: {
+        "no_space": "The guest does not have enough free space.",
     },
 }
 
@@ -125,7 +142,7 @@ def public_server_detail(status_code: int, detail: Any, reference: str) -> Any:
     `authority_unavailable` reached the browser as a Python dict repr and the client's mapping for
     it never matched.
     """
-    if status_code not in (502, 503, 504):
+    if status_code not in (502, 503, 504, 507):
         return client_detail(reference)
     codes = _STRUCTURED_5XX.get(status_code, {})
     if isinstance(detail, dict) and detail.get("error") in codes:

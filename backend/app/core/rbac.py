@@ -139,6 +139,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
     Role.TENANT: {
         Permission.INSTANCE_READ,
         Permission.INSTANCE_CONSOLE, Permission.INSTANCE_TERMINAL,
+        Permission.FILE_TRANSFER,
         Permission.NETWORK_READ,
         Permission.STORAGE_READ,
         Permission.IMAGE_READ,

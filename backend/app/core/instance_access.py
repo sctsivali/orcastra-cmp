@@ -22,3 +22,16 @@ def verify_instance_access(host: str, project: Optional[str], instance_name: str
     if permission != "view" and get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, scoped_project, instance_name, permission)
     return scoped_project
+
+
+def verify_file_access(host: str, project: Optional[str], instance_name: str) -> str:
+    """The project the caller may reach `instance_name`'s files in; raises 403 when it may not.
+
+    important: `file_transfer` is checked whatever `tenant_perm_enforcement_enabled` says. That flag
+    relaxes a rollout of console grants, and reading it here would turn every viewer into root in
+    the guest's filesystem the moment an operator switched it off.
+    """
+    scoped_project = verify_project_access(host, project)
+    verify_tenant_permission(host, scoped_project, instance_name, "view")
+    verify_tenant_permission(host, scoped_project, instance_name, "file_transfer")
+    return scoped_project

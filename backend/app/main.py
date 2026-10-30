@@ -658,10 +658,12 @@ async def lifespan(app: FastAPI):
     # per-process fallback while four workers serve sockets. Redis is used whenever it answers;
     # with REDIS_ENABLED an unreachable Redis refuses tickets instead of falling back.
     try:
+        from app.core.file_ticket import get_file_ticket_store
         from app.core.ws_ticket_store import get_ws_ticket_store
 
         if settings.redis_url:
             await get_ws_ticket_store().connect(settings.redis_url, required=settings.redis_enabled)
+            await get_file_ticket_store().connect(settings.redis_url, required=settings.redis_enabled)
     except Exception as ticket_err:
         logger.error("WebSocket ticket store did not start: %s", ticket_err)
 
@@ -830,10 +832,12 @@ async def lifespan(app: FastAPI):
         tracker.stop_cleanup()
         tracker.stop_publisher()
         await get_session_registry().aclose()
+        from app.core.file_ticket import get_file_ticket_store
         from app.core.ws_ticket_store import get_ws_ticket_store
         from app.services.spice_session import get_spice_session_store
 
         await get_ws_ticket_store().aclose()
+        await get_file_ticket_store().aclose()
         await get_spice_session_store().aclose()
         logger.info("Session tracker cleanup and publisher stopped")
     except Exception:
@@ -1128,6 +1132,15 @@ Ensure your client certificates are properly configured.
     # File Transfer Router (Upload files to LXD instances)
     from app.routers.file_transfer import router as file_transfer_router
     app.include_router(file_transfer_router, prefix=settings.api_prefix)
+
+    from app.routers.instance_file_transfer import (
+        router as instance_file_transfer_router,
+        ticket_router as instance_file_ticket_router,
+    )
+    from app.routers.instance_files import router as instance_files_router
+    app.include_router(instance_files_router, prefix=settings.api_prefix)
+    app.include_router(instance_file_transfer_router, prefix=settings.api_prefix)
+    app.include_router(instance_file_ticket_router, prefix=settings.api_prefix)
     
     # Terminal Router (WebSocket terminal access)
     app.include_router(terminal_router, prefix=settings.api_prefix)

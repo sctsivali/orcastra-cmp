@@ -658,6 +658,8 @@
   "settings": {
     "api_version": "",
     "debug": false,
+    "instance_files_enabled": true,
+    "instance_files_max_transfer_bytes": 20000000000,
     "migration_auto_cleanup_enabled": true,
     "migration_center_enabled": true,
     "migration_default_retention_hours": 24,

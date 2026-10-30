@@ -214,6 +214,16 @@ class Settings(BaseSettings):
     # taking snapshots on live customer clusters as a side effect of a deploy is not a deliberate
     # act. It gates the loop AND the routes, so a deployment that has not turned it on has no
     # surface at all rather than one that answers but never fires.
+    instance_files_enabled: bool = Field(
+        default=True,
+        alias="INSTANCE_FILES_ENABLED",
+        description="Offer the file explorer. Off, its routes answer 503 feature_disabled.",
+    )
+    instance_files_max_transfer_bytes: int = Field(
+        default=20_000_000_000,
+        alias="INSTANCE_FILES_MAX_TRANSFER_BYTES",
+        description="Largest single file or folder archive moved through the file explorer.",
+    )
     snapshot_schedules_enabled: bool = Field(
         default=False,
         alias="SNAPSHOT_SCHEDULES_ENABLED",

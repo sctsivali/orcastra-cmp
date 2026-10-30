@@ -186,7 +186,7 @@ def test_a_signed_entry_moved_to_another_ticket_opens_nothing():
 def test_without_a_signing_key_nothing_is_minted(monkeypatch):
     from app.core import ws_ticket_store as module
 
-    monkeypatch.setattr(module, "_settings_mac_key", lambda: None)
+    monkeypatch.setattr(module, "_settings_mac_key", lambda *_: None)
     store = WsTicketStore()
 
     with pytest.raises(TicketStoreUnavailable):

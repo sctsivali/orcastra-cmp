@@ -25,6 +25,8 @@ from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
 import websockets
 
+from pylxd.exceptions import NotFound
+
 from app.core.blocking import run_blocking
 from app.services.lxd_ssl import create_lxd_ssl_context
 
@@ -119,16 +121,21 @@ def read_instance(host: str, project: str, instance_name: str) -> Dict[str, Any]
     client = lxd_client(host)
     if client is None:
         raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True)
+    # important: pylxd raises NotFound for a 404 before a status check here could see one, and a
+    # missing instance is an answer, not a stale client worth rebuilding.
     try:
         response = client.api.instances[safe_segment(instance_name)].get(params=params)
+    except NotFound as missing:
+        raise SessionSetupError(f"Instance {instance_name} was not found", retryable=False) from missing
     except Exception as first:  # noqa: BLE001 - a pooled client can be stale; rebuild it once
         logger.info("Instance read on %s failed with the pooled client (%s); reconnecting", host, type(first).__name__)
         client = client_for_retry(host)
         if client is None:
             raise SessionSetupError(f"Cannot reach cluster {host}", retryable=True) from first
-        response = client.api.instances[safe_segment(instance_name)].get(params=params)
-    if response.status_code == 404:
-        raise SessionSetupError(f"Instance {instance_name} was not found", retryable=False)
+        try:
+            response = client.api.instances[safe_segment(instance_name)].get(params=params)
+        except NotFound as missing:
+            raise SessionSetupError(f"Instance {instance_name} was not found", retryable=False) from missing
     if response.status_code != 200:
         raise SessionSetupError(f"The cluster answered {response.status_code} for {instance_name}", retryable=True)
     return response.json().get("metadata", {}) or {}
@@ -160,6 +167,14 @@ def connection_material(host: str) -> Tuple[str, ssl.SSLContext]:
     if not endpoint:
         raise ValueError(f"No endpoint is registered for {host}")
     return ws_base(endpoint), _ssl_context(host, cert_pem, key_pem)
+
+
+def connection_pin(host: str) -> str:
+    """The certificate fingerprint this worker holds ``host`` to, or "" when it holds none."""
+    from app.services.lxd_service import get_lxd_service
+
+    info = get_lxd_service().connection_manager._connection_info.get(host) or {}
+    return str(info.get("server_fingerprint") or "")
 
 
 def ws_base(endpoint: str) -> str:

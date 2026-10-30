@@ -66,6 +66,8 @@ class SystemSettings(BaseModel):
     snapshot_schedules_enabled: bool
     # The task panel is mounted only when the journal is on; the console hides the dock otherwise.
     task_journal_enabled: bool
+    instance_files_enabled: bool = False
+    instance_files_max_transfer_bytes: int = 0
     # Migration rollout is staged. Each mutation class has its own gate, and the instance
     # stages are on by default. The recovery flags tell the console which retention actions,
     # automatic cleanup, and running-source behaviour to describe.
@@ -127,6 +129,8 @@ async def get_system_settings():
         debug=settings.debug,
         snapshot_schedules_enabled=settings.snapshot_schedules_enabled,
         task_journal_enabled=settings.task_journal_enabled,
+        instance_files_enabled=getattr(settings, "instance_files_enabled", False),
+        instance_files_max_transfer_bytes=getattr(settings, "instance_files_max_transfer_bytes", 0),
         migration_center_enabled=getattr(settings, "migration_center_enabled", False),
         migration_durable_copy_enabled=getattr(
             settings, "migration_durable_copy_enabled", False

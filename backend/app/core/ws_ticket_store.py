@@ -52,21 +52,41 @@ class TicketBudgetExceeded(Exception):
     """The caller minted more tickets in the window than any page needs."""
 
 
-def _budget_key(user_key: str) -> str:
-    return f"{BUDGET_PREFIX}:{hashlib.sha256(user_key.encode('utf-8')).hexdigest()}"
+def _budget_key(user_key: str, prefix: str = BUDGET_PREFIX) -> str:
+    return f"{prefix}:{hashlib.sha256(user_key.encode('utf-8')).hexdigest()}"
 
 
-def _settings_mac_key() -> Optional[bytes]:
+def _settings_mac_key(context: bytes = _MAC_CONTEXT) -> Optional[bytes]:
     from app.core.config import get_settings
 
     secret = get_settings().secret_key or ""
     if not secret:
         return None
-    return hmac.new(secret.encode("utf-8"), _MAC_CONTEXT, hashlib.sha256).digest()
+    return hmac.new(secret.encode("utf-8"), context, hashlib.sha256).digest()
 
 
 class WsTicketStore:
-    def __init__(self, mac_key: Optional[bytes] = None) -> None:
+    """Single-use signed tickets. Its defaults are the WebSocket ones.
+
+    note: another kind of ticket is another store with its own prefix and MAC context, as
+    core/file_ticket.py does, so a ticket of one kind cannot be spent on the other's door.
+    """
+
+    def __init__(
+        self,
+        mac_key: Optional[bytes] = None,
+        *,
+        ticket_prefix: str = TICKET_PREFIX,
+        budget_prefix: str = BUDGET_PREFIX,
+        mac_context: bytes = _MAC_CONTEXT,
+        budget: int = BUDGET_PER_WINDOW,
+        ttl_seconds: int = TICKET_TTL_SECONDS,
+    ) -> None:
+        self._ticket_prefix = ticket_prefix
+        self._budget_prefix = budget_prefix
+        self._mac_context = mac_context
+        self._budget = budget
+        self._ttl_seconds = ttl_seconds
         self._client: Any = None
         self._redis_expected = False
         self._mac_key = mac_key
@@ -110,7 +130,7 @@ class WsTicketStore:
 
     def _key_bytes(self) -> bytes:
         if self._mac_key is None:
-            self._mac_key = _settings_mac_key()
+            self._mac_key = _settings_mac_key(self._mac_context)
         if not self._mac_key:
             logger.error("SECRET_KEY is not set; WebSocket tickets cannot be signed, so none are minted")
             raise TicketStoreUnavailable()
@@ -135,15 +155,15 @@ class WsTicketStore:
 
     async def mint(self, user_key: str, claims_json: str) -> str:
         ticket = new_ticket()
-        key = f"{TICKET_PREFIX}:{ticket_digest(ticket)}"
+        key = f"{self._ticket_prefix}:{ticket_digest(ticket)}"
         signed = self._sign(key, claims_json)
         if self._redis_expected:
             if self._client is None:
                 raise TicketStoreUnavailable()
             try:
                 granted = await self._client.eval(
-                    _MINT, 2, key, _budget_key(user_key),
-                    signed, BUDGET_PER_WINDOW, BUDGET_WINDOW_SECONDS, TICKET_TTL_SECONDS,
+                    _MINT, 2, key, _budget_key(user_key, self._budget_prefix),
+                    signed, self._budget, BUDGET_WINDOW_SECONDS, self._ttl_seconds,
                 )
             except Exception as exc:  # noqa: BLE001 - refused, never minted somewhere else
                 logger.warning("WebSocket ticket mint failed: %s", type(exc).__name__)
@@ -156,18 +176,18 @@ class WsTicketStore:
             started, spent = self._spent.get(user_key, (now, 0))
             if now - started >= BUDGET_WINDOW_SECONDS:
                 started, spent = now, 0
-            if spent >= BUDGET_PER_WINDOW:
+            if spent >= self._budget:
                 raise TicketBudgetExceeded()
             self._spent[user_key] = (started, spent + 1)
             self._local = {k: v for k, v in self._local.items() if v[0] > now}
-            self._local[key] = (now + TICKET_TTL_SECONDS, signed)
+            self._local[key] = (now + self._ttl_seconds, signed)
         return ticket
 
     async def redeem(self, ticket: str) -> Optional[str]:
         """The ticket's claims, deleted as they are read; None when unknown, spent or unsigned."""
         if not ticket or len(ticket) > 128:
             return None
-        key = f"{TICKET_PREFIX}:{ticket_digest(ticket)}"
+        key = f"{self._ticket_prefix}:{ticket_digest(ticket)}"
         if self._redis_expected:
             if self._client is None:
                 return None
