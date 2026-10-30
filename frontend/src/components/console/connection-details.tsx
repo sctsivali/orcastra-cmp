@@ -43,7 +43,10 @@ export function ConnectionDetails({ status, stats, mouseMode, agentConnected, re
   if (status !== "connected") return null;
   const rtt = stats?.rttMs ?? null;
   const { className, Icon, verdict } = tone(rtt);
-  const chip = rtt !== null ? `${rtt} ms` : `${stats?.fps ?? 0} fps`;
+  // The round trip is measured from pointer ACKs only (a fake move would keep the guest awake),
+  // so before the first move the chip shows frames, and "Idle" on a still screen.
+  const fps = stats?.fps ?? 0;
+  const chip = rtt !== null ? `${rtt} ms` : fps > 0 ? `${fps} fps` : "Idle";
 
   return (
     <Popover>
