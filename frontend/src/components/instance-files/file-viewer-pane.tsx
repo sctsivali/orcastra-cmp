@@ -112,7 +112,7 @@ export function FileViewerPane({ target, file, writeReason, onClose, onDownload 
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-[36px] items-center gap-2 border-b px-2">
         <Button variant="ghost" size="sm" className="h-7 gap-1 px-2" onClick={leave}>
-          <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back to folder
         </Button>
         <OverflowText label="File name" value={`${name}${dirty ? " (unsaved)" : ""}`} mono mode="overlay" className="min-w-0 flex-1 text-xs" />
         {content.data && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(content.data.size)}</span>}

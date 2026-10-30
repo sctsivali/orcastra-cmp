@@ -13,10 +13,19 @@ const OVERSCAN = 10;
  *
  * note: the table owns its scroll container (ui/table.tsx), found from the table element.
  */
-export function useFixedRowWindow(rowHeight: number, rowCount: number, pinned: number | null) {
+export function useFixedRowWindow(estimatedRowHeight: number, rowCount: number, pinned: number | null) {
   const tableRef = useRef<HTMLTableElement>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState({ top: 0, height: 600 });
+  const [measured, setMeasured] = useState<number | null>(null);
+  // Read from a real row: a spacer sized from a guess leaves the scrollbar lying about the end.
+  const rowHeight = measured ?? estimatedRowHeight;
+
+  useEffect(() => {
+    const row = tableRef.current?.querySelector<HTMLElement>("tr[data-row-index]");
+    const height = row?.getBoundingClientRect().height;
+    if (height && Math.abs(height - rowHeight) > 0.5) setMeasured(height);
+  }, [rowCount, estimatedRowHeight, rowHeight]);
 
   useEffect(() => {
     const scroller = tableRef.current?.closest<HTMLElement>('[data-slot="table-container"]') ?? null;
@@ -42,7 +51,7 @@ export function useFixedRowWindow(rowHeight: number, rowCount: number, pinned: n
     (index: number) => {
       const scroller = scrollerRef.current;
       if (!scroller) return;
-      const headerHeight = 32;
+      const headerHeight = tableRef.current?.tHead?.getBoundingClientRect().height ?? 32;
       const top = index * rowHeight;
       const bottom = top + rowHeight + headerHeight;
       if (top < scroller.scrollTop) scroller.scrollTop = top;

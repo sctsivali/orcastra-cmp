@@ -121,19 +121,19 @@ async def write_upload_chunk(
     instance_name: str = Query(...),
     upload_token: str = Header(..., alias="Upload-Token", max_length=32768),
     upload_offset: int = Header(..., alias="Upload-Offset", ge=0),
-    content_length: int = Header(..., alias="Content-Length", ge=0),
+    # important: not Content-Length. The same-origin proxy streams the body and drops that header,
+    # so it never arrives from a browser. `write_chunk` holds the body to this as bytes arrive.
+    upload_length: int = Header(..., alias="Upload-Length", ge=0, le=uploads.MAX_CHUNK_BYTES),
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ):
     bound = verify_file_access(host, project, instance_name)
-    if content_length > uploads.MAX_CHUNK_BYTES:
-        raise too_large(uploads.MAX_CHUNK_BYTES).to_http()
     async with http_failures():
         session = _session_of(upload_token, user, host, bound, instance_name)
     # note: the body is read only from here on. FastAPI parses nothing for a raw stream, so a caller
     # refused above has made this server hold none of it.
     async with guest_session(user, host, bound, instance_name, transfer=True, op_timeout=30.0) as guest:
         offset = await uploads.write_chunk(
-            guest, session, offset=upload_offset, length=content_length, body=request.stream()
+            guest, session, offset=upload_offset, length=upload_length, body=request.stream()
         )
     return Response(status_code=204, headers={"Upload-Offset": str(offset)})
 
@@ -232,12 +232,9 @@ async def upload_bundle(
     host: str = Query(...),
     project: str = Query("default"),
     instance_name: str = Query(...),
-    content_length: int = Header(..., alias="Content-Length", ge=4),
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ):
     bound = verify_file_access(host, project, instance_name)
-    if content_length > bundle.MAX_BUNDLE_BYTES + bundle.MAX_MANIFEST_BYTES + 4:
-        raise too_large(bundle.MAX_BUNDLE_BYTES).to_http()
     async with audited("file.upload", host=host, project=bound, instance=instance_name, details={"bundle": True}) as record:
         async with guest_session(user, host, bound, instance_name, transfer=True, record=record, op_timeout=30.0) as guest:
             result = await bundle.receive_bundle(guest, request.stream(), now=int(time.time()))

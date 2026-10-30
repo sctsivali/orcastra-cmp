@@ -108,11 +108,12 @@ async def list_directory(guest: SftpClient, path: str) -> Dict[str, Any]:
                     if is_expired_temp(name, now):
                         stale.append(name)
                     continue
-                entries.append(_entry(name, item.attrs, item.longname))
-                held += len(item.filename) + len(item.longname)
+                # One past the cap before calling it truncated: a folder of exactly the limit is whole.
                 if len(entries) >= MAX_LIST_ENTRIES or held >= MAX_LIST_BYTES:
                     truncated = True
                     break
+                entries.append(_entry(name, item.attrs, item.longname))
+                held += len(item.filename) + len(item.longname)
             if truncated:
                 break
     gate = asyncio.Semaphore(_PARALLEL)

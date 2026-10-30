@@ -182,6 +182,15 @@ def test_no_cluster_lock_is_held_across_a_guest_round_trip():
         assert "guard_migration_mutations" not in names, path.name
 
 
+def test_no_route_depends_on_content_length():
+    """The proxy streams request bodies and drops Content-Length, so a browser never sends one.
+
+    Live on 2026-10-30 every chunk from a browser answered 422 while a direct API call passed.
+    """
+    for filename in ("instance_files.py", "instance_file_transfer.py"):
+        assert 'alias="Content-Length"' not in (ROUTERS / filename).read_text()
+
+
 def test_paths_never_travel_in_a_query():
     for filename in ("instance_files.py", "instance_file_transfer.py"):
         for node in _handlers(filename):
@@ -308,6 +317,6 @@ async def test_a_chunk_for_a_fenced_instance_is_refused_before_its_body_is_read(
     with pytest.raises(HTTPException) as refused:
         await transfer.write_upload_chunk(
             request=_Unread(), host=HOST, project="default", instance_name=INSTANCE,
-            upload_token="t", upload_offset=0, content_length=1, user=None,
+            upload_token="t", upload_offset=0, upload_length=1, user=None,
         )
     assert refused.value.detail["error"] == "migration_fenced"

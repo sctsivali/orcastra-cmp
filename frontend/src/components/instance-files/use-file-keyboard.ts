@@ -93,7 +93,7 @@ export function useFileKeyboard({
           runAction("delete", selectedEntries.length ? selectedEntries : [entry as GuestEntry]);
         }
         return;
-      case "/": event.preventDefault(); rootRef.current?.querySelector<HTMLInputElement>('input[type="search"], input[placeholder="Filter this folder"]')?.focus(); return;
+      case "/": event.preventDefault(); rootRef.current?.querySelector<HTMLInputElement>('input[aria-label="Filter this folder"]')?.focus(); return;
       case "Escape":
         if (state.filter) dispatch({ type: "filter", value: "" });
         else if (state.selected.size) dispatch({ type: "select", names: [], anchor: null });

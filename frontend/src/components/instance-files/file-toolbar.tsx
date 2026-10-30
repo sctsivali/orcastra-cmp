@@ -85,7 +85,8 @@ export function FileToolbar(props: FileToolbarProps) {
           <SearchInput
             value={props.filter}
             onChange={props.onFilter}
-            placeholder="Filter this folder"
+            placeholder="Filter"
+            label="Filter this folder"
             clearLabel="Clear the folder filter"
             className="w-44 shrink-0"
           />
@@ -153,7 +154,8 @@ export function FileToolbar(props: FileToolbarProps) {
           <SearchInput
             value={props.filter}
             onChange={props.onFilter}
-            placeholder="Filter this folder"
+            placeholder="Filter"
+            label="Filter this folder"
             clearLabel="Clear the folder filter"
           />
         </div>

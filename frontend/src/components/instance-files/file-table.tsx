@@ -15,6 +15,7 @@ import { RowActions } from "@/components/ui/row-actions";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TableLink } from "@/components/ui/table-link";
+import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { guestText } from "@/lib/instance-files/guest-text";
 import type { GuestEntry } from "@/lib/instance-files/api";
 import { defineTable } from "@/lib/table-filter";
@@ -54,14 +55,14 @@ export const FILE_TABLE = defineTable<GuestEntry>()({
   ],
 });
 
-const ROW_HEIGHT: Record<ExplorerWidth, number> = { wide: 33, medium: 33, narrow: 44 };
+const ROW_HEIGHT: Record<ExplorerWidth, number> = { wide: 33, medium: 33, narrow: 45 };
 
 export function formatMode(mode: number): string {
   return mode.toString(8).padStart(4, "0");
 }
 
 export function formatTime(mtime: number | null): string {
-  return mtime ? formatDateTime(new Date(mtime * 1000).toISOString()) : "";
+  return mtime ? formatDateTime(new Date(mtime * 1000).toISOString()) : EMPTY_VALUE;
 }
 
 function EntryIcon({ entry }: { entry: GuestEntry }) {
@@ -212,7 +213,7 @@ export function FileTable({
         <TableCell>
           <div className="flex min-w-0 items-center gap-2">
             <EntryIcon entry={entry} />
-            <div className="min-w-0">
+            <div className={cn("min-w-0", mode !== "narrow" && "flex items-baseline gap-2")}>
               <TableLink onClick={() => onActivate(entry)} className="max-w-full" aria-label={`Open ${name}`}>
                 <span className="font-mono">{name}</span>
               </TableLink>
@@ -221,25 +222,26 @@ export function FileTable({
                   {isFolder ? formatTime(entry.mtime) : `${formatBytes(entry.size)}, ${formatTime(entry.mtime)}`}
                 </div>
               ) : note ? (
-                <OverflowText label="Link target" value={note} mode="overlay" className="text-muted-foreground" />
+                <OverflowText label="Link target" value={note} mode="overlay" className="min-w-0 text-muted-foreground" />
               ) : null}
             </div>
           </div>
         </TableCell>
         {mode !== "narrow" && (
           <>
-            <TableCell className="w-24 text-right"><span className="tabular-nums">{isFolder ? "" : formatBytes(entry.size)}</span></TableCell>
+            <TableCell className="w-24 text-right"><span className="tabular-nums">{isFolder ? EMPTY_VALUE : formatBytes(entry.size)}</span></TableCell>
             <TableCell className="w-44"><span className="tabular-nums">{formatTime(entry.mtime)}</span></TableCell>
           </>
         )}
         {mode === "wide" && (
           <>
-            <TableCell className="w-28"><OverflowText label="Owner" value={String(entry.owner ?? entry.uid ?? "")} mode="overlay" /></TableCell>
+            <TableCell className="w-28"><OverflowText label="Owner" value={String(entry.owner ?? entry.uid ?? EMPTY_VALUE)} mode="overlay" /></TableCell>
             <TableCell className="w-16 font-mono">{formatMode(entry.mode)}</TableCell>
           </>
         )}
         <TableCell className="w-10 text-right">
           <RowActions
+            className="-my-1 h-6 w-6"
             triggerLabel={`Actions for ${name}`}
             actions={rowActions.map((action) => ({
               id: action.id,

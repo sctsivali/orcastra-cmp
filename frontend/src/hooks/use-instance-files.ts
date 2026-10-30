@@ -48,11 +48,9 @@ export function useFileActions(target: GuestTarget) {
   const entryChange = useCallback(
     async <T,>(write: () => Promise<T>): Promise<T | undefined> => {
       const outcome = await dispatchActorMutation(captureActorMutationFence(scopeKey), write);
-      if (outcome.retired) return undefined;
-      await reconcileMutationImpact(queryClient, "instance-files.entry");
-      return outcome.value;
+      return outcome.retired ? undefined : outcome.value;
     },
-    [queryClient, scopeKey],
+    [scopeKey],
   );
 
   return useMemo(

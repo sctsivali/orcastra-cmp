@@ -192,6 +192,7 @@ export const instanceFilesAPI = {
           "Content-Type": "application/octet-stream",
           "Upload-Token": token,
           "Upload-Offset": String(offset),
+          "Upload-Length": String(chunk.size),
         },
         body: chunk,
         signal,
