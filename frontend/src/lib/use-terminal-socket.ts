@@ -22,6 +22,7 @@ import {
   ACCESS_REVOKED_MESSAGE,
   INSTANCE_RETURN_POLL_MS,
   INSTANCE_RETURN_WINDOW_MS,
+  STABLE_SESSION_MS,
   WAITING_FOR_INSTANCE,
   WS_CLOSE,
   mintFailureMessage,
@@ -119,6 +120,9 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
   const closedByUsRef = useRef(false);
   // When a live session dropped or its instance powered down; null while connected.
   const droppedAtRef = useRef<number | null>(null);
+  const readyAtRef = useRef<number | null>(null);
+  // Why the server refused the session; the close follows at once and reports it.
+  const refusalRef = useRef<string | null>(null);
   const lastPongRef = useRef(Date.now());
   const pendingRef = useRef<Uint8Array[]>([]);
   const writingRef = useRef(false);
@@ -240,13 +244,14 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
           callbacks.current.onSessionId?.(String(msg.session_id));
           break;
         case "ready":
-          attemptsRef.current = 0;
+          readyAtRef.current = Date.now();
           droppedAtRef.current = null;
           setStatus("connected");
           callbacks.current.onReady?.();
           break;
         case "error":
-          note(bundleRef.current?.term, String(msg.message), "\x1b[31m");
+          // note: kept for the close, so it prints once, and in full where a close reason may be cut.
+          refusalRef.current = String(msg.message);
           break;
         case "pong":
           lastPongRef.current = Date.now();
@@ -260,7 +265,11 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
       if (wsRef.current === ws) wsRef.current = null;
       if (closedByUsRef.current) return;
       const term = bundleRef.current?.term;
-      const reason = event.reason || "";
+      const reason = refusalRef.current || event.reason || "";
+      refusalRef.current = null;
+      const readyAt = readyAtRef.current;
+      readyAtRef.current = null;
+      if (readyAt !== null && Date.now() - readyAt >= STABLE_SESSION_MS) attemptsRef.current = 0;
       const wasLive = statusRef.current === "connected";
       if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) droppedAtRef.current ??= Date.now();
       const droppedAt = droppedAtRef.current;

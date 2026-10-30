@@ -13,7 +13,7 @@
  *   clipboard and file drops work both ways. Without it the console scales the picture instead.
  */
 
-import { INSTANCE_RETURN_POLL_MS, INSTANCE_RETURN_WINDOW_MS, WAITING_FOR_INSTANCE, WS_CLOSE, spiceSocketUrls } from "@/lib/ws-url";
+import { INSTANCE_RETURN_POLL_MS, INSTANCE_RETURN_WINDOW_MS, STABLE_SESSION_MS, WAITING_FOR_INSTANCE, WS_CLOSE, spiceSocketUrls } from "@/lib/ws-url";
 import { loadSpice } from "./loader";
 import { KeyboardBridge, downCode, keyForCharacter, upCode, NAMED_KEYS } from "./keyboard";
 import { PointerBridge, type MouseMode } from "./pointer";
@@ -99,9 +99,6 @@ export interface SpiceConn extends ChannelLike {
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000];
 const FINAL_CODES = new Set([1000, 1008, 4403, 4404, 4409]);
-// Retries count again from the first only once a connection has stayed up this long, so two
-// viewers trading one display (one outside the dashboard, say) run out of retries.
-const STABLE_AFTER_MS = 10_000;
 const RESIZE_DEBOUNCE_MS = 350;
 const TYPE_INTERVAL_MS = 8;
 
@@ -253,7 +250,7 @@ export class SpiceSession {
       this.droppedAt = null;
       this.stableTimer = setTimeout(() => {
         this.attempts = 0;
-      }, STABLE_AFTER_MS);
+      }, STABLE_SESSION_MS);
       this.setStatus("connected");
       this.wake();
     };

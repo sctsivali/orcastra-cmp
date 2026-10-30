@@ -43,6 +43,13 @@ export const INSTANCE_RETURN_WINDOW_MS = 180_000;
 export const INSTANCE_RETURN_POLL_MS = 3_000;
 export const WAITING_FOR_INSTANCE = "The instance is not running. The console reconnects when it starts again.";
 
+/**
+ * Retries count again from the first only once a session has stayed up this long. A session that
+ * dies sooner keeps the backoff going, otherwise two viewers trade a display, or a shell that
+ * cannot stay open is retried every second, for as long as the page is open.
+ */
+export const STABLE_SESSION_MS = 10_000;
+
 export const ACCESS_REVOKED_MESSAGE = "Access to this instance was revoked.";
 
 /**
