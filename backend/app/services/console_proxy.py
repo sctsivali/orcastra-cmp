@@ -33,7 +33,7 @@ from app.services.interactive_relay import (
     OutputWindow,
     close_browser,
 )
-from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, session_io
+from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, redact, session_io
 from app.services.migration_fence import MigrationFenceConflict, guard_instance_mutation
 from app.services.session_models import new_session_id
 from app.services.session_tracker import SessionProtocol, get_session_tracker
@@ -110,7 +110,7 @@ class ConsoleProxy:
         except MigrationFenceConflict as exc:
             await close_browser(self.browser_ws, CLOSE_UNAVAILABLE, str(exc.detail))
         except Exception as exc:  # noqa: BLE001 - the browser is told; the log keeps the type
-            logger.error("Console proxy for %s failed: %s: %s", self._label, type(exc).__name__, exc)
+            logger.error("Console proxy for %s failed: %s: %s", self._label, type(exc).__name__, redact(exc))
             await close_browser(self.browser_ws, CLOSE_UPSTREAM, "The console connection failed")
         finally:
             await self._cleanup()
@@ -149,6 +149,9 @@ class ConsoleProxy:
                 "data_url": info["ws_url"],
                 "operation_id": info["operation_id"],
                 "session_id": self._session.session_id if self._session else "",
+                "host": self.host,
+                "project": self.project,
+                "instance": self.instance_name,
             })
             self._published = True
             self._log_ready(started)
@@ -161,8 +164,12 @@ class ConsoleProxy:
 
         record = await store.wait_for(group)
         if record and record.get("data_url"):
+            base, ssl_context = await session_io(connection_material, self.host, label=f"console.material:{self.host}", host=self.host)
+            if not self._is_own_display(record, base):
+                logger.warning("A SPICE record for %s named another display; this channel opens its own", self._label)
+                await self._run_own_operation(started)
+                return
             self.role = "member"
-            _, ssl_context = await session_io(connection_material, self.host, label=f"console.material:{self.host}", host=self.host)
             self.data_ws = await open_lxd_socket(record["data_url"], ssl_context, timeout=_CONNECT_TIMEOUT_SECONDS)
             self._log_ready(started)
             flush = asyncio.create_task(self._flush_member_bytes(store, group))
@@ -176,6 +183,18 @@ class ConsoleProxy:
             raise SessionSetupError(str(record["failed"]), retryable=False)
         logger.warning("No shared SPICE operation appeared for %s; this channel opens its own", self._label)
         await self._run_own_operation(started)
+
+    def _is_own_display(self, record: Dict[str, Any], base: str) -> bool:
+        """Whether the shared record is this socket's own display on this cluster's LXD."""
+        operation_id = str(record.get("operation_id") or "")
+        data_url = str(record.get("data_url") or "")
+        return bool(
+            operation_id
+            and record.get("host") == self.host
+            and record.get("project") == self.project
+            and record.get("instance") == self.instance_name
+            and data_url.startswith(f"{base}/1.0/operations/{operation_id}/websocket?secret=")
+        )
 
     async def _renew_while_open(self, store: Any, group: str) -> None:
         while True:

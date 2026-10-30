@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import ssl
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -42,6 +43,18 @@ _SESSION_IO_TIMEOUT_SECONDS = 30.0
 LXD_PING_INTERVAL_SECONDS = 30.0
 LXD_PING_TIMEOUT_SECONDS = 30.0
 
+
+
+_SECRET = re.compile(r"secret=[^&\s'\"]+")
+
+
+def redact(text: object) -> str:
+    """``text`` with any operation secret blanked, for log lines built from exception text.
+
+    note: websockets renders the whole URL in some errors (InvalidURI), and the URL of an LXD
+    operation socket carries the secret that opens it.
+    """
+    return _SECRET.sub("secret=[redacted]", str(text))
 
 
 class SessionSetupError(Exception):

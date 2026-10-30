@@ -22,6 +22,11 @@ the guest's screen and keyboard. It is stored only Fernet-encrypted under a key 
 SECRET_KEY, keyed by a digest of the group id, and lives no longer than the owner keeps renewing
 it. The group id itself only ever travels inside signed tickets.
 
+important: Fernet authenticates the bytes, not where they sit. A sealed record copied under
+another group's key would decrypt there and hand a stranger's channels the victim's display, so
+the record carries its own key and is refused anywhere else, and a joining channel also checks
+the record's instance and operation URL against its own (console_proxy).
+
 note: anything that fails here falls back to the old behaviour, an operation per channel, rather
 than refusing the console.
 """
@@ -46,6 +51,8 @@ RECORD_TTL_SECONDS = 60
 RENEW_EVERY_SECONDS = 15.0
 ATTACH_WAIT_SECONDS = 10.0
 _POLL_SECONDS = 0.05
+# A channel joins within its ticket's 30 s; a record older than this is never what it wants.
+_SEAL_TTL_SECONDS = 120
 _KEY_CONTEXT = b"orcastra:spice-session:v1"
 _CONNECT_TIMEOUT = 2.0
 _SOCKET_TIMEOUT = 2.0
@@ -109,23 +116,28 @@ class SpiceSessionStore:
             self._fernet = Fernet(base64.urlsafe_b64encode(raw))
         return self._fernet
 
-    def _seal(self, record: Dict[str, Any]) -> str:
-        return self._cipher().encrypt(json.dumps(record, separators=(",", ":")).encode("utf-8")).decode("ascii")
+    def _seal(self, op_key: str, record: Dict[str, Any]) -> str:
+        body = json.dumps({"k": op_key, **record}, separators=(",", ":"))
+        return self._cipher().encrypt(body.encode("utf-8")).decode("ascii")
 
-    def _open(self, sealed: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _open(self, sealed: Optional[str], op_key: str) -> Optional[Dict[str, Any]]:
         if not sealed:
             return None
         try:
             from cryptography.fernet import InvalidToken
 
             try:
-                return json.loads(self._cipher().decrypt(sealed.encode("ascii")))
+                record = json.loads(self._cipher().decrypt(sealed.encode("ascii"), ttl=_SEAL_TTL_SECONDS))
             except InvalidToken:
                 logger.warning("A SPICE session record failed its integrity check and was ignored")
                 return None
         except Exception as exc:  # noqa: BLE001 - an unreadable record attaches nothing
             logger.warning("A SPICE session record could not be read: %s", type(exc).__name__)
             return None
+        if not isinstance(record, dict) or record.pop("k", None) != op_key:
+            logger.warning("A SPICE session record sealed for another display was ignored")
+            return None
+        return record
 
     # ── local fallback (a backend run without Redis is one process) ──────────────────────────
 
@@ -137,7 +149,11 @@ class SpiceSessionStore:
         return entry[1]
 
     def _local_set(self, key: str, value: Any, ttl: float) -> None:
-        self._local[key] = (time.monotonic() + ttl, value)
+        now = time.monotonic()
+        # Records nobody reads again (a failure, a member's last bytes) expire here too.
+        for stale in [k for k, (expires, _) in self._local.items() if expires <= now]:
+            del self._local[stale]
+        self._local[key] = (now + ttl, value)
 
     # ── the protocol ─────────────────────────────────────────────────────────────────────────
 
@@ -154,7 +170,7 @@ class SpiceSessionStore:
 
     async def publish(self, group: str, record: Dict[str, Any]) -> None:
         _, op_key, _ = _keys(group)
-        sealed = self._seal(record)
+        sealed = self._seal(op_key, record)
         if self._client is not None:
             await self._client.set(op_key, sealed, ex=RECORD_TTL_SECONDS)
         else:
@@ -176,7 +192,7 @@ class SpiceSessionStore:
                 sealed = await self._client.get(op_key)
             else:
                 sealed = self._local_get(op_key)
-            record = self._open(sealed)
+            record = self._open(sealed, op_key)
             if record is not None:
                 return record
             if time.monotonic() >= deadline:

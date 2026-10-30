@@ -52,8 +52,8 @@ class Cluster:
         number = len(self.operations) + 1
         info = {
             "operation_id": f"op-{number}",
-            "ws_url": f"wss://cluster/op-{number}/data?secret=data-{number}",
-            "control_url": f"wss://cluster/op-{number}/control?secret=control-{number}",
+            "ws_url": f"wss://cluster/1.0/operations/op-{number}/websocket?secret=data-{number}",
+            "control_url": f"wss://cluster/1.0/operations/op-{number}/websocket?secret=control-{number}",
         }
         self.operations.append(info)
         return info
@@ -247,3 +247,58 @@ def test_the_vga_tickets_of_one_display_carry_one_group():
 
     assert again.group == claims.group and claims.group
     assert TicketClaims.from_json(claims_for("terminal", WsTarget(), None).to_json()).group is None
+
+
+# ── the shared record is bound to its group and its target ─────────────────────────────────────
+
+
+async def test_a_record_copied_into_another_group_is_refused(store):
+    """Fernet has no associated data: a sealed record moved to another group's key used to decrypt
+    and attach a stranger's channels to the victim's display. The record now names its own key."""
+    await store.publish("victim-group", {"data_url": "wss://cluster/1.0/operations/op-1/websocket?secret=s",
+                                         "operation_id": "op-1", "host": "nuc2", "project": "default", "instance": "vm-a"})
+    victim_key = next(k for k in store._local if k.endswith(":op"))
+    expiry, sealed = store._local[victim_key]
+    from app.services.spice_session import _keys
+    store._local[_keys("attacker-group")[1]] = (expiry, sealed)
+
+    assert await store.wait_for("attacker-group", timeout=0) is None
+
+
+async def test_a_member_does_not_join_a_display_of_another_instance(cluster, store):
+    await store.claim(GROUP)
+    await store.publish(GROUP, {"data_url": "wss://cluster/1.0/operations/op-9/websocket?secret=s",
+                                "operation_id": "op-9", "host": "nuc2", "project": "default", "instance": "other-vm"})
+    browser = FakeBrowser()
+    task = asyncio.create_task(channel(browser).run())
+    # It opens its own operation rather than the other instance's display.
+    await wait_until(lambda: len(cluster.operations) == 1, "a fallback operation of its own")
+    assert "wss://cluster/1.0/operations/op-9/websocket?secret=s" not in cluster.sockets
+    browser.leave()
+    await task
+
+
+async def test_a_member_does_not_follow_a_url_outside_the_clusters_operations(cluster, store):
+    await store.claim(GROUP)
+    await store.publish(GROUP, {"data_url": "wss://elsewhere.example/1.0/operations/op-9/websocket?secret=s",
+                                "operation_id": "op-9", "host": "nuc2", "project": "default", "instance": "vm-a"})
+    browser = FakeBrowser()
+    task = asyncio.create_task(channel(browser).run())
+    await wait_until(lambda: len(cluster.operations) == 1, "a fallback operation of its own")
+    assert not any(url.startswith("wss://elsewhere.example") for url in cluster.sockets)
+    browser.leave()
+    await task
+
+
+def test_the_local_store_forgets_expired_records(store):
+    for i in range(50):
+        store._local[f"stale-{i}"] = (0.0, "x")
+    store._local_set("fresh", "y", 60)
+    assert list(store._local) == ["fresh"]
+
+
+def test_a_failure_log_never_carries_an_operation_secret():
+    from app.services.lxd_ws import redact
+
+    text = "wss://10.0.0.5:8443/1.0/operations/abc/websocket?secret=3f9a3f9a isn't a valid URI"
+    assert "3f9a3f9a" not in redact(text)

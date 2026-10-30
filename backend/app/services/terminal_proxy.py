@@ -32,7 +32,7 @@ from app.services.interactive_relay import (
     OutputWindow,
     close_browser,
 )
-from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, session_io
+from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, redact, session_io
 from app.services.migration_fence import MigrationFenceConflict, guard_instance_mutation
 from app.services.session_models import new_session_id
 from app.services.session_tracker import SessionProtocol, get_session_tracker
@@ -109,7 +109,7 @@ class TerminalProxy:
         except MigrationFenceConflict as exc:
             await self._refuse(str(exc.detail), CLOSE_UNAVAILABLE)
         except Exception as exc:  # noqa: BLE001 - the browser is told; the log keeps the type
-            logger.error("Terminal proxy for %s failed: %s: %s", self._label, type(exc).__name__, exc)
+            logger.error("Terminal proxy for %s failed: %s: %s", self._label, type(exc).__name__, redact(exc))
             await self._refuse("The terminal connection failed", CLOSE_UPSTREAM)
         finally:
             await self._cleanup()
