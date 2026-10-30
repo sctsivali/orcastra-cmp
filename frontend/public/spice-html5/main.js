@@ -153,7 +153,11 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
                         parent: this,
                         connection_id : this.connection_id,
                         type : chans.channels[i].type,
-                        chan_id : chans.channels[i].id
+                        chan_id : chans.channels[i].id,
+                        /* Orcastra: a display, inputs or cursor channel that failed used to
+                           fail silently (no onerror), leaving a frozen screen or dead input
+                           under a "connected" status. */
+                        onerror : this.child_error.bind(this)
                     };
             // For LXD console, only create essential channels to reduce WebSocket connections
             // This prevents browser freeze and operation flood
@@ -224,6 +228,8 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
     if (msg.type == SPICE_MSG_MAIN_AGENT_DISCONNECTED)
     {
         this.agent_connected = false;
+        if (this.onagentdisconnected)
+            this.onagentdisconnected(this);
         return true;
     }
 
@@ -240,6 +246,43 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
         else if (agent_data.type == VD_AGENT_FILE_XFER_STATUS)
         {
             this.handle_file_xfer_status(new VDAgentFileXferStatusMessage(agent_data.data));
+            return true;
+        }
+        /* Orcastra: the clipboard, both ways, as UTF-8 text through the guest agent. */
+        else if (agent_data.type == VD_AGENT_CLIPBOARD_GRAB)
+        {
+            var grab = new VDAgentClipboardGrab(agent_data.data);
+            if (grab.types.indexOf(VD_AGENT_CLIPBOARD_UTF8_TEXT) >= 0)
+                this.send_agent_message(VD_AGENT_CLIPBOARD_REQUEST,
+                                        new VDAgentClipboardRequest(VD_AGENT_CLIPBOARD_UTF8_TEXT));
+            return true;
+        }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD)
+        {
+            var clip = new VDAgentClipboard(agent_data.data);
+            if (clip.type == VD_AGENT_CLIPBOARD_UTF8_TEXT && typeof this.clipboard_on_guest_data === "function")
+            {
+                try {
+                    this.clipboard_on_guest_data(new TextDecoder("utf-8").decode(clip.bytes));
+                } catch (e) {}
+            }
+            return true;
+        }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD_REQUEST)
+        {
+            var self = this;
+            if (typeof this.clipboard_get_host_data === "function")
+            {
+                Promise.resolve(this.clipboard_get_host_data()).then(function(text) {
+                    var bytes = new TextEncoder().encode(text == null ? "" : String(text));
+                    self.send_agent_message(VD_AGENT_CLIPBOARD,
+                                            new VDAgentClipboard(VD_AGENT_CLIPBOARD_UTF8_TEXT, bytes));
+                }).catch(function() {});
+            }
+            return true;
+        }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD_RELEASE)
+        {
             return true;
         }
 
@@ -291,9 +334,22 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
     return false;
 }
 
+SpiceMainConn.prototype.child_error = function(e)
+{
+    if (this.state == "closing" || this.state == "error")
+        return;
+    if (this.onerror !== undefined)
+        this.onerror(e);
+}
+
 SpiceMainConn.prototype.stop = function(msg)
 {
     this.state = "closing";
+    /* Orcastra: mark the channels closing before they close, or each reports its own close. */
+    [this.inputs, this.cursor, this.display].forEach(function(channel) {
+        if (channel)
+            channel.state = "closing";
+    });
 
     if (this.inputs)
     {
@@ -358,10 +414,28 @@ SpiceMainConn.prototype.send_agent_message = function(type, message)
 
 SpiceMainConn.prototype.announce_agent_capabilities = function(request)
 {
+    /* Orcastra: clipboard support (UTF-8 text, on demand), without the selection variant so
+       the messages keep the simple wire format. */
     var caps = new VDAgentAnnounceCapabilities(request, (1 << VD_AGENT_CAP_MOUSE_STATE) |
                                                         (1 << VD_AGENT_CAP_MONITORS_CONFIG) |
-                                                        (1 << VD_AGENT_CAP_REPLY));
+                                                        (1 << VD_AGENT_CAP_REPLY) |
+                                                        (1 << VD_AGENT_CAP_CLIPBOARD) |
+                                                        (1 << VD_AGENT_CAP_CLIPBOARD_BY_DEMAND));
     this.send_agent_message(VD_AGENT_ANNOUNCE_CAPABILITIES, caps);
+}
+
+/* Orcastra: tell the guest the browser holds UTF-8 text; its next paste asks for it. */
+SpiceMainConn.prototype.clipboard_grab = function()
+{
+    this.send_agent_message(VD_AGENT_CLIPBOARD_GRAB,
+                            new VDAgentClipboardGrab([VD_AGENT_CLIPBOARD_UTF8_TEXT]));
+}
+
+SpiceMainConn.prototype.file_xfer_cancel = function(task_id)
+{
+    var task = this.file_xfer_tasks[task_id];
+    if (task)
+        task.cancelled = true;
 }
 
 SpiceMainConn.prototype.resize_window = function(flags, width, height, depth, x, y)
@@ -376,6 +450,9 @@ SpiceMainConn.prototype.file_xfer_start = function(file)
 
     task_id = this.file_xfer_task_id++;
     task = new SpiceFileXferTask(task_id, file);
+    /* Orcastra: the console draws transfers itself when it listens. */
+    if (this.onfiletransfer)
+        task.notify = this.onfiletransfer;
     task.create_progressbar();
     this.file_xfer_tasks[task_id] = task;
     xfer_start = new VDAgentFileXferStartMessage(task_id, file.name, file.size);
@@ -430,6 +507,7 @@ SpiceMainConn.prototype.file_xfer_read = function(file_xfer_task, start_byte)
         var xfer_status = new VDAgentFileXferStatusMessage(file_xfer_task.id,
                                                            VD_AGENT_FILE_XFER_STATUS_CANCELLED);
         this.send_agent_message(VD_AGENT_FILE_XFER_STATUS, xfer_status);
+        file_xfer_task.remove_progressbar();
         delete this.file_xfer_tasks[file_xfer_task.id];
         return;
     }
@@ -466,6 +544,8 @@ SpiceMainConn.prototype.file_xfer_completed = function(file_xfer_task, error)
     else
         this.log_info("transfer of '" + file_xfer_task.file.name +"' was successful");
 
+    file_xfer_task.finished = error ? "error" : "done";
+    file_xfer_task.error = error || null;
     file_xfer_task.remove_progressbar();
 
     delete this.file_xfer_tasks[file_xfer_task.id];
@@ -500,6 +580,9 @@ SpiceMainConn.prototype.handle_mouse_mode = function(current, supported)
 
     if (this.inputs)
         this.inputs.mouse_mode = current;
+    /* Orcastra: the console shows the mode and locks the pointer only in server mode. */
+    if (this.onmousemode)
+        this.onmousemode(current);
 }
 
 /* Shift current time to attempt to get a time matching that of the server */

@@ -26,14 +26,32 @@
 **           and then use drawImage to put it onto the target,
 **           as drawImage does alpha.
 **--------------------------------------------------------------------------*/
+// perf: one reusable offscreen canvas instead of document.createElement per draw.
+// Window dragging emits many alpha images/sec; allocating a canvas + GC per draw
+// stalls the main thread. JS is single-threaded so reuse is reentrancy-safe.
+// Grow-only (never shrink) to avoid clearing churn; we always blit only the
+// d.width x d.height region via the 9-arg drawImage so stale area is ignored.
+var _alphaHelperCanvas = null;
+var _alphaHelperCtx = null;
+function _getAlphaHelperCtx(w, h)
+{
+    if (!_alphaHelperCanvas)
+    {
+        _alphaHelperCanvas = document.createElement("canvas");
+        _alphaHelperCtx = _alphaHelperCanvas.getContext("2d");
+    }
+    if (_alphaHelperCanvas.width < w)
+        _alphaHelperCanvas.width = w;
+    if (_alphaHelperCanvas.height < h)
+        _alphaHelperCanvas.height = h;
+    return _alphaHelperCtx;
+}
+
 function putImageDataWithAlpha(context, d, x, y)
 {
-    var c = document.createElement("canvas");
-    var t = c.getContext("2d");
-    c.setAttribute('width', d.width);
-    c.setAttribute('height', d.height);
+    var t = _getAlphaHelperCtx(d.width, d.height);
     t.putImageData(d, 0, 0);
-    context.drawImage(c, x, y, d.width, d.height);
+    context.drawImage(_alphaHelperCanvas, 0, 0, d.width, d.height, x, y, d.width, d.height);
 }
 
 /*----------------------------------------------------------------------------
@@ -45,9 +63,12 @@ function putImageDataWithAlpha(context, d, x, y)
 **--------------------------------------------------------------------------*/
 function stripAlpha(d)
 {
-    var i;
-    for (i = 0; i < (d.width * d.height * 4); i += 4)
-        d.data[i + 3] = 255;
+    // perf: set the alpha byte of every pixel via a 32-bit view (one write per
+    // pixel instead of per-byte indexing). Canvas ImageData is little-endian in
+    // every browser, so the alpha byte is the high byte of each uint32.
+    var u32 = new Uint32Array(d.data.buffer, d.data.byteOffset, d.width * d.height);
+    for (var i = 0; i < u32.length; i++)
+        u32[i] |= 0xFF000000;
 }
 
 /*----------------------------------------------------------------------------
@@ -62,6 +83,18 @@ function SpiceDisplayConn()
 SpiceDisplayConn.prototype = Object.create(SpiceConn.prototype);
 SpiceDisplayConn.prototype.process_channel_message = function(msg)
 {
+    /* Orcastra: frames painted, for the console's connection details and its "showing the
+       guest" moment (the first draw after connect). */
+    if ((msg.type >= SPICE_MSG_DISPLAY_DRAW_FILL && msg.type <= SPICE_MSG_DISPLAY_DRAW_COMPOSITE &&
+         msg.type != SPICE_MSG_DISPLAY_SURFACE_CREATE) ||
+        msg.type == SPICE_MSG_DISPLAY_COPY_BITS ||
+        msg.type == SPICE_MSG_DISPLAY_STREAM_DATA || msg.type == SPICE_MSG_DISPLAY_STREAM_DATA_SIZED)
+    {
+        this.parent.draws = (this.parent.draws || 0) + 1;
+        if (this.parent.draws === 1 && this.parent.onfirstdraw)
+            this.parent.onfirstdraw();
+    }
+
     if (msg.type == SPICE_MSG_DISPLAY_MODE)
     {
         this.known_unimplemented(msg.type, "Display Mode");
@@ -186,19 +219,10 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
                     return false;
                 }
 
-                // FIXME - how lame is this.  Be have it in binary format, and we have
-                //         to put it into string to get it back into jpeg.  Blech.
-                var tmpstr = "data:image/jpeg,";
+                // Orcastra: a Blob URL instead of a percent-encoded data URL, which built a string
+                // three times the image's size on the main thread for every JPEG.
+                var tmpstr = jpeg_object_url(draw_copy.data.src_bitmap.jpeg.data);
                 var img = new Image;
-                var i;
-                var qdv = new Uint8Array(draw_copy.data.src_bitmap.jpeg.data);
-                for (i = 0; i < qdv.length; i++)
-                {
-                    tmpstr +=  '%';
-                    if (qdv[i] < 16)
-                        tmpstr += '0';
-                    tmpstr += qdv[i].toString(16);
-                }
 
                 img.o =
                     { base: draw_copy.base,
@@ -207,6 +231,7 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
                       sc : this,
                     };
                 img.onload = handle_draw_jpeg_onload;
+                img.onerror = handle_draw_jpeg_onerror;
                 img.src = tmpstr;
 
                 return true;
@@ -219,19 +244,10 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
                     return false;
                 }
 
-                // FIXME - how lame is this.  Be have it in binary format, and we have
-                //         to put it into string to get it back into jpeg.  Blech.
-                var tmpstr = "data:image/jpeg,";
+                // Orcastra: a Blob URL instead of a percent-encoded data URL, which built a string
+                // three times the image's size on the main thread for every JPEG.
+                var tmpstr = jpeg_object_url(draw_copy.data.src_bitmap.jpeg_alpha.data);
                 var img = new Image;
-                var i;
-                var qdv = new Uint8Array(draw_copy.data.src_bitmap.jpeg_alpha.data);
-                for (i = 0; i < qdv.length; i++)
-                {
-                    tmpstr +=  '%';
-                    if (qdv[i] < 16)
-                        tmpstr += '0';
-                    tmpstr += qdv[i].toString(16);
-                }
 
                 img.o =
                     { base: draw_copy.base,
@@ -248,6 +264,7 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
                                             draw_copy.data.src_bitmap.jpeg_alpha.alpha);
                 }
                 img.onload = handle_draw_jpeg_onload;
+                img.onerror = handle_draw_jpeg_onerror;
                 img.src = tmpstr;
 
                 return true;
@@ -437,18 +454,35 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
         if (height > (copy_bits.base.box.bottom - copy_bits.base.box.top))
             height = copy_bits.base.box.bottom - copy_bits.base.box.top;
 
-        var source_img = source_context.getImageData(
-                copy_bits.src_pos.x, copy_bits.src_pos.y, width, height);
-        //source_context.putImageData(source_img, copy_bits.base.box.left, copy_bits.base.box.top);
-        putImageDataWithAlpha(source_context, source_img, copy_bits.base.box.left, copy_bits.base.box.top);
+        // perf: copy the region canvas->canvas directly. The old path did a
+        // synchronous getImageData (GPU readback that stalls the pipeline) plus a
+        // temp-canvas alpha blit. For an opaque framebuffer, a source-over draw
+        // is equivalent and skips the readback. drawImage reads the whole source
+        // region first, so overlapping src/dst (scrolling) is handled correctly.
+        // COPY_BITS is the dominant op while dragging windows.
+        // Orcastra: only an opaque surface may take the source-over shortcut; an ARGB surface
+        // would blend instead of copy, so it keeps the readback.
+        if (width > 0 && height > 0)
+        {
+            if (this.surfaces[copy_bits.base.surface_id].format != SPICE_SURFACE_FMT_32_ARGB)
+                source_context.drawImage(source_canvas,
+                    copy_bits.src_pos.x, copy_bits.src_pos.y, width, height,
+                    copy_bits.base.box.left, copy_bits.base.box.top, width, height);
+            else
+                putImageDataWithAlpha(source_context,
+                    source_context.getImageData(copy_bits.src_pos.x, copy_bits.src_pos.y, width, height),
+                    copy_bits.base.box.left, copy_bits.base.box.top);
+        }
 
-        if (DUMP_DRAWS && this.parent.dump_id)
+        if (DUMP_DRAWS && this.parent.dump_id && width > 0 && height > 0)
         {
             var debug_canvas = document.createElement("canvas");
             debug_canvas.setAttribute('width', width);
             debug_canvas.setAttribute('height', height);
             debug_canvas.setAttribute('id', "copybits" + copy_bits.base.surface_id + "." + this.surfaces[copy_bits.base.surface_id].draw_count);
-            debug_canvas.getContext("2d").putImageData(source_img, 0, 0);
+            debug_canvas.getContext("2d").drawImage(source_canvas,
+                copy_bits.base.box.left, copy_bits.base.box.top, width, height,
+                0, 0, width, height);
             document.getElementById(this.parent.dump_id).appendChild(debug_canvas);
         }
 
@@ -497,7 +531,12 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
         canvas.setAttribute('height', m.surface.height);
         canvas.setAttribute('id', "spice_surface_" + m.surface.surface_id);
         canvas.setAttribute('tabindex', m.surface.surface_id);
-        canvas.context = canvas.getContext("2d");
+        // perf: opaque (xRGB) surfaces skip alpha compositing entirely; desynchronized
+        // lets the browser present without blocking on vsync (lower draw latency).
+        canvas.context = canvas.getContext("2d", {
+            alpha: (m.surface.format == SPICE_SURFACE_FMT_32_ARGB),
+            desynchronized: true,
+        });
 
         if (DUMP_CANVASES && this.parent.dump_id)
             document.getElementById(this.parent.dump_id).appendChild(canvas);
@@ -685,14 +724,19 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
 
 SpiceDisplayConn.prototype.delete_surface = function(surface_id)
 {
-    var canvas = document.getElementById("spice_surface_" + surface_id);
+    /* Orcastra: the surface's own canvas. Every display names its canvases spice_surface_<id>,
+       so with two consoles open a lookup by id found the other console's canvas. */
+    var canvas = this.surfaces[surface_id] ? this.surfaces[surface_id].canvas : null;
+    if (!canvas)
+        return;
     if (DUMP_CANVASES && this.parent.dump_id)
         document.getElementById(this.parent.dump_id).removeChild(canvas);
     if (this.primary_surface == surface_id)
     {
         this.unhook_events();
         this.primary_surface = undefined;
-        document.getElementById(this.parent.screen_id).removeChild(canvas);
+        if (canvas.parentNode)
+            canvas.parentNode.removeChild(canvas);
     }
 
     delete this.surfaces[surface_id];
@@ -830,6 +874,14 @@ SpiceDisplayConn.prototype.hook_events = function()
     {
         var canvas = this.surfaces[this.primary_surface].canvas;
         canvas.sc = this.parent;
+        /* Orcastra: the console's own input engine (lib/spice) owns the canvas's pointer and
+           keyboard; the handlers below only serve a page that did not ask for it. */
+        if (this.parent.external_input)
+        {
+            if (this.parent.oncanvas)
+                this.parent.oncanvas(canvas);
+            return;
+        }
         canvas.addEventListener('mousemove', handle_mousemove);
         canvas.addEventListener('mousedown', handle_mousedown);
         canvas.addEventListener('contextmenu', handle_contextmenu);
@@ -848,6 +900,12 @@ SpiceDisplayConn.prototype.unhook_events = function()
     if (this.primary_surface !== undefined)
     {
         var canvas = this.surfaces[this.primary_surface].canvas;
+        if (this.parent.external_input)
+        {
+            if (this.parent.oncanvasgone)
+                this.parent.oncanvasgone(canvas);
+            return;
+        }
         canvas.removeEventListener('mousemove', handle_mousemove);
         canvas.removeEventListener('mousedown', handle_mousedown);
         canvas.removeEventListener('contextmenu', handle_contextmenu);
@@ -884,12 +942,38 @@ function handle_mouseout(e)
     this.blur();
 }
 
+/* Orcastra: JPEG bytes as an object URL; handle_draw_jpeg_onload/onerror revoke it. */
+function jpeg_object_url(bytes)
+{
+    return URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+}
+
+function release_jpeg_url(img)
+{
+    if (img.src && img.src.lastIndexOf("blob:", 0) === 0)
+        URL.revokeObjectURL(img.src);
+}
+
+function handle_draw_jpeg_onerror()
+{
+    release_jpeg_url(this);
+    // Orcastra: a stream frame that failed to decode must not hold its stream's loading count.
+    if (this.o && this.o.sc.streams && this.o.sc.streams[this.o.id])
+        this.o.sc.streams[this.o.id].frames_loading--;
+    this.onload = this.onerror = undefined;
+}
+
 function handle_draw_jpeg_onload()
 {
     var temp_canvas = null;
     var context;
 
-    if (this.o.sc.streams[this.o.id])
+    release_jpeg_url(this);
+    this.onerror = undefined;
+
+    /* Orcastra: `streams` exists only once a stream was created; a draw-copy JPEG before that
+       threw here and its region was never painted. */
+    if (this.o.sc.streams && this.o.sc.streams[this.o.id])
         this.o.sc.streams[this.o.id].frames_loading--;
 
     /*------------------------------------------------------------
@@ -972,7 +1056,7 @@ function handle_draw_jpeg_onload()
         this.o.sc.surfaces[this.o.base.surface_id].draw_count++;
     }
 
-    if (this.o.sc.streams[this.o.id] && "report" in this.o.sc.streams[this.o.id])
+    if (this.o.sc.streams && this.o.sc.streams[this.o.id] && "report" in this.o.sc.streams[this.o.id])
         process_stream_data_report(this.o.sc, this.o.id, this.o.msg_mmtime, this.o.msg_mmtime - this.o.sc.parent.relative_now());
 }
 
@@ -988,16 +1072,9 @@ function process_mjpeg_stream_data(sc, m, time_until_due)
         return;
     }
 
-    var tmpstr = "data:image/jpeg,";
+    // Orcastra: a Blob URL, as for draw-copy JPEGs.
+    var tmpstr = jpeg_object_url(m.data);
     var img = new Image;
-    var i;
-    for (i = 0; i < m.data.length; i++)
-    {
-        tmpstr +=  '%';
-        if (m.data[i] < 16)
-        tmpstr += '0';
-        tmpstr += m.data[i].toString(16);
-    }
     var strm_base = new SpiceMsgDisplayBase();
     strm_base.surface_id = sc.streams[m.base.id].surface_id;
     strm_base.box = m.dest || sc.streams[m.base.id].dest;
@@ -1011,6 +1088,7 @@ function process_mjpeg_stream_data(sc, m, time_until_due)
           msg_mmtime : m.base.multi_media_time,
         };
     img.onload = handle_draw_jpeg_onload;
+    img.onerror = handle_draw_jpeg_onerror;
     img.src = tmpstr;
 
     sc.streams[m.base.id].frames_loading++;

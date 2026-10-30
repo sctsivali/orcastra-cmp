@@ -38,14 +38,10 @@ SpiceCursorConn.prototype.process_channel_message = function(msg)
         if (this.parent && this.parent.inputs &&
             this.parent.inputs.mouse_mode == SPICE_MOUSE_MODE_SERVER)
         {
-            // FIXME - this imagines that the server actually
-            //          provides the current cursor position,
-            //          instead of 0,0.  As of May 11, 2012,
-            //          that assumption was false :-(.
             this.parent.inputs.mousex = cursor_init.position.x;
             this.parent.inputs.mousey = cursor_init.position.y;
         }
-        // FIXME - We don't handle most of the parameters here...
+        this.report_position(cursor_init.position.x, cursor_init.position.y);
         return true;
     }
 
@@ -53,36 +49,49 @@ SpiceCursorConn.prototype.process_channel_message = function(msg)
     {
         var cursor_set = new SpiceMsgCursorSet(msg.data);
         DEBUG > 1 && console.log("SpiceMsgCursorSet");
-        if (cursor_set.flags & SPICE_CURSOR_FLAGS_NONE)
+        /* Orcastra: the flags live on the cursor, not on the message. Reading them from the
+           message never saw NONE (a hidden pointer then threw on its missing header) nor
+           FROM_CACHE (a cached shape arrived without data and was drawn empty). */
+        var flags = cursor_set.cursor.flags;
+        if ((flags & SPICE_CURSOR_FLAGS_NONE) || !cursor_set.visible)
         {
-            document.getElementById(this.parent.screen_id).style.cursor = "none";
+            this.apply_cursor("none");
             return true;
         }
 
-        if (cursor_set.flags > 0)
-            this.log_warn("FIXME: No support for cursor flags " + cursor_set.flags);
-
-        if (cursor_set.cursor.header.type != SPICE_CURSOR_TYPE_ALPHA)
+        var header = cursor_set.cursor.header;
+        if (flags & SPICE_CURSOR_FLAGS_FROM_CACHE)
         {
-            this.log_warn("FIXME: No support for cursor type " + cursor_set.cursor.header.type);
+            var cached = this.cursor_cache && this.cursor_cache[header.unique];
+            this.apply_cursor(cached || "default", cached ? this.cursor_meta[header.unique] : null);
+            return true;
+        }
+
+        if (header.type != SPICE_CURSOR_TYPE_ALPHA)
+        {
+            this.log_warn("FIXME: No support for cursor type " + header.type);
             return false;
         }
 
-        this.set_cursor(cursor_set.cursor);
-
+        this.set_cursor(cursor_set.cursor, (flags & SPICE_CURSOR_FLAGS_CACHE_ME) != 0);
+        this.report_position(cursor_set.position.x, cursor_set.position.y);
         return true;
     }
 
     if (msg.type == SPICE_MSG_CURSOR_MOVE)
     {
-        this.known_unimplemented(msg.type, "Cursor Move");
+        /* Orcastra: where the guest put its pointer; the console draws it there while the
+           browser's own pointer is locked (server mouse mode). */
+        var position = new SpicePoint16();
+        position.from_dv(new SpiceDataView(msg.data), 0, msg.data);
+        this.report_position(position.x, position.y);
         return true;
     }
 
     if (msg.type == SPICE_MSG_CURSOR_HIDE)
     {
         DEBUG > 1 && console.log("SpiceMsgCursorHide");
-        document.getElementById(this.parent.screen_id).style.cursor = "none";
+        this.apply_cursor("none");
         return true;
     }
 
@@ -95,7 +104,7 @@ SpiceCursorConn.prototype.process_channel_message = function(msg)
     if (msg.type == SPICE_MSG_CURSOR_RESET)
     {
         DEBUG > 1 && console.log("SpiceMsgCursorReset");
-        document.getElementById(this.parent.screen_id).style.cursor = "auto";
+        this.apply_cursor("default");
         return true;
     }
 
@@ -108,21 +117,54 @@ SpiceCursorConn.prototype.process_channel_message = function(msg)
     if (msg.type == SPICE_MSG_CURSOR_INVAL_ALL)
     {
         DEBUG > 1 && console.log("SpiceMsgCursorInvalAll");
-        // FIXME - There may be something useful to do here...
+        this.cursor_cache = {};
+        this.cursor_meta = {};
         return true;
     }
 
     return false;
 }
 
-SpiceCursorConn.prototype.set_cursor = function(cursor)
+/* Orcastra: one place that shows a cursor, on the screen element the canvas inherits from,
+   and tells the console (for its locked-pointer overlay). */
+SpiceCursorConn.prototype.apply_cursor = function(css, meta)
 {
-    var pngstr = create_rgba_png(cursor.header.height, cursor.header.width, cursor.data);
-    var curstr = 'url(data:image/png,' + pngstr + ') ' +
-        cursor.header.hot_spot_x + ' ' + cursor.header.hot_spot_y + ", default";
     var screen = document.getElementById(this.parent.screen_id);
-    screen.style.cursor = 'auto';
-    screen.style.cursor = curstr;
-    if (window.getComputedStyle(screen, null).cursor == 'auto')
-        SpiceSimulateCursor.simulate_cursor(this, cursor, screen, pngstr);
+    if (screen)
+        screen.style.cursor = css;
+    if (this.parent.oncursorshape)
+        this.parent.oncursorshape(css, meta || null);
+}
+
+SpiceCursorConn.prototype.report_position = function(x, y)
+{
+    if (this.parent.oncursormove)
+        this.parent.oncursormove(x, y);
+}
+
+SpiceCursorConn.prototype.set_cursor = function(cursor, cache)
+{
+    /* Orcastra: width then height, as create_rgba_png takes them (they were swapped, which
+       garbled every cursor that is not square). */
+    var pngstr = create_rgba_png(cursor.header.width, cursor.header.height, cursor.data);
+    var url = 'url(data:image/png,' + pngstr + ')';
+    var curstr = url + ' ' + cursor.header.hot_spot_x + ' ' + cursor.header.hot_spot_y + ", default";
+    var meta = {
+        url: 'data:image/png,' + pngstr,
+        width: cursor.header.width,
+        height: cursor.header.height,
+        hot_x: cursor.header.hot_spot_x,
+        hot_y: cursor.header.hot_spot_y,
+    };
+    if (cache)
+    {
+        if (!this.cursor_cache)
+        {
+            this.cursor_cache = {};
+            this.cursor_meta = {};
+        }
+        this.cursor_cache[cursor.header.unique] = curstr;
+        this.cursor_meta[cursor.header.unique] = meta;
+    }
+    this.apply_cursor(curstr, meta);
 }

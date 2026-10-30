@@ -24,8 +24,16 @@ function SpiceFileXferTask(id, file)
     this.file = file;
 }
 
+/* Orcastra: when the console listens (task.notify), it draws the transfer itself. */
+SpiceFileXferTask.prototype.report = function(state, sent)
+{
+    this.notify({ id: this.id, name: this.file.name, size: this.file.size, sent: sent, state: state, error: this.error || null });
+}
+
 SpiceFileXferTask.prototype.create_progressbar = function()
 {
+    if (this.notify)
+        return this.report("sending", 0);
     var _this = this;
     var cancel = document.createElement("input");
     this.progressbar_container = document.createElement("div");
@@ -56,11 +64,15 @@ SpiceFileXferTask.prototype.create_progressbar = function()
 
 SpiceFileXferTask.prototype.update_progressbar = function(value)
 {
+    if (this.notify)
+        return this.report("sending", value);
     this.progressbar.setAttribute('value', value);
 }
 
 SpiceFileXferTask.prototype.remove_progressbar = function()
 {
+    if (this.notify)
+        return this.report(this.cancelled ? "cancelled" : (this.finished || "done"), this.finished === "done" ? this.file.size : 0);
     if (this.progressbar_container && this.progressbar_container.parentNode)
         this.progressbar_container.parentNode.removeChild(this.progressbar_container);
 }

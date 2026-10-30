@@ -40,18 +40,11 @@ var EMPTY_GIF_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs
 **--------------------------------------------------------------------------*/
 function combine_array_buffers(a1, a2)
 {
-    var in1 = new Uint8Array(a1);
-    var in2 = new Uint8Array(a2);
-    var ret = new ArrayBuffer(a1.byteLength + a2.byteLength);
-    var out = new Uint8Array(ret);
-    var o = 0;
-    var i;
-    for (i = 0; i < in1.length; i++)
-        out[o++] = in1[i];
-    for (i = 0; i < in2.length; i++)
-        out[o++] = in2[i];
-
-    return ret;
+    /* Orcastra: a native copy instead of a byte loop. */
+    var ret = new Uint8Array(a1.byteLength + a2.byteLength);
+    ret.set(new Uint8Array(a1), 0);
+    ret.set(new Uint8Array(a2), a1.byteLength);
+    return ret.buffer;
 }
 
 /*----------------------------------------------------------------------------
@@ -259,10 +252,14 @@ function keycode_to_start_scan(code)
         return 0;
     }
 
+    /* Orcastra: this table spells an extended key 0xE0xx (Print Screen 0x2A37), and the old
+       arithmetic `0xe0 | ((scancode - 0x100) << 8)` sent its low byte plus a stray third byte:
+       e0 47 df for Home, and e0 37 29 for Print Screen, 0x29 being the backtick key. The
+       console now sends keys through lib/spice; this keeps the vendored path correct too. */
     if (scancode < 0x100) {
         return scancode;
     } else {
-        return 0xe0 | ((scancode - 0x100) << 8);
+        return 0xe0 | ((scancode & 0xff) << 8);
     }
 }
 
@@ -275,7 +272,7 @@ function keycode_to_end_scan(code)
     if (scancode < 0x100) {
         return scancode | 0x80;
     } else {
-        return 0x80e0 | ((scancode - 0x100) << 8);
+        return 0x80e0 | ((scancode & 0xff) << 8);
     }
 }
 

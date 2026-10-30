@@ -85,6 +85,7 @@ function SpiceConn(o)
     });
     this.ws.addEventListener('close', function(e) {
         var code = e.code;
+        var event_reason = e.reason || "";
         DEBUG > 0 && console.log(">> WebSockets.onclose");
         DEBUG > 0 && console.log("id " + this.parent.connection_id +"; type " + this.parent.type);
         DEBUG > 0 && console.log(e);
@@ -102,6 +103,12 @@ function SpiceConn(o)
                 e = new Error("Bad password.");
             else
                 e = new Error("Unexpected close while " + this.parent.state);
+
+            /* Orcastra: the close code and reason say why (1000 ended, 1011 dropped, 4404 cannot
+               start, 4403 revoked), and the console decides from them whether to reconnect. */
+            e.code = code;
+            e.reason = event_reason;
+            e.channel = this.parent.channel_type();
 
             this.parent.onerror(e);
             this.parent.log_err(e.toString());
@@ -145,12 +152,12 @@ SpiceConn.prototype =
         }
         else if (msg.channel_type == SPICE_CHANNEL_DISPLAY)
         {
+            /* Orcastra: MJPEG only. VP8 plays through a buffered <video> overlay that adds
+               latency to an interactive desktop and is not placed inside the scaled screen. */
             var caps =  (1 << SPICE_DISPLAY_CAP_SIZED_STREAM) |
                         (1 << SPICE_DISPLAY_CAP_STREAM_REPORT) |
                         (1 << SPICE_DISPLAY_CAP_MULTI_CODEC) |
                         (1 << SPICE_DISPLAY_CAP_CODEC_MJPEG);
-            if ('MediaSource' in window && MediaSource.isTypeSupported(SPICE_VP8_CODEC))
-                caps |= (1 << SPICE_DISPLAY_CAP_CODEC_VP8);
             msg.channel_caps.push(caps);
         }
 
@@ -352,7 +359,7 @@ SpiceConn.prototype =
     process_message: function(msg)
     {
         var rc;
-        var start = Date.now();
+        var start = DEBUG > 0 ? Date.now() : 0;
         DEBUG > 0 && console.log("<< hdr " + this.channel_type() + " type " + msg.type + " size " + (msg.data && msg.data.byteLength));
         rc = this.process_common_messages(msg);
         if (! rc)
@@ -380,9 +387,8 @@ SpiceConn.prototype =
             }
         }
 
-        var delta = Date.now() - start;
-        if (DEBUG > 0 || delta > GAP_DETECTION_THRESHOLD)
-            console.log("delta " + this.channel_type() + ":" + msg.type + " " + delta);
+        if (DEBUG > 0)
+            console.log("delta " + this.channel_type() + ":" + msg.type + " " + (Date.now() - start));
         return rc;
     },
 

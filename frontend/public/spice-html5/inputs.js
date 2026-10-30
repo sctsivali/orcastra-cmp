@@ -64,7 +64,11 @@ SpiceInputsConn.prototype.process_channel_message = function(msg)
     if (msg.type == SPICE_MSG_INPUTS_MOUSE_MOTION_ACK)
     {
         DEBUG > 1 && console.log("mouse motion ack");
-        this.waiting_for_ack -= SPICE_INPUT_MOTION_ACK_BUNCH;
+        this.waiting_for_ack = Math.max(0, this.waiting_for_ack - SPICE_INPUT_MOTION_ACK_BUNCH);
+        /* Orcastra: the console's pointer engine sends its newest pending position here
+           instead of dropping moves while the window is full. */
+        if (this.onmotionack)
+            this.onmotionack();
         return true;
     }
     return false;

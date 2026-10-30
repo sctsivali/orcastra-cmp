@@ -72,21 +72,31 @@ SpiceWireReader.prototype =
         }
 
 
-        /* If we have fragments that add up to what we need, combine them */
-        /*  FIXME - it would be faster to revise the processing code to handle
-        **          multiple fragments directly.  Essentially, we should be
-        **          able to do this without any slice() or combine_array_buffers() calls */
-        while (this.buffers.length > 1 && this.buffers[0].byteLength < this.needed)
+        /* Orcastra: combine the fragments once, when together they hold the message. Merging
+           them pairwise re-copied the growing buffer for every 32 KiB frame LXD sends, so a
+           full-screen image cost quadratic copying on the main thread. Loop until no message
+           is complete. */
+        for (;;)
         {
-            var mb1 = this.buffers.shift();
-            var mb2 = this.buffers.shift();
+            if (this.buffers.length > 1 && this.buffers[0].byteLength < this.needed)
+            {
+                var total = 0, count = 0;
+                while (count < this.buffers.length && total < this.needed)
+                    total += this.buffers[count++].byteLength;
+                if (total < this.needed)
+                    break;
+                var merged = new Uint8Array(total), offset = 0;
+                for (var f = 0; f < count; f++)
+                {
+                    merged.set(new Uint8Array(this.buffers[f]), offset);
+                    offset += this.buffers[f].byteLength;
+                }
+                this.buffers.splice(0, count, merged.buffer);
+            }
 
-            this.buffers.unshift(combine_array_buffers(mb1, mb2));
-        }
+            if (!(this.needed > 0 && this.buffers.length > 0 && this.buffers[0].byteLength >= this.needed))
+                break;
 
-
-        while (this.buffers.length > 0 && this.buffers[0].byteLength >= this.needed)
-        {
             mb = this.buffers.shift();
             if (mb.byteLength > this.needed)
             {

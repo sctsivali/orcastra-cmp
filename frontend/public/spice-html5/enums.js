@@ -358,6 +358,14 @@ var VD_AGENT_MOUSE_STATE            = 1,
     VD_AGENT_CLIENT_DISCONNECTED    =13,
     VD_AGENT_MAX_CLIPBOARD          =14;
 
+// Orcastra: clipboard data types carried by the VD_AGENT_CLIPBOARD* messages.
+var VD_AGENT_CLIPBOARD_NONE             = 0,
+    VD_AGENT_CLIPBOARD_UTF8_TEXT        = 1,
+    VD_AGENT_CLIPBOARD_IMAGE_PNG        = 2,
+    VD_AGENT_CLIPBOARD_IMAGE_BMP        = 3,
+    VD_AGENT_CLIPBOARD_IMAGE_TIFF       = 4,
+    VD_AGENT_CLIPBOARD_IMAGE_JPG        = 5;
+
 var VD_AGENT_CAP_MOUSE_STATE            = 0,
     VD_AGENT_CAP_MONITORS_CONFIG        = 1,
     VD_AGENT_CAP_REPLY                  = 2,
