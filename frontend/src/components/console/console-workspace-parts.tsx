@@ -10,8 +10,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, MonitorX, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InstanceFileExplorer } from "@/components/instance-files/instance-file-explorer";
 import { cn } from "@/lib/utils";
 import type { ActiveConsoleSession } from "@/lib/console-api";
+import type { ConsoleConnectionStatus, ConsoleTab } from "@/lib/console-store";
 
 const TERMINAL_KEYS: Record<string, string> = {
   Enter: "\r", Tab: "\t", Escape: "\x1b", Backspace: "\x7f", Delete: "\x1b[3~", Insert: "\x1b[2~",
@@ -149,4 +151,36 @@ export function useFullscreenChrome(getTarget: () => HTMLElement | null) {
   }, []);
 
   return { fullscreen, revealed, reveal, conceal };
+}
+
+/** The Files tab: mounted once like Text, so a half-typed path and a transfer list survive a switch. */
+export function FilesPane({
+  hidden,
+  active,
+  host,
+  project,
+  instanceName,
+  onTabChange,
+  onStatus,
+}: {
+  hidden: boolean;
+  active: boolean;
+  host: string;
+  project: string;
+  instanceName: string;
+  onTabChange: (tab: ConsoleTab) => void;
+  onStatus: (status: ConsoleConnectionStatus) => void;
+}) {
+  return (
+    <div className={cn("absolute inset-0", hidden && "hidden")}>
+      <InstanceFileExplorer
+        host={host}
+        project={project}
+        instanceName={instanceName}
+        active={active}
+        onOpenConsoleTab={onTabChange}
+        onHealth={onStatus}
+      />
+    </div>
+  );
 }

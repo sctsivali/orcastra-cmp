@@ -20,7 +20,7 @@ import type { ConsoleConnectionStatus, ConsoleTab, InstanceStatus } from "@/lib/
 import { getAccessToken } from "@/lib/api";
 import { AgentActivityBadge } from "./components/agent-activity-badge";
 
-const TABS: ConsoleTab[] = ["graphics", "text", "serial", "iso"];
+const TABS: ConsoleTab[] = ["graphics", "text", "serial", "iso", "files"];
 
 function ConsoleLoading() {
   return (

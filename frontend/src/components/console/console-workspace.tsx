@@ -13,6 +13,7 @@ import * as React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useFilesUnavailableReason } from "@/hooks/use-instance-files";
 import { toast } from "@/hooks/use-toast";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
 import { cn } from "@/lib/utils";
@@ -33,7 +34,7 @@ import { OnScreenKeyboard } from "./on-screen-keyboard";
 import { OnScreenCursor } from "./on-screen-cursor";
 import { ClipboardManager, rememberClipboard } from "./clipboard-manager";
 import { ConsoleResourceBar } from "./resource-bar";
-import { ConflictNotice, SearchBar, terminalSequence, useFullscreenChrome } from "./console-workspace-parts";
+import { ConflictNotice, FilesPane, SearchBar, terminalSequence, useFullscreenChrome } from "./console-workspace-parts";
 
 export interface ConsoleWorkspaceProps {
   consoleId: string;
@@ -120,12 +121,14 @@ export function ConsoleWorkspace({
   });
   const [textStatus, setTextStatus] = useState<ConsoleConnectionStatus>("connecting");
   const [serialStatus, setSerialStatus] = useState<ConsoleConnectionStatus>("connecting");
+  const [filesStatus, setFilesStatus] = useState<ConsoleConnectionStatus>("connecting");
   const chrome = useFullscreenChrome(getFullscreenTarget);
 
   const { hasPermission, termReadOnlyReason } = useTenantAccess();
   const canOperate = hasPermission(host, project, instanceName, "operate");
   const canUseConsole = hasPermission(host, project, instanceName, "console");
   const operateReason = termReadOnlyReason(host, project, instanceName);
+  const filesUnavailableReason = useFilesUnavailableReason(host, project, instanceName);
 
   useEffect(() => setResizeGuest(readResizePreference()), []);
 
@@ -190,8 +193,9 @@ export function ConsoleWorkspace({
     else if (activeTab === "graphics") onConnectionStatus?.(graphicsToConnection(graphics.status));
     else if (activeTab === "text") onConnectionStatus?.(textStatus);
     else if (activeTab === "serial") onConnectionStatus?.(serialStatus);
+    else if (activeTab === "files") onConnectionStatus?.(filesStatus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, capsError, graphics.status, textStatus, serialStatus]);
+  }, [activeTab, capsError, graphics.status, textStatus, serialStatus, filesStatus]);
 
   // Keyboard focus follows the front tab.
   useEffect(() => {
@@ -310,7 +314,7 @@ export function ConsoleWorkspace({
       onFocusCapture={chrome.reveal}
       onBlurCapture={chrome.conceal}
     >
-      <ConsoleTabs activeTab={activeTab} onTabChange={onTabChange} instanceType={instanceType} capabilities={capabilities} />
+      <ConsoleTabs activeTab={activeTab} onTabChange={onTabChange} instanceType={instanceType} capabilities={capabilities} filesUnavailableReason={filesUnavailableReason} />
       {(isGraphics || isTerminal) && (
         <ConsoleToolbar
           instanceName={instanceName}
@@ -458,6 +462,17 @@ export function ConsoleWorkspace({
               <ISOManagerPanel consoleId={consoleId} instanceName={instanceName} host={host} project={project} />
             </div>
           )}
+          {mounted.has("files") && !filesUnavailableReason && (
+            <FilesPane
+              hidden={activeTab !== "files"}
+              active={visible && activeTab === "files"}
+              host={host}
+              project={project}
+              instanceName={instanceName}
+              onTabChange={onTabChange}
+              onStatus={setFilesStatus}
+            />
+          )}
           {isTerminal && panels.search && (
             <SearchBar
               onSearch={(term, forward) => {
@@ -486,8 +501,8 @@ export function ConsoleWorkspace({
           instanceName={instanceName}
           host={host}
           project={project}
-          connectionStatus={isGraphics ? graphicsToConnection(graphics.status) : activeTab === "serial" ? serialStatus : textStatus}
-          protocol={isGraphics ? "graphics" : "terminal"}
+          connectionStatus={isGraphics ? graphicsToConnection(graphics.status) : activeTab === "serial" ? serialStatus : activeTab === "files" ? filesStatus : textStatus}
+          protocol={isGraphics ? "graphics" : activeTab === "files" ? "files" : "terminal"}
           compact={!isFullPage}
         />
       )}

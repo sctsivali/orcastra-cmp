@@ -22,6 +22,8 @@ import { useConsoleStore, type ConsoleCapabilities, type ConsoleConnectionStatus
 import { ConsoleWorkspace } from "./console-workspace";
 
 import "react-resizable/css/styles.css";
+import { toast } from "@/hooks/use-toast";
+import { hasDrafts } from "@/lib/instance-files/draft-store";
 
 interface ConsoleWindowProps {
   consoleId: string;
@@ -80,6 +82,11 @@ export function ConsoleWindow({ consoleId, onClose, onMinimize, onMaximize, isFu
   if (!consoleInstance) return null;
 
   const openInNewTab = () => {
+    // A new tab is a new document, so unsaved text in this one's editor would be left behind.
+    if (hasDrafts()) {
+      toast({ title: "Unsaved changes", description: "Save or discard the file you are editing first." });
+      return;
+    }
     const tab = consoleInstance.activeTab === "iso" || consoleInstance.activeTab === "boot" ? "text" : consoleInstance.activeTab;
     const params = new URLSearchParams({
       instance: consoleInstance.instanceName,

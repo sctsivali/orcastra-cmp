@@ -1,12 +1,13 @@
 /**
  * Console Tabs: Graphics (a VM's display), Text (a shell, needs the VM agent), Serial (the serial
- * console, needs neither the agent nor networking) and ISO (a VM's boot media).
+ * console, needs neither the agent nor networking), ISO (a VM's boot media) and Files (the guest's
+ * filesystem, needs the VM agent).
  */
 
 "use client";
 
 import * as React from "react";
-import { Disc, Monitor, Terminal, TerminalSquare } from "lucide-react";
+import { Disc, FolderOpen, Monitor, Terminal, TerminalSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ConsoleCapabilities, ConsoleTab } from "@/lib/console-store";
 
@@ -15,6 +16,8 @@ interface ConsoleTabsProps {
   onTabChange: (tab: ConsoleTab) => void;
   instanceType: string;
   capabilities: ConsoleCapabilities | null;
+  /** Why files cannot be used here, or undefined when they can. */
+  filesUnavailableReason?: string;
   className?: string;
 }
 
@@ -26,7 +29,7 @@ interface TabConfig {
   description: string;
 }
 
-export function ConsoleTabs({ activeTab, onTabChange, instanceType, capabilities, className }: ConsoleTabsProps) {
+export function ConsoleTabs({ activeTab, onTabChange, instanceType, capabilities, filesUnavailableReason, className }: ConsoleTabsProps) {
   const isVM = instanceType === "virtual-machine";
   const tabs: TabConfig[] = [
     {
@@ -56,6 +59,13 @@ export function ConsoleTabs({ activeTab, onTabChange, instanceType, capabilities
       icon: <Disc className="h-4 w-4" aria-hidden="true" />,
       available: isVM,
       description: isVM ? "Boot media" : "Only virtual machines take boot media",
+    },
+    {
+      id: "files",
+      label: "Files",
+      icon: <FolderOpen className="h-4 w-4" aria-hidden="true" />,
+      available: !filesUnavailableReason,
+      description: filesUnavailableReason ?? (isVM ? "Files in the VM (needs its agent)" : "Files in the container"),
     },
   ];
   // A container has no display and no boot media: those tabs are left out rather than greyed.

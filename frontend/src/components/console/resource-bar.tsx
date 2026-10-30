@@ -71,7 +71,7 @@ interface ConsoleResourceBarProps {
   /** Connection status from the console/terminal page */
   connectionStatus: "connecting" | "connected" | "disconnected" | "error" | "loading";
   /** Protocol type */
-  protocol?: "terminal" | "graphics";
+  protocol?: "terminal" | "graphics" | "files";
   /** Compact layout for inline/floating console windows (smaller expanded height, 2-col grid) */
   compact?: boolean;
 }
@@ -265,7 +265,7 @@ export function ConsoleResourceBar({
     sessionStats?.user?.role || userRole || "unknown"
   );
   const displayEmail = sessionStats?.user?.email || userEmail || "";
-  const displayProtocol = protocol === "graphics" ? "SPICE (VGA)" : "WebSocket";
+  const displayProtocol = protocol === "graphics" ? "SPICE (VGA)" : protocol === "files" ? "SFTP" : "WebSocket";
 
   // Bandwidth from session stats
   const dlRate = sessionStats?.bandwidth?.download_rate_bps ?? 0;

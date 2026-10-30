@@ -9,6 +9,7 @@ import { usePersonalization } from "./personalization-provider";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
 import { BreakGlassModal } from "@/components/break-glass/break-glass-modal";
+import { TransferTray } from "@/components/instance-files/transfer-tray";
 import { useNavigationProgress } from "./navigation/navigation-progress";
 import { TaskPanel } from "@/components/task-panel";
 import { AccessBlockedNotice } from "@/components/access-blocked-notice";
@@ -175,6 +176,9 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
 
       {/* Break-glass prompt - shown when an admin opens a console/terminal they must justify */}
       <BreakGlassModal />
+
+      {/* Uploads outlive the explorer that started them, on full-page views too */}
+      <TransferTray />
     </div>
   );
 }

@@ -5,7 +5,9 @@ import { SlidersHorizontal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
+import { InstanceFileExplorer } from "@/components/instance-files/instance-file-explorer";
 import { useInstance, useInstanceMetrics } from "@/hooks/use-lxd";
+import { useFilesUnavailableReason } from "@/hooks/use-instance-files";
 import { InstanceOverviewTab } from "./instance-overview-tab";
 import { InstanceMetricsTab } from "./instance-metrics-tab";
 import { InstanceConfigTab } from "./instance-config-tab";
@@ -14,7 +16,7 @@ import { InstanceSnapshotsTab } from "./instance-snapshots-tab";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 import type { VMInfo } from "@/types/api";
 
-export type InstanceDetailTab = "overview" | "metrics" | "config" | "devices" | "snapshots";
+export type InstanceDetailTab = "overview" | "metrics" | "config" | "devices" | "snapshots" | "files";
 
 export interface InstanceDetailDialogProps {
   instance: VMInfo | null;
@@ -77,6 +79,7 @@ export function InstanceDetailDialog({
       : instance
     : null;
   const effectiveProject = record?.project || project || "default";
+  const filesUnavailableReason = useFilesUnavailableReason(record?.host ?? "", effectiveProject, record?.name ?? "");
 
   // important: gated on the tab and the page, not on the row's status. The modal this replaces
   // polled from the moment it opened; the row-status gate that followed froze the panel on
@@ -126,6 +129,7 @@ export function InstanceDetailDialog({
   // browser clock that disagrees with it.
   const updatedAt = metricsUpdatedAt || null;
   const statusDisplay = instanceStatusDisplay(detail.status);
+  const canSeeFiles = !filesUnavailableReason;
 
   return (
     <RecordDetailDialog
@@ -207,6 +211,23 @@ export function InstanceDetailDialog({
             />
           ),
         },
+        ...(canSeeFiles
+          ? [
+              {
+                value: "files",
+                label: "Files",
+                content: (
+                  <InstanceFileExplorer
+                    host={detail.host}
+                    project={detail.project || "default"}
+                    instanceName={detail.name}
+                    active={isOpen && tab === "files"}
+                    embedded
+                  />
+                ),
+              },
+            ]
+          : []),
       ]}
     />
   );
