@@ -629,6 +629,16 @@ class FleetInventory(NamedTuple):
     incomplete: List[str]
     # cluster -> "inventory" (its read ran past the wall) or "busy" (the pool was full)
     timed_out: Dict[str, str]
+
+
+def timed_out_reason(kind: str) -> str:
+    """The node_errors text for a cluster FleetInventory names in ``timed_out``.
+
+    note: "busy" is this server's own pool, not the cluster, so it must not read as a slow cluster.
+    """
+    if kind == "busy":
+        return "unreachable: not read, every inventory reader on this server was busy"
+    return f"unreachable: did not answer within {int(_INSTANCE_NODE_TIMEOUT_SECONDS)} s"
 _INSTANCE_DETAIL_TIMEOUT_SECONDS = 30.0
 _INSTANCE_INVENTORY_WORKERS = 20
 _INSTANCE_DETAIL_WORKERS = 8

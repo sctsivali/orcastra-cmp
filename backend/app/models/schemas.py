@@ -195,6 +195,14 @@ class VMListResponse(BaseModel):
         default_factory=list,
         description="Registered clusters that did not answer, so their instances are absent",
     )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Reason per cluster in unreachable_nodes when it is known, prefixed unreachable:, "
+            "such as one whose list did not answer within the inventory wall. Empty for Tenant "
+            "callers."
+        ),
+    )
     lxd_count: int = Field(0, description="Number of LXD Clusters online")
     microcloud_count: int = Field(0, description="Number of MicroCloud Clusters online")
     incus_count: int = Field(0, description="Number of Incus Clusters online")

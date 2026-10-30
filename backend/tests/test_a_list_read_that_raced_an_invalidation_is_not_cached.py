@@ -25,6 +25,7 @@ from app.core.rbac import get_current_user
 from app.routers import instances as instances_module
 from app.routers import snapshots_fleet as snapshots_fleet_module
 from app.services.lxd_service import get_lxd_service
+from app.services.lxd.instance import FleetInventory
 
 
 def _manager() -> CacheManager:
@@ -50,6 +51,12 @@ class _Service:
         vm = VMInfo(name="web01", status=VMStatus.STOPPED, status_code=102, host="mc-lab",
                     host_endpoint="https://lab:9444", project="UAT-Hermes", type="container", architecture="x86_64")
         return [vm], ["mc-lab"], []
+
+    async def read_fleet_inventory(self):
+        # The instance list reads the fleet through this since 2026-10-29; it names a late
+        # cluster instead of raising, which these doubles never produce.
+        vms, connected, incomplete = await self.list_all_vms_with_failures()
+        return FleetInventory(vms, connected, incomplete, {})
 
     async def list_all_vms_with_failures(self):
         return self._read()

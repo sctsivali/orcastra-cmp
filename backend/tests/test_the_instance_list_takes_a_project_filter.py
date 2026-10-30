@@ -20,6 +20,7 @@ from app.core.rbac import get_current_user
 from app.models.schemas import VMInfo, VMStatus
 from app.routers import instances as instances_module
 from app.services.lxd_service import get_lxd_service
+from app.services.lxd.instance import FleetInventory
 
 
 def _vm(name, project, host="nuc2"):
@@ -37,6 +38,12 @@ class _Service:
 
     def get_node_names(self):
         return ["nuc2", "nuc1"]
+
+    async def read_fleet_inventory(self):
+        # The instance list reads the fleet through this since 2026-10-29; it names a late
+        # cluster instead of raising, which these doubles never produce.
+        vms, connected, incomplete = await self.list_all_vms_with_failures()
+        return FleetInventory(vms, connected, incomplete, {})
 
     async def list_all_vms_with_failures(self):
         self.reads += 1

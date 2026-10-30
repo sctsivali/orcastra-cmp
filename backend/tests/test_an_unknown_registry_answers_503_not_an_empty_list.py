@@ -17,6 +17,7 @@ from app.core import vault_status
 from app.core.cache import CacheManager
 from app.core.error_sanitizer import public_server_detail
 from app.core.registry_guard import VAULT_UNAVAILABLE, require_known_registry
+from app.services.lxd.instance import FleetInventory
 
 
 class _SpyCache(CacheManager):
@@ -83,6 +84,12 @@ class _Fleet:
 
     async def check_nodes_status_async(self):
         return []
+
+    async def read_fleet_inventory(self):
+        # The instance list reads the fleet through this since 2026-10-29; it names a late
+        # cluster instead of raising, which these doubles never produce.
+        vms, connected, incomplete = await self.list_all_vms_with_failures()
+        return FleetInventory(vms, connected, incomplete, {})
 
     async def list_all_vms_with_failures(self):
         return [], [], []

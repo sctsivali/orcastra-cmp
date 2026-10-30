@@ -28,6 +28,7 @@ from app.routers import storage_volumes as volumes_module
 from app.routers import vms as vms_module
 from app.services.lxd_service import get_lxd_service
 from app.core.cache_envelope import unwrap
+from app.services.lxd.instance import FleetInventory
 
 HOST = "shared-cluster"
 NAME = "web-1"
@@ -96,6 +97,12 @@ def _as(tier, call):
 class _Service:
     def get_node_names(self):
         return [HOST]
+
+    async def read_fleet_inventory(self):
+        # The instance list reads the fleet through this since 2026-10-29; it names a late
+        # cluster instead of raising, which these doubles never produce.
+        vms, connected, incomplete = await self.list_all_vms_with_failures()
+        return FleetInventory(vms, connected, incomplete, {})
 
     async def list_all_vms_with_failures(self):
         return [_vm()], [HOST], []

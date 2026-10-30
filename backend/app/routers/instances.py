@@ -4,7 +4,7 @@ Provides endpoints for managing LXD instances (containers and VMs).
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Header, Query
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 from urllib.parse import urlparse
 import sys
 import asyncio
@@ -52,6 +52,7 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.api_key_capabilities import is_valid_project_name
 from app.core.host_detail import metrics_for_tier, vm_for_tier, vm_list_for_tier
 from app.core.task_scope import caller_tier
+from app.core.tenant_visibility import tenant_acl_active
 from app.core.org_scope import (
     can_view_instance,
     check_tenant_permission,
@@ -84,7 +85,7 @@ from app.services.lxd.create_preflight import (
     CreatePreflightUnavailable,
     evaluate_instance_create,
 )
-from app.services.lxd.instance import CreateSubmissionUnknown
+from app.services.lxd.instance import CreateSubmissionUnknown, timed_out_reason
 from app.services.instance_security_policy import (
     InstanceSecurityPolicyViolation,
     resolve_cluster_write_policy,
@@ -110,6 +111,9 @@ import requests
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
+
+# How long an instance list that names a late cluster is fresh (a complete one is fresh for 30 s).
+_LATE_CLUSTER_FRESH_SECONDS = 10
 
 router = APIRouter(
     prefix="/instances",
@@ -312,13 +316,18 @@ async def list_instances(
     )
 
     async def build() -> Built:
+        late: Dict[str, str] = {}
         if host and project:
             all_vms, connected_nodes, incomplete_nodes = (
                 await lxd_service.list_vms_in_project_with_failures(host, project)
             )
         else:
-            all_vms, connected_nodes, incomplete_nodes = (
-                await lxd_service.list_all_vms_with_failures()
+            # important: the fleet read names a cluster that ran past the inventory wall instead of
+            # raising for the whole fleet. One slow cluster (central-1's list arriving past 30 s)
+            # made every viewer's list and the Overview answer 503. The late cluster is in
+            # incomplete, so it lands in unreachable_nodes below and its rows are not claimed.
+            all_vms, connected_nodes, incomplete_nodes, late = (
+                await lxd_service.read_fleet_inventory()
             )
     
         # Filter by host if provided
@@ -382,11 +391,21 @@ async def list_instances(
             )
         ]
 
+        # Only the clusters this answer reports, so a host-scoped list never names another
+        # cluster's failure; and never to a Tenant, like every other fan-out list's reasons.
+        late_here = {name: kind for name, kind in late.items() if name in unreachable_nodes}
+        node_errors = (
+            {}
+            if tenant_acl_active()
+            else {name: timed_out_reason(kind) for name, kind in late_here.items()}
+        )
+
         response = VMListResponse(
             total=len(all_vms),
             vms=all_vms[offset:offset + limit] if limit > 0 else all_vms,
             nodes=response_nodes,
             unreachable_nodes=unreachable_nodes,
+            node_errors=node_errors,
             offset=offset,
             limit=limit,
             has_more=(offset + limit < len(all_vms)) if limit > 0 else False,
@@ -407,7 +426,10 @@ async def list_instances(
             logger.warning("Not caching instances list: no cluster answered")
         # note: an invalidation while this read was in flight (a create landed, a background
         # start finished) is refused by swr.serve through the instance list generation.
-        return Built(value=response, body=response.model_dump(), fresh_for=30 if cacheable_answer else None)
+        # A late cluster is kept briefly: the body says it did not answer in time, which is true
+        # for those seconds, and the next read tries it again soon.
+        ttl = _LATE_CLUSTER_FRESH_SECONDS if late_here else 30
+        return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable_answer else None)
 
     try:
         served = await swr.serve(
