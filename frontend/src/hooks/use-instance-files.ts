@@ -41,6 +41,27 @@ export function useFilesUnavailableReason(host: string, project: string, instanc
     : "Your access to this instance does not include files";
 }
 
+interface TreeSlice {
+  changed: number;
+  skipped: number;
+  remaining: boolean;
+}
+
+export interface TreeChange {
+  changed: number;
+  skipped: number;
+  unfinished: boolean;
+}
+
+/** Adds a slice, and says whether another is worth asking for: each skips what already matches, so
+ * one that changed nothing while more remains will never get further. */
+function addSlice(total: TreeChange, slice: TreeSlice): boolean {
+  total.changed += slice.changed;
+  total.skipped = slice.skipped;
+  total.unfinished = slice.remaining;
+  return slice.remaining && slice.changed > 0;
+}
+
 /** The writes of one explorer, each dispatched under the actor that asked for it. */
 export function useFileActions(target: GuestTarget) {
   const queryClient = useQueryClient();
@@ -76,22 +97,19 @@ export function useFileActions(target: GuestTarget) {
         }),
       setMode: (path: string, mode: number, recursive: boolean) =>
         entryChange(async () => {
-          let result = await instanceFilesAPI.setMode(target, path, mode, recursive);
-          // Each slice skips what already matches, so this ends when a slice has nothing to do.
-          while (result.remaining && result.changed > 0) {
-            result = await instanceFilesAPI.setMode(target, path, mode, recursive);
-          }
+          const total: TreeChange = { changed: 0, skipped: 0, unfinished: false };
+          let more = true;
+          while (more) more = addSlice(total, await instanceFilesAPI.setMode(target, path, mode, recursive));
           await reconcileMutationImpact(queryClient, "instance-files.entry");
-          return result;
+          return total;
         }),
       setOwner: (path: string, uid: number, gid: number, recursive: boolean) =>
         entryChange(async () => {
-          let result = await instanceFilesAPI.setOwner(target, path, uid, gid, recursive);
-          while (result.remaining && result.changed > 0) {
-            result = await instanceFilesAPI.setOwner(target, path, uid, gid, recursive);
-          }
+          const total: TreeChange = { changed: 0, skipped: 0, unfinished: false };
+          let more = true;
+          while (more) more = addSlice(total, await instanceFilesAPI.setOwner(target, path, uid, gid, recursive));
           await reconcileMutationImpact(queryClient, "instance-files.entry");
-          return result;
+          return total;
         }),
       remove: (path: string, recursive: boolean, onProgress?: (deleted: number) => void) =>
         entryChange(async () => {

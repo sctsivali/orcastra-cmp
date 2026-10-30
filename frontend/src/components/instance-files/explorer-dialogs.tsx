@@ -1,7 +1,8 @@
 "use client";
 
-import type { useFileActions } from "@/hooks/use-instance-files";
-import type { GuestEntry, GuestTarget } from "@/lib/instance-files/api";
+import type { TreeChange, useFileActions } from "@/hooks/use-instance-files";
+import { toast } from "@/hooks/use-toast";
+import { fileErrorCode, type GuestEntry, type GuestTarget } from "@/lib/instance-files/api";
 import { joinPath, normalizePath } from "@/lib/instance-files/path";
 import { DeleteDialog } from "./delete-dialog";
 import { NameDialog } from "./name-dialog";
@@ -24,6 +25,20 @@ interface ExplorerDialogsProps {
   onSelect: (names: string[]) => void;
 }
 
+/** Says what a recursive change could not do. A dialog that just closes would claim all of it. */
+function reportTreeChange(outcomes: (TreeChange | undefined)[]): void {
+  if (outcomes.some((outcome) => outcome?.unfinished)) {
+    throw new Error("This folder is too large to finish in one go. Part of it changed and the rest did not.");
+  }
+  const skipped = Math.max(0, ...outcomes.map((outcome) => outcome?.skipped ?? 0));
+  if (skipped > 0) {
+    toast({
+      title: "Some items were left as they were",
+      description: `${skipped.toLocaleString()} could not be changed, for example a device, a pipe or an immutable file.`,
+    });
+  }
+}
+
 /** Every question the explorer asks, in one place, so its root stays about the list. */
 export function ExplorerDialogs({ prompt, target, folder, writeReason, actions, onClose, onSelect }: ExplorerDialogsProps) {
   const removePath = async (entries: GuestEntry[], onProgress: (deleted: number) => void) => {
@@ -32,11 +47,18 @@ export function ExplorerDialogs({ prompt, target, folder, writeReason, actions, 
     let failedCount = 0;
     for (const entry of entries) {
       const before = deleted;
-      const outcome = await actions.remove(
-        joinPath(folder, entry.name),
-        entry.type === "directory",
-        (count) => onProgress(before + count),
-      );
+      let outcome: Awaited<ReturnType<typeof actions.remove>>;
+      try {
+        outcome = await actions.remove(
+          joinPath(folder, entry.name),
+          entry.type === "directory",
+          (count) => onProgress(before + count),
+        );
+      } catch (error) {
+        // Already gone, which is what was asked: a retry after a partial failure starts here.
+        if (fileErrorCode(error) === "not_found") continue;
+        throw error;
+      }
       if (outcome) {
         deleted += outcome.deleted;
         failed.push(...outcome.failed);
@@ -98,7 +120,11 @@ export function ExplorerDialogs({ prompt, target, folder, writeReason, actions, 
           if (prompt?.kind !== "move") return;
           const destination = normalizePath(value.trim(), folder);
           for (const entry of prompt.entries) {
-            await actions.rename(joinPath(folder, entry.name), joinPath(destination, entry.name));
+            try {
+              await actions.rename(joinPath(folder, entry.name), joinPath(destination, entry.name));
+            } catch (error) {
+              if (fileErrorCode(error) !== "not_found") throw error;
+            }
           }
           onSelect([]);
         }}
@@ -118,11 +144,13 @@ export function ExplorerDialogs({ prompt, target, folder, writeReason, actions, 
         path={prompt?.kind === "properties" ? joinPath(folder, prompt.entry.name) : ""}
         writeReason={writeReason}
         onClose={onClose}
-        onSave={async ({ mode: nextMode, uid, gid, recursive }) => {
+        onSave={async ({ mode: nextMode, uid, gid, deepMode, deepOwner }) => {
           if (prompt?.kind !== "properties") return;
           const path = joinPath(folder, prompt.entry.name);
-          if (nextMode !== undefined) await actions.setMode(path, nextMode, recursive);
-          if (uid !== undefined && gid !== undefined) await actions.setOwner(path, uid, gid, recursive);
+          reportTreeChange([
+            nextMode !== undefined ? await actions.setMode(path, nextMode, deepMode) : undefined,
+            uid !== undefined && gid !== undefined ? await actions.setOwner(path, uid, gid, deepOwner) : undefined,
+          ]);
         }}
       />
     </>

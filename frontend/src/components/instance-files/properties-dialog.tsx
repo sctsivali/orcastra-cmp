@@ -17,7 +17,7 @@ interface PropertiesDialogProps {
   entry: GuestEntry | null;
   path: string;
   writeReason?: string;
-  onSave: (change: { mode?: number; uid?: number; gid?: number; recursive: boolean }) => Promise<void>;
+  onSave: (change: { mode?: number; uid?: number; gid?: number; deepMode: boolean; deepOwner: boolean }) => Promise<void>;
   onClose: () => void;
 }
 
@@ -39,7 +39,8 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
   const [modeText, setModeText] = React.useState("");
   const [uid, setUid] = React.useState("");
   const [gid, setGid] = React.useState("");
-  const [recursive, setRecursive] = React.useState(false);
+  const [deepMode, setDeepMode] = React.useState(false);
+  const [deepOwner, setDeepOwner] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState(false);
   const inFlight = React.useRef(false);
@@ -50,7 +51,8 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
     setModeText(formatMode(entry.mode));
     setUid(String(entry.uid ?? ""));
     setGid(String(entry.gid ?? ""));
-    setRecursive(false);
+    setDeepMode(false);
+    setDeepOwner(false);
     setError(null);
   }, [entry]);
 
@@ -77,11 +79,15 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
     const nextMode = parseInt(modeText, 8);
     const nextUid = Number(uid);
     const nextGid = Number(gid);
+    // important: two ticks, not one. A single "everything inside" stamped the folder's owner and
+    // mode on every child, whichever of the two the person meant to change.
+    const newOwner = nextUid !== entry.uid || nextGid !== entry.gid;
     const change = {
-      mode: nextMode !== entry.mode || recursive ? nextMode : undefined,
-      uid: nextUid !== entry.uid || nextGid !== entry.gid || recursive ? nextUid : undefined,
-      gid: nextUid !== entry.uid || nextGid !== entry.gid || recursive ? nextGid : undefined,
-      recursive,
+      mode: nextMode !== entry.mode || deepMode ? nextMode : undefined,
+      uid: newOwner || deepOwner ? nextUid : undefined,
+      gid: newOwner || deepOwner ? nextGid : undefined,
+      deepMode,
+      deepOwner,
     };
     if (change.mode === undefined && change.uid === undefined) {
       onClose();
@@ -169,10 +175,17 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
                       </div>
                     </fieldset>
                     {entry.type === "directory" && (
-                      <label className="flex items-center gap-2 text-sm">
-                        <Checkbox checked={recursive} disabled={locked} onCheckedChange={(checked) => setRecursive(checked === true)} />
-                        Apply to everything inside. Links are skipped.
-                      </label>
+                      <div className="space-y-1">
+                        <label className="flex items-center gap-2 text-sm">
+                          <Checkbox checked={deepMode} disabled={locked} onCheckedChange={(checked) => setDeepMode(checked === true)} />
+                          Apply these permissions to everything inside
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <Checkbox checked={deepOwner} disabled={locked} onCheckedChange={(checked) => setDeepOwner(checked === true)} />
+                          Apply this owner to everything inside
+                        </label>
+                        <p className="text-xs text-muted-foreground">Files and folders take the same values. Links are skipped.</p>
+                      </div>
                     )}
                     {writeReason && <p className="text-xs text-muted-foreground">{writeReason}</p>}
                   </>
