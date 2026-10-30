@@ -19,12 +19,16 @@ interface KeyboardOptions {
   onEditPath: () => void;
 }
 
-function isTyping(target: EventTarget | null): boolean {
-  return Boolean(
-    (target as HTMLElement | null)?.closest?.(
-      "input, textarea, select, [contenteditable=true], .cm-editor, [role=dialog], [role=menu]",
-    ),
-  );
+function isForTheList(event: React.KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  // important: React events bubble through portals, so a key pressed in a dialog or a menu arrives
+  // here too. Enter on Cancel used to open the row behind it, which moved the folder a waiting
+  // delete was aimed at.
+  if (!target?.closest || !event.currentTarget.contains(target)) return false;
+  if (target.closest("input, textarea, select, [contenteditable=true], .cm-editor")) return false;
+  // A button or a box answers Enter and Space itself. Alt+Enter is still Properties.
+  const press = (event.key === "Enter" || event.key === " ") && !event.altKey;
+  return !(press && target.closest("button, a, [role=checkbox]"));
 }
 
 /** Every key the list answers to. Handled on the explorer's root, so it never leaks into a console. */
@@ -33,7 +37,7 @@ export function useFileKeyboard({
 }: KeyboardOptions) {
   const typeAhead = React.useRef({ text: "", at: 0 });
   return (event: React.KeyboardEvent) => {
-    if (isTyping(event.target) || state.open) return;
+    if (!isForTheList(event) || state.open) return;
     const index = state.active === null ? -1 : rows.findIndex((row) => row.name === state.active);
     const entry = index >= 0 ? rows[index] : undefined;
     const go = (to: number) => {
