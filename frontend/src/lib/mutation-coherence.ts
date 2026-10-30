@@ -58,6 +58,8 @@ const QUERY_FAMILY_KEYS = {
   hostHealth: [["host-health"], ["vault-seal-status"]],
   releaseStatus: [["release-status"]],
   kernelAdvisories: [["kernelAdvisories"], ["kernelCveFeed"]],
+  instanceFiles: [["instanceFiles"]],
+  instanceFileContent: [["instanceFileContent"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type QueryFamily = keyof typeof QUERY_FAMILY_KEYS;
@@ -397,6 +399,28 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
     queryFamilies: ["hostHealth", "tasks"],
     apiCalls: ["hostHealthAPI.unseal"],
   },
+  "instance-files.entry": {
+    completion: "response",
+    queryFamilies: ["instanceFiles", "instanceFileContent"],
+    apiCalls: [
+      "instanceFilesAPI.createFolder",
+      "instanceFilesAPI.createFile",
+      "instanceFilesAPI.rename",
+      "instanceFilesAPI.delete",
+      "instanceFilesAPI.setMode",
+      "instanceFilesAPI.setOwner",
+      "instanceFilesAPI.purgeUploads",
+    ],
+  },
+  "instance-files.content": {
+    completion: "response",
+    queryFamilies: ["instanceFiles", "instanceFileContent"],
+    apiCalls: [
+      "instanceFilesAPI.save",
+      "instanceFilesAPI.finalizeUpload",
+      "instanceFilesAPI.uploadBundle",
+    ],
+  },
 } as const);
 
 export type MutationImpactId = keyof typeof MUTATION_IMPACTS;
@@ -416,6 +440,16 @@ export const MUTATION_CALL_EXCEPTIONS = {
   "api.isoUploads.patchChunk": "non-terminal streaming upload stage",
   "api.isoUploads.abort": "streaming upload cancellation",
   "consoleActionsAPI.record": "audit-only record of a console toolbar action; changes no state a query shows",
+  "instanceFilesAPI.list": "read sent as POST so guest paths stay out of URLs",
+  "instanceFilesAPI.stat": "read sent as POST so guest paths stay out of URLs",
+  "instanceFilesAPI.summarize": "read sent as POST so guest paths stay out of URLs",
+  "instanceFilesAPI.readText": "read sent as POST so guest paths stay out of URLs",
+  "instanceFilesAPI.previewImage": "read sent as POST so guest paths stay out of URLs",
+  "instanceFilesAPI.createDownload": "single-use read ticket",
+  "instanceFilesAPI.createUpload": "non-terminal streaming upload stage",
+  "instanceFilesAPI.patchChunk": "non-terminal streaming upload stage",
+  "instanceFilesAPI.uploadStatus": "read of a streaming upload's state",
+  "instanceFilesAPI.abortUpload": "streaming upload cancellation",
 } as const;
 
 export interface ReconcileMutationOptions {

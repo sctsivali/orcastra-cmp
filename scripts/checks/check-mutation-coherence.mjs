@@ -416,6 +416,13 @@ const RAW_FETCH_WRITE_ALLOWLIST = [
     markers: ["application/x-www-form-urlencoded", "response.ok"],
   },
   {
+    id: "guest-image-preview",
+    path: "frontend/src/lib/instance-files/api.ts",
+    method: "POST",
+    endpointMarker: "/instance-files/preview-image",
+    markers: ["response.blob()", "getAccessToken()", "response.ok"],
+  },
+  {
     id: "multipart-guest-file-push",
     path: "frontend/src/lib/file-transfer-api.ts",
     method: "POST",
@@ -431,6 +438,14 @@ const seenRawFetchWrites = new Set();
  * reconciliation, while avoiding a forced rewrite of well-scoped optimistic/UI-local paths.
  */
 const CUSTOM_RECONCILIATION_SITES = {
+  "frontend/src/lib/instance-files/transfer-pump.ts:instanceFilesAPI.finalizeUpload": {
+    impact: "instance-files.content",
+    markers: ["scheduleReconcile("],
+  },
+  "frontend/src/lib/instance-files/transfer-pump.ts:instanceFilesAPI.uploadBundle": {
+    impact: "instance-files.content",
+    markers: ["scheduleReconcile("],
+  },
   "frontend/src/app/extensions/[installId]/page.tsx:extensionsAPI.updateSettings": {
     impact: "extension.write",
     markers: ["onSuccess:", "invalidate()"],

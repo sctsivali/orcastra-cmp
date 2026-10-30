@@ -1476,6 +1476,8 @@ export interface SystemSettings {
    * disabled on an explicit `false`.
    */
   snapshot_schedules_enabled?: boolean;
+  instance_files_enabled?: boolean;
+  instance_files_max_transfer_bytes?: number;
   /** Whether this deployment mounted the task journal routes. Same three-state rule. */
   task_journal_enabled?: boolean;
   /** Read-only Migration Center planning and history capability. */

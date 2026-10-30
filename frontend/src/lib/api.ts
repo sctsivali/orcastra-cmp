@@ -286,6 +286,18 @@ function clearAuthFailureState() {
 // loop ends as soon as the refresh settles, so only a slow IdP waits this long.
 const SESSION_REFRESH_WAIT_MS = 21_000;
 
+/**
+ * For a raw request outside fetchAPI that met a 401: join the one session refresh, then say
+ * whether a retry may follow. A refresh token rotates on every grant, so a chunk loop that started
+ * its own refresh would present a spent one and sign the operator out.
+ */
+export async function recoverFrom401(signal?: AbortSignal | null): Promise<boolean> {
+  const actorGeneration = _authActorGeneration;
+  if (!_sessionRefreshInFlight && !handle401()) return false;
+  await waitForSessionRefresh(signal);
+  return _authActorGeneration === actorGeneration;
+}
+
 function waitForSessionRefresh(signal?: AbortSignal | null): Promise<void> {
   return new Promise((resolve, reject) => {
     let elapsed = 0;
@@ -337,7 +349,7 @@ interface TimedJSONResponse {
  * Keep one composed cancellation scope alive until the response body has been consumed.
  * `fetch()` resolves as soon as headers arrive, while a JSON body can still stall indefinitely.
  */
-async function fetchJSONWithTimeout(
+export async function fetchJSONWithTimeout(
   url: string,
   options: RequestInit = {},
   timeoutMs: number = 45000

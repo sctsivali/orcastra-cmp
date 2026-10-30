@@ -111,6 +111,7 @@ export const ROLE_PERMISSIONS: Record<Role, Set<Permission>> = {
   [Role.TENANT]: new Set([
     Permission.INSTANCE_READ,
     Permission.INSTANCE_CONSOLE, Permission.INSTANCE_TERMINAL,
+    Permission.FILE_TRANSFER,
     Permission.NETWORK_READ,
     Permission.STORAGE_READ,
     Permission.IMAGE_READ,

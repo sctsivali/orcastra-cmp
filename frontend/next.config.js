@@ -145,6 +145,17 @@ const nextConfig = {
         ],
       },
       {
+        // important: guest file bytes. This must follow the rule above, because for one header key
+        // the last match wins, and that rule would otherwise replace the backend's sandbox with
+        // the app's policy. The access token is readable by script, so a guest's HTML or SVG must
+        // never run on this origin, even if a browser ignored `attachment`.
+        source: '/api/v1/instance-files/download',
+        headers: [
+          { key: 'Content-Security-Policy', value: "sandbox; default-src 'none'" },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+        ],
+      },
+      {
         // The basemap filename carries its own version, so a change ships as a new path and
         // the old one can be cached hard. Without this Next serves public/ with max-age=0
         // and every navigation revalidates a file that never changes.

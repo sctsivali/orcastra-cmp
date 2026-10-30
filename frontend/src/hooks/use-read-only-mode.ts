@@ -80,6 +80,11 @@ export function useSnapshotSchedulesEnabled(): boolean | undefined {
   return useSystemSettings().data?.snapshot_schedules_enabled;
 }
 
+/** Whether this deployment offers the file explorer, on the same three-state rule. */
+export function useInstanceFilesEnabled(): boolean | undefined {
+  return useSystemSettings().data?.instance_files_enabled;
+}
+
 /**
  * Whether this deployment mounted the task journal routes, on the same three-state rule: only
  * an explicit `false` hides the task panel.

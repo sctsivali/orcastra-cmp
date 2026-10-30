@@ -25,6 +25,7 @@ const src = join(root, 'frontend', 'src');
 // terminal session is open.
 const AREAS = [
   join('components', 'console'),
+  join('components', 'instance-files'),
   join('components', 'terminal'),
   join('app', 'console'),
   join('app', 'terminal'),
