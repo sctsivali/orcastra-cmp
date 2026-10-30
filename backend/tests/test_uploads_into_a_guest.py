@@ -357,3 +357,15 @@ async def test_a_bad_manifest_is_refused_before_any_file(manifest):
             await bundle.receive_bundle(client, _stream(_bundle(manifest)), now=int(time.time()))
     assert len(guest.nodes) == 3
     await asyncio.wait_for(task, 1)
+
+
+async def test_a_large_file_may_arrive_before_the_bundle_that_makes_its_folder():
+    guest = _guest()
+    client, task = await connected(guest)
+    async with client:
+        _, session = await _create(client, dest="/home/lab/new/deep/big.bin", size=2)
+        await uploads.write_chunk(client, session, offset=0, length=2, body=_stream(b"ok"))
+        await uploads.complete(client, session)
+    assert guest.nodes[b"/home/lab/new/deep/big.bin"].data == b"ok"
+    assert guest.nodes[b"/home/lab/new"].uid == 1000
+    await asyncio.wait_for(task, 1)

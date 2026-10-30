@@ -19,6 +19,7 @@ from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
 from app.core.rbac import _populate_request_state, has_mapped_role
 from app.core.ws_ticket import TICKET_TTL_SECONDS
 from app.core.ws_ticket_store import TicketBudgetExceeded, TicketStoreUnavailable
+from app.middleware.stream_cut import mark_cut
 from app.models.instance_file_schemas import (
     BundleResponse,
     CompleteUploadBody,
@@ -401,13 +402,20 @@ class GuestDownload(Response):
         except GuestFileError as failure:
             code = failure.code
             if record["bytes"]:
+                mark_cut(scope)
                 raise StreamCut(failure.code) from None
             http = failure.to_http()
             await JSONResponse(http.detail, status_code=http.status_code)(scope, receive, send)
         except ClientLeft:
             result, code = "cancelled", "client_left"
         except StreamCut as cut:
+            mark_cut(scope)
             code = cut.reason
+            raise
+        except Exception as exc:
+            # Whatever this was, bytes may be out, and a clean end would call them complete.
+            mark_cut(scope)
+            code = type(exc).__name__
             raise
         finally:
             await write(

@@ -146,3 +146,12 @@ async def test_a_non_utf8_name_survives_the_archive():
     guest.add_file(b"/app/caf\xe9", b"x")
     archive = await _archive(guest, ["/app"])
     assert os.fsencode(archive.getnames()[1]) == b"app/caf\xe9"
+
+
+async def test_a_link_chosen_as_the_root_means_its_target():
+    guest = FakeGuest()
+    guest.add_dir(b"/real")
+    guest.add_file(b"/real/inside", b"data")
+    guest.add_link(b"/chosen", b"/real")
+    archive = await _archive(guest, ["/chosen"])
+    assert archive.extractfile("chosen/inside").read() == b"data"

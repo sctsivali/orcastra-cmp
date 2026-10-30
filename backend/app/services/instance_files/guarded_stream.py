@@ -5,10 +5,10 @@ that stops reading parks the handler forever, holding a guest connection and a t
 has no way to end a stream when access is withdrawn. And an HTTP response only reads as failed if
 it ends without its terminal chunk.
 
-important: this app's middleware is all `BaseHTTPMiddleware`, which sends a terminal chunk itself
-when the inner app simply returns. So a cut stream must RAISE. Returning quietly here would hand a
-browser a truncated file reported as complete. That is why `StreamCut` propagates to uvicorn, which
-then closes the connection without finishing the response.
+important: this app's middleware is all `BaseHTTPMiddleware`, which finishes a response itself when
+the inner app stops, even when it stops by raising. So a cut stream marks its scope for
+`middleware/stream_cut.py`, which withholds the terminal chunk, and then raises, so that uvicorn
+closes the connection. Without both, a truncated archive reads as a finished download.
 """
 
 import logging

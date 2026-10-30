@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 from . import sftp_codec as codec
 from .errors import GuestFileError, already_exists, no_space, too_large
-from .operations import _move_without_replacing, stat_path
+from .operations import _move_without_replacing, make_directory, stat_path
 from .paths import clean_name, clean_path, is_pseudo, is_safe_entry, from_guest, to_guest
 from .sftp_client import SftpClient, is_directory, is_symlink
 from .uploads_temp import TEMP_LIFETIME_SECONDS, is_expired_temp, is_upload_temp, temp_name
@@ -165,6 +165,27 @@ async def commit_temp(guest: SftpClient, temp: bytes, dest: bytes, *, replace: b
         await _move_without_replacing(guest, temp, dest)
 
 
+async def _ensure_folder(guest: SftpClient, folder: str, raw_folder: bytes) -> None:
+    """The destination folder, made when missing.
+
+    note: a folder upload sends its small files and new folders in bundles while large files start
+    alongside them, so a large file can arrive before the bundle that makes its folder.
+    """
+    try:
+        attrs = await guest.stat(raw_folder)
+    except GuestFileError as failure:
+        if failure.code != "not_found":
+            raise
+        try:
+            await make_directory(guest, folder, parents=True)
+        except GuestFileError as raced:
+            if raced.code != "already_exists":
+                raise
+        return
+    if not is_directory(attrs):
+        raise GuestFileError("not_a_directory", 409, "This path is not a folder.")
+
+
 async def create(
     guest: SftpClient,
     *,
@@ -184,8 +205,7 @@ async def create(
     raw_dest = to_guest(dest)
     folder = dest.rsplit("/", 1)[0] or "/"
     raw_folder = to_guest(folder)
-    if not is_directory(await guest.stat(raw_folder)):
-        raise GuestFileError("not_a_directory", 409, "This path is not a folder.")
+    await _ensure_folder(guest, folder, raw_folder)
     existing = await _existing(guest, raw_dest)
     if existing is not None:
         if is_directory(existing):

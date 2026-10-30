@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.error_sanitizer import public_server_detail, reference_for, sanitize_error
+from app.middleware.stream_cut import StreamCutMiddleware
 from app.middleware.security import apply_security_headers
 import uvicorn
 import urllib3
@@ -969,6 +970,9 @@ Ensure your client certificates are properly configured.
     
     # Add security headers outermost so blocked responses are hardened too
     app.add_middleware(SecurityHeadersMiddleware)
+
+    # Outermost of all: see middleware/stream_cut.py for why a cut download needs this.
+    app.add_middleware(StreamCutMiddleware)
     
     # Register routers
     app.include_router(vms_router, prefix=settings.api_prefix)

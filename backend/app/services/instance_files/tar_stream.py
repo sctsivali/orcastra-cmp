@@ -101,7 +101,12 @@ async def tar_gz_stream(
     for root in reversed(roots):
         raw = to_guest(root)
         name = raw.rstrip(b"/").rsplit(b"/", 1)[-1] or b"root"
-        stack.append((raw, name, await guest.lstat(raw)))
+        attrs = await guest.lstat(raw)
+        # A link somebody chose to download means what it points at; a link inside a tree does not.
+        if is_symlink(attrs):
+            raw = await guest.realpath(raw)
+            attrs = await guest.lstat(raw)
+        stack.append((raw, name, attrs))
 
     while stack:
         path, arcname, attrs = stack.pop()
