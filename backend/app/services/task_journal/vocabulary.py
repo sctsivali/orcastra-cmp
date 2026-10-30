@@ -189,6 +189,8 @@ LOG_SUPPRESSED_ACTIONS = frozenset(
         "cluster.auth_check",
         "integration.proxy.request",
         "auth.token.refresh",
+        # Stdout keeps it. The log keeps what changed, and a person opening a folder changed nothing.
+        "file.browse",
     }
 )
 

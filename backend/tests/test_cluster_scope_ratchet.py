@@ -23,6 +23,8 @@ CLUSTER_SCOPE_GATES = {
     "_enforce_snapshot_access",
     # core/instance_access.py: the shell and console gate, pinned below to keep the project bound
     "verify_instance_access",
+    # the same, for a guest's files: core/instance_access.py, with `file_transfer` always enforced
+    "verify_file_access",
 }
 
 # Handlers that legitimately do not call verify_cluster_access, each with the reason.
