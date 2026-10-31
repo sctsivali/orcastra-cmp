@@ -291,7 +291,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
                 {/* The icon is the only thing naming the resource when a unit occupies the
                     second line, so a screen reader also gets the resource name in words. */}
                 {spec.unit !== label && <span className="sr-only">{label}</span>}
-                <span className="text-xs font-semibold text-foreground/80">{spec.value}</span>
+                <span className="text-xs font-semibold text-foreground/80">{spec.value}</span>{" "}
                 <span className="text-[10px] text-muted-foreground">{spec.unit}</span>
               </div>
             </div>

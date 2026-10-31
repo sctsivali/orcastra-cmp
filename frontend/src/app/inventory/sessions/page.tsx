@@ -466,9 +466,9 @@ function ActiveSessionsTab() {
       {/* Table */}
       <Card>
         <CardHeader className="pb-3 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-lg">Active Sessions</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <SessionScopeToggle scope={scope} onChange={changeScope} />
               <Button
                 variant={autoRefresh ? "default" : "outline"}

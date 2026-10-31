@@ -77,7 +77,7 @@ def test_retries_without_delivery_over_the_window_is_down() -> None:
     result = logging_check.assess(new, [old], stall_seconds=180)
     assert result.status == "down"
     assert "not reaching OpenSearch" in result.summary
-    assert _facts(result)["Audit Logs"] == "nothing delivered in 3 min, 80 retries"
+    assert _facts(result)["Audit Logs"] == "nothing delivered in 3m, 80 retries"
 
 
 def test_delivery_inside_the_window_is_healthy() -> None:
@@ -85,7 +85,7 @@ def test_delivery_inside_the_window_is_healthy() -> None:
     new = _sample(1_200.0, proc=900, retries=12)
     result = logging_check.assess(new, [old], stall_seconds=180)
     assert result.status == "ok"
-    assert _facts(result)["Audit Logs"] == "400 delivered in 3 min"
+    assert _facts(result)["Audit Logs"] == "400 delivered in 3m"
 
 
 def test_an_idle_pipeline_is_healthy() -> None:
@@ -93,7 +93,7 @@ def test_an_idle_pipeline_is_healthy() -> None:
     new = _sample(1_200.0, proc=500, retries=10)
     result = logging_check.assess(new, [old], stall_seconds=180)
     assert result.status == "ok"
-    assert _facts(result)["Audit Logs"] == "nothing to send in 3 min"
+    assert _facts(result)["Audit Logs"] == "nothing to send in 3m"
 
 
 def test_a_sample_younger_than_the_window_is_not_a_baseline() -> None:
