@@ -36,6 +36,9 @@ PROBE_TIMEOUT = (3, 5)
 ClientFor = Callable[[str], Optional[Any]]
 
 
+NOT_EMPTY_REFUSAL = "Only empty projects can be removed"
+
+
 def project_exists_sync(client_for: ClientFor, host: str, name: str) -> bool:
     """Exact, short read of one project: only a 200 or a 404 is an answer."""
     lxd_segment(name, what="Project name")  # a `.` or `..` is the caller's 400, before any client
@@ -70,8 +73,10 @@ def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
     except NotFound:
         raise LXDProjectNotFoundError(name) from None
     except LXDAPIException as e:
-        if definitive_lxd_refusal(e, phase):
-            # LXD's own sentence ("Only empty projects can be removed"), not transport text.
+        # important: LXD 5.21 sends the non-empty refusal as a plain error rather than a 400, so the
+        # status alone reads as ambiguous and a refusal came back as "may still finish".
+        if definitive_lxd_refusal(e, phase) or NOT_EMPTY_REFUSAL in str(e):
+            # LXD's own sentence, not transport text.
             raise LXDOperationError(f"Could not delete project: {e}") from e
         raise LXDOperationUnknownError("delete", name) from e
     except requests_exceptions.RequestException as e:

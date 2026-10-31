@@ -619,6 +619,23 @@ async def test_a_proxy_caller_that_leaves_does_not_cut_the_delete_short(monkeypa
     assert finished == ["web"]
 
 
+def test_a_non_empty_project_is_a_refusal_at_any_status() -> None:
+    """LXD 5.21 sends this sentence as a plain error, so its status alone reads as ambiguous."""
+    node = _ProjectNode(
+        delete=_raise(_api_error(500, "Only empty projects can be removed")), get=lambda: _Response(200)
+    )
+    with pytest.raises(LXDOperationError) as raised:
+        project_delete.delete_project_sync(_client_for(node), HOST, "web")
+    assert not isinstance(raised.value, LXDOperationUnknownError)
+    assert "Only empty projects can be removed" in str(raised.value)
+
+
+def test_a_500_with_any_other_text_is_still_unknown() -> None:
+    node = _ProjectNode(delete=_raise(_api_error(500, "database is locked")), get=lambda: _Response(200))
+    with pytest.raises(LXDOperationUnknownError):
+        project_delete.delete_project_sync(_client_for(node), HOST, "web")
+
+
 def test_a_dot_name_is_the_callers_400_and_never_reaches_lxd() -> None:
     node = _ProjectNode(delete=lambda: pytest.fail("LXD was asked"), get=lambda: pytest.fail("LXD was asked"))
     for name in (".", ".."):
