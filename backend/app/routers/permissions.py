@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pylxd.exceptions import LXDAPIException
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons
 from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
@@ -176,7 +176,7 @@ async def list_identities(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except Exception as e:
         logger.error(f"Error listing identities: {e}")
@@ -315,7 +315,7 @@ async def list_groups(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except Exception as e:
         logger.error(f"Error listing groups: {e}")

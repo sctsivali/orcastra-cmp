@@ -4,7 +4,7 @@ Provides endpoints for viewing LXD warnings.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List
+from typing import Dict, Optional, List
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect, unattempted
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
 from app.models.schemas import FanoutReachability
 from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
@@ -205,7 +205,7 @@ async def list_warnings(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
             collected_at=datetime.now(timezone.utc),
         )
         # Same rule as the storage lists: a cluster that could not be reached at all is named
@@ -480,6 +480,7 @@ async def get_all_system_warnings(
         # kernels were not read are named, and a failed assessment says so.
         kernel_rows: List[KernelAdvisoryWarning] = []
         kernel_unread: List[str] = []
+        kernel_errors: Dict[str, str] = {}
         kernel_failed = False
         try:
             report = await build_kernel_report(
@@ -487,6 +488,7 @@ async def get_all_system_warnings(
             )
             kernel_rows = kernel_warning_rows(report)
             kernel_unread = report.unreachable_nodes
+            kernel_errors = report.node_errors
         except Exception as e:  # noqa: BLE001 - the rest of the feed must still answer
             kernel_failed = True
             logger.warning(f"Could not assess host kernels: {e}")
@@ -515,11 +517,12 @@ async def get_all_system_warnings(
             "node_warnings": node_warnings,
             "kernel_advisories": [r.model_dump(mode="json") for r in kernel_rows],
             "kernel_advisories_unread": kernel_unread,
+            "kernel_advisories_errors": complete_reasons(kernel_unread, kernel_errors),
             "kernel_advisories_failed": kernel_failed,
             "nodes": nodes_to_query,
             "unreachable_nodes": fan.unreachable_nodes,
             "partial_nodes": fan.partial_nodes,
-            "node_errors": fan.node_errors,
+            "node_errors": complete_reasons(fan.unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
         # important: a feed nobody answered is not "no warnings". Only a read where a cluster

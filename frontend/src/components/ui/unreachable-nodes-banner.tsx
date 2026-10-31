@@ -1,7 +1,9 @@
 "use client";
 
-import { ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
+import { ReactNode, useState } from "react";
+import { AlertTriangle, ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { cn } from "@/lib/utils";
@@ -33,13 +35,11 @@ interface UnreachableNodesBannerProps {
   /** What is missing, lowercase plural, ex; "networks", "storage pools". */
   noun: string;
   /**
-   * Why each node did not answer, keyed by its name in `nodes`. A fan-out list endpoint only
-   * reports which nodes it lost, so most callers have nothing to pass here and the names are
-   * joined inline. Where the payload does carry a reason, listing it is the difference between
-   * "a node is down" and a diagnosis the operator can act on.
+   * Why each node did not answer, keyed by its name in `nodes`, shown under Show Details. A name
+   * with no reason still lists: a payload cached by an older build carries none.
    *
-   * important: a reason is raw connection text, so it carries hosts, ports and TLS detail. It
-   * travels on the same role gate as the names and never reaches a role without cluster:read.
+   * important: a reason can carry LXD's own error text. It travels on the same role gate as the
+   * names and never reaches a role without cluster:read.
    */
   reasons?: Record<string, string>;
   /**
@@ -51,7 +51,18 @@ interface UnreachableNodesBannerProps {
   className?: string;
 }
 
-type DetailProps = Omit<UnreachableNodesBannerProps, "nodes"> & { nodes: string[] };
+type DetailProps = Omit<UnreachableNodesBannerProps, "nodes"> & {
+  nodes: string[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
+
+// Past this many rows the list scrolls inside the banner, so a fleet-wide outage cannot push the
+// page it is warning about off the screen.
+const SCROLL_AFTER = 8;
+
+// The API prefixes a reason with its kind. Under "Could not reach" the prefix says nothing twice.
+const REASON_KIND = /^(?:unreachable|forbidden|error|partial):\s*/;
 
 /**
  * The caution shell, written once for both shapes.
@@ -59,18 +70,32 @@ type DetailProps = Omit<UnreachableNodesBannerProps, "nodes"> & { nodes: string[
  * note: a token border and a toned icon on the card, not a wash. It was a 10% amber tint under
  * amber-600, the raw palette shape scripts/checks/check-semantic-colour.mjs ratchets; the prose
  * already inherited --foreground, so only the icon and the border carry the caution.
+ *
+ * important: `role="status"` sits on the sentence alone. It is a live region, so a control or a
+ * long list inside it would be read out again on every background refetch.
  */
-function BannerShell({ className, children }: { className?: string; children: ReactNode }) {
+function BannerShell({
+  className,
+  sentence,
+  children,
+}: {
+  className?: string;
+  sentence: ReactNode;
+  children?: ReactNode;
+}) {
   return (
     <div
+      data-slot="unreachable-banner"
       className={cn(
         "flex items-start gap-2 rounded-lg border border-status-pending/40 bg-card p-3 text-sm",
         className,
       )}
-      role="status"
     >
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-status-pending" aria-hidden="true" />
-      <div className="space-y-1">{children}</div>
+      <div className="min-w-0 flex-1">
+        <div role="status">{sentence}</div>
+        {children}
+      </div>
     </div>
   );
 }
@@ -88,47 +113,75 @@ function BannerShell({ className, children }: { className?: string; children: Re
  */
 function UnreachableNodesNotice({ noun, className }: { noun: string; className?: string }) {
   return (
-    <BannerShell className={className}>
-      <div>Some {noun} could not be loaded right now, so this list may be incomplete.</div>
-    </BannerShell>
+    <BannerShell
+      className={className}
+      sentence={`Some ${noun} could not be loaded right now, so this list may be incomplete.`}
+    />
   );
 }
 
-/** What Admin and Partner see. Unchanged from the shape that shipped. */
-function UnreachableNodesDetail({ nodes, noun, reasons, partial = false, className }: DetailProps) {
-  // important: the leading "Could not reach N node(s)" clause is matched by regex in four
-  // specs, so it stays byte-identical in both shapes. Only what follows it moves.
-  const detailed = nodes.some((node) => reasons?.[node]);
+/** What Admin and Partner see: one sentence, and the clusters behind Show Details. */
+function UnreachableNodesDetail({
+  nodes,
+  noun,
+  reasons,
+  partial = false,
+  className,
+  open,
+  onOpenChange,
+}: DetailProps) {
+  // important: the leading "Could not reach N cluster(s)" clause is matched by regex in four
+  // specs, so it stays byte-identical. Only what follows it moves.
   const lead = partial ? "Could not fully read" : "Could not reach";
   const tail = partial
     ? `Some of their ${noun} are not shown, so this list may be incomplete.`
     : `Their ${noun} are not shown, so this list may be incomplete.`;
+  const sorted = [...nodes].sort((a, b) => a.localeCompare(b));
+  const scrolls = sorted.length > SCROLL_AFTER;
 
   return (
-    <BannerShell className={className}>
-      <div>
-        <span className="font-medium">
-          {lead} {nodes.length} cluster{nodes.length === 1 ? "" : "s"}
-          {detailed ? "." : ":"}
-        </span>{" "}
-        {detailed ? null : <>{nodes.join(", ")}. </>}
-        {tail}
-      </div>
-      {detailed ? (
-        <ul className="space-y-0.5">
-          {nodes.map((node, i) => (
-            // note: index in the key. Callers pass node names, which are unique, but a
-            // duplicate string here must not silently drop a row from a warning banner.
-            <li key={`${node}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
-              <span className="font-medium">{node}</span>
-              {/* note: no --muted-foreground here. The amber tint is a 10% wash over the page
-                  background, so muted measures the same 4.27:1 it does on --background and
-                  would fail AA. The node name is already distinguished by weight. */}
-              <span className="break-words">{reasons?.[node] || "no reason reported"}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+    <BannerShell
+      className={className}
+      sentence={
+        <>
+          <span className="font-medium">
+            {lead} {nodes.length} cluster{nodes.length === 1 ? "" : "s"}.
+          </span>{" "}
+          {tail}
+        </>
+      }
+    >
+      <Collapsible open={open} onOpenChange={onOpenChange}>
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" size="sm" className="-ml-2 mt-1 h-8 px-2 text-muted-foreground">
+            <ChevronDown
+              className={cn("mr-1 h-4 w-4 transition-transform motion-reduce:transition-none", open && "rotate-180")}
+              aria-hidden="true"
+            />
+            {open ? "Hide Details" : "Show Details"}
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <ul
+            aria-label={`Clusters behind this notice, ${nodes.length} in total`}
+            // A list that scrolls takes focus, or the rows past the fold are mouse-only.
+            tabIndex={scrolls ? 0 : undefined}
+            className={cn("space-y-0.5 pt-1", scrolls && "max-h-60 overflow-y-auto")}
+          >
+            {sorted.map((node, i) => {
+              const reason = reasons?.[node]?.replace(REASON_KIND, "");
+              return (
+                // note: index in the key. Callers pass node names, which are unique, but a
+                // duplicate string here must not silently drop a row from a warning banner.
+                <li key={`${node}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-medium">{node}</span>
+                  {reason ? <span className="min-w-0 break-words">{reason}</span> : null}
+                </li>
+              );
+            })}
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
     </BannerShell>
   );
 }
@@ -162,6 +215,9 @@ export function UnreachableNodesBanner({
 }: UnreachableNodesBannerProps) {
   // important: the hook runs before every early return, so the emptiness check cannot move above it.
   const { isLoading, hasRole } = usePermissions();
+  // important: above the early returns too. A list that drops to no missing clusters for one
+  // refetch and comes back must not close what the operator opened.
+  const [open, setOpen] = useState(false);
 
   if (!nodes?.length) return null;
 
@@ -189,6 +245,8 @@ export function UnreachableNodesBanner({
       reasons={reasons}
       partial={partial}
       className={className}
+      open={open}
+      onOpenChange={setOpen}
     />
   );
 }

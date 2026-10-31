@@ -55,6 +55,7 @@ from app.services.lxd.operation_ownership import (  # noqa: F401 - the router's 
     operation_value as _operation_value,
     resource_project as _resource_project,
 )
+from app.services.lxd.fanout import complete_reasons
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +282,10 @@ class OperationListResponse(BaseModel):
             "so an unreachable cluster is distinguishable from one that has none."
         ),
     )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Reason per cluster in unreachable_nodes. Empty for Tenant callers.",
+    )
 
 
 def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[OperationInfo]:
@@ -402,6 +407,7 @@ async def list_operations(
             operations=all_operations,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            node_errors=complete_reasons(unreachable_nodes, {}),
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

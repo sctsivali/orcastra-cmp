@@ -57,8 +57,13 @@ for (const router of reporting) {
       continue;
     }
     // the JSX tag, not the bare name: an import alone renders nothing
-    if (!readFileSync(path, 'utf8').includes('<UnreachableNodesBanner')) {
+    const source = readFileSync(path, 'utf8');
+    if (!source.includes('<UnreachableNodesBanner')) {
       offenders.push(`${page} drops the unreachable_nodes that ${router} reports`);
+    }
+    // Show Details is the whole diagnosis: a banner with no reasons lists bare names under it.
+    if (!/<UnreachableNodesBanner\b[^>]*\breasons=/.test(source)) {
+      offenders.push(`${page} renders the banner without the reasons ${router} reports`);
     }
   }
 }

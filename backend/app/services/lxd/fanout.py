@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Generic, List, Optional, Sequence, Tuple, TypeVar
+from typing import Dict, Generic, Iterable, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 import requests
 import urllib3
 from pylxd.exceptions import LXDAPIException
 
+from app.core.org_scope import visible_projects_for
+from app.core.tenant_visibility import tenant_acl_active
+from app.services.lxd import health
 from app.services.lxd.exceptions import (
     LXDAuthorizationError,
     LXDConnectionError,
@@ -188,6 +191,60 @@ class Fanout(Generic[T]):
         return all(
             self.failure_kinds.get(node) == KIND_UNREACHABLE for node in self.unreachable_nodes
         )
+
+
+def _absent_reason(cluster: str) -> str:
+    """Why a cluster the listing never read is missing, from the breaker's verdict.
+
+    important: the failure kind only. last_failure() also holds str(exc), which can carry the
+    endpoint and TLS detail this module's reasons promise never to.
+    """
+    failure = health.last_failure(cluster)
+    if failure is None:
+        return f"{KIND_UNREACHABLE}: not connected from this server yet"
+    if failure[1] == health.KIND_UNAUTHORIZED:
+        return f"{KIND_FORBIDDEN}: certificate not trusted by the cluster"
+    return f"{KIND_UNREACHABLE}: no connection to the cluster"
+
+
+# Fixed text for a cluster shared with another organization. Partial detail and LXD's own error
+# text can name that organization's pools and volumes; a transport reason is already fixed text.
+_BOUND_TEXT = {
+    KIND_PARTIAL: f"{KIND_PARTIAL}: some rows could not be read",
+    KIND_FORBIDDEN: f"{KIND_FORBIDDEN}: the cluster refused this read",
+    KIND_FAILED: f"{KIND_FAILED}: the cluster could not answer this read",
+}
+
+
+def complete_reasons(
+    unreachable: Iterable[str],
+    known: Mapping[str, str],
+    *,
+    partial: Iterable[str] = (),
+) -> Dict[str, str]:
+    """`node_errors` for a list answer: one reason per missing or partial cluster, for this caller.
+
+    Clusters reach unreachable_nodes without passing through collect() (no client in this worker,
+    a breaker skip, a registered cluster nobody asked), and they used to carry nothing, so the
+    banner printed "no reason reported" beside the one cluster that had a reason.
+
+    A Tenant gets nothing. On a cluster this caller sees only part of, the text is reduced to its
+    kind; visible_projects_for answers None for an Admin and on a single-organization cluster, so
+    the full diagnosis stays with whoever may read it.
+    """
+    if tenant_acl_active():
+        return {}
+    reasons: Dict[str, str] = {}
+    for cluster in unreachable:
+        reasons[cluster] = known.get(cluster) or _absent_reason(cluster)
+    for cluster in partial:
+        reasons[cluster] = known.get(cluster) or _BOUND_TEXT[KIND_PARTIAL]
+    return {
+        cluster: _BOUND_TEXT.get(text.partition(":")[0], text)
+        if visible_projects_for(cluster) is not None
+        else text
+        for cluster, text in reasons.items()
+    }
 
 
 def unattempted(seeded: Sequence[str], connection_manager: object) -> List[str]:

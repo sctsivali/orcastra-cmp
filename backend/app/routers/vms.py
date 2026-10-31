@@ -82,6 +82,7 @@ from app.services.lxd.create_preflight import (
 )
 from app.services.lxd.instance import CreateSubmissionUnknown
 from app.services.shared_cluster_audit import serialize_cluster_configuration
+from app.services.lxd.fanout import complete_reasons
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -484,6 +485,7 @@ async def list_vms(
             vms=filtered_vms[offset:offset + limit] if limit > 0 else filtered_vms,
             nodes=connected_nodes,
             unreachable_nodes=unreachable_nodes,
+            node_errors=complete_reasons(unreachable_nodes, {}),
             lxd_count=lxd_count,
             microcloud_count=microcloud_count,
             incus_count=incus_count,

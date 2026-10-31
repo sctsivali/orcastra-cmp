@@ -829,6 +829,7 @@ function WarningsContent() {
           <KernelAdvisoryTab
             rows={kernelWarnings}
             unread={systemWarnings?.kernel_advisories_unread ?? []}
+            unreadReasons={systemWarnings?.kernel_advisories_errors}
             failed={systemWarnings?.kernel_advisories_failed === true}
             onShowDetail={(record) => handleShowWarningDetail("kernel", record)}
           />

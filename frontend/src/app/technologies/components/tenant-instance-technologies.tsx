@@ -267,6 +267,7 @@ function TenantCategoryDialog({
   isRefreshing,
   refreshError,
   unreachableNodes,
+  unreachableReasons,
   onOpenChange,
 }: {
   category: TenantCategory | null;
@@ -275,6 +276,7 @@ function TenantCategoryDialog({
   isRefreshing: boolean;
   refreshError: boolean;
   unreachableNodes: string[];
+  unreachableReasons?: Record<string, string>;
   onOpenChange: (open: boolean) => void;
 }) {
   const [page, setPage] = React.useState(1);
@@ -330,6 +332,7 @@ function TenantCategoryDialog({
           ) : null}
           <UnreachableNodesBanner
             nodes={unreachableNodes}
+            reasons={unreachableReasons}
             noun={`${category?.title ?? "instance"} specifications`}
           />
           {refreshError ? (
@@ -422,6 +425,7 @@ export function TenantInstanceTechnologies({
 
         <UnreachableNodesBanner
           nodes={response.unreachable_nodes}
+          reasons={response.node_errors}
           noun="instance specifications"
         />
 
@@ -460,6 +464,7 @@ export function TenantInstanceTechnologies({
         isRefreshing={isRefreshing}
         refreshError={refreshError}
         unreachableNodes={response.unreachable_nodes}
+        unreachableReasons={response.node_errors}
         onOpenChange={(open) => {
           if (!open) setSelectedId(null);
         }}

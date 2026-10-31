@@ -396,7 +396,8 @@ function SnapshotsContent() {
 
       {takeSnapshotDialog}
 
-      <UnreachableNodesBanner noun="snapshots" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="snapshots" nodes={unreachableNodes} reasons={data?.node_errors} />
+      <UnreachableNodesBanner noun="snapshots" nodes={partialNodes} reasons={data?.node_errors} partial />
 
       {/* Schedules first: they are the cause of some of the rows below, and stacking rather than
           tabbing keeps that comparison on one screen. */}
@@ -416,12 +417,6 @@ function SnapshotsContent() {
             }
           />
           <TableToolbar filters={filters} noun="snapshots" />
-          {partialNodes.length > 0 && (
-            <p className="text-sm text-warning">
-              {partialNodes.join(", ")} answered for only some of their projects, so this list is
-              incomplete for {partialNodes.length === 1 ? "it" : "them"}.
-            </p>
-          )}
           {truncated && (
             <p className="text-sm text-warning">
               This is the first {items.length} snapshots. Choose one cluster and one project to

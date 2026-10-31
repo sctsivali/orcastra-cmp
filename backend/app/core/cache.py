@@ -567,7 +567,13 @@ class CacheManager:
 
         # note: warnings too. Both feeds name an unreachable cluster, and they are cached now.
         # Images as well: a cluster that answers again brings its image store back into the list.
-        self.invalidate_resource_cache("clusters", "projects", "regions", "warnings", "images")
+        # The storage, network and IPAM lists remember an outage too, and would keep naming a
+        # recovered cluster for their degraded TTL.
+        self.invalidate_resource_cache(
+            "clusters", "projects", "regions", "warnings", "images",
+            "storage_pools", "storage_pool_resources", "storage_volumes",
+            "networks", "profiles", "ipam",
+        )
         self.delete("vault_list", get_settings().vault_clusters_path.replace("/data/", "/metadata/"))
         self.invalidate_instance_cache()
         # The availability fence first, so a stale-while-revalidate read already in flight cannot

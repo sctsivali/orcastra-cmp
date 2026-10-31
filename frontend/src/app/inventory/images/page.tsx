@@ -135,6 +135,13 @@ function ImagesContent() {
         .map((host) => host.host),
     [imagesByHost],
   );
+  const unreachableReasons = useMemo(
+    () =>
+      Object.fromEntries(
+        (imagesByHost as ImageListResponse[]).map((host) => [host.host, host.error ?? ""]),
+      ),
+    [imagesByHost],
+  );
   
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -285,7 +292,7 @@ function ImagesContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="images" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="images" nodes={unreachableNodes} reasons={unreachableReasons} />
 
       <Card>
         <CardHeader className="space-y-4">

@@ -15,7 +15,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.services.lxd.fanout import NodeRead, collect, unattempted
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
 from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
 from app.models.schemas import FanoutReachability
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -267,7 +267,7 @@ async def list_storage_pools(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
             collected_at=datetime.now(timezone.utc),
         )
 

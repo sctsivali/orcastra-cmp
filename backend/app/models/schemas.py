@@ -82,6 +82,7 @@ class InstanceSpecificationsResponse(BaseModel):
     total: int
     instances: List[InstanceSpecification]
     unreachable_nodes: List[str] = Field(default_factory=list)
+    node_errors: Dict[str, str] = Field(default_factory=dict)
     collected_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC time when this projection was assembled",
@@ -198,9 +199,8 @@ class VMListResponse(BaseModel):
     node_errors: Dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "Reason per cluster in unreachable_nodes when it is known, prefixed unreachable:, "
-            "such as one whose list did not answer within the inventory wall. Empty for Tenant "
-            "callers."
+            "Reason per cluster in unreachable_nodes, prefixed unreachable:, forbidden:, error: "
+            "or partial:. Empty for Tenant callers."
         ),
     )
     lxd_count: int = Field(0, description="Number of LXD Clusters online")

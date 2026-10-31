@@ -74,6 +74,7 @@ from app.services.migration_fence import (
     MigrationFenceConflict,
     assert_project_not_migration_fenced,
 )
+from app.services.lxd.fanout import complete_reasons
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -339,6 +340,10 @@ class ProfileListResponse(BaseModel):
             "may be incomplete. A short list is never presented as the whole truth."
         ),
     )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Reason per cluster in unreachable_nodes or partial_nodes. Empty for Tenant callers.",
+    )
 
 
 def _fetch_profiles_for_node(
@@ -484,6 +489,7 @@ async def list_profiles(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=sorted(partial_nodes),
+            node_errors=complete_reasons(unreachable_nodes, {}, partial=partial_nodes),
         )
         
         # important: an outage must not be remembered as the answer. See instances.py.

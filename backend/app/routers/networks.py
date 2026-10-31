@@ -11,6 +11,7 @@ import requests
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.fanout import complete_reasons
 from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
@@ -324,6 +325,10 @@ class NetworkListResponse(BaseModel):
             "may be incomplete. A short list is never presented as the whole truth."
         ),
     )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Reason per cluster in unreachable_nodes or partial_nodes. Empty for Tenant callers.",
+    )
     collected_at: Optional[datetime] = Field(
         None, description="When this list was read. A cached answer keeps the time of its read."
     )
@@ -465,6 +470,7 @@ async def list_networks(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=sorted(unreachable_nodes),
             partial_nodes=sorted(partial_nodes),
+            node_errors=complete_reasons(unreachable_nodes, {}, partial=partial_nodes),
             collected_at=datetime.now(timezone.utc),
         )
         

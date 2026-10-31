@@ -145,17 +145,20 @@ class CachePrewarm:
     async def _fetch_vms(self):
         """Fetch VMs data for cache warming."""
         from app.models.schemas import VMListResponse
+        from app.services.lxd.fanout import complete_reasons
         all_vms, connected_nodes = await self._lxd_service.list_all_vms()
         if not connected_nodes:
             # mirrors the guard in routers/vms.py
             return None
         # Filter to VMs only (type == virtual-machine)
         vms_only = [vm for vm in all_vms if vm.type == "virtual-machine"]
+        unreachable_nodes = self._unreachable(connected_nodes)
         response = VMListResponse(
             total=len(vms_only),
             vms=vms_only,
             nodes=connected_nodes,
-            unreachable_nodes=self._unreachable(connected_nodes),
+            unreachable_nodes=unreachable_nodes,
+            node_errors=complete_reasons(unreachable_nodes, {}),
         )
         return response.model_dump()
     

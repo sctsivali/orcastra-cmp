@@ -64,6 +64,8 @@ interface KernelAdvisoryTabProps {
   rows: KernelAdvisoryWarning[];
   /** Clusters whose kernels were not read: named, so a short list is never mistaken for a clean one. */
   unread?: string[];
+  /** Why each member's kernel could not be read, keyed like `unread`. */
+  unreadReasons?: Record<string, string>;
   /** The assessment failed outright: the empty state must not claim every kernel is patched. */
   failed?: boolean;
   onShowDetail: (record: KernelAdvisoryWarning) => void;
@@ -83,6 +85,7 @@ export function KernelAdvisoryTab(props: KernelAdvisoryTabProps) {
 function KernelAdvisoryTable({
   rows,
   unread = [],
+  unreadReasons,
   failed = false,
   onShowDetail,
 }: KernelAdvisoryTabProps) {
@@ -113,7 +116,7 @@ function KernelAdvisoryTable({
             <KernelCveUbuntuStatus />
           </div>
         </div>
-        <UnreachableNodesBanner noun="member kernels" nodes={unread} />
+        <UnreachableNodesBanner noun="member kernels" nodes={unread} reasons={unreadReasons} />
         <TableToolbar filters={filters} noun="kernel CVE findings" />
       </CardHeader>
       <CardContent className="p-0 md:p-6 md:pt-0">

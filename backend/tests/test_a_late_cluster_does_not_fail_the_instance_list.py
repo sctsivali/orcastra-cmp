@@ -123,7 +123,7 @@ def test_the_partial_answer_is_kept_for_ten_seconds_and_a_complete_one_for_thirt
 
 def test_a_tenant_sees_the_late_cluster_without_the_reason(monkeypatch):
     svc = _service(monkeypatch, BlockingTimeout(f"instance.inventory[{LATE}]", 30.0))
-    monkeypatch.setattr(instances_module, "tenant_acl_active", lambda: True)
+    monkeypatch.setattr("app.services.lxd.fanout.tenant_acl_active", lambda: True)
     monkeypatch.setattr(instances_module, "check_tenant_permission", lambda *a, **k: True)
     body = _client(monkeypatch, svc, CacheManager(redis_url=None)).get("/instances").json()
 

@@ -12,7 +12,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect, unattempted
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons, unattempted
 from app.services.lxd.ipam_join import classify, network_facts
 from app.services.lxd.project_scope import (
     ALL_PROJECTS_READ_TIMEOUT,
@@ -349,7 +349,7 @@ async def list_ipam_allocations(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
             collected_at=datetime.now(timezone.utc),
         )
 

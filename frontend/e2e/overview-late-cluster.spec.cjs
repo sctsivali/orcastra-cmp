@@ -8,6 +8,7 @@ const { fullInstance } = require("./support/api-fixture-data.cjs");
 
 const LATE = "cluster-b";
 const REASON = "unreachable: did not answer within 30 s";
+const SHOWN_REASON = "did not answer within 30 s";
 
 const project = (host, name) => ({ name, description: "", config: {}, used_by: [], host, tags: [] });
 
@@ -41,7 +42,8 @@ async function installLateCluster(page, role, options = {}) {
     { host: "cluster-a", projects: [project("cluster-a", "tenant-a")], total: 1, reachable: true, error: null },
     { host: LATE, projects: [project(LATE, "web")], total: 1, reachable: true, error: null },
   ] }));
-  await page.route("**/api/v1/instances", async (route) => {
+  // note: a regex, because the page's refetch carries a query string a glob would not match.
+  await page.route(/\/api\/v1\/instances(\?|$)/, async (route) => {
     control.instanceReads += 1;
     if (control.held) await held;
     return route.fulfill({ json: lateList(role) });
@@ -69,10 +71,11 @@ for (const role of ["admin", "partner"]) {
     control.release();
 
     await expect(page.getByText("Loading Total Instances", { exact: true })).toHaveCount(0);
-    const banner = page.getByRole("status").filter({ hasText: "Their instances are not shown" });
+    const banner = page.locator('[data-slot="unreachable-banner"]').filter({ hasText: "Their instances are not shown" });
     await expect(banner).toContainText("Could not reach 1 cluster.");
+    await banner.getByRole("button", { name: "Show Details" }).click();
     await expect(banner).toContainText(LATE);
-    await expect(banner).toContainText(REASON);
+    await expect(banner).toContainText(SHOWN_REASON);
     // The late cluster's project has an unknown count, never 0, and cannot be deleted from here.
     await expect(projectCard(page, "web").getByLabel(/^Instance count not read/)).toBeVisible();
     await expect(projectCard(page, "tenant-a").getByText("1", { exact: true })).toBeVisible();
@@ -92,9 +95,10 @@ test("admin: the Instances page gives the late cluster's reason", async ({ page,
   const { state, control } = await installLateCluster(page, "admin", { instanceListPage: true });
   control.release();
   await page.goto("/inventory/instances");
-  const banner = page.getByRole("status").filter({ hasText: "Their instances are not shown" });
+  const banner = page.locator('[data-slot="unreachable-banner"]').filter({ hasText: "Their instances are not shown" });
   await expect(banner).toContainText("Could not reach 1 cluster.");
-  await expect(banner).toContainText(REASON);
+  await banner.getByRole("button", { name: "Show Details" }).click();
+  await expect(banner).toContainText(SHOWN_REASON);
   await expectCleanInventoryHarness(state);
 });
 

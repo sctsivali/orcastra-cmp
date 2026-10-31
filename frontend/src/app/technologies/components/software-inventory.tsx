@@ -52,7 +52,7 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
   };
   const unreachableNames = unreachable.map(labelFor);
   const unreachableReasons = Object.fromEntries(
-    unreachable.map((node) => [labelFor(node), node.error || "no reason reported"]),
+    unreachable.map((node) => [labelFor(node), node.error ?? ""]),
   );
 
   // note: the zero-connected line describes the section rather than repeating the empty state

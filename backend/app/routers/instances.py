@@ -52,7 +52,6 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.api_key_capabilities import is_valid_project_name
 from app.core.host_detail import metrics_for_tier, vm_for_tier, vm_list_for_tier
 from app.core.task_scope import caller_tier
-from app.core.tenant_visibility import tenant_acl_active
 from app.core.org_scope import (
     can_view_instance,
     check_tenant_permission,
@@ -107,6 +106,7 @@ from app.services.migration_fence import (
 )
 from app.routers.tags import get_tag_service_dep
 from app.core.lxd_path import safe_segment
+from app.services.lxd.fanout import complete_reasons
 import requests
 
 logger = logging.getLogger(__name__)
@@ -391,13 +391,11 @@ async def list_instances(
             )
         ]
 
-        # Only the clusters this answer reports, so a host-scoped list never names another
-        # cluster's failure; and never to a Tenant, like every other fan-out list's reasons.
-        late_here = {name: kind for name, kind in late.items() if name in unreachable_nodes}
-        node_errors = (
-            {}
-            if tenant_acl_active()
-            else {name: timed_out_reason(kind) for name, kind in late_here.items()}
+        # A cluster that answered and still sits in unreachable_nodes lost some rows.
+        node_errors = complete_reasons(
+            [name for name in unreachable_nodes if name not in response_nodes],
+            {name: timed_out_reason(kind) for name, kind in late.items()},
+            partial=[name for name in unreachable_nodes if name in response_nodes],
         )
 
         response = VMListResponse(
@@ -428,7 +426,7 @@ async def list_instances(
         # start finished) is refused by swr.serve through the instance list generation.
         # A late cluster is kept briefly: the body says it did not answer in time, which is true
         # for those seconds, and the next read tries it again soon.
-        ttl = _LATE_CLUSTER_FRESH_SECONDS if late_here else 30
+        ttl = _LATE_CLUSTER_FRESH_SECONDS if late.keys() & set(unreachable_nodes) else 30
         return Built(value=response, body=response.model_dump(), fresh_for=ttl if cacheable_answer else None)
 
     try:
@@ -494,6 +492,11 @@ async def list_instance_specifications(
             total=len(specifications),
             instances=specifications,
             unreachable_nodes=unreachable,
+            node_errors=complete_reasons(
+                [name for name in unreachable if name not in connected_nodes],
+                {},
+                partial=[name for name in unreachable if name in connected_nodes],
+            ),
             collected_at=datetime.now(timezone.utc),
         )
 

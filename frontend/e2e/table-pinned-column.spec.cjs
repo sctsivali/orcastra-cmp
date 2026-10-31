@@ -21,7 +21,7 @@ function instanceRows(count) {
 async function openInstances(page, context) {
   await authenticate(context, "admin");
   await installInventoryHardeningFixtures(page, "admin");
-  await page.route("**/api/v1/instances", (route) => {
+  await page.route(/\/api\/v1\/instances(\?|$)/, (route) => {
     const vms = instanceRows(6);
     return route.fulfill({ json: {
       total: vms.length, vms, nodes: ["cluster-a"], unreachable_nodes: [], node_errors: {},

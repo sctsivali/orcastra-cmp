@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.acl_rules import rule_list_problem, validate_rules
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons
 from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
@@ -288,7 +288,7 @@ async def list_network_acls(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=sorted(fan.partial_nodes),
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

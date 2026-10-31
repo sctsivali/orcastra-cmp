@@ -336,7 +336,13 @@ function OperationsContent() {
         <RefreshButton label="Refresh tasks" lastUpdatedAt={query.dataUpdatedAt} onRefresh={query.refreshNow} />
       </div>
 
-      <UnreachableNodesBanner noun="newest tasks" nodes={disconnectedClusters} />
+      <UnreachableNodesBanner
+        noun="newest tasks"
+        nodes={disconnectedClusters}
+        reasons={Object.fromEntries(
+          disconnectedClusters.map((cluster) => [cluster, "live task collection is interrupted"]),
+        )}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

@@ -41,7 +41,7 @@ function PlatformTechnologies() {
   const hardwareInfo = React.useMemo(() => buildHardwareCategories(nodes), [nodes]);
   const unreachable = nodes.filter((node) => !node.connected);
   const unreachableReasons = Object.fromEntries(
-    unreachable.map((node) => [node.name, node.error || "no reason reported"]),
+    unreachable.map((node) => [node.name, node.error ?? ""]),
   );
 
   if (isLoading) {

@@ -48,6 +48,7 @@ from app.routers.instance_snapshots import (
     _enforce_snapshot_access,
 )
 from app.services.lxd_service import LXDService, get_lxd_service
+from app.services.lxd.fanout import complete_reasons
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,10 @@ class FleetSnapshotListResponse(BaseModel):
     partial_nodes: List[str] = Field(
         default_factory=list,
         description="Clusters that answered, but not for every project they hold",
+    )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Reason per cluster in unreachable_nodes or partial_nodes. Empty for Tenant callers.",
     )
     truncated: bool = Field(
         default=False, description="The row cap was reached and some rows are not present"
@@ -317,6 +322,7 @@ async def list_fleet_snapshots(
         unreachable_nodes=unreachable_nodes,
         queried_nodes=sorted(answered),
         partial_nodes=sorted(partial),
+        node_errors=complete_reasons(unreachable_nodes, {}, partial=partial),
         truncated=truncated,
         size_measurement=size_measurement,
         measured_instances=measured_instances,

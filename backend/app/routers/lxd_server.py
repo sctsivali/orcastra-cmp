@@ -10,7 +10,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
-from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.fanout import NodeRead, collect, complete_reasons
 from app.models.schemas import FanoutReachability
 from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
@@ -156,7 +156,7 @@ async def list_servers(
             total=len(all_servers),
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
-            node_errors=fan.node_errors,
+            node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

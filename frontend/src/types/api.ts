@@ -193,6 +193,8 @@ export interface InstanceSpecificationsResponse {
   instances: InstanceSpecification[];
   /** Scoped cluster ids that could not be read. The list can therefore be incomplete. */
   unreachable_nodes: string[];
+  /** Why each of them is missing. Empty for Tenant callers. */
+  node_errors?: Record<string, string>;
   collected_at: string;
 }
 
@@ -2144,6 +2146,8 @@ export interface SystemWarningsResponse {
   kernel_advisories?: KernelAdvisoryWarning[];
   /** Clusters whose kernels were not read, so their absence from kernel_advisories proves nothing. */
   kernel_advisories_unread?: string[];
+  /** Why each member kernel could not be read. Empty for Tenant callers. */
+  kernel_advisories_errors?: Record<string, string>;
   /** True when the kernel assessment failed outright; the empty list is then not an all-clear. */
   kernel_advisories_failed?: boolean;
   nodes: string[];
@@ -3402,6 +3406,8 @@ export interface FleetSnapshotListResponse {
   queried_nodes?: string[];
   /** Answered, but not for every project they hold. Their rows ARE present, unlike unreachable. */
   partial_nodes?: string[];
+  /** Why each cluster in those two lists is short. Empty for Tenant callers. */
+  node_errors?: Record<string, string>;
   /** The server-side row cap was reached, so some snapshots are not in `items`. */
   truncated?: boolean;
   /**
