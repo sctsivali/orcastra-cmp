@@ -34,6 +34,7 @@
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { closing, openingTags } from './source-scan.mjs';
 
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
@@ -92,6 +93,26 @@ if (gates.length !== 1) {
   );
 }
 
+// The gate's direction, and what each side renders. Counting the gate passes with its branches
+// swapped, which hands every tenant the named list.
+const ungated = /if \(!hasRole\(Role\.PARTNER\)\) \{\s*return <UnreachableNodesNotice noun=\{noun\} className=\{className\} \/>;\s*\}/
+  .exec(executable);
+if (!ungated) {
+  offenders.push(
+    'the banner no longer reads `if (!hasRole(Role.PARTNER)) return <UnreachableNodesNotice ' +
+      'noun={noun} className={className} />`. The role below Partner gets that line and only that.',
+  );
+}
+for (const name of ['UnreachableNodesNotice', 'UnreachableNodesDetail']) {
+  const renders = executable.match(new RegExp(`<${name}\\b`, 'g')) ?? [];
+  if (renders.length !== 1) {
+    offenders.push(`${name} renders ${renders.length} times. One place on each side of the gate is the design.`);
+  }
+}
+if (ungated && executable.indexOf('<UnreachableNodesDetail') < ungated.index) {
+  offenders.push('UnreachableNodesDetail renders above the role gate');
+}
+
 // With no session resolveRoles([]) answers [Role.TENANT], so painting during the first read shows
 // the tenant line to a partner for a frame and then swaps it. Absence is the only correct render.
 if (!/if\s*\(isLoading\)\s*return null;/.test(executable)) {
@@ -124,6 +145,16 @@ if (!notice) {
         'Any other prop is a channel a host name can travel down.',
     );
   }
+}
+
+// The signature keeps a name out of the props, and this keeps one out of the body.
+const noticeBody = executable.slice(
+  executable.indexOf('function UnreachableNodesNotice'),
+  executable.indexOf('function UnreachableNodesDetail'),
+);
+const noticeHoles = [...noticeBody.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim());
+if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|reasons)\b/.test(noticeBody)) {
+  offenders.push('UnreachableNodesNotice prints something other than its noun');
 }
 
 // --- 3. the gate and the permission matrix agree ---------------------------------------------
@@ -180,7 +211,9 @@ if (roles.join(',') !== 'ADMIN,PARTNER,TENANT') {
 
 // --- 4. no call site invents a second channel -------------------------------------------------
 
-const ALLOWED_PROPS = new Set(['nodes', 'noun', 'reasons', 'className', 'key']);
+const ALLOWED_PROPS = new Set(['nodes', 'noun', 'reasons', 'partial', 'className', 'key']);
+// The one noun that is not a literal: a specification category's title, from a fixed list.
+const NOUN_EXPRESSIONS = new Set(['`${category?.title ?? "instance"} specifications`']);
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -188,28 +221,6 @@ function* walk(dir) {
     if (statSync(full).isDirectory()) yield* walk(full);
     else if (full.endsWith('.tsx')) yield full;
   }
-}
-
-/** Opening tags for `name` with their body, brace- and quote-aware. */
-function tags(source, name) {
-  const found = [];
-  const open = new RegExp(`<${name}\\b`, 'g');
-  let m;
-  while ((m = open.exec(source)) !== null) {
-    let i = m.index + m[0].length;
-    let depth = 0;
-    let quote = null;
-    for (; i < source.length; i += 1) {
-      const c = source[i];
-      if (quote) { if (c === quote) quote = null; continue; }
-      if (c === '"' || c === "'" || c === '`') quote = c;
-      else if (c === '{') depth += 1;
-      else if (c === '}') depth -= 1;
-      else if (c === '>' && depth === 0) break;
-    }
-    found.push({ text: source.slice(m.index, i + 1), index: m.index });
-  }
-  return found;
 }
 
 const lineOf = (source, index) => source.slice(0, index).split('\n').length;
@@ -220,8 +231,19 @@ for (const file of walk(src)) {
   if (rel === 'components/ui/unreachable-nodes-banner.tsx') continue;
   const body = readFileSync(file, 'utf8');
   if (!body.includes('<UnreachableNodesBanner')) continue;
-  for (const tag of tags(body, 'UnreachableNodesBanner')) {
+  for (const tag of openingTags(body, 'UnreachableNodesBanner')) {
     sites += 1;
+    // `noun` is printed to every role, so a name passed through it would reach a tenant.
+    const noun = tag.text.match(/\bnoun=(?:"[^"]*"|\{)/);
+    const expression = noun?.[0].endsWith('{')
+      ? tag.text.slice(noun.index + noun[0].length, closing(tag.text, noun.index + noun[0].length - 1))
+      : null;
+    if (!noun || (expression !== null && !NOUN_EXPRESSIONS.has(expression))) {
+      offenders.push(
+        `${rel}:${lineOf(body, tag.index)} gives the banner a noun that is not a fixed word. It is ` +
+          'printed to every role, so it cannot come from the payload.',
+      );
+    }
     for (const attr of tag.text.matchAll(/(?:^|\s)([a-zA-Z][a-zA-Z0-9]*)=/g)) {
       if (!ALLOWED_PROPS.has(attr[1])) {
         offenders.push(

@@ -16,8 +16,9 @@ from app.services.interactive_relay import close_reason, plain_text
         ("gone\x1b[2J", "gone [2J"),
         ("gone\x9b2J", "gone 2J"),
         ("a\x1b]8;;http://evil.invalid\x07b", "a ]8;;http://evil.invalid b"),
-        ("name‮root", "name root"),
+        ("name\u202eroot", "name root"),
         ("line\nbreak", "line break"),
+        ("name\u061croot", "name root"),
     ],
 )
 def test_nothing_a_terminal_would_execute_survives(sent, shown):

@@ -38,7 +38,7 @@ _MAX_REASON_BYTES = 120
 
 
 # C0, DEL and C1, then the format characters that reorder what a reader sees.
-_UNPRINTABLE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+_UNPRINTABLE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 
 
 def plain_text(text: str) -> str:

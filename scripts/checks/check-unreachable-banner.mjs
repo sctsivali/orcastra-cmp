@@ -12,9 +12,10 @@
 //
 // Run: node scripts/checks/check-unreachable-banner.mjs [repo-root]
 
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { openingTags } from './source-scan.mjs';
 
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const routersDir = join(root, 'backend', 'app', 'routers');
@@ -61,9 +62,28 @@ for (const router of reporting) {
     if (!source.includes('<UnreachableNodesBanner')) {
       offenders.push(`${page} drops the unreachable_nodes that ${router} reports`);
     }
-    // Show Details is the whole diagnosis: a banner with no reasons lists bare names under it.
-    if (!/<UnreachableNodesBanner\b[^>]*\breasons=/.test(source)) {
-      offenders.push(`${page} renders the banner without the reasons ${router} reports`);
+  }
+}
+
+function* walk(dir) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) yield* walk(full);
+    else if (full.endsWith('.tsx')) yield full;
+  }
+}
+
+// Show Details is the whole diagnosis: a banner with no reasons lists bare names under it. Each
+// banner on its own, because most pages hold two, and one that kept `reasons` hid the other.
+let banners = 0;
+for (const file of walk(join(root, 'frontend', 'src'))) {
+  if (file.endsWith('unreachable-nodes-banner.tsx')) continue;
+  const source = readFileSync(file, 'utf8');
+  for (const tag of openingTags(source, 'UnreachableNodesBanner')) {
+    banners += 1;
+    if (!/\breasons=/.test(tag.text)) {
+      const line = source.slice(0, tag.index).split('\n').length;
+      offenders.push(`${relative(root, file)}:${line} renders the banner without reasons`);
     }
   }
 }
@@ -79,6 +99,9 @@ for (const router of ROUTER_TO_PAGES.keys()) {
 // A scan over nothing passes for the wrong reason.
 if (reporting.length < 11) {
   offenders.push(`only ${reporting.length} routers report unreachable_nodes; expected at least 11`);
+}
+if (banners < 30) {
+  offenders.push(`only ${banners} banners found; expected at least 30`);
 }
 
 if (offenders.length) {
