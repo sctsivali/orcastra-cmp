@@ -1,3 +1,4 @@
+import { LXD_NAME_PATTERN } from "@/lib/lxd-names";
 import type {
   MigrationIntent,
   MigrationPlanCreateRequest,
@@ -74,7 +75,7 @@ export function planningStepFromKey(key: string | null | undefined): number | nu
 export const MIN_RETENTION_HOURS = 1;
 export const MAX_RETENTION_HOURS = 168;
 
-export const LXD_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$/;
+export { LXD_NAME_PATTERN };
 
 /** Suggested name for a copy. A name that would exceed the LXD limit is left for the operator. */
 export function defaultCopyName(name: string): string {

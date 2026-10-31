@@ -255,6 +255,10 @@ class ConsoleProxy:
         self._log_ready(started)
         if self.console_type == "console":
             # A serial client shows "connected" on this; a SPICE stream must stay binary only.
+            if self._session:
+                await self.browser_ws.send_text(
+                    json.dumps({"type": "session", "session_id": self._session.session_id})
+                )
             await self.browser_ws.send_text(json.dumps({"type": "ready"}))
         await self._relay()
 

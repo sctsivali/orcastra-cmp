@@ -31,6 +31,7 @@ from app.services.interactive_relay import (
     CLOSE_UNAVAILABLE,
     CLOSE_UPSTREAM,
     OutputWindow,
+    plain_text,
     close_browser,
 )
 from app.services.lxd_ws import SessionSetupError, connection_material, open_lxd_socket, redact, session_io
@@ -171,7 +172,7 @@ class TerminalProxy:
         """
         try:
             await self.browser_ws.send_json({
-                "type": "error", "message": message, "code": code, "retryable": code == CLOSE_UPSTREAM,
+                "type": "error", "message": plain_text(message), "code": code, "retryable": code == CLOSE_UPSTREAM,
             })
         except Exception:  # noqa: BLE001 - already gone
             pass

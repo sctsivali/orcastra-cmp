@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -36,9 +37,22 @@ CLOSE_UNAVAILABLE = 4404
 _MAX_REASON_BYTES = 120
 
 
+# C0, DEL and C1, then the format characters that reorder what a reader sees.
+_UNPRINTABLE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+
+
+def plain_text(text: str) -> str:
+    """``text`` with nothing a terminal would execute.
+
+    important: a refusal echoes what the browser asked for, and the browser writes it to xterm. A
+    crafted instance name must not arrive as an escape sequence. The client strips this too.
+    """
+    return _UNPRINTABLE.sub(" ", text or "").strip()
+
+
 def close_reason(text: str) -> str:
     """``text`` cut to fit a close frame, on a character boundary."""
-    raw = (text or "").replace("\n", " ").strip().encode("utf-8")
+    raw = plain_text(text).encode("utf-8")
     if len(raw) <= _MAX_REASON_BYTES:
         return raw.decode("utf-8")
     return raw[: _MAX_REASON_BYTES - 3].decode("utf-8", errors="ignore").rstrip() + "..."

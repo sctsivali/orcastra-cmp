@@ -317,6 +317,8 @@ jobs:
 
       - name: Terminal theme
         run: node scripts/checks/check-terminal-theme.mjs .
+      - name: Text from outside the PTY reaches xterm sanitized
+        run: node scripts/checks/check-terminal-output.mjs .
 
       # An em dash joined the two halves of the stop dialog's warning, and the same character
       # was in 83 other places across the console, the API layer and the README. tsc and

@@ -33,6 +33,8 @@ export interface XtermBundle {
   searchAddon: SearchAddon;
   /** rAF-coalesced fit: a burst of layout changes refits once. */
   fit: () => void;
+  /** Fit now, for code that needs the grid's real size before it writes. */
+  fitNow: () => void;
   /** Set the font size (clamped) and refit; returns the size applied. */
   setFontSize: (px: number) => number;
   dispose: () => void;
@@ -97,18 +99,22 @@ export function createXterm(container: HTMLElement, options: { fontSize?: number
   // buffer. Not enumerable, so nothing that walks the element picks it up.
   Object.defineProperty(container, "__xterm", { value: term, configurable: true });
 
+  const fitNow = () => {
+    // A hidden container measures 0x0, and fitting to it would collapse the grid.
+    if (!container.clientWidth || !container.clientHeight) return;
+    try {
+      fitAddon.fit();
+    } catch {
+      /* detached mid-resize */
+    }
+  };
+
   let frame: number | null = null;
   const fit = () => {
     if (frame !== null) return;
     frame = requestAnimationFrame(() => {
       frame = null;
-      // A hidden container measures 0x0, and fitting to it would collapse the grid.
-      if (!container.clientWidth || !container.clientHeight) return;
-      try {
-        fitAddon.fit();
-      } catch {
-        /* detached mid-resize */
-      }
+      fitNow();
     });
   };
 
@@ -137,5 +143,5 @@ export function createXterm(container: HTMLElement, options: { fontSize?: number
   };
 
   fit();
-  return { term, searchAddon, fit, setFontSize, dispose };
+  return { term, searchAddon, fit, fitNow, setFontSize, dispose };
 }

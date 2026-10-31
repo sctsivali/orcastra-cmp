@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { Terminal } from "@xterm/xterm";
+import { drawConnectBox, terminalSafe } from "@/lib/terminal-banner";
 import { createXterm, terminalFontReady, type XtermBundle } from "@/lib/xterm-setup";
 import {
   INSTANCE_RETURN_POLL_MS,
@@ -75,16 +76,19 @@ const RESIZE_DEBOUNCE_MS = 100;
 const DIM = "\x1b[2m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
+const GREEN = "\x1b[1;32m";
 const RESET = "\x1b[0m";
+// A session id only ever goes to the screen in this shape, whatever the server sends.
+const SESSION_ID = /^[\w.:-]{1,128}$/;
+// Abort any half-read sequence, then end mouse reporting, bracketed paste and a hidden cursor. A
+// dropped vim leaves all of that on, and the new shell would start inside it.
+const END_DEAD_PROGRAM = "\x18\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[0m";
+// important: only from the alternate screen. On the normal one this restores the saved cursor,
+// which is the top left corner, and the next line overwrites the connect box.
+const LEAVE_ALT_SCREEN = "\x1b[?1049l";
 
 function note(term: Terminal | undefined, text: string, color = DIM): void {
-  term?.write(`\r\n${color}${text}${RESET}\r\n`);
-}
-
-function welcome(term: Terminal, kind: TerminalKind, instanceName: string): void {
-  term.writeln(`\x1b[1;36m${kind === "serial" ? "Serial console" : "Shell"}: ${instanceName}\x1b[0m`);
-  // note: nothing is typed for the operator. On a serial line an Enter could pick a boot menu entry.
-  term.writeln(`${DIM}${kind === "serial" ? "Connecting… Press Enter for a prompt once connected." : "Connecting…"}${RESET}`);
+  term?.write(`\r\n${color}${terminalSafe(text)}${RESET}\r\n`);
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -140,6 +144,7 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
   const pendingRef = useRef<Uint8Array[]>([]);
   const writingRef = useRef(false);
   const ackRef = useRef(0);
+  const sessionsRef = useRef(0);
   const connectRef = useRef<() => void>(() => {});
   const callbacks = useRef(options);
   callbacks.current = options;
@@ -263,9 +268,20 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
         return;
       }
       switch (msg.type) {
-        case "session":
-          callbacks.current.onSessionId?.(String(msg.session_id));
+        case "session": {
+          const term = bundleRef.current?.term;
+          const sessionId = String(msg.session_id ?? "");
+          // note: not on serial. That line is the guest's own console, and the program is still
+          // running behind it.
+          if (kind === "shell" && sessionsRef.current > 0) {
+            term?.write(END_DEAD_PROGRAM);
+            if (term?.buffer.active.type === "alternate") term.write(LEAVE_ALT_SCREEN);
+          }
+          sessionsRef.current += 1;
+          if (SESSION_ID.test(sessionId)) term?.writeln(`${GREEN}✓ Session established: ${sessionId}${RESET}`);
+          callbacks.current.onSessionId?.(sessionId);
           break;
+        }
         case "ready":
           readyAtRef.current = Date.now();
           droppedAtRef.current = null;
@@ -273,6 +289,10 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
           liveRef.current = true;
           if (replacingRef.current) note(bundleRef.current?.term, SOCKET_MESSAGES.newShell, YELLOW);
           replacingRef.current = false;
+          bundleRef.current?.term.writeln(`${GREEN}✓ Connected${RESET}`);
+          // note: nothing is typed for the operator. On a serial line an Enter could pick a boot
+          // menu entry.
+          if (kind === "serial") bundleRef.current?.term.writeln(`${DIM}Press Enter for a prompt.${RESET}`);
           setStatus("connected");
           callbacks.current.onReady?.();
           break;
@@ -361,7 +381,14 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
       const bundle = createXterm(containerRef.current, { fontSize });
       bundleRef.current = bundle;
       const term = bundle.term;
-      welcome(term, kind, instanceName);
+      // Before the first row is written, so the box takes the window's real size.
+      bundle.fitNow();
+      const connectBox = drawConnectBox(
+        term,
+        kind === "serial" ? "Orcastra Serial Console" : "Orcastra Terminal",
+        `Connecting to ${instanceName}…`,
+      );
+      cleanups.push(() => connectBox.dispose());
 
       // Ctrl+Shift+C / Ctrl+Shift+V (and Ctrl/Shift+Insert) copy and paste, the convention of
       // Linux terminals; plain Ctrl+C stays an interrupt for the program.

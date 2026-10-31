@@ -5,6 +5,7 @@
 
 "use client";
 
+import { LXD_NAME_PATTERN } from "@/lib/lxd-names";
 import * as React from "react";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -102,6 +103,16 @@ function TerminalPage() {
     return (
       <div className="flex h-[100dvh] items-center justify-center bg-background px-6 text-center">
         <p className="text-sm text-muted-foreground">This terminal link is missing the instance or its cluster.</p>
+      </div>
+    );
+  }
+
+  // important: the name comes from the URL and reaches the terminal, so a link that is not a real
+  // instance name stops here, before any socket opens.
+  if (!LXD_NAME_PATTERN.test(instanceName)) {
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-background px-6 text-center">
+        <p className="text-sm text-muted-foreground">This terminal link is not valid.</p>
       </div>
     );
   }
