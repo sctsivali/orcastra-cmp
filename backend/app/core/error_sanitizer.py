@@ -88,8 +88,9 @@ def client_detail(reference: str) -> str:
 
 
 # The structured 5xx answers a client acts on, by status, each with the message used when the
-# raising handler gave none. Only these keep their `{error, message}` shape; any other detail is
-# flattened to sanitized text, so a handler cannot ship arbitrary fields to a client.
+# raising handler gave none. Only these keep their shape, `{error, message}` or `{code, message}`
+# as the handler keyed it; any other detail is flattened to sanitized text, so a handler cannot
+# ship arbitrary fields to a client.
 _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
     502: {
         "snapshot_outcome_unknown": "Check this instance's snapshots before trying again.",
@@ -120,6 +121,12 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "unsupported_server": "This cluster does not offer file access.",
         "feature_disabled": "File access is turned off on this deployment.",
         "guest_disconnected": "The connection to the guest closed. The instance may have stopped.",
+        # frontend isProjectDeleteUnknown follows the project on this code instead of failing.
+        "project_write_unknown": "This project change may still finish. Refresh before retrying.",
+        "CREATE_PREFLIGHT_UNAVAILABLE": "Instance preflight is busy or timed out. Try again shortly.",
+        "LXD_UNAVAILABLE": "The target cluster is unavailable. The create was not submitted.",
+        "operation_cancel_temporarily_unavailable": "Operation cancellation is temporarily unavailable. Retry shortly.",
+        "operation_cancel_outcome_unknown": "The cluster may have accepted the cancellation. Refresh before retrying.",
     },
     504: {
         "guest_timeout": "The guest did not answer in time. It may be busy or still starting.",
@@ -145,14 +152,19 @@ def public_server_detail(status_code: int, detail: Any, reference: str) -> Any:
     if status_code not in (502, 503, 504, 507):
         return client_detail(reference)
     codes = _STRUCTURED_5XX.get(status_code, {})
-    if isinstance(detail, dict) and detail.get("error") in codes:
-        code = detail["error"]
-        message = detail.get("message")
-        return {
-            "error": code,
-            "message": sanitize_error(message if isinstance(message, str) else codes[code]),
-        }
-    return sanitize_error(str(detail))
+    if not isinstance(detail, dict):
+        return sanitize_error(str(detail))
+    message = detail.get("message")
+    for key in ("error", "code"):
+        code = detail.get(key)
+        if isinstance(code, str) and code in codes:
+            return {
+                key: code,
+                "message": sanitize_error(message if isinstance(message, str) else codes[code]),
+            }
+    # important: never str() a dict. The operator reads this text, and a repr hides the code from
+    # the client that branches on it: `project_write_unknown` was lost this way.
+    return sanitize_error(message) if isinstance(message, str) else client_detail(reference)
 
 
 def is_sensitive_param(name: str) -> bool:
