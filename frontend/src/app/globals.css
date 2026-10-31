@@ -21,6 +21,7 @@
   }
 
   :root {
+    --table-edge-shadow: hsl(222 47% 11% / 0.2);
     --background: 220 13% 96%;
     --foreground: 222 47% 11%;
     --card: 0 0% 98%;
@@ -149,6 +150,7 @@
      and 5.51 on --muted, from 7.77 and 5.81. At 68% it measures 7.78 and 5.90, so the most reused
      colour in the console comes out level or better instead of quietly worse. */
   .dark {
+    --table-edge-shadow: hsl(0 0% 0% / 0.6);
     --background: 256.4 24.4% 8.8%;
     --foreground: 0 0% 98%;
     /* important: one step above --background, not equal to it. Dark used to paint card, popover
@@ -394,30 +396,42 @@
    Painted as an inset shadow on the scroll container, which stays on the border box while the
    rows move underneath it. A pseudo-element would have been positioned against the padding box
    and scrolled away with the content, which is the same class of mistake as putting a scrollbar
-   on a box that is taller than the viewport. The colour is a token, so it inverts with the theme
-   instead of being a black shadow nobody can see on the dark ground. No keyframes, so there is
-   nothing here for prefers-reduced-motion to guard. */
+   on a box that is taller than the viewport. The colour is --table-edge-shadow, so it stays a
+   shadow in both themes instead of turning into a pale glow on the dark ground. No keyframes, so
+   there is nothing here for prefers-reduced-motion to guard. */
+[data-slot="table-container"]:has([data-pinned="end"]) {
+  /* Keyboard focus moved to a cell must not land under the pinned column. */
+  scroll-padding-inline-end: 4rem;
+}
+
 [data-slot="table-container"][data-scroll-x="start"] {
-  box-shadow: inset -12px 0 10px -10px hsl(var(--foreground) / 0.28);
+  box-shadow: inset -12px 0 10px -10px var(--table-edge-shadow);
 }
 
 [data-slot="table-container"][data-scroll-x="middle"] {
   box-shadow:
-    inset 12px 0 10px -10px hsl(var(--foreground) / 0.28),
-    inset -12px 0 10px -10px hsl(var(--foreground) / 0.28);
+    inset 12px 0 10px -10px var(--table-edge-shadow),
+    inset -12px 0 10px -10px var(--table-edge-shadow);
 }
 
 [data-slot="table-container"][data-scroll-x="end"] {
-  box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
+  box-shadow: inset 12px 0 10px -10px var(--table-edge-shadow);
 }
 
 /* A column pinned to the trailing edge (TableHead and TableCell `pinned="end"`) covers the
    container's own trailing shadow, so it marks the rows sliding under it itself, on its tint
-   layer: above the ground and the hover tint, below the control. Same colour and geometry as
-   the container edge. */
+   layer: above the ground and the hover tint, below the control.
+
+   It casts outward, onto the rows, with a hairline on the edge. It used to be an inset shadow,
+   which painted inside the column and made the column read as sunken rather than raised above
+   what slides beneath it. clip-path cuts the blur at the row, so stacked cells draw one continuous
+   strip with no scallop at each row line; the -1px keeps the collapsed border line covered. */
 [data-slot="table-container"][data-scroll-x="start"] [data-pinned="end"]::after,
 [data-slot="table-container"][data-scroll-x="middle"] [data-pinned="end"]::after {
-  box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
+  box-shadow:
+    -1px 0 0 hsl(var(--border)),
+    -6px 0 8px -2px var(--table-edge-shadow);
+  clip-path: inset(-1px 0 -1px -16px);
 }
 
 /* With a pinned end column the cells draw the trailing hint, so the container keeps only its
@@ -429,7 +443,7 @@
 }
 
 [data-slot="table-container"][data-scroll-x="middle"]:has([data-pinned="end"]) {
-  box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
+  box-shadow: inset 12px 0 10px -10px var(--table-edge-shadow);
 }
 
 /* Custom scrollbar */

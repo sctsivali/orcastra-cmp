@@ -84,7 +84,10 @@ function useHorizontalScrollState(ref: React.RefObject<HTMLDivElement>): {
 // its own TableHeader.
 const STICKY_HEADER =
   "[&_thead_tr]:border-b-0 [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10 " +
-  "[&_thead_th]:bg-background [&_thead_th]:shadow-[inset_0_-1px_0_hsl(var(--border))]";
+  "[&_thead_th]:bg-background [&_thead_th]:shadow-[inset_0_-1px_0_hsl(var(--border))] " +
+  // The pinned corner's ground paints over the th's inset separator, so it draws the line itself,
+  // on the same pixel row as the rest of the header rather than one below it.
+  "[&_thead_th[data-pinned]]:before:bottom-0";
 
 // A column pinned to the trailing edge while the rest of the table scrolls under it, for the
 // row-actions column of a table wider than its container: the control an operator reaches for
@@ -97,22 +100,27 @@ const STICKY_HEADER =
 // focus) and, from globals.css, the edge shadow that says rows are sliding underneath. Tints on
 // `after` so they sit over the ground; the shadow on the same layer so it sits over the tint.
 //
-// note: `bg-card` because every list table lives on a card. A table on the page ground passes
-// `className="before:bg-background"`. The last body row drops its separator the way TableBody
-// does, keyed on tbody so the header row, also a last child, keeps its line.
+// note: the ground is `--pinned-ground`, falling back to `--card` because almost every list table
+// lives on a card. A table on another surface sets the variable on its container (the task dock
+// does), so the column never paints a second colour beside the rows.
 //
 // note: the ground reaches one pixel below the cell. With `border-collapse`, the row's 1 px
 // border is painted on the grid line, which Chromium allocates to the top strip of the next
 // cell, outside this cell's box, so a ground that stops at the box edge leaves that line
 // visible under the pseudo's own line and the pinned column shows a doubled separator.
 //
+// important: the last body row stops at its box and drops its separator, keyed on tbody so the
+// header row, also a last child, keeps its line. There is no next cell there, so the pixel below
+// is outside the table, and that pixel was enough to raise a 10 px vertical scrollbar on the
+// scroll container of every pinned table.
+//
 // note: only the tints TableRow itself applies are mirrored (hover, selected, pending, the
 // post-create focus). A row that carries its own bg-* or hover:bg-* class gets a pinned cell
 // painted on the plain ground; give such a row a TableRow state instead.
 const PINNED_END =
   "sticky end-0 z-[1] " +
-  "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:-bottom-px before:-z-[2] before:border-b before:border-border before:bg-card " +
-  "[tbody>tr:last-child>&]:before:border-b-0 " +
+  "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:-bottom-px before:-z-[2] before:border-b before:border-border before:bg-[var(--pinned-ground,hsl(var(--card)))] " +
+  "[tbody>tr:last-child>&]:before:bottom-0 [tbody>tr:last-child>&]:before:border-b-0 " +
   "after:pointer-events-none after:absolute after:inset-0 after:-z-[1] after:transition-colors motion-reduce:after:transition-none " +
   "[tr:hover>&]:after:bg-muted/50 [tr[data-state=selected]>&]:after:bg-muted [tr[data-state=pending]>&]:after:bg-muted/30 " +
   "[tr[data-row-focus=true]>&]:after:bg-primary/10 [tr[data-row-focus]>&]:after:duration-700";
@@ -192,7 +200,12 @@ const Table = React.forwardRef<HTMLTableElement, TableProps>(
           role={scrollable && scrollLabel ? "region" : undefined}
           aria-label={scrollable && scrollLabel ? scrollLabel : undefined}
           className={cn(
-            "relative w-full overflow-auto",
+            // important: only a call site that bounds the height gets vertical scroll. A table
+            // that grows with its rows has nothing to scroll, so a stray pixel can never raise a
+            // scrollbar on it.
+            "relative w-full",
+            containerClassName ? "overflow-auto" : "overflow-x-auto overflow-y-hidden",
+            stickyHeader && "scroll-pt-12",
             // important: an outline, not the house `ring-2`. Tailwind implements a ring AS a
             // box-shadow, and the edge shadow keyed off data-scroll-x in globals.css is also a
             // box-shadow on this same element, at equal specificity and declared after

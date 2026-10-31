@@ -205,7 +205,7 @@ function LogTabInner({ feed, height, onOpenTask, registerRefresh, collectionInco
           </Button>
         </div>
       ) : null}
-      <Table density="compact" stickyHeader containerClassName="min-h-0 flex-1 border-t" scrollLabel="log entries">
+      <Table density="compact" stickyHeader containerClassName="min-h-0 flex-1 border-t [--pinned-ground:hsl(var(--background))]" scrollLabel="log entries">
         <TableHeader>
           <TableRow>
             <SortableTableHead label="Time" field="time" currentField={sortField} direction={sortDirection} onSort={handleSort} />

@@ -124,7 +124,7 @@ function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel
     <div className="flex min-h-0 flex-1 flex-col">
       <CollectionNotice incomplete={collectionIncomplete} />
       <TableToolbar filters={filters} noun="tasks" className="px-3 py-2" />
-      <Table density="compact" stickyHeader containerClassName="min-h-0 flex-1 border-t" scrollLabel="tasks">
+      <Table density="compact" stickyHeader containerClassName="min-h-0 flex-1 border-t [--pinned-ground:hsl(var(--background))]" scrollLabel="tasks">
         <TableHeader>
           <TableRow>
             <SortableTableHead label="Task" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
