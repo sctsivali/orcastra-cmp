@@ -33,6 +33,7 @@ import {
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { retryUnlessUnavailable } from "@/lib/read-error";
 import type { IntegrationOrganization } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 const COLUMN_COUNT = 5;
 
@@ -181,7 +182,7 @@ function SyncedOrganizationsContent() {
                 direction={sortDirection} onSort={handleSort} />
               <SortableTableHead label="Owner State" field="state" currentField={sortField}
                 direction={sortDirection} onSort={handleSort} />
-              <TableHead className="w-12 text-right">
+              <TableHead pinned="end" className="w-12 text-right">
                 <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
@@ -192,7 +193,7 @@ function SyncedOrganizationsContent() {
                 colSpan={COLUMN_COUNT}
                 icon={Building2}
                 title="No organization matches the current filters"
-                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active`}
+                description={`${plural(filters.activeFilterCount, "filter")} active`}
               />
             ) : (
               paginated.map((org) => {
@@ -226,7 +227,7 @@ function SyncedOrganizationsContent() {
                         <TableSubText wrap>Only administrators see this owner key, and partners of the key&apos;s own organization once it has provisioned a buyer.</TableSubText>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell pinned="end" className="text-right">
                       {isAdmin && (
                         <RowActions triggerLabel={`Actions for ${org.slug}`} actions={actionsFor(org)} />
                       )}
@@ -268,7 +269,7 @@ function SyncedOrganizationsContent() {
           <Alert>
             <AlertTriangle className="h-4 w-4" aria-hidden />
             <AlertDescription>
-              {frozen} {frozen === 1 ? "organization has" : "organizations have"} an owner key that
+              {plural(frozen, "organization has", "organizations have")} an owner key that
               no longer works. Their sync and provisioning are paused until you transfer them.
             </AlertDescription>
           </Alert>

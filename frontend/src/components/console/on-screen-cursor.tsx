@@ -796,8 +796,8 @@ export function OnScreenCursor({
           "bg-black/70"
         )}>
           {isHoldMode 
-            ? "Hold Mode ON • Drag to move window • Tap Hold to release"
-            : `Drag to move • Tap to ${clickMode === "left" ? "left" : "right"}-click`
+            ? "Hold Mode ON · Drag to move window · Tap Hold to release"
+            : `Drag to move · Tap to ${clickMode === "left" ? "left" : "right"}-click`
           }
         </div>
       </div>

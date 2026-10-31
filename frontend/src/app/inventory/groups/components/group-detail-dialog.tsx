@@ -27,7 +27,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { parseLxdReference } from "@/lib/used-by";
 import { referenceKind } from "@/lib/used-by-kinds";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, plural } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { NodeLink } from "@/components/ui/node-link";
 
@@ -106,7 +106,7 @@ function PermissionsPanelContent({ group }: { group: any }) {
               colSpan={3}
               icon={Shield}
               title="No permissions match the current filters"
-              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${permissions.length} permissions.`}
+              description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(permissions.length, "permission")}.`}
               action={
                 <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
                   Clear filters

@@ -127,6 +127,9 @@ const KNOWN_CONTRAST_FAILURES = new Map([
   // carry white, and moving it moves every destructive Button and confirm dialog at once.
   ['badge#destructive#light', 3.61],
   ['button#destructive#light', 3.61],
+  // The same token read the other way round: text-destructive on a plain surface. The token fix
+  // above retires this one too, so it is carried here rather than patched in alert.tsx.
+  ['alert#destructive#light', 3.42],
   // Same shape on --success and --warning. bg-warning under text-warning-foreground at 2.13:1
   // is the worst pair in the system, and it is white on amber, so no lightening of the
   // foreground rescues it. The token has to darken.
@@ -552,6 +555,7 @@ const measured = [];
 const CVAS = [
   ['badge', join(src, 'components', 'ui', 'badge.tsx')],
   ['button', join(src, 'components', 'ui', 'button.tsx')],
+  ['alert', join(src, 'components', 'ui', 'alert.tsx')],
 ];
 
 for (const [name, path] of CVAS) {

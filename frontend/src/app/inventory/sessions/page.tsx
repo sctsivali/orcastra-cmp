@@ -54,9 +54,8 @@ import {
   ArrowUpFromLine,
   Loader2,
   History,
-  ShieldAlert,
-  AlertTriangle } from "lucide-react";
-import { formatBytes, formatLabel, formatNetworkRate, formatDateTimeSeconds, formatCount } from "@/lib/utils";
+  ShieldAlert } from "lucide-react";
+import { formatBytes, formatLabel, formatNetworkRate, formatDateTimeSeconds, formatCount, plural } from "@/lib/utils";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -497,20 +496,18 @@ function ActiveSessionsTab() {
           {/* A short list and a correct list look identical, which is how the
               per-worker bug went unnoticed for so long. Say when it is partial. */}
           {currentDegraded && (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
-              <span className="text-foreground">
+            <div className="mb-3">
+              <PartialReadNotice>
                 Showing sessions from one dashboard server only. The shared session view is
                 unavailable, so this list may be incomplete. Your connections are unaffected.
-              </span>
+              </PartialReadNotice>
             </div>
           )}
           {/* important: only replace the table when there is nothing to show. A
               5s poll that blips would otherwise wipe rows we still hold. */}
           {currentError && currentSessions.length > 0 && (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-              <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
-              <span className="text-foreground">Showing the last known data. {currentError}</span>
+            <div className="mb-3">
+              <PartialReadNotice>Showing the last known data. {currentError}</PartialReadNotice>
             </div>
           )}
           {currentError && currentSessions.length === 0 ? (
@@ -526,7 +523,7 @@ function ActiveSessionsTab() {
               <EmptyState
                 icon={Terminal}
                 title="No session matches the current filters"
-                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${currentSessions.length} session${currentSessions.length === 1 ? "" : "s"}.`}
+                description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(currentSessions.length, "session")}.`}
                 action={
                   <Button size="sm" variant="outline" onClick={() => filters.clearAll()}>
                     Clear filters
@@ -911,9 +908,8 @@ function SessionHistoryTab() {
             </div>
           )}
           {currentError && currentLogs.length > 0 && (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-              <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
-              <span className="text-foreground">Showing the last known data. {currentError}</span>
+            <div className="mb-3">
+              <PartialReadNotice>Showing the last known data. {currentError}</PartialReadNotice>
             </div>
           )}
           {currentError && currentLogs.length === 0 ? (
@@ -965,7 +961,6 @@ function SessionHistoryTab() {
                 pageSize={pageSize}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => { setPageSize(size); setCurrentPage(1); }}
-                pageSizeOptions={[10, 25, 50, 100]}
               />
             </>
           )}

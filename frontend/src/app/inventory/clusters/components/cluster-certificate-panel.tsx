@@ -7,7 +7,7 @@ import { DetailField, DetailGrid, DetailSection } from "@/components/detail/deta
 import { TableLink } from "@/components/ui/table-link";
 import { useCertificate } from "@/hooks/use-lxd";
 import { inventoryLinks } from "@/lib/inventory-links";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, plural } from "@/lib/utils";
 
 /**
  * The cluster's client certificate as the certificate itself describes it.
@@ -55,7 +55,7 @@ export function ClusterCertificatePanel({ clusterId }: { clusterId: string }) {
           {open > 0 && (
             <DetailField
               label="Old Trust Entries"
-              value={`${open} replaced ${open === 1 ? "certificate is" : "certificates are"} still trusted by the cluster`}
+              value={`${plural(open, "replaced certificate is", "replaced certificates are")} still trusted by the cluster`}
               span="full"
             />
           )}

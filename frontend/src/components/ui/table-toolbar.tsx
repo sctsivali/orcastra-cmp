@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { cn } from "@/lib/utils";
+import { cn, plural, singular } from "@/lib/utils";
 import { SearchInput } from "@/components/ui/search-input";
 import { FacetedFilter } from "@/components/ui/faceted-filter";
 import { RangeFilter } from "@/components/ui/range-filter";
@@ -164,8 +164,8 @@ export function TableToolbar<F extends string>({
         {countUnknown
           ? null
           : activeFilterCount === 0
-            ? `${totalCount} ${noun}`
-            : `${filteredCount} of ${totalCount} ${noun}`}
+            ? plural(totalCount, singular(noun), noun)
+            : `${filteredCount} of ${plural(totalCount, singular(noun), noun)}`}
       </p>
     </div>
   );

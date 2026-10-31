@@ -133,7 +133,7 @@ export function RestoreSnapshotDialog({
         },
       });
       toast({
-        title: "Restore started",
+        title: "Snapshot restore started",
         description: takeSafety
           ? `${snapshot.source_name} is rolling back. A safety snapshot was taken first.`
           : `${snapshot.source_name} is rolling back to ${snapshot.name}.`,
@@ -157,15 +157,19 @@ export function RestoreSnapshotDialog({
         </DialogHeader>
 
         <DialogBody className="space-y-4">
-          <div className="flex gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" aria-hidden />
-            <p className="text-sm">
+          {/* note: role="note" because this stands from the moment the dialog opens, and Alert's
+              default would announce a standing consequence as a failure beside the real one
+              DialogSubmitError raises. The body stays on --foreground: this is the sentence the
+              operator has to read, and text-destructive is 3.42:1 on a light ground. */}
+          <Alert variant="destructive" role="note">
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            <AlertDescription className="text-foreground">
               Everything written to{" "}
               <span className="font-medium">{snapshot.source_name}</span> since{" "}
               {snapshot.created_at ? formatDateTime(snapshot.created_at) : "this snapshot was taken"}{" "}
               will be discarded. The instance stops and starts as part of the restore.
-            </p>
-          </div>
+            </AlertDescription>
+          </Alert>
 
           {planChecking && (
             <p className="text-xs text-muted-foreground" role="status">
@@ -220,7 +224,7 @@ export function RestoreSnapshotDialog({
           </div>
 
           {needsAcknowledgement && (
-            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+            <div className="space-y-3 rounded-md border border-destructive/40 p-3">
               <p className="text-sm">
                 {origin === "upstream"
                   ? "This restore point belongs to the upstream snapshot product. Rolling onto it acts on something that product owns and a customer may be paying to keep."

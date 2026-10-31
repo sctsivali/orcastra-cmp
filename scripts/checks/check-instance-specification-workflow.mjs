@@ -298,7 +298,7 @@ const pendingRows = read(pendingRowsPath);
 requireText(pendingRowsPath, pendingRows, [
   "Review configuration",
   "View instance",
-  "Refresh actual state",
+  "Reload current state",
   'p.jobStatus === "failure"',
   'p.jobStatus === "partial"',
   'p.jobStatus === "unknown"',

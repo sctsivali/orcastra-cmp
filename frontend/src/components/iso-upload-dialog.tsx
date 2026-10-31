@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -310,7 +311,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="space-y-4 pt-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label>Cluster *</Label>
@@ -321,7 +322,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
                   setPool("");
                 }}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading…" : "Select cluster"}
+                placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
                 searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={loadingNodes || busy}
@@ -337,7 +338,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="iso-pool">Storage pool *</Label>
+              <Label htmlFor="iso-pool">Storage Pool *</Label>
               <SearchableSelect
                 id="iso-pool"
                 value={pool}
@@ -352,7 +353,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="iso-name">Volume name *</Label>
+            <Label htmlFor="iso-name">Volume Name *</Label>
             <Input
               id="iso-name"
               value={volumeName}
@@ -370,7 +371,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="iso-file">ISO file *</Label>
+            <Label htmlFor="iso-file">ISO File *</Label>
             <Input
               id="iso-file"
               ref={fileInputRef}
@@ -395,14 +396,11 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
             </div>
           )}
 
-          {error && (
-            <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-              {error}
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
+        <DialogSubmitError message={error} />
+
+        <DialogFooter className="pt-4">
           {phase === "done" || phase === "unknown" ? (
             <Button
               onClick={() => {

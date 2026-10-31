@@ -9,7 +9,7 @@ import { toast } from "@/hooks/use-toast";
 import { useReleaseStatus } from "@/hooks/use-release-status";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { releaseAPI } from "@/lib/release-api";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, plural } from "@/lib/utils";
 import { APIError } from "@/types/api";
 import type { ReleaseLevel } from "@/types/release";
 import { SOURCE_LABEL, releaseNoticeCopy, runningStatusText } from "./release-copy";
@@ -43,8 +43,8 @@ export function ReleaseStatusCard() {
     onError: (error) => {
       const wait = error instanceof APIError ? error.retryAfter : undefined;
       toast({
-        title: "Could not check now",
-        description: wait ? `The feed was read moments ago. Try again in ${wait} seconds.` : "Please try again.",
+        title: "Could not check for releases",
+        description: wait ? `The feed was read moments ago. Try again in ${plural(wait, "second")}.` : "Try again.",
         variant: "destructive",
       });
     },

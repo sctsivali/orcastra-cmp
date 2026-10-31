@@ -18,7 +18,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { toast } from "@/hooks/use-toast";
 import { copyText } from "@/lib/clipboard";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatClockTime,  formatDateTimeSeconds, formatLabel, toMillis } from "@/lib/utils";
+import { formatClockTime,  formatDateTimeSeconds, formatLabel, toMillis, plural } from "@/lib/utils";
 import type { ClusterLogEntry } from "@/types/tasks";
 import { useClusterLog } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
@@ -97,7 +97,7 @@ function LogRow({
     toast(
       ok
         ? { title: "Copied", description: "Log line copied to clipboard." }
-        : { title: "Copy failed", description: "Select the line and copy it manually.", variant: "destructive" },
+        : { title: "Could not copy log line", description: "Select the line and copy it manually.", variant: "destructive" },
     );
   };
   return (
@@ -201,7 +201,7 @@ function LogTabInner({ feed, height, onOpenTask, registerRefresh, collectionInco
       {newCount > 0 ? (
         <div className="pointer-events-none absolute inset-x-0 top-24 z-20 flex justify-center">
           <Button type="button" size="sm" variant="secondary" className="pointer-events-auto shadow-md" onClick={jumpToTop}>
-            {newCount} new {newCount === 1 ? "entry" : "entries"}
+            {plural(newCount, "new entry", "new entries")}
           </Button>
         </div>
       ) : null}

@@ -101,7 +101,7 @@ function InstallDetail() {
       invalidate();
     },
     onError: (error: Error) =>
-      toast({ title: "Could not save", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not save settings", description: error.message, variant: "destructive" }),
   });
 
   const rotate = useMutation({
@@ -111,7 +111,7 @@ function InstallDetail() {
       invalidate();
     },
     onError: (error: Error) =>
-      toast({ title: "Could not rotate", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not rotate credential", description: error.message, variant: "destructive" }),
   });
 
   const setStatus = useMutation({

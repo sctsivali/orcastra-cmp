@@ -388,6 +388,7 @@ function InstancesContent() {
             canCreateInstance={canCreateInstance}
             onCreate={() => navigate("/inventory/instances/create")}
             onViewPendingInstance={handleViewPendingInstance}
+            onRefreshPending={refreshNow}
             rowProps={focus.rowProps}
             onOpen={handleInstanceClick}
             onAction={actions.handleAction}

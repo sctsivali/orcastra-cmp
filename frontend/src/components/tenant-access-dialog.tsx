@@ -1,6 +1,6 @@
 "use client";
 
-import { formatDate } from "@/lib/utils";
+import { formatDate, plural } from "@/lib/utils";
 import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -388,7 +388,7 @@ function InlinePolicyEditor({
       <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle>
-            {isEdit ? "Edit Policy" : "Create Access Policy"}
+            {isEdit ? "Edit Policy" : "Create Policy"}
           </DialogTitle>
           <DialogDescription>
             {isEdit
@@ -403,7 +403,7 @@ function InlinePolicyEditor({
               <Label htmlFor="inline-policy-name" className="text-xs">Policy Name</Label>
               <Input
                 id="inline-policy-name"
-                placeholder="e.g. Production Read-Only"
+                placeholder="for example, Production Read-Only"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 maxLength={100}
@@ -412,7 +412,7 @@ function InlinePolicyEditor({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="inline-policy-desc" className="text-xs">Description (optional)</Label>
+              <Label htmlFor="inline-policy-desc" className="text-xs">Description (Optional)</Label>
               <Textarea
                 id="inline-policy-desc"
                 placeholder="Describe what this policy allows…"
@@ -616,10 +616,10 @@ export function TenantAccessDialog({
     mutationFn: (data: AssignmentCreateRequest) => api.tenantAccess.createAssignment(data),
     onSuccess: () => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
-      toast({ title: "Policy Assigned", description: `Access policy assigned to ${userEmail}.` });
+      toast({ title: "Policy assigned", description: `Access policy assigned to ${userEmail}.` });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not assign policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -628,10 +628,10 @@ export function TenantAccessDialog({
     onSuccess: () => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setRevokeId(null);
-      toast({ title: "Access Revoked", description: `Policy revoked from ${userEmail}.` });
+      toast({ title: "Access revoked", description: `Policy revoked from ${userEmail}.` });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not revoke access", description: err.message, variant: "destructive" });
     },
   });
 
@@ -640,10 +640,10 @@ export function TenantAccessDialog({
     onSuccess: (policy) => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setCreatePolicyOpen(false);
-      toast({ title: "Policy Created", description: `"${policy.name}" is ready to assign.` });
+      toast({ title: "Policy created", description: `"${policy.name}" is ready to assign.` });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not create policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -653,10 +653,10 @@ export function TenantAccessDialog({
     onSuccess: (policy) => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setEditPolicyObj(null);
-      toast({ title: "Policy Updated", description: `"${policy.name}" updated.` });
+      toast({ title: "Policy updated", description: `"${policy.name}" updated.` });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not update policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -665,10 +665,10 @@ export function TenantAccessDialog({
     onSuccess: () => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setDeletePolicyId(null);
-      toast({ title: "Policy Deleted" });
+      toast({ title: "Policy deleted" });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not delete policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -822,7 +822,7 @@ export function TenantAccessDialog({
                                   </Badge>
                                 )}
                                 <Badge variant="secondary" className="px-2 py-0">
-                                  {policy.rules?.length || 0} {(policy.rules?.length || 0) === 1 ? "rule" : "rules"}
+                                  {plural(policy.rules?.length || 0, "rule")}
                                 </Badge>
                               </div>
                               {policy.description && (
@@ -987,7 +987,7 @@ function AssignedPolicyCard({
           )}
           <Badge asChild variant="secondary" className="shrink-0 px-2 py-0">
             <span>
-              {rules.length} {rules.length === 1 ? "rule" : "rules"}
+              {plural(rules.length, "rule")}
             </span>
           </Badge>
         </button>
@@ -1202,7 +1202,7 @@ function EffectivePermissionsSection({
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           Effective Permissions
           <Badge variant="outline" className="text-[10px] px-1.5">
-            {rules.length} {rules.length === 1 ? "rule" : "rules"}
+            {plural(rules.length, "rule")}
           </Badge>
         </h3>
         <span className="text-[10px] text-muted-foreground">

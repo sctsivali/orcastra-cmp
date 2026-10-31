@@ -24,7 +24,7 @@ import {
 import { useInstanceSnapshots, useSnapshotSchedules } from "@/hooks/use-lxd";
 import { useReadOnlyMode, useSnapshotSchedulesEnabled } from "@/hooks/use-read-only-mode";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, plural } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 
 import { SnapshotRowActions } from "@/app/inventory/snapshots/components/snapshot-row-actions";
@@ -173,7 +173,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
 
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
         <div className="text-sm text-muted-foreground">
-          {operatorCount} operator snapshot{operatorCount === 1 ? "" : "s"} of {snapshots.length}{" "}
+          {plural(operatorCount, "operator snapshot")} of {snapshots.length}{" "}
           total
         </div>
         <div className="flex w-full flex-col items-start gap-1 sm:w-auto sm:items-end">
@@ -253,7 +253,9 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
         />
       ) : (
         <>
-          <Table>
+          {/* note: overflow-y-hidden because any containerClassName turns on vertical scroll, and
+              this table grows with its rows. The ground is the dialog, not a card. */}
+          <Table containerClassName="overflow-y-hidden [--pinned-ground:hsl(var(--background))]">
             <TableHeader>
               <TableRow>
                 <TableHead>Snapshot</TableHead>
@@ -261,7 +263,9 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                 <TableHead>Size</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Expires</TableHead>
-                <TableHead className="w-12" />
+                <TableHead pinned="end" className="w-12 text-right">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -300,7 +304,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                     <TableCell className="whitespace-nowrap">
                       {expiryCell(snapshot.expires_at)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell pinned="end" className="text-right">
                       <SnapshotRowActions
                         // The per-instance listing carries no host or project, because it was
                         // read for one already-known scope. Stamping them here keeps every row

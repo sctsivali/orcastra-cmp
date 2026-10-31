@@ -4,7 +4,7 @@ import * as React from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { replaceUrl } from "@/lib/url-state";
 import { Suspense } from "react";
-import { formatHypervisorType, formatLabel} from "@/lib/utils";
+import { formatHypervisorType, formatLabel, plural } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
   Server,
@@ -166,8 +166,8 @@ function ClusterMembersContent() {
   React.useEffect(() => {
     if (error) {
       toast({
-        title: "Failed to fetch cluster members",
-        description: error instanceof Error ? error.message : "Unknown error occurred",
+        title: "Could not fetch cluster members",
+        description: error instanceof Error ? error.message : "Unknown error occurred.",
         variant: "destructive" });
     }
   }, [error]);
@@ -371,7 +371,7 @@ function ClusterMembersContent() {
                       colSpan={6}
                       icon={Server}
                       title="No member matches the current filters"
-                      description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${members.length} member${members.length === 1 ? "" : "s"} in this cluster.`}
+                      description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(members.length, "member")} in this cluster.`}
                       action={
                         <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
                           Clear filters

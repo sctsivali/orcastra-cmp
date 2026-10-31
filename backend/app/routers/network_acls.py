@@ -438,7 +438,7 @@ async def create_network_acl(
                 error_code="LXDError",
                 error_message="Failed to create network ACL",
             )
-            raise HTTPException(status_code=500, detail="Failed to create network ACL")
+            raise HTTPException(status_code=500, detail="Could not create network ACL")
     except HTTPException:
         raise
     except Exception as e:
@@ -546,7 +546,7 @@ async def update_network_acl(
                 "message": f"Network ACL {acl_name} updated successfully"
             }
         else:
-            raise HTTPException(status_code=500, detail="Failed to update network ACL")
+            raise HTTPException(status_code=500, detail="Could not update network ACL")
     except HTTPException:
         raise
     except Exception as e:
@@ -620,7 +620,7 @@ async def delete_network_acl(
                 error_code="LXDError",
                 error_message="Failed to delete network ACL",
             )
-            raise HTTPException(status_code=500, detail="Failed to delete network ACL")
+            raise HTTPException(status_code=500, detail="Could not delete network ACL")
     except HTTPException:
         raise
     except Exception as e:

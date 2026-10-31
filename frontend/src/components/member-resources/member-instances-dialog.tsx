@@ -15,7 +15,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { Activity, Layers } from "lucide-react";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { formatInstanceType } from "@/lib/utils";
+import { formatInstanceType, plural } from "@/lib/utils";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 import type { MemberResources, VMInfo } from "@/types/api";
 
@@ -77,7 +77,7 @@ export function MemberInstancesDialog({
             {filter === "running" ? "Running" : "Stopped"} Instances on {memberName}
           </DialogTitle>
           <DialogDescription>
-            {`${instances.length} ${filter} instance${instances.length === 1 ? "" : "s"} visible to you`}
+            {`${plural(instances.length, `${filter} instance`)} visible to you`}
           </DialogDescription>
         </DialogHeader>
 

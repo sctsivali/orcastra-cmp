@@ -43,7 +43,7 @@ export default function GlobalError({
       <AlertTriangle className="h-12 w-12 text-destructive" />
       <h2 className="text-xl font-semibold">Something went wrong</h2>
       <p className="text-muted-foreground text-center max-w-md">
-        {error.message || "An unexpected error occurred. Please try again."}
+        {error.message || "An unexpected error occurred. Try again."}
       </p>
       <div className="flex gap-3 mt-2">
         <Button variant="outline" onClick={() => (window.location.href = "/")}>

@@ -18,6 +18,7 @@ import { projectsFromUsedBy } from "@/lib/used-by";
 import { USAGE_PANEL_ID, type UsedBySubject } from "./types";
 import type { UsedByDialogState } from "./use-used-by-dialog";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { plural } from "@/lib/utils";
 
 // One dialog for the whole used_by family, opened from either the "Used By" or the "Projects"
 // cell of six inventory tables.
@@ -60,8 +61,7 @@ export function UsedByDialog({
         <DialogHeader className="pr-8 pb-4">
           <DialogTitle>{titleFor(subject)}</DialogTitle>
           <DialogDescription>
-            {`${subject.usedBy.length} reference${subject.usedBy.length === 1 ? "" : "s"} across ` +
-              `${projectCount} project${projectCount === 1 ? "" : "s"}`}
+            {`${plural(subject.usedBy.length, "reference")} across ${plural(projectCount, "project")}`}
             {subject.description ? ` · ${subject.description}` : ""}
           </DialogDescription>
         </DialogHeader>

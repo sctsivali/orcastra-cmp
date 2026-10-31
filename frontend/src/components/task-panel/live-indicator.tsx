@@ -40,7 +40,7 @@ function present(state: LiveState, nextRetry: number | null): Presentation {
       return {
         tone: "caution",
         text: "Degraded",
-        tooltip: "Some hypervisor sources are unavailable. Tasks and logs may be incomplete or stale.",
+        tooltip: "Task collection is interrupted on some clusters. Tasks and logs may be incomplete or stale.",
       };
     case "journal-paused":
       return {

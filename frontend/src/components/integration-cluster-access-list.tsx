@@ -7,6 +7,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { SearchInput } from "@/components/ui/search-input";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { plural } from "@/lib/utils";
 
 // The panel shows at most this many rows, and every control appears exactly when a cluster can
 // be off-screen. One constant rather than two: the house search threshold of six beside a page
@@ -75,8 +76,8 @@ export function IntegrationClusterAccessList({
 
   const countPart =
     filtered.length === clusters.length
-      ? `${clusters.length} clusters`
-      : `${filtered.length} of ${clusters.length} clusters`;
+      ? plural(clusters.length, "cluster")
+      : `${filtered.length} of ${plural(clusters.length, "cluster")}`;
   const firstRow = (currentPage - 1) * PAGE_SIZE + 1;
   const lastRow = Math.min(currentPage * PAGE_SIZE, filtered.length);
   const countSentence =

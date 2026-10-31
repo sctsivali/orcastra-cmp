@@ -1,9 +1,10 @@
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import type { CertificateInfo } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 export function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return EMPTY_VALUE;
-  if (days < 0) return `Expired ${Math.abs(days)} days ago`;
+  if (days < 0) return `Expired ${plural(Math.abs(days), "day")} ago`;
   if (days === 0) return "Expires today";
   if (days === 1) return "Expires tomorrow";
   return `${days} days remaining`;

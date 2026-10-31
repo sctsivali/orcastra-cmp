@@ -105,7 +105,7 @@ function ExtensionsOverviewContent() {
       setPreview(result);
     },
     onError: (error: Error) =>
-      toast({ title: "Could not read the preview", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not read preview", description: error.message, variant: "destructive" }),
   });
 
   const confirmInstall = useMutation({
@@ -160,7 +160,7 @@ function ExtensionsOverviewContent() {
       extensionsAPI.setStatus(slug, status),
     onSuccess: () => reconcileMutationImpact(queryClient, "extension.write"),
     onError: (error: Error) =>
-      toast({ title: "Could not change status", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not change add-on status", description: error.message, variant: "destructive" }),
   });
 
   const withdraw = useMutation({
@@ -168,7 +168,7 @@ function ExtensionsOverviewContent() {
     onSuccess: () => reconcileMutationImpact(queryClient, "extension.write"),
     // A withdraw is refused while an installation still holds it, and that refusal explains why.
     onError: (error: Error) =>
-      toast({ title: "Could not withdraw", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not withdraw add-on", description: error.message, variant: "destructive" }),
   });
 
   const setInstallStatus = useMutation({
@@ -178,7 +178,7 @@ function ExtensionsOverviewContent() {
         : extensionsAPI.resume(id),
     onSuccess: () => reconcileMutationImpact(queryClient, "extension.write"),
     onError: (error: Error) =>
-      toast({ title: "Could not change the installation", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not change installation", description: error.message, variant: "destructive" }),
   });
 
   const uninstall = useMutation({

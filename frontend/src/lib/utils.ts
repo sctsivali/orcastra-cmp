@@ -424,6 +424,11 @@ export function formatLabel(value: string | null | undefined): string {
 //
 // important: instance type always goes through this, never formatLabel, because
 // formatLabel("vm") returns "VM" via the acronym map and that is the fifth vocabulary.
+/** Lower-cases a leading word for use mid-sentence, leaving an initialism such as "CLI command" alone. */
+export function lowerFirst(text: string): string {
+  return /^[A-Z]{2}/.test(text) ? text : text.charAt(0).toLowerCase() + text.slice(1);
+}
+
 export function formatInstanceType(type: string | null | undefined): string {
   if (!type) return "Unknown";
   const t = type.trim().toLowerCase();
@@ -448,6 +453,13 @@ export function toMillis(value: string | null | undefined): number | null {
 /** "1 cluster", "3 clusters". Name the plural when it is not an added s: plural(2, "entry", "entries"). */
 export function plural(count: number, word: string, pluralWord = `${word}s`): string {
   return `${count} ${count === 1 ? word : pluralWord}`;
+}
+
+/** "clusters" to "cluster", "entries" to "entry", for a noun prop that names the plural. Not for "aliases". */
+export function singular(word: string): string {
+  if (word.endsWith("ies")) return `${word.slice(0, -3)}y`;
+  if (word.endsWith("s")) return word.slice(0, -1);
+  return word;
 }
 
 /** "1 vCPU", "4 vCPUs", "0.94 vCPUs". Used as a modifier it stays singular: "the 4 vCPU limit". */

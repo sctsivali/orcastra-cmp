@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { SEAL_STATUS_KEY, newerSealStatus, useUnsealVault, useVaultSealStatus } from "@/hooks/use-host-health";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import { APIError } from "@/types/api";
 import type { VaultSealStatus } from "@/types/host-health";
 
@@ -32,7 +32,7 @@ const KEY_MIN = 16;
 const KEY_MAX = 256;
 
 const OUTCOME_COPY = {
-  accepted: (s: VaultSealStatus) => `Key accepted. ${s.progress ?? 0} of ${s.threshold ?? "?"} keys entered.`,
+  accepted: (s: VaultSealStatus) => `Key accepted. ${s.progress ?? 0} of ${s.threshold ?? "?"} ${s.threshold === 1 ? "key" : "keys"} entered.`,
   duplicate: () => "Vault already holds this key for the current attempt. Enter a different key share.",
   reset: () => "Progress reset. Vault discarded the keys entered so far.",
 } as const;
@@ -238,11 +238,11 @@ export function UnsealVaultDialog({ open, onOpenChange }: UnsealVaultDialogProps
                   <div className="flex items-baseline justify-between gap-3 text-sm">
                     <span className="font-medium">Unseal Progress</span>
                     <span className="tabular-nums text-muted-foreground">
-                      {progress} of {threshold ?? "?"} keys entered
+                      {progress} of {threshold ?? "?"} {threshold === 1 ? "key" : "keys"} entered
                       {status.shares ? ` (${status.shares} exist)` : ""}
                     </span>
                   </div>
-                  <Progress value={percent} aria-label={`Unseal progress: ${progress} of ${threshold ?? "unknown"} keys`} />
+                  <Progress value={percent} aria-label={`Unseal progress: ${progress} of ${threshold ?? "unknown"} ${threshold === 1 ? "key" : "keys"}`} />
                   {status.nonce && (
                     <p className="text-xs text-muted-foreground">
                       Attempt <span className="font-mono break-all" translate="no">{status.nonce}</span>. Key holders
@@ -348,7 +348,7 @@ export function UnsealVaultDialog({ open, onOpenChange }: UnsealVaultDialogProps
           if (!next) setResetError(null);
         }}
         title="Reset Unseal Progress"
-        description={`Vault discards the ${progress} key${progress === 1 ? "" : "s"} entered so far in this attempt, including shares other administrators entered. Everyone starts again from the first key.`}
+        description={`Vault discards the ${plural(progress, "key")} entered so far in this attempt, including shares other administrators entered. Everyone starts again from the first key.`}
         confirmLabel="Reset Progress"
         pendingLabel="Resetting…"
         pending={pending}

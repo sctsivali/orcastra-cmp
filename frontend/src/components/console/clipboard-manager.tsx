@@ -95,7 +95,7 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     if (!newText.trim()) {
       toast({
         title: "Empty text",
-        description: "Please enter some text to add",
+        description: "Enter some text to add.",
         variant: "destructive",
       });
       return;
@@ -115,8 +115,8 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     setSelectedId(entry.id);
 
     toast({
-      title: "Added to clipboard",
-      description: "Text added to clipboard history",
+      title: "Text added to clipboard",
+      description: "Text added to clipboard history.",
     });
   }, [newText, entries, saveHistory]);
 
@@ -139,13 +139,13 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
         setNewText(text);
         setShowAddForm(true);
         toast({
-          title: "Pasted from clipboard",
+          title: "Text pasted from clipboard",
           description: "Text added to the form. Click Add to save.",
         });
       } else {
         toast({
           title: "Clipboard empty",
-          description: "No text found in system clipboard",
+          description: "No text found in system clipboard.",
           variant: "destructive",
         });
       }
@@ -175,8 +175,8 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     saveHistory([]);
     setSelectedId(null);
     toast({
-      title: "Cleared",
-      description: "All clipboard entries cleared",
+      title: "Clipboard cleared",
+      description: "All clipboard entries cleared.",
     });
   }, [saveHistory]);
 
@@ -185,8 +185,8 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     const ok = await copyText(entry.text);
     if (!ok) {
       toast({
-        title: "Copy failed",
-        description: "Unable to copy to clipboard",
+        title: "Could not copy text",
+        description: "Unable to copy to clipboard.",
         variant: "destructive",
       });
       return;
@@ -199,8 +199,8 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
   const handleInsert = useCallback(() => {
     if (!selectedId) {
       toast({
-        title: "No selection",
-        description: "Please select a clipboard entry first",
+        title: "No clipboard entry selected",
+        description: "Select a clipboard entry first.",
         variant: "destructive",
       });
       return;
@@ -210,8 +210,8 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     if (entry) {
       onInsert(entry.text);
       toast({
-        title: "Inserted",
-        description: "Text sent to console",
+        title: "Text inserted",
+        description: "Text sent to console.",
       });
     }
   }, [selectedId, entries, onInsert]);

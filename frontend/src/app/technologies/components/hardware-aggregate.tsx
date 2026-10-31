@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Cpu, Database, HardDrive, Sparkles, type LucideIcon } from "lucide-react";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, plural } from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import { HardwareDetailDialog } from "./hardware-detail-dialog";
 import {
@@ -140,7 +140,7 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
               : EMPTY_VALUE,
           detail:
             reportingNodeCount > 0
-              ? `Average across ${reportingNodeCount} reporting cluster${reportingNodeCount === 1 ? "" : "s"}`
+              ? `Average across ${plural(reportingNodeCount, "reporting cluster")}`
               : "No cluster reported memory",
         },
       ],
@@ -234,8 +234,8 @@ export function HardwareAggregate({
               in the contrast sweep. One exception is enough. */}
           <p className="text-sm text-foreground">
             {reportingNodeCount === nodes.length
-              ? `Summed across all ${nodes.length} reporting cluster${nodes.length === 1 ? "" : "s"}.`
-              : `Partial totals from ${reportingNodeCount} of ${nodes.length} clusters.`}{" "}
+              ? `Summed across all ${plural(nodes.length, "reporting cluster")}.`
+              : `Partial totals from ${reportingNodeCount} of ${plural(nodes.length, "cluster")}.`}{" "}
             Open a category for cluster detail.
           </p>
         </div>

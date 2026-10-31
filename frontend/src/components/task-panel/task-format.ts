@@ -33,9 +33,9 @@ export interface TaskStatusDisplay {
 const TASK_STATUS_DISPLAY: Record<TaskStatus, TaskStatusDisplay> = {
   pending: { label: "Pending", tone: "neutral" },
   running: { label: "Running", tone: "caution" },
-  success: { label: "Success", tone: "positive" },
-  failure: { label: "Failure", tone: "negative" },
-  cancelled: { label: "Cancelled", tone: "negative" },
+  success: { label: "Succeeded", tone: "positive" },
+  failure: { label: "Failed", tone: "negative" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
   lost: { label: "Lost", tone: "neutral" },
 };
 

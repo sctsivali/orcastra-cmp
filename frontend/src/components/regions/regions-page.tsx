@@ -11,7 +11,7 @@ import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, plural } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -47,7 +47,7 @@ function InstanceCounts({ region }: { region: RegionSummary }) {
     <div className="flex items-center gap-4 text-sm">
       <div className="flex items-center gap-1.5">
         <Box className="h-4 w-4 text-foreground" aria-hidden />
-        <span>{region.instance_count === 1 ? "1 instance" : `${region.instance_count} instances`}</span>
+        <span>{plural(region.instance_count, "instance")}</span>
       </div>
       <div className="flex items-center gap-1.5">
         <Activity className="h-4 w-4 text-foreground" aria-hidden />
@@ -160,7 +160,7 @@ function RegionCard({
               <div className="flex items-center gap-2">
                 <div className="text-right">
                   <p className="text-sm font-medium">
-                    {region.node_count === 1 ? "1 cluster" : `${region.node_count} clusters`}
+                    {plural(region.node_count, "cluster")}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {onlineClusters} online
@@ -219,7 +219,7 @@ function RegionCard({
                     </div>
                     {node.hardware ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>{node.hardware.cpu_total} hardware threads</span>
+                        <span>{plural(node.hardware.cpu_total, "hardware thread")}</span>
                         <span>•</span>
                         <span>{formatBytes(node.hardware.memory_total)}</span>
                         {node.hardware.gpu_total > 0 && (
@@ -393,7 +393,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
             icon={Sparkles}
             label="Compute GPUs"
             value={nothingRead ? NOT_READ : fleet.gpu}
-            note={!nothingRead && fleet.gpuCards > fleet.gpu ? `${fleet.gpuCards} cards detected` : undefined}
+            note={!nothingRead && fleet.gpuCards > fleet.gpu ? `${plural(fleet.gpuCards, "card")} detected` : undefined}
           />
         </div>
       )}
@@ -444,8 +444,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
                 {filters.activeFilterCount > 0 && (
                   <>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {filters.activeFilterCount} filter
-                      {filters.activeFilterCount === 1 ? "" : "s"} active
+                      {plural(filters.activeFilterCount, "filter")} active
                     </p>
                     <Button
                       variant="link"

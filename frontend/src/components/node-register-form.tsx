@@ -73,7 +73,7 @@ const nodeRegisterSchema = z.object({
         }
       },
       {
-        message: "Endpoint must be a valid URL (e.g., https://192.168.10.187:8443). Only http/https allowed, no commas or invalid characters."
+        message: "Endpoint must be a valid URL (for example, https://192.168.10.187:8443). Only http/https allowed, no commas or invalid characters."
       }
     ),
   region_id: z.string().min(1, "Region is required"),
@@ -136,8 +136,8 @@ export function NodeRegisterForm() {
       
       if (response.authenticated) {
         toast({
-          title: "Authentication Successful",
-          description: "Cluster is now online and ready to use!",
+          title: "Cluster authenticated",
+          description: "Cluster is now online and ready to use.",
         });
         setRegistrationResult(prev => prev ? {
           ...prev,
@@ -151,8 +151,8 @@ export function NodeRegisterForm() {
         }, 1000);
       } else {
         toast({
-          title: "Not Authenticated",
-          description: response.message || "Certificate not yet trusted by the cluster. Please run the trust command first.",
+          title: "Cluster not authenticated",
+          description: response.message || "Certificate not yet trusted by the cluster. Run the trust command first.",
           variant: "destructive",
         });
       }
@@ -160,10 +160,10 @@ export function NodeRegisterForm() {
       // distinguish timeout (504) from other errors for better UX
       const isTimeout = error instanceof APIError && error.status === 504;
       toast({
-        title: isTimeout ? "Connection Timed Out" : "Check Failed",
+        title: isTimeout ? "Connection timed out" : "Could not check authentication",
         description: isTimeout
-          ? "The cluster did not respond in time. Please verify the trust certificate command has been executed on the cluster, then try again."
-          : (error.message || "Failed to check authentication"),
+          ? "The cluster did not respond in time. Verify the trust certificate command has been executed on the cluster, then try again."
+          : (error.message || "Try again."),
         variant: "destructive",
       });
     } finally {
@@ -214,7 +214,7 @@ export function NodeRegisterForm() {
 
       if (response.success && response.certificate) {
         toast({
-          title: "Cluster Registered",
+          title: "Cluster registered",
           description: "Certificate generated successfully. Follow the steps below to complete setup.",
         });
         
@@ -225,16 +225,16 @@ export function NodeRegisterForm() {
       } else if (!response.success) {
         // Backend returned success=false
         toast({
-          title: "Registration Failed",
-          description: response.message || "Failed to generate certificate",
+          title: "Could not register cluster",
+          description: response.message || "Could not generate certificate.",
           variant: "destructive",
         });
       }
     } catch (error: any) {
       console.error("Registration error:", error);
-      const errorMessage = error.message || "Failed to register cluster. Please check your connection and try again.";
+      const errorMessage = error.message || "Check your connection and try again.";
       toast({
-        title: "Registration Failed",
+        title: "Could not register cluster",
         description: errorMessage,
         variant: "destructive",
       });
@@ -466,7 +466,7 @@ export function NodeRegisterForm() {
                     <Label htmlFor="facility_name" className="text-xs">Facility Name</Label>
                     <Input
                       id="facility_name"
-                      placeholder="e.g. Main Data Center"
+                      placeholder="for example, Main Data Center"
                       disabled={isSubmitting}
                       list="facility-name-suggestions"
                       autoComplete="off"
@@ -482,7 +482,7 @@ export function NodeRegisterForm() {
                     <Label htmlFor="facility_provider" className="text-xs">Provider / Operator</Label>
                     <Input
                       id="facility_provider"
-                      placeholder="e.g. Acme Corporation"
+                      placeholder="for example, Acme Corporation"
                       disabled={isSubmitting}
                       list="facility-provider-suggestions"
                       autoComplete="off"

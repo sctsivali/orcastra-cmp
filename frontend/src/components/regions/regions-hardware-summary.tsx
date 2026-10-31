@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Cpu, HardDrive, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, plural } from "@/lib/utils";
 import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE } from "@/lib/gpu";
 import { ExtendedHardwareInfo } from "@/types/api";
 
@@ -21,7 +21,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="outline" className="gap-1">
           <Cpu className="h-3 w-3 text-foreground" />
-          {hardware.cpu_total} hardware threads
+          {plural(hardware.cpu_total, "hardware thread")}
         </Badge>
         <Badge variant="outline" className="gap-1">
           <MemoryStick className="h-3 w-3 text-foreground" />
@@ -50,7 +50,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
           CPU
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
-          <p>{hardware.cpu_total} hardware threads ({hardware.cpu_sockets} sockets)</p>
+          <p>{plural(hardware.cpu_total, "hardware thread")} ({plural(hardware.cpu_sockets, "socket")})</p>
           <p>{hardware.cpu_architecture}</p>
           {hardware.cpu_vendor && <p>{hardware.cpu_vendor}</p>}
         </div>
@@ -78,7 +78,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
           {hardware.gpu_total > 0 ? (
             <>
               <p>
-                {hardware.gpu_total} compute {hardware.gpu_total === 1 ? "GPU" : "GPUs"}
+                {plural(hardware.gpu_total, "compute GPU")}
               </p>
               {hardware.gpu_vendors.length > 0 && (
                 <p>{hardware.gpu_vendors.join(", ")}</p>
@@ -86,12 +86,12 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
               {hardware.gpu_models.length > 0 && (
                 <p className="break-words">{hardware.gpu_models.join(", ")}</p>
               )}
-              {extraCards > 0 && <p className="text-xs">{cardsTotal} cards detected</p>}
+              {extraCards > 0 && <p className="text-xs">{plural(cardsTotal, "card")} detected</p>}
             </>
           ) : cardsTotal > 0 ? (
             <>
               <p>{GPU_NO_COMPUTE_TITLE}</p>
-              <p className="text-xs">{cardsTotal} cards detected</p>
+              <p className="text-xs">{plural(cardsTotal, "card")} detected</p>
             </>
           ) : (
             <p>{GPU_EMPTY_TITLE}</p>

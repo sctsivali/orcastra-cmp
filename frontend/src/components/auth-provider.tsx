@@ -246,7 +246,7 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
             onClick={() => signIn("authentik")}
             className="underline font-medium hover:opacity-80"
           >
-            Retry Login
+            Sign in again
           </button>
         </div>
       )}

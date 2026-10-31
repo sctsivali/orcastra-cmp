@@ -86,6 +86,7 @@ interface InstancesTableProps {
   canCreateInstance: boolean;
   onCreate: () => void;
   onViewPendingInstance: (pending: PendingCreate) => void;
+  onRefreshPending: () => Promise<unknown>;
   rowProps: RowFocusState["rowProps"];
   onOpen: (instance: VMInfo) => void;
   onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
@@ -141,6 +142,7 @@ export function InstancesTable(props: InstancesTableProps) {
         <PendingCreateRows
           pending={visiblePendingCreates}
           onViewInstance={props.onViewPendingInstance}
+          onRefresh={props.onRefreshPending}
         />
         {paginatedInstances.length === 0 ? (
           visiblePendingCreates.length === 0 ? (

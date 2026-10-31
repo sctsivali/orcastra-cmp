@@ -42,6 +42,7 @@ import { ALL_CLUSTERS, ALL_PROJECTS, SnapshotScopePicker } from "./components/sn
 import { SnapshotSchedulesCard } from "./components/snapshot-schedules-card";
 import { SNAPSHOTS, SnapshotsTable } from "./components/snapshots-table";
 import { TakeSnapshotDialog } from "./components/take-snapshot-dialog";
+import { plural } from "@/lib/utils";
 
 /**
  * A hand-edited URL can carry several values, or the empty-bucket sentinel. Both have to degrade
@@ -63,7 +64,7 @@ function sizeNoteFor(data: FleetSnapshotListResponse): string | null {
   switch (data.size_measurement) {
     case "partial":
       return typeof measured === "number" && typeof unmeasured === "number"
-        ? `Sizes measured for ${measured} of ${measured + unmeasured} instances holding snapshots. The rest show Not measured.`
+        ? `Sizes measured for ${measured} of ${plural(measured + unmeasured, "instance")} holding snapshots. The rest show Not measured.`
         : "Sizes were measured for some of the instances holding snapshots. The rest show Not measured.";
     case "skipped":
       return "Sizes could not be measured on this read. Refresh to try again.";

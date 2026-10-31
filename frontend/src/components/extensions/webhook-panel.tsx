@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { formatDateTimeSeconds } from "@/lib/utils";
+import { formatDateTimeSeconds, plural } from "@/lib/utils";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { DELIVERY_STATE, SUBSCRIPTION_STATUS } from "@/lib/extension-display";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
@@ -125,12 +125,12 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["extensions", "deliveries", installId] });
       toast({
-        title: "Queued again",
+        title: "Delivery queued again",
         description: "The same event id is reused, so a receiver that dedupes sees one event.",
       });
     },
     onError: (error: Error) =>
-      toast({ title: "Could not retry", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not retry delivery", description: error.message, variant: "destructive" }),
   });
 
   const create = useMutation({
@@ -146,7 +146,7 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
       invalidate();
     },
     onError: (error: Error) =>
-      toast({ title: "Could not subscribe", description: error.message, variant: "destructive" }),
+      toast({ title: "Could not create subscription", description: error.message, variant: "destructive" }),
   });
 
   const verify = useMutation({
@@ -200,11 +200,10 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
                       className="font-mono text-sm"
                     />
                     <p className="text-xs text-muted-foreground">
-                      {row.event_types.length} event type
-                      {row.event_types.length === 1 ? "" : "s"} · secret{" "}
+                      {plural(row.event_types.length, "event type")} · secret{" "}
                       <span className="font-mono">{row.secret_fingerprint}</span>
                       {row.consecutive_failures > 0
-                        ? ` · ${row.consecutive_failures} consecutive failures`
+                        ? ` · ${plural(row.consecutive_failures, "consecutive failure")}`
                         : ""}
                     </p>
                   </div>

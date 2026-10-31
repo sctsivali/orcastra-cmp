@@ -176,7 +176,7 @@ async def test_a_vault_write_that_raises_still_evicts_and_names_nothing(
 
     monkeypatch.setattr(three["vault"], "vault_kv_put", lost)
     response = await send(ADMIN, db, "POST", f"{KEYS}/{PLAIN}/revoke")
-    assert (response.status_code, response.json()["detail"]) == (500, "Failed to revoke the API key")
+    assert (response.status_code, response.json()["detail"]) == (500, "Could not revoke the API key")
     assert three["evicted"] == [PLAIN], "the write may have landed before its reply was lost"
 
 

@@ -20,6 +20,7 @@ import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RowActions, type RowAction } from "@/components/ui/row-actions";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useAllProjects } from "@/hooks/use-lxd";
@@ -211,8 +212,7 @@ function MyKeysContent() {
     mutationFn: (request: KeyCreateRequest) => api.myKeys.create(request),
     onSuccess: (created) => {
       toast({
-        title: "Success",
-        description: "Key generated successfully" });
+        title: "Key generated" });
       setCreateDialogOpen(false);
       requestRowFocus("my-keys", created.id, created.name);
       queryClient.invalidateQueries({ queryKey: ["my-keys"] });
@@ -220,8 +220,8 @@ function MyKeysContent() {
     },
     onError: (error: any) => {
       toast({
-        title: "Error",
-        description: error.message || "Failed to generate key",
+        title: "Could not generate key",
+        description: error.message || "Try again.",
         variant: "destructive" });
     } });
 
@@ -230,15 +230,14 @@ function MyKeysContent() {
     mutationFn: (keyId: string) => api.myKeys.delete(keyId),
     onSuccess: () => {
       toast({
-        title: "Success",
-        description: "Key deleted successfully" });
+        title: "Key deleted" });
       queryClient.invalidateQueries({ queryKey: ["my-keys"] });
       refetch();
     },
     onError: (error: any) => {
       toast({
-        title: "Error",
-        description: error.message || "Failed to delete key",
+        title: "Could not delete key",
+        description: error.message || "Try again.",
         variant: "destructive" });
     } });
 
@@ -258,14 +257,13 @@ function MyKeysContent() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
       toast({
-        title: "Success",
-        description: "Key downloaded successfully" });
+        title: "Key downloaded" });
       // The download is on the key's trail now; an open activity view should show it.
       void queryClient.invalidateQueries({ queryKey: ["my-key-activity"] });
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to download key",
+        title: "Could not download key",
+        description: error.message || "Try again.",
         variant: "destructive" });
     }
   };
@@ -384,17 +382,17 @@ function MyKeysContent() {
               `keys.length` rendered a headers-only table with no message at all. The copy keys
               off the full set, so it stays right whichever of the three did the emptying. */}
           {sortedKeys.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Key className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p className="text-lg font-medium">No keys found</p>
-              <p className="text-sm mt-2">
-                {filters.activeFilterCount > 0
+            <EmptyState
+              icon={Key}
+              title="No keys found"
+              description={
+                filters.activeFilterCount > 0
                   ? "Try adjusting your search or filters"
                   : keys.length > 0
                     ? "No key on this tab. The other tabs may still have some."
-                    : "Generate your first key to get started"}
-              </p>
-            </div>
+                    : "Generate your first key to get started"
+              }
+            />
           ) : (
             <>
             <Table>
@@ -408,7 +406,7 @@ function MyKeysContent() {
                   <SortableTableHead label="Expires" field="expires" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Last Used" field="last_used" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <TableHead className="w-12 text-right"><span className="sr-only">Actions</span></TableHead>
+                  <TableHead pinned="end" className="w-12 text-right"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -458,7 +456,7 @@ function MyKeysContent() {
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell pinned="end" className="text-right">
                       <RowActions triggerLabel={`Actions for key ${key.name} on ${key.node}`} actions={keyActions(key)} />
                     </TableCell>
                   </TableRow>

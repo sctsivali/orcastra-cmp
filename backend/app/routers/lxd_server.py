@@ -307,7 +307,7 @@ async def update_server_config(
         if response.status_code in [200, 202]:
             return response.json().get('metadata', {})
         else:
-            raise HTTPException(status_code=response.status_code, detail="Failed to update server config")
+            raise HTTPException(status_code=response.status_code, detail="Could not update server config")
     except HTTPException:
         raise
     except Exception as e:

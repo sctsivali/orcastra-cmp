@@ -1,5 +1,6 @@
 "use client";
 
+import { formatInstanceType } from "@/lib/utils";
 import * as React from "react";
 import {
   Server,
@@ -80,13 +81,16 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   // two different buttons on one screen. check-icon-button-names.mjs counts buttons with no name,
   // never buttons whose name is ambiguous, so nothing was catching it.
   const rowLabel = `${vm.name} in ${vm.project || "default"} on ${vm.host}`;
+  // One row renders both kinds, so a toast names the one that was acted on.
+  const instanceNoun = vm.type === "virtual-machine" ? "virtual machine" : "container";
+  const instanceSubject = vm.type === "virtual-machine" ? "Virtual machine" : "Container";
 
   const handleTagsChange = async (newTags: string[]) => {
     const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Tag updates are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Tag updates are disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -98,14 +102,14 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         project: vm.project || "default" });
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "Tags Updated",
+        title: "Tags updated",
         description: `Tags for ${vm.name} have been updated.`,
         variant: "success" });
       onTagsUpdate?.();
     } catch (error) {
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "Failed to update tags",
+        title: "Could not update tags",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     }
@@ -115,8 +119,8 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
     const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Instance actions are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Instance actions are disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -126,13 +130,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         request: { host: vm.host, project: vm.project || "default" } });
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "VM Started",
+        title: `${instanceSubject} started`,
         description: `${vm.name} is now starting.`,
         variant: "success" });
     } catch (error) {
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "Failed to start VM",
+        title: `Could not start ${instanceNoun}`,
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     }
@@ -142,8 +146,8 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
     const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Instance actions are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Instance actions are disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -153,13 +157,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         request: { host: vm.host, project: vm.project || "default" } });
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "VM Stopped",
+        title: `${instanceSubject} stopped`,
         description: `${vm.name} is now stopping.`,
         variant: "success" });
     } catch (error) {
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "Failed to stop VM",
+        title: `Could not stop ${instanceNoun}`,
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     }
@@ -169,8 +173,8 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
     const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Instance actions are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Instance actions are disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -180,13 +184,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         request: { host: vm.host, project: vm.project || "default" } });
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "VM Restarted",
+        title: `${instanceSubject} restarted`,
         description: `${vm.name} is now restarting.`,
         variant: "success" });
     } catch (error) {
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "Failed to restart VM",
+        title: `Could not restart ${instanceNoun}`,
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     }
@@ -196,8 +200,8 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
     const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Instance deletion is disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Instance deletion is disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -210,17 +214,17 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         project: vm.project || "default" });
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
-        title: "VM Deleted",
+        title: `${instanceSubject} deleted`,
         description: `${vm.name} has been deleted.`,
         variant: "success" });
     } catch (error) {
       if (activeActorScopeRef.current !== requestActorScope) return;
       toast(isDeleteOutcomeUnknown(error)
         ? {
-            title: "Still deleting",
+            title: `Still deleting ${instanceNoun}`,
             description: `${vm.name} is taking longer than usual on the cluster. It leaves the list when the delete finishes.` }
         : {
-            title: "Failed to delete VM",
+            title: `Could not delete ${instanceNoun}`,
             description: error instanceof Error ? error.message : "Unknown error",
             variant: "destructive" });
     } finally {
@@ -283,7 +287,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
             {/* Type */}
             <div className="flex items-center gap-1">
               <span className="font-medium">Type:</span>
-              <span>{vm.type === "virtual-machine" ? "VM" : "Container"}</span>
+              <span>{formatInstanceType(vm.type)}</span>
             </div>
             
             {/* Architecture */}

@@ -19,6 +19,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { TableLink } from "@/components/ui/table-link";
 import {
   GroupDetailDialog,
@@ -62,6 +63,7 @@ import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
+import { plural } from "@/lib/utils";
 
 // filter-coverage: no project dimension here, and not for lack of a mechanism. A group's
 // permissions[].url values do carry ?project= when LXD scopes them, and projectsFromUsedBy
@@ -197,14 +199,14 @@ function GroupsContent() {
         host: groupToDelete.node });
 
       toast({
-        title: "Success",
-        description: `Group "${groupToDelete.name}" deleted successfully` });
+        title: "Group deleted",
+        description: `Group "${groupToDelete.name}" deleted successfully.` });
 
       refetch();
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to delete group",
+        title: "Could not delete group",
+        description: error.message || "Try again.",
         variant: "destructive" });
     } finally {
       setIsDeleting(false);
@@ -262,17 +264,17 @@ function GroupsContent() {
             <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
           )}
           {groups.length === 0 ? (
-            <div className="text-center py-12">
-              <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No groups found</h3>
-              <p className="text-muted-foreground mb-4">
-                Create your first group to manage permissions and identities
-              </p>
-              <Button onClick={() => setCreateDialogOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Group
-              </Button>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="No groups found"
+              description="Create your first group to manage permissions and identities"
+              action={
+                <Button onClick={() => setCreateDialogOpen(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Group
+                </Button>
+              }
+            />
           ) : (
             <>
             <Table>
@@ -283,7 +285,7 @@ function GroupsContent() {
                   <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Identities" field="identities" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Permissions" field="permissions" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -316,12 +318,12 @@ function GroupsContent() {
                     <TableCell><NodeLink clusterId={group.node} /></TableCell>
                     <TableCell className="text-center">
                       <TableLink onClick={() => openGroupDetail(group, "members")}>
-                        {((group.identities?.tls?.length || 0) + (group.identities?.oidc?.length || 0))} members
+                        {plural((group.identities?.tls?.length || 0) + (group.identities?.oidc?.length || 0), "member")}
                       </TableLink>
                     </TableCell>
                     <TableCell className="text-center">
                       <TableLink onClick={() => openGroupDetail(group, "permissions")}>
-                        {group.permissions?.length || 0} permissions
+                        {plural(group.permissions?.length || 0, "permission")}
                       </TableLink>
                     </TableCell>
                     <TableCell className="text-right">

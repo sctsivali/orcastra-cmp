@@ -175,11 +175,11 @@ function MappingCategory({
 
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
         <div className="space-y-2">
-          <Label htmlFor={sourceId}>Source name</Label>
+          <Label htmlFor={sourceId}>Source Name</Label>
           <Input id={sourceId} value={source} onChange={(event) => setSource(event.target.value)} autoComplete="off" />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={targetId}>Destination name</Label>
+          <Label htmlFor={targetId}>Destination Name</Label>
           <Input id={targetId} value={target} onChange={(event) => setTarget(event.target.value)} autoComplete="off" />
         </div>
         <Button type="button" variant="outline" onClick={add} disabled={!canAdd}>

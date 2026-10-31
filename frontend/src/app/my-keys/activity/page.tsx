@@ -139,7 +139,7 @@ function KeyActivityContent() {
       link.remove();
       URL.revokeObjectURL(url);
     } catch (failure) {
-      toast({ title: "Export failed", description: failure instanceof Error ? failure.message : "Try again.", variant: "destructive" });
+      toast({ title: "Could not export key activity", description: failure instanceof Error ? failure.message : "Try again.", variant: "destructive" });
     } finally {
       setExporting(false);
     }

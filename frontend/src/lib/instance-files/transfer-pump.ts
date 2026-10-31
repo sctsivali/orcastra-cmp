@@ -236,7 +236,7 @@ async function runBundle(target: GuestTarget, base: string, picked: BundleItem[]
         store().patch(transfer.id, { state: "failed", error: messageOf(error), errorCode: fileErrorCode(error) }),
       );
       // Folders have no row of their own, so nothing else would say so.
-      if (items.length === 0) toast({ title: "Folders not created", description: messageOf(error), variant: "destructive" });
+      if (items.length === 0) toast({ title: "Could not create folders", description: messageOf(error), variant: "destructive" });
     }
   } finally {
     // One request carries them all, so cancelling one stops the rest. What already landed stays.

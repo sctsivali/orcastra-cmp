@@ -330,7 +330,7 @@ function TakeSnapshotDialogBody({
               value={host}
               onValueChange={resetAfterHost}
               options={nodePicker.isError ? [] : nodePicker.options}
-              placeholder={nodePicker.isLoading ? "Reading clusters" : "Select cluster"}
+              placeholder={nodePicker.isLoading ? "Reading clusters" : "Select a cluster"}
               searchPlaceholder="Search clusters"
               emptyText={
                 nodePicker.isError ? "The cluster list could not be read" : "No online cluster found"
@@ -374,7 +374,7 @@ function TakeSnapshotDialogBody({
               options={projectOptions}
               placeholder={
                 !host
-                  ? "Select cluster first"
+                  ? "Select a cluster first"
                   : (projects.isLoading || projects.isFetching) && projectOptions.length === 0
                     ? "Reading projects"
                     : "Select project"

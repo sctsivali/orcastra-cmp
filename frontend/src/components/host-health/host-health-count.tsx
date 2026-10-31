@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { useHostHealth } from "@/hooks/use-host-health";
+import { plural } from "@/lib/utils";
 
 /**
  * How many of the dashboard's dependencies need attention, beside the Host Health nav item.
@@ -25,7 +26,7 @@ export function HostHealthCount() {
         {data.attention}
       </Badge>
       <span className="sr-only">
-        {`, ${data.attention} ${data.attention === 1 ? "service needs" : "services need"} attention`}
+        {`, ${plural(data.attention, "service needs", "services need")} attention`}
       </span>
     </>
   );

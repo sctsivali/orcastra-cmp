@@ -1,6 +1,6 @@
 "use client";
 
-import { formatDate, EMPTY_VALUE } from "@/lib/utils";
+import { formatDate, EMPTY_VALUE, plural } from "@/lib/utils";
 import * as React from "react";
 import { Suspense, useCallback, useMemo, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -232,13 +232,13 @@ function IntegrationsSettingsContent() {
       setCreatedKey(response);
       queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
       toast({
-        title: "API Key Created",
-        description: "Do not forget to save the secret!",
+        title: "API key created",
+        description: "Do not forget to save the secret.",
       });
     },
     onError: (error: Error) => {
       toast({
-        title: "Failed to create API key",
+        title: "Could not create API key",
         description: isVaultUnavailable(error)
           ? "Vault is not configured. Enable Vault in backend settings for API key management."
           : error.message,
@@ -261,11 +261,11 @@ function IntegrationsSettingsContent() {
     }) => api.integrations.updateAPIKeyPermissions(keyId, permissions, rebindClusterIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
-      toast({ title: "Cluster Access Updated" });
+      toast({ title: "Cluster access updated" });
     },
     onError: (error: Error) => {
       toast({
-        title: "Failed to update access",
+        title: "Could not update cluster access",
         description: error.message,
         variant: "destructive",
       });
@@ -280,11 +280,11 @@ function IntegrationsSettingsContent() {
       api.integrations.updateAPIKeyCapabilities(keyId, { capabilities, force }),
     onSuccess: () => {
       void reconcileMutationImpact(queryClient, "integration.write").catch(() => undefined);
-      toast({ title: "Capabilities Updated" });
+      toast({ title: "Capabilities updated" });
     },
     onError: (error: Error) => {
       if (provisioningWouldStopDetail(error) || keyOwnsOrganizationsDetail(error)) return;
-      toast({ title: "Failed to update capabilities", description: error.message, variant: "destructive" });
+      toast({ title: "Could not update capabilities", description: error.message, variant: "destructive" });
     },
   });
 
@@ -293,7 +293,7 @@ function IntegrationsSettingsContent() {
     mutationFn: (keyId: string) => api.integrations.revokeAPIKey(keyId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
-      toast({ title: "API Key Revoked" });
+      toast({ title: "API key revoked" });
     },
     onError: (error: Error) => {
       // A key that came to own an organization after this list loaded is refused by the server,
@@ -301,7 +301,7 @@ function IntegrationsSettingsContent() {
       if (keyOwnsOrganizationsDetail(error)) {
         queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
       }
-      toast({ title: "Failed to revoke", description: error.message, variant: "destructive" });
+      toast({ title: "Could not revoke API key", description: error.message, variant: "destructive" });
     },
   });
 
@@ -310,13 +310,13 @@ function IntegrationsSettingsContent() {
     mutationFn: (keyId: string) => api.integrations.deleteAPIKey(keyId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
-      toast({ title: "API Key Deleted" });
+      toast({ title: "API key deleted" });
     },
     onError: (error: Error) => {
       if (keyOwnsOrganizationsDetail(error)) {
         queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
       }
-      toast({ title: "Failed to delete", description: error.message, variant: "destructive" });
+      toast({ title: "Could not delete API key", description: error.message, variant: "destructive" });
     },
   });
 
@@ -529,7 +529,7 @@ function IntegrationsSettingsContent() {
             <EmptyState
               icon={Key}
               title="No API key matches the current filters"
-              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${apiKeys.length} keys.`}
+              description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(apiKeys.length, "key")}.`}
               action={
                 <Button size="sm" variant="outline" onClick={() => filters.clearAll()}>
                   Clear filters

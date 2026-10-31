@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, ArrowUp, Eye, EyeOff, FilePlus, FolderPlus, FolderTree, FolderUp, MoreHorizontal, Plus, RefreshCw, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUp, Eye, EyeOff, FilePlus, FolderPlus, FolderTree, FolderUp, MoreHorizontal, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -9,6 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { SearchInput } from "@/components/ui/search-input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ExplorerWidth } from "@/hooks/use-explorer-width";
@@ -23,7 +24,6 @@ interface FileToolbarProps {
   filter: string;
   showHidden: boolean;
   treeShown: boolean;
-  refreshing: boolean;
   writeReason?: string;
   editingPath: boolean;
   onEditingPath: (editing: boolean) => void;
@@ -34,7 +34,8 @@ interface FileToolbarProps {
   onFilter: (value: string) => void;
   onShowHidden: (value: boolean) => void;
   onToggleTree: () => void;
-  onRefresh: () => void;
+  /** Must reject on failure: RefreshButton shows a success tick for anything that resolves. */
+  onRefresh: () => Promise<unknown> | unknown;
   onNewFolder: () => void;
   onNewFile: () => void;
   onUploadFiles: () => void;
@@ -91,9 +92,7 @@ export function FileToolbar(props: FileToolbarProps) {
             className="w-44 shrink-0"
           />
         )}
-        <IconButton label="Refresh this folder" onClick={props.onRefresh}>
-          <RefreshCw className={cn("h-4 w-4", props.refreshing && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
-        </IconButton>
+        <RefreshButton label="Refresh this folder" onRefresh={props.onRefresh} variant="ghost" className="h-8 w-8" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="outline" className="h-8 shrink-0 gap-1 px-2" disabled={Boolean(writeReason)} title={writeReason}>

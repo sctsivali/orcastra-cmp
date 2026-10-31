@@ -18,7 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
 interface TagManagerProps {
@@ -224,7 +224,7 @@ export function TagManager({
                   size="sm"
                   className="h-5 px-1 text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:bg-transparent"
                 >
-                  +{hiddenCount} more tag{hiddenCount !== 1 ? "s" : ""}
+                  +{plural(hiddenCount, "more tag")}
                 </Button>
               </DialogTrigger>
             </>

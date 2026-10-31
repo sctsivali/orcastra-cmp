@@ -3,6 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VMListResponse, ClusterListResponse, ClusterStatus } from "@/types";
+import { plural } from "@/lib/utils";
 
 interface StatsOverviewProps {
   data?: VMListResponse;
@@ -77,7 +78,7 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
       <StatCard
         label="Total Instances"
         value={instances === null ? null : totalVMs}
-        subtext={`${virtualMachines} VMs, ${containers} containers`}
+        subtext={`${plural(virtualMachines, "VM")}, ${plural(containers, "container")}`}
         delay={0}
       />
       <StatCard

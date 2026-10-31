@@ -32,6 +32,9 @@ export function usePendingCreateJobs(
     .map((entry) => `${entry.id}:${entry.jobId}`)
     .sort()
     .join(",");
+  // A dependency of the effect below and nothing else: changing it restarts the poller, which
+  // reads at once. An unknown verdict otherwise waits out its 10 s delay after a manual recheck.
+  const latestRecheck = pending.reduce((latest, entry) => Math.max(latest, entry.recheckAt ?? 0), 0);
 
   // A durable create job owns the verdict. WebSocket frames are only acceleration signals.
   useEffect(() => {
@@ -152,5 +155,5 @@ export function usePendingCreateJobs(
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [pendingJobsKey, queryClient, scopeKey]);
+  }, [pendingJobsKey, latestRecheck, queryClient, scopeKey]);
 }

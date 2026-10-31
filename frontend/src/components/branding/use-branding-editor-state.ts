@@ -33,7 +33,7 @@ interface EditorOptions {
 function failureText(error: unknown): string {
   // A 422 names the field the server refused (backend services/branding/validation.py).
   if (error instanceof APIError && typeof error.detail === "string") return error.detail;
-  return "The branding could not be saved. Please try again.";
+  return "The branding could not be saved. Try again.";
 }
 
 /** Debounced saves, undo and redo for whichever branding row the editor targets. */
@@ -70,7 +70,7 @@ export function useBrandingEditorState({
     try {
       await persistRef.current(toSave);
     } catch (error) {
-      toast({ title: "Failed to save branding", description: failureText(error), variant: "destructive" });
+      toast({ title: "Could not save branding", description: failureText(error), variant: "destructive" });
     } finally {
       setIsSaving(false);
     }
@@ -130,7 +130,7 @@ export function useBrandingEditorState({
       await remove();
       toast({ title: "Branding removed", description: "What shows now is the branding this one inherits." });
     } catch (error) {
-      toast({ title: "Failed to reset branding", description: failureText(error), variant: "destructive" });
+      toast({ title: "Could not reset branding", description: failureText(error), variant: "destructive" });
     } finally {
       setIsSaving(false);
     }

@@ -132,8 +132,8 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
   const handleTagsChange = async (newTags: string[]) => {
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Tag updates are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Tag updates are disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -143,13 +143,13 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
         projectName: project.name,
         tags: newTags });
       toast({
-        title: "Tags Updated",
+        title: "Tags updated",
         description: `Tags for project '${project.name}' have been updated.`,
         variant: "success" });
       refetch();
     } catch (error) {
       toast({
-        title: "Failed to update tags",
+        title: "Could not update tags",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     }

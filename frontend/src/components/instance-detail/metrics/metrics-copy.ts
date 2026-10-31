@@ -1,4 +1,5 @@
 import { APIError, type InstanceMetricSection, type VMStatus } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 export const METRIC_SECTION_LABELS: Record<InstanceMetricSection, string> = {
   cpu: "vCPU",
@@ -44,7 +45,7 @@ export function describeMetricsError(error: unknown): MetricsErrorState {
     const wait = error instanceof APIError && error.retryAfter ? error.retryAfter : 30;
     return {
       title: "Metrics temporarily limited",
-      description: `The request budget was reached. Live updates resume on their own in about ${wait} seconds.`,
+      description: `The request budget was reached. Live updates resume on their own in about ${plural(wait, "second")}.`,
       permissionDenied: false,
       staleReason: "request limited",
     };

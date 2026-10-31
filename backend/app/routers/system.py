@@ -294,7 +294,7 @@ async def get_system_resource_usage():
     except ImportError:
         raise HTTPException(
             status_code=500,
-            detail="psutil is not installed. Please install it with: pip install psutil"
+            detail="psutil is not installed. Install it with: pip install psutil"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -39,6 +39,8 @@ export interface PendingCreate {
   createdAt: number;
   /** Latest authorized job or daemon signal. Memory-only, never persisted. */
   lastSignalAt?: number;
+  /** When an operator last asked for the job to be read now. Memory-only, never persisted. */
+  recheckAt?: number;
 }
 
 /**

@@ -87,7 +87,7 @@ export function CreateKeyDialog({
             <Label htmlFor="name">Key Name</Label>
             <Input
               id="name"
-              placeholder="e.g., Production Access Key"
+              placeholder="for example, Production Access Key"
               value={formData.name}
               onChange={(e) =>
                 setFormData({ ...formData, name: e.target.value })
@@ -175,7 +175,7 @@ export function CreateKeyDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="expire_days">
-              Expiration (days)
+              Expiration (Days)
             </Label>
             <Input
               id="expire_days"

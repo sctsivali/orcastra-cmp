@@ -474,8 +474,46 @@ test("an unknown create keeps exact reconciliation and offers actual-state refre
   await expect(page.getByText("Outcome unknown")).toBeVisible();
   await expect(page.getByRole("button", { name: "Review configuration" })).toHaveCount(0);
   const readsBeforeRefresh = reads;
-  await page.getByRole("button", { name: "Refresh actual state" }).click();
+  const freshListReads = [];
+  page.on("request", (request) => {
+    if (/\/api\/v1\/instances\?(.*&)?fresh=true/.test(request.url())) freshListReads.push(request.url());
+  });
+  // A document reload would clear this marker, so it proves the row refreshed in place.
+  await page.evaluate(() => { window.__sameDocument = true; });
+  await page.getByRole("button", { name: "Reload current state" }).click();
   await expect.poll(() => reads).toBeGreaterThan(readsBeforeRefresh);
+  await expect.poll(() => freshListReads.length).toBeGreaterThan(0);
   await expect(page.getByText("Outcome unknown")).toBeVisible();
+  expect(await page.evaluate(() => window.__sameDocument)).toBe(true);
+  await expectCleanHarness(api);
+});
+
+// A reload used to rebuild the row from sessionStorage, which holds no verdict, so it was also what
+// put a halted row back on its job. The in-place refresh has to do that part itself.
+test("reloading the current state of a halted create follows its job again", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { snapshotInstancePage: true });
+  const entry = {
+    id: "cluster-a/tenant-a/halted-create",
+    name: "halted-create",
+    host: "cluster-a",
+    project: "tenant-a",
+    type: "container",
+    jobId: "halted-create-job",
+    createdAt: Date.now(),
+  };
+  let available = false;
+  await seedPendingJob(page, "partner", entry);
+  await page.route("**/api/v1/instances/operations/halted-create-job", async (route) => {
+    if (available) await json(route, createJob(entry, "running"));
+    else await json(route, { detail: "Not found" }, 404);
+  });
+
+  await page.goto("/inventory/instances");
+  await expect(page.getByText("Status unavailable")).toBeVisible();
+  available = true;
+  await page.getByRole("button", { name: "Reload current state" }).click();
+  await expect(page.getByText("Status unavailable")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reload current state" })).toHaveCount(0);
   await expectCleanHarness(api);
 });

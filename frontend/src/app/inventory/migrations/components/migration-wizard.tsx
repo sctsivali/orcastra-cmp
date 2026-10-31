@@ -202,7 +202,7 @@ export function MigrationWizard(props: MigrationWizardProps) {
             onClick={() => void wizard.saveAndClose()}
             disabled={pending}
           >
-            {plan && wizard.planDirty ? "Save and close" : "Close"}
+            {plan && wizard.planDirty ? "Save and Close" : "Close"}
           </Button>
           <div className="hidden sm:block sm:flex-1" />
           <Button

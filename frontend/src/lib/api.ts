@@ -2302,7 +2302,7 @@ export const myKeysAPI = {
       },
     });
     if (!response.ok) {
-      throw new Error("Failed to download key");
+      throw new Error("Could not download key.");
     }
     return response.blob();
   },

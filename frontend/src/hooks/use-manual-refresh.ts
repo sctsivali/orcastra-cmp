@@ -125,7 +125,7 @@ export function useManualRefresh(
       }
 
       const {
-        errorTitle = "Refresh failed",
+        errorTitle = "Could not refresh data",
         errorDescription,
         onError,
       } = optionsRef.current;
@@ -136,7 +136,7 @@ export function useManualRefresh(
           errorDescription ??
           (error instanceof Error && error.message
             ? error.message
-            : "Unable to load the latest data. Please try again."),
+            : "Unable to load the latest data. Try again."),
         variant: "destructive",
       });
     } finally {

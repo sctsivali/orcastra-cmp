@@ -9,6 +9,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ExtensionDetail } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 const PAGE_SIZE = 10;
 
@@ -83,8 +84,7 @@ export function DraftsList({
               <p className="font-medium">{extension.name}</p>
               <p className="text-xs text-muted-foreground">
                 <span className="font-mono">{extension.slug}</span> · v{extension.version} · asks
-                for {extension.requested_capabilities.length} capabilit
-                {extension.requested_capabilities.length === 1 ? "y" : "ies"}
+                for {plural(extension.requested_capabilities.length, "capability", "capabilities")}
               </p>
             </div>
             <Badge variant="caution">Draft</Badge>

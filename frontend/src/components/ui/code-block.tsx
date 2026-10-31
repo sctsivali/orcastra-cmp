@@ -5,7 +5,7 @@ import { Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/lib/clipboard";
-import { cn } from "@/lib/utils";
+import { cn, lowerFirst } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
 interface CodeBlockProps {
@@ -59,7 +59,7 @@ export function CodeBlock({ value, copyValue, label, copyLabel = "Snippet", clas
     const ok = await copyText(copyValue ?? value);
     if (!ok) {
       toast({
-        title: "Copy failed",
+        title: `Could not copy ${lowerFirst(copyLabel)}`,
         description: "Select the block and copy it manually.",
         variant: "destructive",
       });

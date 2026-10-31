@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ProjectChipList } from "@/components/integrations/project-chip-list";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import type { ProjectScopeOption } from "@/hooks/use-project-scope-options";
 
 // Matches SearchableSelect and ClusterAccessSelector: short lists stay uncluttered.
@@ -135,8 +135,7 @@ export function ProjectScopePicker({
   let triggerLabel: string;
   if (!hasClusters) triggerLabel = "Select clusters first";
   else if (value.length === 0) triggerLabel = "Select projects";
-  else if (value.length === 1) triggerLabel = "1 project selected";
-  else triggerLabel = `${value.length} projects selected`;
+  else triggerLabel = `${plural(value.length, "project")} selected`;
 
   let emptyText: string;
   if (isLoading) emptyText = "Loading projects…";
@@ -241,7 +240,7 @@ export function ProjectScopePicker({
                         {showCoverage && (
                           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                             <span className="sr-only">Present on </span>
-                            {option.presentOn.length} of {answeredCount} clusters
+                            {option.presentOn.length} of {plural(answeredCount, "cluster")}
                           </span>
                         )}
                       </div>

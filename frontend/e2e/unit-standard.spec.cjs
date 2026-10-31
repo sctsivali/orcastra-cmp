@@ -47,8 +47,8 @@ test("a disk created in GiB reads in GB in the table", async ({ page, context })
 
 test("a size field offers the standard units and shows the stored value in them", async ({ page, context }) => {
   const { dialog } = await openSpecificationDialog(page, context);
-  await expect(dialog.getByRole("spinbutton", { name: "Memory limit", exact: true })).toHaveValue("8.59");
-  await expect(dialog.getByRole("spinbutton", { name: "Root disk size", exact: true })).toHaveValue("85.9");
+  await expect(dialog.getByRole("spinbutton", { name: "Memory Limit", exact: true })).toHaveValue("8.59");
+  await expect(dialog.getByRole("spinbutton", { name: "Root Disk Size", exact: true })).toHaveValue("85.9");
 
   await dialog.getByRole("combobox", { name: "Memory limit unit" }).click();
   await expect(page.getByRole("option")).toHaveText(["MB", "GB", "TB"]);
@@ -68,7 +68,7 @@ test("a field nobody touched is not applied, whatever it rounds to", async ({ pa
 
 test("a field the operator typed in writes exactly what it says", async ({ page, context }) => {
   const { dialog, previews } = await openSpecificationDialog(page, context);
-  await dialog.getByRole("spinbutton", { name: "Memory limit", exact: true }).fill("4");
+  await dialog.getByRole("spinbutton", { name: "Memory Limit", exact: true }).fill("4");
   await dialog.getByRole("button", { name: "Review and apply" }).click();
 
   await expect.poll(() => previews.length).toBeGreaterThan(0);
@@ -77,7 +77,7 @@ test("a field the operator typed in writes exactly what it says", async ({ page,
 
 test("typing the same figure back is still the stored value", async ({ page, context }) => {
   const { dialog } = await openSpecificationDialog(page, context);
-  const memory = dialog.getByRole("spinbutton", { name: "Memory limit", exact: true });
+  const memory = dialog.getByRole("spinbutton", { name: "Memory Limit", exact: true });
   await memory.fill("9");
   await expect(dialog.getByRole("button", { name: "Review and apply" })).toBeEnabled();
   await memory.fill("8.59");

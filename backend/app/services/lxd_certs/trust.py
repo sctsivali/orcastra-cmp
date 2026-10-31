@@ -96,7 +96,7 @@ class TrustMixin:
                 
         except requests.exceptions.RequestException as e:
             logger.error(f"Request failed when adding trust for {cluster_id}: {e}")
-            raise LXDCertManagerError(f"Failed to add trust: {str(e)}")
+            raise LXDCertManagerError(f"Could not add trust: {str(e)}")
         except VaultClientError as e:
             logger.error(f"Vault error: {e}")
             raise LXDCertManagerError(f"Vault error: {str(e)}")
@@ -167,7 +167,7 @@ class TrustMixin:
                 
         except requests.exceptions.RequestException as e:
             logger.error(f"Request failed: {e}")
-            raise LXDCertManagerError(f"Failed to add trust: {str(e)}")
+            raise LXDCertManagerError(f"Could not add trust: {str(e)}")
         except VaultClientError as e:
             logger.error(f"Vault error: {e}")
             raise LXDCertManagerError(f"Vault error: {str(e)}")

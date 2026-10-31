@@ -1,4 +1,4 @@
-import { formatBytes, formatVcpuCount } from "@/lib/utils";
+import { formatBytes, formatVcpuCount, plural } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 
 import { type ProjectLimits } from "@/lib/lxd-limits";
@@ -65,7 +65,7 @@ export function ProjectQuotaLine({ id, project, limits, used, check }: ProjectQu
     );
   }
   if (limits.instances !== undefined) {
-    parts.push(used ? `${used.instances} of ${limits.instances} instances` : `${limits.instances} instances`);
+    parts.push(used ? `${used.instances} of ${plural(limits.instances, "instance")}` : plural(limits.instances, "instance"));
   }
   if (parts.length === 0) return null;
   const summary = used

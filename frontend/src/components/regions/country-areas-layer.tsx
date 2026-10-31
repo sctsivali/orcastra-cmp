@@ -7,6 +7,7 @@ import { RegionSummary } from "@/types/api";
 import { OFFLINE_BASEMAP_ATTRIBUTION, escapeHtml } from "@/lib/map-basemap";
 import type { CountryArea, CountryAreas } from "@/lib/regions/country-areas";
 import { createPopupContent, regionStatus } from "./map-icons";
+import { plural } from "@/lib/utils";
 
 // important: above overlayPane (400), where the offline basemap's canvas lives and would take
 // every pointer event, and below markers (600), tooltips (650) and popups (700). Tiles sit at
@@ -24,7 +25,7 @@ export function focusBounds(area: CountryArea): L.LatLngBounds {
 }
 
 function areaLabel(region: RegionSummary): string {
-  const clusters = region.node_count === 1 ? "1 cluster" : `${region.node_count} clusters`;
+  const clusters = plural(region.node_count, "cluster");
   return `${region.country_name}, ${clusters}`;
 }
 

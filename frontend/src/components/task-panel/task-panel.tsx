@@ -208,7 +208,7 @@ function TaskPanelInner() {
         if (task.status !== "failure" || task.action === "instance.create") return;
         toast({
           variant: "destructive",
-          title: "Task failed",
+          title: "Could not finish task",
           description: `${task.description} on ${task.cluster_id}: ${task.error ?? "no error was reported"}`,
           action: (
             <ToastAction altText="Show the failed task" onClick={() => showTaskFromToast(task.id)}>

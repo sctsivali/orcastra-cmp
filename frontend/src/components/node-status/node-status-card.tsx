@@ -71,8 +71,8 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
     if (!isPartner) return;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Cluster name updates are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Cluster name updates are disabled in read-only mode.",
         variant: "destructive",
       });
       return;
@@ -88,7 +88,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
       // Small delay to ensure dialog is fully closed
       setTimeout(() => {
         toast({
-          title: "Name Updated",
+          title: "Cluster name updated",
           description: `Display name for cluster '${node.name}' has been updated to '${newDisplayName}'.`,
           variant: "success",
         });
@@ -96,7 +96,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
       }, 100);
     } catch (error) {
       toast({
-        title: "Failed to update name",
+        title: "Could not update cluster name",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       });
@@ -109,8 +109,8 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
     if (!isPartner) return;
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Tag updates are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Tag updates are disabled in read-only mode.",
         variant: "destructive",
       });
       return;
@@ -121,14 +121,14 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
         tags: newTags,
       });
       toast({
-        title: "Tags Updated",
+        title: "Tags updated",
         description: `Tags for cluster '${node.name}' have been updated.`,
         variant: "success",
       });
       onTagsUpdate?.();
     } catch (error) {
       toast({
-        title: "Failed to update tags",
+        title: "Could not update tags",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       });
@@ -137,7 +137,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
 
   const getUsagePercentage = (used: number, total: number) => {
     const reading = capacityReading({ used, total });
-    return reading ? `${reading.percent.toFixed(0)}% used` : "Usage unavailable";
+    return reading ? `${reading.percent.toFixed(1)}% used` : "Usage unavailable";
   };
 
   const cpu = cpuAllocation(node.resources ?? { cpu_total: 0, cpu_used: 0 });
@@ -303,7 +303,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                     <div className="text-muted-foreground">
                       {gpu.hasCompute
                         ? `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated${
-                            gpu.extraCards > 0 ? ` • ${gpu.cardsTotal} cards` : ""
+                            gpu.extraCards > 0 ? ` · ${gpu.cardsTotal} cards` : ""
                           }`
                         : gpu.hasCards
                           ? gpuCardsCaption(gpu)

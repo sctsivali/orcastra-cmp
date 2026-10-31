@@ -124,13 +124,13 @@ export function TrustCleanupDialog({ certificate, isReadOnly, onClose }: TrustCl
       setEntries(result.superseded);
       const failed = Object.values(result.outcomes).filter((o) => o === "failed" || o === "forbidden").length;
       toast({
-        title: failed ? "Some entries were not removed" : "Trust cleanup finished",
+        title: failed ? "Could not remove some trust entries" : "Trust cleanup finished",
         description: result.message,
         variant: failed ? "destructive" : undefined,
       });
     } catch (error) {
       toast({
-        title: "Trust cleanup failed",
+        title: "Could not clean up trust entries",
         description: error instanceof Error ? error.message : "The cluster could not be reached.",
         variant: "destructive",
       });

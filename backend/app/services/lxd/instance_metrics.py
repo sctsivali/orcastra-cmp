@@ -402,4 +402,4 @@ def read_instance_metrics(
         raise LXDConnectionError(f"Could not read metrics from {host}") from exc
     except Exception as exc:
         logger.error("Error getting metrics for '%s' on %s: %s", instance_name, host, exc)
-        raise LXDOperationError(f"Failed to get metrics: {exc}") from exc
+        raise LXDOperationError(f"Could not get metrics: {exc}") from exc

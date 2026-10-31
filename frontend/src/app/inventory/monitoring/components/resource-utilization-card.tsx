@@ -55,7 +55,7 @@ export function capacityScope(data: MonitoringDashboardResponse, selectedNode: s
   if (reporting === 0) return { unavailable: NO_CLUSTER_REPORTED, partial: null };
   return {
     unavailable: null,
-    partial: reporting < total ? `From ${reporting} of ${total} clusters` : null,
+    partial: reporting < total ? `From ${reporting} of ${plural(total, "cluster")}` : null,
   };
 }
 

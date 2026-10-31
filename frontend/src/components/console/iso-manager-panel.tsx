@@ -191,8 +191,8 @@ export function ISOManagerPanel({
     } catch (err) {
       if (!isAuthActorSynchronized(scopeKey)) return;
       toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : 'Failed to change boot priority',
+        title: "Could not change boot priority",
+        description: err instanceof Error ? err.message : 'Try again.',
         variant: "destructive",
       });
     } finally {
@@ -217,8 +217,8 @@ export function ISOManagerPanel({
       await reconcileMutationImpact(queryClient, "instance.media");
       if (!isAuthActorSynchronized(actorScope)) return;
       toast({
-        title: "ISO Attached",
-        description: data.message || `${selectedISO.name} attached successfully`,
+        title: "ISO attached",
+        description: data.message || `${selectedISO.name} attached successfully.`,
       });
       await fetchAttachedISO();
       if (!isAuthActorSynchronized(actorScope)) return;
@@ -227,8 +227,8 @@ export function ISOManagerPanel({
       if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error attaching ISO:', err);
       toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : 'Failed to attach ISO',
+        title: "Could not attach ISO",
+        description: err instanceof Error ? err.message : 'Try again.',
         variant: "destructive",
       });
     } finally {
@@ -255,8 +255,8 @@ export function ISOManagerPanel({
       await reconcileMutationImpact(queryClient, "instance.media");
       if (!isAuthActorSynchronized(actorScope)) return;
       toast({
-        title: "ISO Ejected",
-        description: data.message || "ISO ejected successfully",
+        title: "ISO ejected",
+        description: data.message || "ISO ejected successfully.",
       });
       setAttachedISOState(null);
       setAttachedISO(consoleId, undefined);
@@ -264,8 +264,8 @@ export function ISOManagerPanel({
       if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error ejecting ISO:', err);
       toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : 'Failed to eject ISO',
+        title: "Could not eject ISO",
+        description: err instanceof Error ? err.message : 'Try again.',
         variant: "destructive",
       });
     } finally {
@@ -319,7 +319,7 @@ export function ISOManagerPanel({
               {/* Boot priority is editable in place: higher boots first, so this
                   is what decides whether the VM boots the ISO or its disk. */}
               <div className="flex items-center gap-2 mt-2">
-                <Label className="text-xs shrink-0">Boot priority</Label>
+                <Label className="text-xs shrink-0">Boot Priority</Label>
                 <Select
                   value={String(attachedISO.bootPriority)}
                   onValueChange={(v) => handleChangeBootPriority(parseInt(v))}

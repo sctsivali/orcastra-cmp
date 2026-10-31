@@ -82,9 +82,9 @@ export function BreakGlassPanel() {
       });
     } catch (error) {
       toast({
-        title: "Revoke failed",
+        title: "Could not revoke grant",
         description:
-          error instanceof Error ? error.message : "The grant is still active. Please try again.",
+          error instanceof Error ? error.message : "The grant is still active. Try again.",
         variant: "destructive",
       });
     } finally {
@@ -123,7 +123,7 @@ export function BreakGlassPanel() {
                 <TableHead>Reason</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Expires</TableHead>
-                {isAdmin ? <TableHead className="text-right">Action</TableHead> : null}
+                {isAdmin ? <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>

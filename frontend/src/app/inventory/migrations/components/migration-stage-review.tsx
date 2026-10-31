@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, plural } from "@/lib/utils";
 import type { MigrationPlan } from "@/types/migrations";
 import { endpointLabel, planHasRunningSource } from "./migration-format";
 import { MigrationFindings } from "./migration-findings";
@@ -79,7 +79,7 @@ export function MigrationStageReview({
                 ? plan.scope === "project"
                   ? "Same instances, moved back automatically on failure"
                   : "Same instance, no retained copy"
-                : `${draft.retentionHours} hours`
+                : plural(draft.retentionHours, "hour")
           }
         />
       </div>
@@ -87,7 +87,7 @@ export function MigrationStageReview({
       <MigrationFindings blockers={plan.blockers} warnings={plan.warnings} />
 
       <div className="space-y-2">
-        <Label htmlFor="migration-reason">Reason for this migration</Label>
+        <Label htmlFor="migration-reason">Reason for This Migration</Label>
         <Textarea
           id="migration-reason"
           value={draft.reason}

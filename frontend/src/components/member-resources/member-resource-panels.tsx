@@ -282,7 +282,7 @@ export function MemberResourcePanels({
                     <div className="space-y-1">
                       <Progress value={usagePercent} className="h-2" />
                       <p className={`text-xs ${usageTone(usagePercent).text}`}>
-                        {usagePercent.toFixed(1)}% used • {formatBytes(pool.space_available)} available
+                        {usagePercent.toFixed(1)}% used · {formatBytes(pool.space_available)} available
                       </p>
                     </div>
                   </div>
@@ -307,7 +307,7 @@ export function MemberResourcePanels({
                   ? "unknown"
                   : cpu.over > 0
                     ? `${formatVcpuCount(cpu.over)} beyond capacity (${cpu.ratioLabel})`
-                    : `${cpu.unallocated} hardware threads`}
+                    : plural(cpu.unallocated, "hardware thread")}
               </p>
             </div>
             <div>

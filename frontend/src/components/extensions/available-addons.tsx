@@ -14,6 +14,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { ExtensionDetail } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 /**
  * The catalogue: a browsing surface, so cards rather than a table.
@@ -176,7 +177,7 @@ function AvailableAddonsContent({
         <EmptyState
           icon={Puzzle}
           title="No add-on matches the current filters"
-          description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active`}
+          description={`${plural(filters.activeFilterCount, "filter")} active`}
           action={
             <Button size="sm" variant="outline" onClick={() => filters.clearAll()}>
               Clear filters
@@ -202,8 +203,7 @@ function AvailableAddonsContent({
                 <p className="mt-2 text-sm text-muted-foreground">{extension.description}</p>
               ) : null}
               <p className="mt-2 text-xs text-muted-foreground">
-                Asks for {extension.requested_capabilities.length} capabilit
-                {extension.requested_capabilities.length === 1 ? "y" : "ies"}
+                Asks for {plural(extension.requested_capabilities.length, "capability", "capabilities")}
               </p>
               <Button
                 size="sm"

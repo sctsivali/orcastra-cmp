@@ -9,7 +9,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { INSTALL_STATUS } from "@/lib/extension-display";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { formatDateTimeSeconds } from "@/lib/utils";
+import { formatDateTimeSeconds, plural } from "@/lib/utils";
 import type {
   ExtensionInstall,
   WebhookDeliveryState,
@@ -133,7 +133,7 @@ export function AddonHealthPanel({
                 <span>{formatDateTimeSeconds(install.credential_expires_at)}</span>
                 {expiresInDays !== null && expiresInDays <= 14 && (
                   <Badge variant={expiresInDays <= 0 ? "destructive" : "caution"}>
-                    {expiresInDays <= 0 ? "Expired" : `${expiresInDays} days left`}
+                    {expiresInDays <= 0 ? "Expired" : `${plural(expiresInDays, "day")} left`}
                   </Badge>
                 )}
               </>
@@ -182,7 +182,7 @@ export function AddonHealthPanel({
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" aria-hidden="true" />
           <AlertDescription>
-            {dead > 0 && `${dead} ${dead === 1 ? "delivery" : "deliveries"} gave up after every retry. `}
+            {dead > 0 && `${plural(dead, "delivery", "deliveries")} gave up after every retry. `}
             {dropped > 0 &&
               `${dropped} ${dropped === 1 ? "was" : "were"} dropped because this installation no longer reached the cluster the event was about. `}
             Dropped is not a failure to deliver, it is a refusal to.
@@ -194,8 +194,7 @@ export function AddonHealthPanel({
         <Alert>
           <PauseCircle className="h-4 w-4" aria-hidden="true" />
           <AlertDescription>
-            {suspendedSubscriptions.length}{" "}
-            {suspendedSubscriptions.length === 1 ? "endpoint has" : "endpoints have"} been suspended
+            {plural(suspendedSubscriptions.length, "endpoint has", "endpoints have")} been suspended
             after repeated failures. Fix the endpoint, then verify it again to resume delivery.
           </AlertDescription>
         </Alert>

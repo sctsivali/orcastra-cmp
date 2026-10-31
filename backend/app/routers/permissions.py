@@ -530,7 +530,7 @@ async def update_group(
             clear_response = client.api.auth.groups[safe_segment(group_name)].patch(json=clear_data, timeout=(5, 30))
             
             if clear_response.status_code not in [200, 202]:
-                error_detail = clear_response.json().get('error', 'Failed to clear permissions')
+                error_detail = clear_response.json().get('error', 'Could not clear permissions')
                 logger.error(f"LXD returned error when clearing permissions: {error_detail}")
                 raise HTTPException(status_code=clear_response.status_code, detail=error_detail)
             
@@ -564,7 +564,7 @@ async def update_group(
                 response = client.api.auth.groups[safe_segment(group_name)].put(json=put_data, timeout=(5, 30))
                 
                 if response.status_code not in [200, 202]:
-                    error_detail = response.json().get('error', f'Failed to add permission at step {idx + 1}')
+                    error_detail = response.json().get('error', f'Could not add permission at step {idx + 1}')
                     logger.error(f"LXD returned error at step {idx + 1}: {error_detail}")
                     # Don't fail completely - log and try to continue if possible
                     logger.warning(f"Permission {perm} failed, but continuing with remaining permissions")
@@ -659,7 +659,7 @@ async def update_group(
                     "message": f"Group {group_name} updated successfully"
                 }
             else:
-                error_detail = response.json().get('error', 'Failed to update group')
+                error_detail = response.json().get('error', 'Could not update group')
                 logger.error(f"LXD returned error for group update: {error_detail}")
                 raise HTTPException(status_code=response.status_code, detail=error_detail)
     except HTTPException:
@@ -694,7 +694,7 @@ async def delete_group(
                 "message": f"Group {group_name} deleted successfully"
             }
         else:
-            raise HTTPException(status_code=500, detail="Failed to delete group")
+            raise HTTPException(status_code=500, detail="Could not delete group")
     except HTTPException:
         raise
     except Exception as e:
@@ -759,7 +759,7 @@ async def add_identity_to_group(
                 "message": f"Identity {identity_id} added to group {group_name}"
             }
         else:
-            error_detail = response.json().get('error', 'Failed to add identity to group')
+            error_detail = response.json().get('error', 'Could not add identity to group')
             raise HTTPException(status_code=response.status_code, detail=error_detail)
     except HTTPException:
         raise
@@ -833,7 +833,7 @@ async def remove_identity_from_group(
                 "message": f"Identity {identity_id} removed from group {group_name}"
             }
         else:
-            error_detail = response.json().get('error', 'Failed to remove identity from group')
+            error_detail = response.json().get('error', 'Could not remove identity from group')
             raise HTTPException(status_code=response.status_code, detail=error_detail)
     except HTTPException:
         raise
@@ -883,7 +883,7 @@ async def delete_identity(
                 "message": f"Identity {identity_id} deleted successfully"
             }
         else:
-            error_detail = response.json().get('error', 'Failed to delete identity')
+            error_detail = response.json().get('error', 'Could not delete identity')
             raise HTTPException(status_code=response.status_code, detail=error_detail)
     except HTTPException:
         raise

@@ -432,10 +432,10 @@ test("Attach network waits for a non-eth0 inherited NIC before adding its overri
     "/profiles/default",
     (entry) => entry.search === "?host=cluster-a&project=tenant-a",
   )).toBe(1);
-  await expect(page.getByLabel("Interface name", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Interface Name", { exact: true })).toHaveCount(0);
 
   releaseDefaultProfile();
-  const interfaceName = page.getByLabel("Interface name", { exact: true });
+  const interfaceName = page.getByLabel("Interface Name", { exact: true });
   await expect(interfaceName).toHaveCount(1);
   await expect(interfaceName).toHaveValue("lan0");
   await expect(page.getByLabel("Network", { exact: true })).toContainText("tenant-net");

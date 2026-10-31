@@ -7,6 +7,7 @@ import type {
   KernelAdvisoryState,
   KernelCveCheck,
 } from "@/types/kernel-advisory";
+import { plural } from "@/lib/utils";
 
 // note: the wire values stay exposed/unverified/patched (backend, URL facets, the warning feed).
 // Only what an operator reads is CVE vocabulary. The icon and its token mirror the shape of
@@ -128,13 +129,12 @@ export function topScoreText(advisory: KernelAdvisoryInfo | null): string | null
 }
 
 export function cveCountText(count: number): string {
-  return count === 1 ? "1 CVE" : `${count} CVEs`;
+  return plural(count, "CVE");
 }
 
 /** "1 of 2 members", or "1 of 1 member read" when the member list itself could not be read. */
 export function membersText(item: Pick<OpenAdvisory, "affected" | "total" | "unlisted">): string {
-  const noun = item.total === 1 ? "member" : "members";
-  return `${item.affected} of ${item.total} ${noun}${item.unlisted ? " read" : ""}`;
+  return `${item.affected} of ${plural(item.total, "member")}${item.unlisted ? " read" : ""}`;
 }
 
 /**

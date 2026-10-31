@@ -34,7 +34,7 @@ function reportTreeChange(outcomes: (TreeChange | undefined)[]): void {
   const skipped = Math.max(0, ...outcomes.map((outcome) => outcome?.skipped ?? 0));
   if (skipped > 0) {
     toast({
-      title: "Some items were left as they were",
+      title: "Could not change some items",
       description: `${formatCount(skipped)} could not be changed, for example a device, a pipe or an immutable file.`,
     });
   }

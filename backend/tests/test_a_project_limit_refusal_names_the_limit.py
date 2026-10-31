@@ -2,7 +2,7 @@
 
 The daemon's refusal is synchronous and reached the console as free text:
 
-    Failed to create VM: Failed checking if instance creation allowed: Reached maximum
+    Could not create VM: Failed checking if instance creation allowed: Reached maximum
     aggregate value "4" for "limits.cpu" in project "web-tier"
 
 Read by a person that is clear enough. Read by the form it is nothing: no field to mark, no
@@ -60,7 +60,7 @@ def test_an_unrelated_refusal_is_not_a_limit():
 
 def test_the_typed_error_is_still_an_operation_error():
     """Every handler that catches LXDOperationError keeps working unchanged."""
-    err = LXDProjectLimitError(f"Failed to create VM: {AGGREGATE}", project_limit_from_lxd_error(AGGREGATE))
+    err = LXDProjectLimitError(f"Could not create VM: {AGGREGATE}", project_limit_from_lxd_error(AGGREGATE))
     assert isinstance(err, LXDOperationError)
     assert err.hit.limit == "limits.cpu"
 
@@ -147,7 +147,7 @@ BODY = {"name": "web01", "host": "nuc1", "image": "ubuntu/24.04", "instance_type
 
 
 def test_the_router_answers_a_structured_400(monkeypatch):
-    err = LXDProjectLimitError(f"Failed to create VM: {AGGREGATE}", project_limit_from_lxd_error(AGGREGATE))
+    err = LXDProjectLimitError(f"Could not create VM: {AGGREGATE}", project_limit_from_lxd_error(AGGREGATE))
     module = _prepare_handler(monkeypatch)
     with pytest.raises(HTTPException) as caught:
         asyncio.run(
@@ -170,7 +170,7 @@ def test_the_router_answers_a_structured_400(monkeypatch):
 
 
 def test_an_unrelated_400_is_still_free_text(monkeypatch):
-    err = LXDOperationError("Failed to create VM: Invalid devices: Device validation failed for \"root\"")
+    err = LXDOperationError("Could not create VM: Invalid devices: Device validation failed for \"root\"")
     module = _prepare_handler(monkeypatch)
     with pytest.raises(HTTPException) as caught:
         asyncio.run(

@@ -123,7 +123,7 @@ def get_cert_manager() -> LXDCertificateManager:
         logger.error(f"Failed to initialize certificate manager: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize certificate manager: {str(e)}"
+            detail=f"Could not initialize certificate manager: {str(e)}"
         )
 
 
@@ -522,7 +522,7 @@ async def register_cluster(
             
             return ClusterRegisterResponse(
                 success=False,
-                message=f"Failed to generate certificate: {str(e)}",
+                message=f"Could not generate certificate: {str(e)}",
                 cluster_id=cluster_id,
                 status=ClusterStatus.ERROR,
                 certificate_generated=False,
@@ -1025,7 +1025,7 @@ async def list_clusters(
         logger.error(f"Failed to list clusters: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list clusters: {str(e)}"
+            detail=f"Could not list clusters: {str(e)}"
         )
 
 
@@ -1476,7 +1476,7 @@ async def delete_cluster(
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete cluster: {str(e)}"
+            detail=f"Could not remove cluster: {str(e)}"
         )
 
 
@@ -1698,7 +1698,7 @@ async def update_cluster_location(
         logger.error(f"Failed to update location for {cluster_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update location: {str(e)}"
+            detail=f"Could not update location: {str(e)}"
         )
 
 

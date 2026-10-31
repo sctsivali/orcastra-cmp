@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -355,7 +356,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="space-y-4 pt-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label>Cluster *</Label>
@@ -363,7 +364,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
                 value={node}
                 onValueChange={selectNode}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading…" : "Select cluster"}
+                placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
                 searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={loadingNodes || busy}
@@ -379,7 +380,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
               />
             </div>
             <div className="grid gap-2">
-              <Label>Image type *</Label>
+              <Label>Image Type *</Label>
               <SearchableSelect
                 value={imageType}
                 onValueChange={(v) => setImageType(v as ImageType)}
@@ -429,7 +430,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="image-file">Image file *</Label>
+            <Label htmlFor="image-file">Image File *</Label>
             <Input
               id="image-file"
               ref={fileInputRef}
@@ -458,14 +459,11 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
             </div>
           )}
 
-          {error && (
-            <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-              {error}
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
+        <DialogSubmitError message={error} />
+
+        <DialogFooter className="pt-4">
           {phase === "done" || phase === "unknown" ? (
             <Button
               onClick={() => {

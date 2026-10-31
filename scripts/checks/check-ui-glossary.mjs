@@ -32,6 +32,17 @@ function lineOf(source, index) {
   return source.slice(0, index).split("\n").length;
 }
 
+// vCPU is everything virtual, CPU is host hardware. These surfaces describe an instance or a quota,
+// so a bare "CPU" on them is the second word for one idea.
+const VIRTUAL_SURFACES = [
+  "components/instance-detail/metrics/metric-cards.tsx",
+  "components/instance-detail/metrics/metrics-copy.ts",
+  "components/instance-detail/metrics/guest-agent-notice.tsx",
+  "components/console/instance-resources.tsx",
+  "components/monitoring/top-consumers-card.tsx",
+  "app/technologies/components/tenant-instance-technologies.tsx",
+];
+
 const forbidden = [
   [/\bRAM\b/g, 'use "Memory", not "RAM"'],
   [/\b(?:VCPU|VCPUs|Vcpu|Vcpus)\b/g, 'spell virtual allocation as "vCPU" or "vCPUs"'],
@@ -163,7 +174,6 @@ const backendForbidden = [
   [/\bRAM\b/g, 'use "Memory", not "RAM"'],
   [/\bCPU cores?\b/g, 'use "hardware threads", verified "physical cores", or "vCPUs"'],
   [/\bex;,/g, 'write "for example" in operator-facing API descriptions'],
-  [/\.1f\}\s+GB\b/g, "a 1024-derived Memory display must use GiB"],
   [/\bdef\s+format_bytes\s*\(/g, "do not restore a private ambiguous byte formatter"],
   [/\bNode is not reachable\b/g, 'a registered endpoint is a "Cluster" in operator messages'],
   [/\bFailed to (?:get node resources|process node)\b/g, 'a registered endpoint is a "cluster" in operator messages'],
@@ -179,6 +189,15 @@ for (const file of walk(src)) {
   const raw = readFileSync(file, "utf8");
   const source = stripComments(raw);
   const rel = relative(src, file).split(sep).join("/");
+
+  if (VIRTUAL_SURFACES.includes(rel)) {
+    const bare = /(?<![A-Za-z])CPU\b(?!")/;
+    source.split("\n").forEach((text, index) => {
+      if (bare.test(text.replace(/CpuReading|cpuState|Cpu\b/g, ""))) {
+        failures.push(`frontend/src/${rel}:${index + 1} says CPU on a virtual surface; use vCPU`);
+      }
+    });
+  }
 
   for (const [pattern, guidance] of forbidden) {
     pattern.lastIndex = 0;

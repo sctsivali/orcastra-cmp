@@ -231,7 +231,7 @@ export function CreateAPIKeyDialog({
                   <Label htmlFor="name">Key Name</Label>
                   <Input
                     id="name"
-                    placeholder="e.g., Production Orcahub"
+                    placeholder="for example, Production Orcahub"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     maxLength={100}
@@ -242,7 +242,7 @@ export function CreateAPIKeyDialog({
                   <Label htmlFor="app_name">Application Name</Label>
                   <Input
                     id="app_name"
-                    placeholder="e.g., Orcahub Production"
+                    placeholder="for example, Orcahub Production"
                     value={appName}
                     onChange={(e) => setAppName(e.target.value)}
                     maxLength={100}

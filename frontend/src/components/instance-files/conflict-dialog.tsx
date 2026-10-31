@@ -6,7 +6,7 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { guestText } from "@/lib/instance-files/guest-text";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 
 export type ConflictChoice = "keep" | "skip" | "replace";
 
@@ -42,7 +42,7 @@ export function ConflictDialog({ names, folder, total, onChoose, onCancel }: Con
         <DialogHeader className="pb-4">
           <DialogTitle>{names.length === 1 ? "A File Already Exists" : "Files Already Exist"}</DialogTitle>
           <DialogDescription>
-            {names.length} of {total} {total === 1 ? "item" : "items"} already exist in {guestText(folder)}.
+            {names.length} of {plural(total, "item")} already {names.length === 1 ? "exists" : "exist"} in {guestText(folder)}.
           </DialogDescription>
         </DialogHeader>
         <DialogBody>

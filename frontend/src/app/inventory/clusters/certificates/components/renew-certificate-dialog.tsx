@@ -97,7 +97,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
         trust_password: trustPassword || undefined,
       });
       if (result.auto_renewed) {
-        toast({ title: "Certificate Renewed", description: "The new certificate is active." });
+        toast({ title: "Certificate renewed", description: "The new certificate is active." });
         setDone({ fingerprint: result.fingerprint, previous_fingerprint: result.previous_fingerprint });
         setStep("done");
       } else if (result.requires_manual_trust) {
@@ -109,14 +109,14 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
         });
         setStep("trust");
         toast({
-          title: "Manual Trust Required",
+          title: "Manual trust required",
           description: "Run the trust command on the cluster (any one member is enough).",
         });
       }
     } catch (error) {
       toast({
-        title: "Renewal Failed",
-        description: errorMessage(error, "Failed to initiate certificate renewal"),
+        title: "Could not renew certificate",
+        description: errorMessage(error, "Try again."),
         variant: "destructive",
       });
     } finally {
@@ -133,7 +133,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
         pending_cert_id: trust?.pending_cert_id,
       });
       if (result.verified && result.activated) {
-        toast({ title: "Certificate Activated", description: "New certificate is now active." });
+        toast({ title: "Certificate activated", description: "New certificate is now active." });
         setDone({
           fingerprint: result.fingerprint,
           previous_fingerprint: result.previous_fingerprint ?? certificate.fingerprint,
@@ -141,15 +141,15 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
         setStep("done");
       } else {
         toast({
-          title: "Not Yet Verified",
-          description: "Certificate not yet trusted. Please run the CLI command first.",
+          title: "Certificate not yet verified",
+          description: "Certificate not yet trusted. Run the CLI command first.",
           variant: "destructive",
         });
       }
     } catch (error) {
       toast({
-        title: "Verification Failed",
-        description: errorMessage(error, "Failed to verify certificate"),
+        title: "Could not verify certificate",
+        description: errorMessage(error, "Try again."),
         variant: "destructive",
       });
       void pending.refetch();

@@ -57,7 +57,7 @@ export function MigrationProjectDestination({
       <div className="grid gap-4 sm:grid-cols-2">
         {mode === "cluster" ? (
           <div className="space-y-2">
-            <Label htmlFor="migration-target-cluster">Destination cluster</Label>
+            <Label htmlFor="migration-target-cluster">Destination Cluster</Label>
             <SearchableSelect
               id="migration-target-cluster"
               value={draft.targetCluster}
@@ -85,7 +85,7 @@ export function MigrationProjectDestination({
         ) : (
           <div className="space-y-2">
             <Label htmlFor="migration-target-project-new">
-              {mode === "rename" ? "New project name" : "Project name on the destination"}
+              {mode === "rename" ? "New Project Name" : "Project Name on the Destination"}
             </Label>
             <Input
               id="migration-target-project-new"
@@ -103,7 +103,7 @@ export function MigrationProjectDestination({
         {(mode === "member" || targetMembers.length > 1) && (
           <div className="space-y-2">
             <Label htmlFor="migration-target-member">
-              {mode === "member" ? "Destination member" : "Destination member (optional)"}
+              {mode === "member" ? "Destination Member" : "Destination Member (Optional)"}
             </Label>
             <SearchableSelect
               id="migration-target-member"
@@ -124,7 +124,7 @@ export function MigrationProjectDestination({
         )}
         {mode !== "member" && (
           <div className="space-y-2">
-            <Label htmlFor="migration-target-pool">Destination storage pool (optional)</Label>
+            <Label htmlFor="migration-target-pool">Destination Storage Pool (Optional)</Label>
             <SearchableSelect
               id="migration-target-pool"
               value={draft.targetStoragePool || DEFAULT_POOL}

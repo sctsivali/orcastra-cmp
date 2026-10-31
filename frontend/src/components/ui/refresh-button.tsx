@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
 import { useRelativeTime } from "@/hooks/use-relative-time";
-import { cn, formatClockTime } from "@/lib/utils";
+import { cn, formatClockTime, lowerFirst } from "@/lib/utils";
 
 export interface RefreshButtonProps
   extends Omit<ButtonProps, "children" | "onClick"> {
@@ -53,7 +53,7 @@ export function RefreshButton({
 }: RefreshButtonProps) {
   const { pending, succeeded, elapsedSeconds, run } = useManualRefresh(
     onRefresh,
-    { errorTitle: errorTitle ?? `${label} failed` },
+    { errorTitle: errorTitle ?? `Could not ${lowerFirst(label)}` },
   );
 
   const relative = useRelativeTime(lastUpdatedAt);

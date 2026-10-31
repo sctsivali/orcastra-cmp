@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { SearchInput } from "@/components/ui/search-input";
 import { clusterStatusMeta, type ClusterStatusMeta } from "@/lib/cluster-status";
-import { cn, formatHypervisorType } from "@/lib/utils";
+import { cn, formatHypervisorType, plural } from "@/lib/utils";
 import { ClusterStatus, type AvailableCluster } from "@/types";
 
 // note: search box appears only past this count so short cluster lists stay uncluttered
@@ -168,7 +168,7 @@ export function ClusterAccessSelector({
         <Label>Cluster Access</Label>
         {!statusUnavailable && withStatus.length > 0 && (
           <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
-            {onlineCount} of {withStatus.length} clusters online
+            {onlineCount} of {plural(withStatus.length, "cluster")} online
           </p>
         )}
       </div>
@@ -261,7 +261,7 @@ export function ClusterAccessSelector({
         )}
       </div>
       <p className="text-xs text-muted-foreground">
-        Selected: {selectedClusterIds.length} cluster(s)
+        Selected: {plural(selectedClusterIds.length, "cluster")}
       </p>
       {statusUnavailable && (
         <p role="status" className="flex items-start gap-2 text-xs text-muted-foreground">

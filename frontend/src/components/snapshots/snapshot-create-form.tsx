@@ -369,7 +369,7 @@ export function SnapshotCreateForm({
         </div>
 
         {billingLinked && (
-          <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+          <div className="space-y-3 rounded-md border border-destructive/40 p-3">
             <div className="flex gap-3">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
               <p className="text-sm">

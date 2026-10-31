@@ -142,7 +142,7 @@ export const consoleAPI = {
       `/console/${segment(instanceName)}/iso/attach?${scopedQuery(host, project)}`,
       { method: "POST", body: JSON.stringify(request) },
     );
-    return requireSuccess(result, "Failed to attach the ISO");
+    return requireSuccess(result, "Could not attach the ISO.");
   },
 
   ejectISO: async (
@@ -156,7 +156,7 @@ export const consoleAPI = {
       `/console/${segment(instanceName)}/iso/eject?${query.toString()}`,
       { method: "POST" },
     );
-    return requireSuccess(result, "Failed to eject the ISO");
+    return requireSuccess(result, "Could not eject the ISO.");
   },
 
   getStartupOrder: async (host: string, project: string): Promise<StartupOrderResponse> => {
@@ -175,6 +175,6 @@ export const consoleAPI = {
       `/console/startup-order?${scopedQuery(host, project)}`,
       { method: "PUT", body: JSON.stringify({ updates }) },
     );
-    return requireSuccess(result, "Failed to update the startup order");
+    return requireSuccess(result, "Could not update the startup order.");
   },
 };

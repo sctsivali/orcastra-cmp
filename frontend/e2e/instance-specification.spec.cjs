@@ -336,14 +336,14 @@ test("validation explains root shrink, memory pressure, and irreversible disk gr
   await expect(dialog.getByText("Enter a positive whole number.")).toBeVisible();
   await cpu.fill("4");
 
-  const rootDisk = dialog.getByRole("spinbutton", { name: "Root disk size", exact: true });
+  const rootDisk = dialog.getByRole("spinbutton", { name: "Root Disk Size", exact: true });
   await rootDisk.fill("70");
   await expect(rootDisk).toHaveAttribute("aria-invalid", "true");
   await expect(dialog.getByText("Root disk size can only be increased.")).toBeVisible();
   await rootDisk.fill("100");
   await expect(dialog.getByText("Root disk growth cannot be rolled back by shrinking the disk.")).toBeVisible();
 
-  await dialog.getByRole("spinbutton", { name: "Memory limit", exact: true }).fill("4");
+  await dialog.getByRole("spinbutton", { name: "Memory Limit", exact: true }).fill("4");
   await expect(dialog.getByText("Lowering memory can pressure or terminate workloads.", { exact: false })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();

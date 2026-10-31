@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { plural } from "@/lib/utils";
 
 interface PageNavProps {
   currentPage: number;
@@ -165,7 +166,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
           </SelectContent>
         </Select>
         <p className="text-xs sm:text-sm text-muted-foreground whitespace-nowrap">
-          Showing {startItem} to {endItem} of {totalItems} entries
+          Showing {startItem} to {endItem} of {plural(totalItems, "entry", "entries")}
         </p>
       </div>
 

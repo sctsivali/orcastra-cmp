@@ -76,25 +76,25 @@ export function RegenerateCertificateDialog({
         if (pendingId) {
           const result = await verify.mutateAsync({ cluster_id: clusterId, pending_cert_id: pendingId });
           if (result.verified && result.activated) {
-            toast({ title: "Certificate Activated", description: `Cluster ${clusterId} now uses the new certificate.` });
+            toast({ title: "Certificate activated", description: `Cluster ${clusterId} now uses the new certificate.` });
             onActivated();
             return;
           }
         } else {
           const result = await checkAuth.mutateAsync(clusterId);
           if (result.authenticated) {
-            toast({ title: "Authentication Successful", description: `Cluster ${clusterId} is now online` });
+            toast({ title: "Cluster authenticated", description: `Cluster ${clusterId} is now online.` });
             onActivated();
             return;
           }
         }
         toast({
-          title: "Not Trusted Yet",
+          title: "Certificate not trusted yet",
           description: "The cluster does not trust the new certificate yet. Run the command on the cluster first (any one member is enough).",
           variant: "destructive",
         });
       } catch (error) {
-        toast({ title: "Verification Failed", description: errorMessage(error, "Failed to verify the certificate"), variant: "destructive" });
+        toast({ title: "Could not verify certificate", description: errorMessage(error, "Try again."), variant: "destructive" });
       }
     });
 
@@ -102,11 +102,11 @@ export function RegenerateCertificateDialog({
     run(async () => {
       try {
         await discard.mutateAsync(clusterId);
-        toast({ title: "New Certificate Discarded", description: "The current certificate stays active." });
+        toast({ title: "New certificate discarded", description: "The current certificate stays active." });
         setConfirmDiscard(false);
         onClose();
       } catch (error) {
-        toast({ title: "Discard Failed", description: errorMessage(error, "Failed to discard the certificate"), variant: "destructive" });
+        toast({ title: "Could not discard certificate", description: errorMessage(error, "Try again."), variant: "destructive" });
       }
     });
 

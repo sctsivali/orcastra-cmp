@@ -35,7 +35,7 @@ export function NetworkServiceFields({ type, options, onChange, errors, disabled
         <h3 className="text-sm font-semibold">DNS</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="net-dns-domain">DNS domain</Label>
+            <Label htmlFor="net-dns-domain">DNS Domain</Label>
             <Input id="net-dns-domain" value={options.dnsDomain} disabled={disabled} maxLength={254}
               onChange={(event) => onChange({ ...options, dnsDomain: event.target.value })} placeholder="Hypervisor default"
               aria-invalid={!!errors.dnsDomain} aria-describedby="net-dns-domain-hint" />
@@ -45,7 +45,7 @@ export function NetworkServiceFields({ type, options, onChange, errors, disabled
           </div>
           {type === "bridge" && (
             <div className="grid gap-2">
-              <Label htmlFor="net-dns-mode">DNS mode</Label>
+              <Label htmlFor="net-dns-mode">DNS Mode</Label>
               <Select value={options.dnsMode} disabled={disabled} onValueChange={(value) => onChange({ ...options, dnsMode: value as DnsMode })}>
                 <SelectTrigger id="net-dns-mode"><SelectValue /></SelectTrigger>
                 <SelectContent>

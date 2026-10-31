@@ -11,7 +11,7 @@ export interface ResourceStatusDisplay {
 const RESOURCE_STATUS_DISPLAY: Record<ResourceStatusKey, ResourceStatusDisplay> = {
   created: { label: "Created", tone: "positive" },
   pending: { label: "Pending", tone: "caution" },
-  errored: { label: "Errored", tone: "negative" },
+  errored: { label: "Error", tone: "negative" },
   unknown: { label: "Unknown", tone: "neutral" },
 };
 

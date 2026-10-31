@@ -3,7 +3,7 @@
 import * as React from "react";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { collectedAtMs, formatHypervisorType } from "@/lib/utils";
+import { collectedAtMs, formatHypervisorType, plural } from "@/lib/utils";
 import { placeShort } from "@/lib/regions/place";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -32,6 +32,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { TableLink } from "@/components/ui/table-link";
 import { ClusterDetailDialog } from "./components/cluster-detail-dialog";
 import { LeftoverTrustDialog, type LeftoverTrust } from "./components/leftover-trust-dialog";
@@ -165,20 +166,20 @@ function ClustersContent() {
       
       if (response.authenticated) {
         toast({
-          title: "Authentication Successful",
+          title: "Cluster authenticated",
           description: `Cluster ${clusterId} is online. Refreshing instance data…` });
         // the mutation's onSuccess reconciles cluster.auth-check, which covers every list a
         // newly trusted cluster adds to (instances, projects, images, pickers)
       } else {
         toast({
-          title: "Not Authenticated",
-          description: response.message || "Certificate not yet trusted",
+          title: "Cluster not authenticated",
+          description: response.message || "Certificate not yet trusted.",
           variant: "destructive" });
       }
     } catch (error: any) {
       toast({
-        title: "Check Failed",
-        description: error.message || "Failed to check authentication",
+        title: "Could not check authentication",
+        description: error.message || "Try again.",
         variant: "destructive" });
     } finally {
       setCheckingAuth(null);
@@ -196,15 +197,15 @@ function ClustersContent() {
           issued: { ...response, cluster_type: cluster.cluster_type || response.cluster_type },
         });
         toast({
-          title: "Certificate Regenerated",
+          title: "Certificate regenerated",
           description: response.pending_cert_id
             ? "The current certificate stays active. Run the command on the cluster (any one member is enough), then verify."
-            : "Copy and run the command on the cluster (any one member is enough) to add trust" });
+            : "Copy and run the command on the cluster (any one member is enough) to add trust." });
       }
     } catch (error: any) {
       toast({
-        title: "Regenerate Failed",
-        description: error.message || "Failed to regenerate certificate",
+        title: "Could not regenerate certificate",
+        description: error.message || "Try again.",
         variant: "destructive" });
     }
   };
@@ -221,8 +222,8 @@ function ClustersContent() {
     try {
       const result = await deleteCluster.mutateAsync(clusterId);
       toast({
-        title: "Cluster Removed",
-        description: `Cluster ${clusterId} has been removed` });
+        title: "Cluster removed",
+        description: `Cluster ${clusterId} has been removed.` });
       setDeleteConfirmModal({ open: false, cluster: null });
       setDeleteConfirmText("");
       if (result?.manual_trust_commands?.length || result?.trust_cleanup_complete === false) {
@@ -232,8 +233,8 @@ function ClustersContent() {
       // refetch now, and every other list it touched refetches when its page next mounts.
     } catch (error: any) {
       toast({
-        title: "Delete Failed",
-        description: error.message || "Failed to remove cluster",
+        title: "Could not remove cluster",
+        description: error.message || "Try again.",
         variant: "destructive" });
     }
   };
@@ -312,19 +313,19 @@ function ClustersContent() {
         </CardHeader>
         <CardContent>
           {clusters.length === 0 ? (
-            <div className="text-center py-12">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No clusters registered</h3>
-              <p className="text-muted-foreground mb-4">
-                Get started by registering your first hypervisor cluster
-              </p>
-              <Button asChild className="gap-2">
-                <IntentLink href="/register-node">
-                  <Plus className="h-4 w-4" />
-                  Register Cluster
-                </IntentLink>
-              </Button>
-            </div>
+            <EmptyState
+              icon={Server}
+              title="No clusters registered"
+              description="Get started by registering your first hypervisor cluster"
+              action={
+                <Button asChild className="gap-2">
+                  <IntentLink href="/register-node">
+                    <Plus className="h-4 w-4" />
+                    Register Cluster
+                  </IntentLink>
+                </Button>
+              }
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -335,7 +336,7 @@ function ClustersContent() {
                   <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Zone" field="zone" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -346,7 +347,7 @@ function ClustersContent() {
                     title="No clusters found"
                     description={
                       filters.activeFilterCount > 0
-                        ? `No cluster matches the current filters. ${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active.`
+                        ? `No cluster matches the current filters. ${plural(filters.activeFilterCount, "filter")} active.`
                         : undefined
                     }
                     action={
@@ -481,7 +482,7 @@ function ClustersContent() {
                             variant="outline"
                             size="sm"
                             onClick={() => handleDeleteClick(cluster)}
-                            title={isReadOnly ? "Disabled in read-only mode" : "Delete Cluster"}
+                            title={isReadOnly ? "Disabled in read-only mode" : "Remove Cluster"}
                             disabled={isReadOnly}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
@@ -591,7 +592,7 @@ function ClustersContent() {
               {deleteCluster.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Deleting…
+                  Removing…
                 </>
               ) : (
                 "Remove Cluster"

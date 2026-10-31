@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatLabel } from "@/lib/utils";
@@ -131,13 +132,12 @@ function IdentitiesContent() {
         identityId: identityToDelete.id,
         host: identityToDelete.node });
       toast({
-        title: "Success",
-        description: `Identity deleted successfully` });
+        title: "Identity deleted" });
       refetch();
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to delete identity",
+        title: "Could not delete identity",
+        description: error.message || "Try again.",
         variant: "destructive" });
     } finally {
       setDeleteDialogOpen(false);
@@ -178,13 +178,9 @@ function IdentitiesContent() {
         </CardHeader>
         <CardContent>
           {identities.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No identities found
-            </div>
+            <EmptyState title="No identities found" />
           ) : sortedIdentities.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No identities match your search criteria
-            </div>
+            <EmptyState title="No identities match your search criteria" />
           ) : (
             <>
               <Table>
@@ -195,7 +191,7 @@ function IdentitiesContent() {
                     <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Cluster" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <SortableTableHead label="Groups" field="groups" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

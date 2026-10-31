@@ -62,7 +62,7 @@ import {
   useClusters
 } from "@/hooks/use-lxd";
 import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import { getResourceBasePath, getValidEntitlements, getEntitlementLabel } from "@/lib/lxd-entitlements";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -295,8 +295,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       });
 
       toast({
-        title: "Success",
-        description: `Description updated successfully`,
+        title: "Group description updated",
       });
       
       // Wait a bit for LXD to persist changes before refetching
@@ -307,8 +306,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       onRefresh();
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to update group",
+        title: "Could not update group description",
+        description: error.message || "Try again.",
         variant: "destructive",
       });
     }
@@ -326,8 +325,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       });
 
       toast({
-        title: "Success",
-        description: `Permissions updated successfully`,
+        title: "Group permissions updated",
       });
 
       // Reset dirty flag
@@ -348,8 +346,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       onRefresh();
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to save permissions",
+        title: "Could not save group permissions",
+        description: error.message || "Try again.",
         variant: "destructive",
       });
     }
@@ -358,8 +356,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const handleAddPermission = () => {
     if (newPermission.entity_type !== "server" && !allResources && selectedResources.length === 0) {
       toast({
-        title: "Validation Error",
-        description: "Please select at least one resource or choose 'All Resources'",
+        title: "Could not add permission",
+        description: "Select at least one resource or choose 'All Resources'.",
         variant: "destructive",
       });
       return;
@@ -401,7 +399,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       
       if (uniquePerms.length === 0) {
         toast({
-          title: "Duplicate Permission",
+          title: "Duplicate permission",
           description: "This permission already exists in the group.",
           variant: "destructive",
         });
@@ -418,11 +416,11 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         ? ` can_view on project ${projectNamesOf(prerequisites).join(", ")} added beside them, which LXD requires.`
         : "";
       const message = duplicateCount > 0 
-        ? `Added ${uniquePerms.length} permission(s). ${duplicateCount} duplicate(s) skipped.${viewNote}`
-        : `Added ${uniquePerms.length} permission(s).${viewNote}`;
+        ? `Added ${plural(uniquePerms.length, "permission")}. ${plural(duplicateCount, "duplicate")} skipped.${viewNote}`
+        : `Added ${plural(uniquePerms.length, "permission")}.${viewNote}`;
       
       toast({
-        title: "Permission Added",
+        title: "Permission added",
         description: `${message} Click "Save Permissions" to apply.`,
       });
     }
@@ -432,7 +430,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     setPermissions(permissions.filter((_, i) => i !== index));
     setIsPermissionsDirty(true);
     toast({
-      title: "Permission Removed",
+      title: "Permission removed",
       description: `Permission removed. Click "Save Permissions" to apply changes.`,
     });
   };
@@ -440,8 +438,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const handleAddIdentity = async () => {
     if (!newIdentity.identity_id.trim()) {
       toast({
-        title: "Validation Error",
-        description: "Identity ID is required",
+        title: "Could not add identity to group",
+        description: "Identity ID is required.",
         variant: "destructive",
       });
       return;
@@ -449,8 +447,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
     if (!currentGroup || !workingNode) {
       toast({
-        title: "Configuration Error",
-        description: `No valid cluster available. Current: ${currentGroup?.node || 'undefined'}, fallback: ${fallbackNode || 'none'}`,
+        title: "Could not add identity to group",
+        description: `No valid cluster available. Current: ${currentGroup?.node || 'undefined'}, fallback: ${fallbackNode || 'none'}.`,
         variant: "destructive",
       });
       return;
@@ -465,8 +463,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       });
 
       toast({
-        title: "Success",
-        description: `Identity added to group "${currentGroup.name}"`,
+        title: "Identity added to group",
+        description: `Identity added to group "${currentGroup.name}".`,
       });
 
       setNewIdentity({
@@ -484,8 +482,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       onRefresh();
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to add identity",
+        title: "Could not add identity to group",
+        description: error.message || "Try again.",
         variant: "destructive",
       });
     }
@@ -503,8 +501,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     
     if (!currentGroup || !workingNode) {
       toast({
-        title: "Configuration Error",
-        description: "No valid cluster available",
+        title: "Could not remove identity from group",
+        description: "No valid cluster available.",
         variant: "destructive",
       });
       setIdentityToRemove(null);
@@ -520,8 +518,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       });
 
       toast({
-        title: "Success",
-        description: `Identity removed from group "${currentGroup.name}"`,
+        title: "Identity removed from group",
+        description: `Identity removed from group "${currentGroup.name}".`,
       });
 
       // Invalidate queries to refresh data
@@ -534,8 +532,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       onRefresh();
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to remove identity",
+        title: "Could not remove identity from group",
+        description: error.message || "Try again.",
         variant: "destructive",
       });
     } finally {
@@ -845,7 +843,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
                   {selectedResources.length > 0 && !allResources && (
                     <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
-                      ✓ {selectedResources.length} resource(s) selected
+                      ✓ {plural(selectedResources.length, "resource")} selected
                     </div>
                   )}
                 </div>
@@ -1203,7 +1201,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               Discard Changes
             </Button>
             <Button onClick={handleSaveAndClose} disabled={updateGroupMutation.isPending}>
-              {updateGroupMutation.isPending ? "Saving…" : "Save & Close"}
+              {updateGroupMutation.isPending ? "Saving…" : "Save and Close"}
             </Button>
           </DialogFooter>
         </DialogContent>

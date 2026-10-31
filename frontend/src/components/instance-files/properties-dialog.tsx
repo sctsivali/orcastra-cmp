@@ -120,7 +120,7 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
                 <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1">
                   <Fact label="Path" value={<OverflowText label="Path" value={guestText(path)} mono />} />
                   <Fact label="Type" value={entry.type} />
-                  <Fact label="Size" value={`${formatBytes(entry.size)} (${formatCount(entry.size)} bytes)`} />
+                  <Fact label="Size" value={`${formatBytes(entry.size)} (${formatCount(entry.size)} ${entry.size === 1 ? "byte" : "bytes"})`} />
                   <Fact label="Modified" value={formatTime(entry.mtime)} />
                   {entry.link_target && <Fact label="Link Target" value={<OverflowText label="Link Target" value={guestText(entry.link_target)} mono />} />}
                 </dl>
@@ -166,11 +166,11 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
                     </fieldset>
                     <fieldset disabled={locked} className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <Label htmlFor="instance-file-uid">Owner Id</Label>
+                        <Label htmlFor="instance-file-uid">Owner ID</Label>
                         <Input id="instance-file-uid" value={uid} inputMode="numeric" onChange={(event) => setUid(event.target.value)} />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor="instance-file-gid">Group Id</Label>
+                        <Label htmlFor="instance-file-gid">Group ID</Label>
                         <Input id="instance-file-gid" value={gid} inputMode="numeric" onChange={(event) => setGid(event.target.value)} />
                       </div>
                     </fieldset>

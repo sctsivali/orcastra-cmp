@@ -14,7 +14,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
-import { formatBytes, formatInstanceType, formatLabel } from "@/lib/utils";
+import { formatBytes, formatInstanceType, formatLabel, plural } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -317,7 +317,7 @@ function ImagesContent() {
                 {/* Not sortable and not a value, so it carries its name for a screen reader
                     rather than a visible label that would read as a sixth column of data. */}
                 {canManage && (
-                  <TableHead className="w-12 text-right">
+                  <TableHead pinned="end" className="w-12 text-right">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 )}
@@ -338,7 +338,7 @@ function ImagesContent() {
                   title="No images found"
                   description={
                     filters.activeFilterCount > 0
-                      ? `No image matches the current filters. ${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active.`
+                      ? `No image matches the current filters. ${plural(filters.activeFilterCount, "filter")} active.`
                       : undefined
                   }
                   action={
@@ -405,7 +405,7 @@ function ImagesContent() {
                       ].filter(Boolean).join(", ") || <TableEmptyValue label="No flags" />}
                     </TableCell>
                     {canManage && (
-                      <TableCell className="text-right">
+                      <TableCell pinned="end" className="text-right">
                         <RowActions
                           triggerLabel={`Actions for image ${imageLabel(image)}`}
                           actions={actionsFor(image)}

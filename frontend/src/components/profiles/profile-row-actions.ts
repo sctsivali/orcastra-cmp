@@ -2,6 +2,7 @@ import { Pencil, Trash2 } from "lucide-react";
 
 import type { RowAction } from "@/components/ui/row-actions";
 import type { ProfileInfo } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 interface ProfileActionsInput {
   profile: ProfileInfo;
@@ -33,7 +34,7 @@ export function profileActions({ profile, isReadOnly, onEdit, onDelete }: Profil
         : profile.name === "default"
           ? "LXD keeps the default profile in every project"
           : used > 0
-            ? `In use by ${used} instance${used === 1 ? "" : "s"}`
+            ? `In use by ${plural(used, "instance")}`
             : undefined,
     },
   ];

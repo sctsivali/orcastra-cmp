@@ -6,14 +6,22 @@ import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
-import { isStalePending, removePendingCreate, type PendingCreate } from "@/lib/pending-creates";
+import {
+  isStalePending,
+  removePendingCreate,
+  updatePendingCreate,
+  type PendingCreate,
+} from "@/lib/pending-creates";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { useManualRefresh } from "@/hooks/use-manual-refresh";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { CREATE_PARAM } from "@/components/instance-create/prefill";
 
 interface PendingCreateRowsProps {
   pending: readonly PendingCreate[];
   onViewInstance: (pending: PendingCreate) => void;
+  /** The list's own manual refresh, the same one the page's RefreshButton runs. */
+  onRefresh: () => Promise<unknown>;
 }
 
 function pendingLabel(pending: PendingCreate): string {
@@ -32,9 +40,41 @@ function pendingLabel(pending: PendingCreate): string {
   return "Creating…";
 }
 
+// important: the full document reload this replaced did two jobs. It read the list again and,
+// because lib/pending-creates.ts persists no verdict, it read the durable job again too, clearing
+// pollingHalted on the way. The list read alone would leave a halted row stuck for good, and an
+// unknown one waiting out its poll delay, so the job is asked for here as well.
+function ReloadCurrentState({
+  pending,
+  onRefresh,
+}: {
+  pending: PendingCreate;
+  onRefresh: () => Promise<unknown>;
+}) {
+  const { scopeKey } = useActorQueryScope();
+  const { pending: reloading, run } = useManualRefresh(
+    () => {
+      updatePendingCreate(scopeKey, pending.id, { pollingHalted: false, recheckAt: Date.now() });
+      return onRefresh();
+    },
+    { errorTitle: "Could not reload instances" },
+  );
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-busy={reloading}
+      disabled={reloading}
+      onClick={() => void run()}
+    >
+      Reload current state
+    </Button>
+  );
+}
+
 // The "Creating..." placeholder rows, rendered above the real rows and outside the filters,
 // the sort and the pager: a create in flight is always visible, whatever the list is showing.
-export function PendingCreateRows({ pending, onViewInstance }: PendingCreateRowsProps) {
+export function PendingCreateRows({ pending, onViewInstance, onRefresh }: PendingCreateRowsProps) {
   const { scopeKey } = useActorQueryScope();
   const { navigate } = useNavigationProgress();
   return (
@@ -113,13 +153,7 @@ export function PendingCreateRows({ pending, onViewInstance }: PendingCreateRows
                   </Button>
                 )}
                 {p.jobStatus === "unknown" && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => window.location.reload()}
-                  >
-                    Refresh actual state
-                  </Button>
+                  <ReloadCurrentState pending={p} onRefresh={onRefresh} />
                 )}
                 <Button
                   variant="ghost"

@@ -187,7 +187,7 @@ export function VMCreateForm() {
       });
 
       toast({
-        title: "VM Created",
+        title: "VM created",
         description: `${data.name} has been created successfully on ${data.host}.`,
         variant: "success",
       });
@@ -199,9 +199,9 @@ export function VMCreateForm() {
       const isReadOnlyError = errorMessage.toLowerCase().includes("read-only mode") || errorMessage.includes("read-only");
       
       toast({
-        title: isReadOnlyError ? "Read-Only Mode Active" : "Failed to create VM",
+        title: isReadOnlyError ? "Read-only mode active" : "Could not create VM",
         description: isReadOnlyError 
-          ? "Cannot create instances while the system is in read-only mode. Please contact your administrator."
+          ? "Cannot create instances while the system is in read-only mode. Contact your administrator."
           : errorMessage,
         variant: "destructive",
       });

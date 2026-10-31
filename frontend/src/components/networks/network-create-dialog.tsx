@@ -243,7 +243,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                   setType("bridge");
                 }}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading…" : "Select cluster"}
+                placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
                 searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={loadingNodes || submitting}
@@ -346,7 +346,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
 
           {type === "ovn" && (
             <div className="grid gap-2">
-              <Label htmlFor="net-uplink">Uplink network *</Label>
+              <Label htmlFor="net-uplink">Uplink Network *</Label>
               <SearchableSelect
                 id="net-uplink"
                 value={uplink}

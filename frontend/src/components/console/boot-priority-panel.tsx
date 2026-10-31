@@ -128,16 +128,15 @@ export function BootPriorityPanel({
       await reconcileMutationImpact(queryClient, "instance.boot-order");
       if (!isAuthActorSynchronized(actorScope)) return;
       toast({
-        title: "Saved",
-        description: "Startup order updated successfully",
+        title: "Startup order saved",
       });
       setOriginalEntries(JSON.parse(JSON.stringify(entries)));
     } catch (err) {
       if (!isAuthActorSynchronized(scopeKey)) return;
       console.error('Error saving startup order:', err);
       toast({
-        title: "Error",
-        description: err instanceof Error ? err.message : 'Failed to save',
+        title: "Could not save startup order",
+        description: err instanceof Error ? err.message : 'Try again.',
         variant: "destructive",
       });
     } finally {

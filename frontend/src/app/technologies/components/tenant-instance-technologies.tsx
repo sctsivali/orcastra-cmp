@@ -30,7 +30,7 @@ import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { STALE_AFTER_MS } from "@/lib/query-config";
 import { instanceStatusDisplay } from "@/lib/instance-status";
-import { formatInstanceType } from "@/lib/utils";
+import { formatInstanceType, plural } from "@/lib/utils";
 import type {
   InstanceResourceSpecification,
   InstanceRootDiskSource,
@@ -183,7 +183,7 @@ function buildTenantCategories(instances: readonly InstanceSpecification[]): Ten
         {
           label: "Instances with GPUs",
           value: gpuInstances.toString(),
-          detail: `Out of ${instances.length} visible instances`,
+          detail: `Out of ${plural(instances.length, "visible instance")}`,
         },
       ],
     },

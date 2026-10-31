@@ -87,10 +87,10 @@ export function snapshotGates(snapshot: SnapshotInfo, billingLinked: boolean) {
 /** Selected from three literals, never composed, so no sentence is assembled by accident. */
 export function acknowledgementLabel(origin: SnapshotOrigin, billingLinked: boolean): string {
   if (origin === "upstream" && billingLinked) {
-    return "I accept that this restore point belongs to the upstream product and that acting on it moves the storage this instance is billed on";
+    return "I accept that this snapshot belongs to the upstream product and that acting on it moves the storage this instance is billed on";
   }
   if (origin === "upstream") {
-    return "I accept that this restore point belongs to the upstream product";
+    return "I accept that this snapshot belongs to the upstream product";
   }
   return "I accept the effect on the schedule this instance is billed under";
 }

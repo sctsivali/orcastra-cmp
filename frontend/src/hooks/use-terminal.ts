@@ -6,6 +6,7 @@
 import { useCallback } from "react";
 import { useTerminalStore, TerminalInstance } from "@/lib/terminal-store";
 import { toast } from "@/hooks/use-toast";
+import { plural } from "@/lib/utils";
 
 interface OpenTerminalParams {
   instanceName: string;
@@ -40,7 +41,7 @@ export function useTerminal() {
           focusTerminal(existing.id);
         }
         toast({
-          title: "Terminal Focused",
+          title: "Terminal focused",
           description: `Terminal for ${instanceName} is now focused.`,
         });
         return existing;
@@ -51,12 +52,12 @@ export function useTerminal() {
 
       if (newTerminal) {
         toast({
-          title: "Terminal Opened",
+          title: "Terminal opened",
           description: `Connecting to ${instanceName}@${host}…`,
         });
       } else if (terminals.length >= useTerminalStore.getState().maxTerminals) {
         toast({
-          title: "Cannot Open Terminal",
+          title: "Could not open terminal",
           description: "Maximum number of terminals reached. Close some terminals first.",
           variant: "destructive",
         });
@@ -75,7 +76,7 @@ export function useTerminal() {
       closeTerminal(id);
       if (terminal) {
         toast({
-          title: "Terminal Closed",
+          title: "Terminal closed",
           description: `Terminal for ${terminal.instanceName} has been closed.`,
         });
       }
@@ -89,8 +90,8 @@ export function useTerminal() {
     closeAllTerminals();
     if (count > 0) {
       toast({
-        title: "All Terminals Closed",
-        description: `${count} terminal(s) have been closed.`,
+        title: "All terminals closed",
+        description: `${plural(count, "terminal has", "terminals have")} been closed.`,
       });
     }
   }, [closeAllTerminals, terminals.length]);

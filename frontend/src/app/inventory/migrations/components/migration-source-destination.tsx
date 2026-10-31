@@ -1,5 +1,6 @@
 "use client";
 
+import { formatInstanceType } from "@/lib/utils";
 import { AlertTriangle, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
@@ -84,7 +85,7 @@ export function MigrationSourceDestination({
   const instanceOptions = instances.map((instance) => ({
     value: instance.name,
     label: instance.name,
-    sublabel: `${instance.type === "virtual-machine" ? "VM" : "Container"} · ${instance.status}${instance.location ? ` · ${instance.location}` : ""}`,
+    sublabel: `${formatInstanceType(instance.type)} · ${instance.status}${instance.location ? ` · ${instance.location}` : ""}`,
   }));
 
   if (stage === "source") {
@@ -92,7 +93,7 @@ export function MigrationSourceDestination({
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="migration-scope">Migration scope</Label>
+            <Label htmlFor="migration-scope">Migration Scope</Label>
             <Select
               value={draft.scope}
               onValueChange={(value) => {
@@ -159,7 +160,7 @@ export function MigrationSourceDestination({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="migration-source-cluster">Source cluster</Label>
+            <Label htmlFor="migration-source-cluster">Source Cluster</Label>
             <SearchableSelect
               id="migration-source-cluster"
               value={draft.sourceCluster}
@@ -183,7 +184,7 @@ export function MigrationSourceDestination({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="migration-source-project">Source project</Label>
+            <Label htmlFor="migration-source-project">Source Project</Label>
             <SearchableSelect
               id="migration-source-project"
               value={draft.sourceProject}
@@ -211,7 +212,7 @@ export function MigrationSourceDestination({
 
         {draft.scope === "instance" ? (
           <div className="space-y-2">
-            <Label htmlFor="migration-resource-name">Instance name</Label>
+            <Label htmlFor="migration-resource-name">Instance Name</Label>
             <SearchableSelect
               id="migration-resource-name"
               value={draft.resourceName}

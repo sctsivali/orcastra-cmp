@@ -4,7 +4,7 @@ import { Clock3, Info, Power, Route } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel, plural } from "@/lib/utils";
 import type { MigrationPlan } from "@/types/migrations";
 import { planHasRunningSource, strategyLabel } from "./migration-format";
 import { MigrationFindings } from "./migration-findings";
@@ -18,7 +18,7 @@ function recoverySummary(plan: MigrationPlan): string {
   }
   const hours = plan.rollback_contract?.retention_hours;
   const automatic = plan.rollback_contract?.automatic_cleanup === true;
-  return `Source${plan.scope === "project" ? " project" : ""} kept ${typeof hours === "number" ? hours : plan.retention_hours} hours${
+  return `Source${plan.scope === "project" ? " project" : ""} kept ${plural(typeof hours === "number" ? hours : plan.retention_hours, "hour")}${
     automatic ? ", then deleted" : ", then Finalize"
   }`;
 }

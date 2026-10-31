@@ -559,5 +559,5 @@ async def get_member_resources(
         logger.error(f"Error getting resources for member {member_name} from {node}: {e}")
         raise HTTPException(
             status_code=503,
-            detail=f"Failed to get resources for member '{member_name}': {str(e)}"
+            detail=f"Could not get resources for member '{member_name}': {str(e)}"
         )

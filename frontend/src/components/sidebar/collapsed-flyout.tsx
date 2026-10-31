@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import type { NavGroup, NavItem, NavRenderContext } from "./types";
@@ -103,8 +103,8 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
 
 
   const counted = [
-    sessions > 0 ? `${sessions} active session${sessions === 1 ? "" : "s"}` : null,
-    attention > 0 ? `${attention} host service${attention === 1 ? " needs" : "s need"} attention` : null,
+    sessions > 0 ? plural(sessions, "active session") : null,
+    attention > 0 ? `${plural(attention, "host service needs", "host services need")} attention` : null,
   ].filter(Boolean);
   const triggerLabel = counted.length > 0 ? `${group.label}, ${counted.join(", ")}` : group.label;
 

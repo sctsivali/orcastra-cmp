@@ -37,6 +37,7 @@ import {
   type FormSizeUnit,
 } from "@/lib/lxd-limits";
 import { ProjectInfo } from "@/types";
+import { plural } from "@/lib/utils";
 
 interface ProjectDialogProps {
   project: ProjectInfo;
@@ -56,8 +57,8 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
   const handleDelete = async (e: React.MouseEvent) => {
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Project deletion is disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Project deletion is disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -68,7 +69,7 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
         host: project.host,
         projectName: project.name });
       toast({
-        title: "Project Deleted",
+        title: "Project deleted",
         description: `Project '${project.name}' has been deleted from ${project.host}.`,
         variant: "success" });
       onOpenChange(false);
@@ -76,12 +77,12 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
       if (isProjectDeleteUnknown(error)) {
         // The cluster may still finish: the card leaves the grid when it does.
         toast({
-          title: "Still deleting",
+          title: "Still deleting project",
           description: `${project.name} is taking longer than usual on ${project.host}. It leaves the list when the delete finishes.` });
         onOpenChange(false);
       } else {
         toast({
-          title: "Failed to delete project",
+          title: "Could not delete project",
           description: error instanceof Error ? error.message : "Unknown error",
           variant: "destructive" });
       }
@@ -104,7 +105,7 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
             </span>
           ) : instanceCount > 0 && (
             <span className="block mt-2 text-destructive font-medium">
-              Warning: This project has {instanceCount} instance(s). Delete all instances first.
+              Warning: This project has {plural(instanceCount, "instance")}. Delete all instances first.
             </span>
           )}
         </AlertDialogDescription>
@@ -180,8 +181,8 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
   const handleSave = async () => {
     if (isReadOnly) {
       toast({
-        title: "Read-Only Mode Active",
-        description: "Project updates are disabled in read-only mode",
+        title: "Read-only mode active",
+        description: "Project updates are disabled in read-only mode.",
         variant: "destructive" });
       return;
     }
@@ -218,7 +219,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
       await updateProject.mutateAsync({ host: project.host, projectName: project.name, data: updateData });
 
       toast({
-        title: "Project Updated",
+        title: "Project updated",
         description: `Project '${project.name}' has been updated successfully.`,
         variant: "success" });
 
@@ -226,7 +227,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
       refetch(); // Refresh the project list
     } catch (error) {
       toast({
-        title: "Failed to update project",
+        title: "Could not update project",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     } finally {

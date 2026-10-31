@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Copy, Eye, EyeOff } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,8 +49,8 @@ export function APIKeySecretDialog({
     const ok = await copyText(text);
     if (!ok) {
       toast({
-        title: "Copy failed",
-        description: "Please select and copy the value manually.",
+        title: "Could not copy API key value",
+        description: "Select and copy the value manually.",
         variant: "destructive",
       });
       return;
@@ -57,8 +58,8 @@ export function APIKeySecretDialog({
     setCopied(type);
     setTimeout(() => setCopied(null), 2000);
     toast({
-      title: "Copied!",
-      description: `API Key ${type} copied to clipboard.`,
+      title: "Copied",
+      description: `API key ${type} copied to clipboard.`,
     });
   };
 
@@ -128,15 +129,13 @@ export function APIKeySecretDialog({
                   </Button>
                 </div>
               </div>
-              <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-                <p className="flex items-center gap-2 font-medium text-foreground">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
-                  <span>Important</span>
-                </p>
-                <p className="mt-1 text-muted-foreground">
+              <Alert variant="warning" role="status">
+                <AlertTriangle className="h-4 w-4" aria-hidden />
+                <AlertTitle>Important</AlertTitle>
+                <AlertDescription>
                   Copy and store these credentials securely. The secret cannot be retrieved later.
-                </p>
-              </div>
+                </AlertDescription>
+              </Alert>
             </div>
             {/* The credentials alone were the whole dialog, and a key holder had no way to learn
                 the base URL, the header names, or which endpoints the key reaches. The obvious

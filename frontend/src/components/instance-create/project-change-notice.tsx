@@ -1,3 +1,4 @@
+import { plural } from "@/lib/utils";
 /**
  * What a project switch cleared and why, so the form does not silently lose an operator's
  * choices. A remote image is kept (it belongs to no project). A local image is kept while the
@@ -15,7 +16,7 @@ export function projectChangeNotice(input: {
   if (input.clearedIso) parts.push("the boot ISO (it is not in this project)");
   if (input.clearedNics > 0) {
     parts.push(
-      `${input.clearedNics} network interface${input.clearedNics === 1 ? "" : "s"} (networks are project-scoped)`,
+      `${plural(input.clearedNics, "network interface")} (networks are project-scoped)`,
     );
   }
   if (parts.length === 0) return null;

@@ -352,7 +352,7 @@ function IsoImagesContent() {
                 {/* Not sortable and not a value, so it carries its name for a screen reader
                     rather than a visible label that would read as another column of data. */}
                 {canManage && (
-                  <TableHead className="w-12 text-right">
+                  <TableHead pinned="end" className="w-12 text-right">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 )}
@@ -394,7 +394,7 @@ function IsoImagesContent() {
                       />
                     </TableCell>
                     {canManage && (
-                      <TableCell className="text-right">
+                      <TableCell pinned="end" className="text-right">
                         <RowActions
                           triggerLabel={`Actions for ISO ${v.name}`}
                           actions={actionsFor(v)}

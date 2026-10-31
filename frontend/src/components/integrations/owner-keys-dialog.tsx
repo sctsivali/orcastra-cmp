@@ -88,9 +88,9 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
     },
     onSuccess: (answer, change) => {
       void reconcileMutationImpact(queryClient, "integration.write").catch(() => undefined);
-      const titles = { add: "Owner Key Added", remove: "Owner Key Removed", primary: "Primary Owner Key Changed" };
+      const titles = { add: "Owner key added", remove: "Owner key removed", primary: "Primary owner key changed" };
       toast({
-        title: answer.changed ? titles[change.kind] : "Owner Keys Unchanged",
+        title: answer.changed ? titles[change.kind] : "Owner keys unchanged",
         description: answer.changed
           ? "OrcaHub sees the change on that connection's next sync, within about 5 minutes on its default schedule."
           : "The owner keys were already as asked.",
@@ -98,7 +98,7 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
       setTarget("");
     },
     onError: (error: Error) => {
-      toast({ title: "Failed to change the owner keys", description: describeError(error), variant: "destructive" });
+      toast({ title: "Could not change owner keys", description: describeError(error), variant: "destructive" });
     },
   });
 

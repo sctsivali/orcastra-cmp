@@ -24,39 +24,39 @@ import { AuthBrandMark } from "@/components/branding/auth-brand-mark";
 // Error details mapping
 const errorDetails: Record<string, { title: string; description: string }> = {
   Configuration: {
-    title: "Configuration Error",
+    title: "Authentication Configuration Error",
     description:
-      "There is a problem with the authentication configuration. Please contact your administrator.",
+      "There is a problem with the authentication configuration. Contact your administrator.",
   },
   AccessDenied: {
     title: "Access Denied",
     description:
-      "You do not have permission to access this application. Please contact your administrator for access.",
+      "You do not have permission to access this application. Contact your administrator for access.",
   },
   Verification: {
     title: "Verification Failed",
     description:
-      "The verification link may have expired or already been used. Please try signing in again.",
+      "The verification link may have expired or already been used. Try signing in again.",
   },
   OAuthSignin: {
     title: "OAuth Sign-in Error",
     description:
-      "There was an error starting the authentication process. Please try again.",
+      "There was an error starting the authentication process. Try again.",
   },
   OAuthCallback: {
     title: "OAuth Callback Error",
     description:
-      "There was an error processing the authentication response. Please try again.",
+      "There was an error processing the authentication response. Try again.",
   },
   OAuthCreateAccount: {
     title: "Account Creation Failed",
     description:
-      "Could not create your account. Please contact your administrator.",
+      "Could not create your account. Contact your administrator.",
   },
   OAuthAccountNotLinked: {
     title: "Account Not Linked",
     description:
-      "This email is already associated with another sign-in method. Please use that method instead.",
+      "This email is already associated with another sign-in method. Use that method instead.",
   },
   SessionRequired: {
     title: "Session Required",
@@ -65,7 +65,7 @@ const errorDetails: Record<string, { title: string; description: string }> = {
   Default: {
     title: "Authentication Error",
     description:
-      "An unexpected error occurred during authentication. Please try again.",
+      "An unexpected error occurred during authentication. Try again.",
   },
 };
 
@@ -119,7 +119,7 @@ function ErrorContent() {
           <div className="text-center text-xs text-muted-foreground pt-4 border-t">
             <p>Error Code: {error}</p>
             <p className="mt-1">
-              If this problem persists, please contact support
+              If this problem persists, contact support
             </p>
           </div>
         </CardContent>

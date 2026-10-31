@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatVcpuAmount, formatVcpuBusy } from "@/lib/instance-metrics-view";
-import { formatBytes, formatNetworkRate, formatVcpuCount } from "@/lib/utils";
+import { formatBytes, formatNetworkRate, formatVcpuCount, formatInstanceType } from "@/lib/utils";
 import type { InstanceMonitoringSummary, MonitoringDashboardResponse } from "@/types/api";
 
 type Resource = "cpu" | "memory" | "storage" | "network";
@@ -187,7 +187,7 @@ const TopConsumerRow = memo(function TopConsumerRow({
       <div className="text-right shrink-0">
         <ConsumerValue instance={instance} type={type} />
         <Badge variant="outline" className="text-xs mt-1">
-          {instance.type === "virtual-machine" ? "VM" : "CT"}
+          {formatInstanceType(instance.type)}
         </Badge>
       </div>
     </button>

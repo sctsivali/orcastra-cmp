@@ -315,7 +315,7 @@ async def renew(
            fingerprint=new_fp, previous_fingerprint=state.current_fp, identity_name=identity_name)
     return CertificateRenewalResponse(
         success=True,
-        message="New certificate generated. Please add trust manually and verify.",
+        message="New certificate generated. Add trust manually and verify.",
         cluster_id=cluster_id,
         auto_renewed=False,
         requires_manual_trust=True,
@@ -353,7 +353,7 @@ async def verify(
             await db.rollback()
             return CertificateVerifyResponse(
                 success=False,
-                message="Certificate not yet trusted by hypervisor server. Please add trust using the CLI command.",
+                message="Certificate not yet trusted by hypervisor server. Add trust using the CLI command.",
                 cluster_id=cluster_id,
                 verified=False,
                 activated=False,

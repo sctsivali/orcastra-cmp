@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useDeleteImage } from "@/hooks/use-lxd";
 import { imageAPI } from "@/lib/api";
 import type { ImageInfo } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 export type ImageRow = ImageInfo & { node: string };
 
@@ -134,7 +135,7 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
         dependentCount > 0
           ? {
               summary:
-                `${dependentCount} instance(s) on ${display?.node} were created from this image` +
+                `${plural(dependentCount, "instance")} on ${display?.node} ${dependentCount === 1 ? "was" : "were"} created from this image` +
                 (hidden > 0 ? ` (${hidden} in projects you cannot see)` : ""),
               names: dependents,
             }

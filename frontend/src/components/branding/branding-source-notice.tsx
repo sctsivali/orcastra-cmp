@@ -5,6 +5,7 @@ import { Link2, Users } from "lucide-react";
 import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 import { Label } from "@/components/ui/label";
 import type { OrgBranding } from "@/types/branding";
+import { plural } from "@/lib/utils";
 
 const INHERITED_NAME: Record<OrgBranding["inherits_from"], string> = {
   provider: "its provider",
@@ -64,7 +65,7 @@ export function BrandingSourceNotice({
         <p className="flex items-start gap-2 text-muted-foreground">
           <Users className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span>
-            {meta.followers_count === 1 ? "1 organization takes" : `${meta.followers_count} organizations take`} their
+            {plural(meta.followers_count, "organization takes", "organizations take")} their
             branding from this one, unless they set their own.
           </span>
         </p>

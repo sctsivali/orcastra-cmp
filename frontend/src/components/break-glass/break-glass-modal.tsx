@@ -83,7 +83,7 @@ export function BreakGlassModal() {
             <Label htmlFor="bg-reason">Reason <span className="text-destructive">*</span></Label>
             <Textarea
               id="bg-reason"
-              placeholder="e.g. investigating ticket INC-1234 on tenant request"
+              placeholder="for example, investigating ticket INC-1234 on tenant request"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               rows={3}
@@ -92,7 +92,7 @@ export function BreakGlassModal() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="bg-duration">Access window</Label>
+              <Label htmlFor="bg-duration">Access Window</Label>
               <Select value={duration} onValueChange={setDuration}>
                 <SelectTrigger id="bg-duration"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -103,7 +103,7 @@ export function BreakGlassModal() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="bg-ticket">Ticket (optional)</Label>
+              <Label htmlFor="bg-ticket">Ticket (Optional)</Label>
               <Input id="bg-ticket" placeholder="INC-1234" value={ticket} onChange={(e) => setTicket(e.target.value)} />
             </div>
           </div>

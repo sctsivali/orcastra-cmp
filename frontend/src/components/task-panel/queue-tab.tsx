@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TableLink } from "@/components/ui/table-link";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { usePermissions } from "@/hooks/use-permissions";
-import { toMillis } from "@/lib/utils";
+import { toMillis, plural } from "@/lib/utils";
 import { Role } from "@/types/rbac";
 import type { DueSchedule, QueueCluster, TaskRecord } from "@/types/tasks";
 import { CollectionNotice } from "./collection-notice";
@@ -233,7 +233,7 @@ export function QueueTab({ feed, height, onOpenTask, registerRefresh, collection
           {page === 1
             ? data.due_schedules_truncated
               ? `Showing the first 100 of ${data.due_schedules_total} due schedules. `
-              : `${data.due_schedules_total} schedules due within an hour. `
+              : `${plural(data.due_schedules_total, "schedule")} due within an hour. `
             : "Due schedules appear on the first queue page. "}
           {hasRole(Role.PARTNER) && (
             <IntentLink href="/inventory/snapshots" className="underline underline-offset-4">View schedules</IntentLink>

@@ -593,7 +593,7 @@ async def get_network(
         raise HTTPException(status_code=503, detail=f"Could not reach cluster '{host}'")
     except Exception as e:
         logger.error(f"Unexpected error getting network {network_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get network")
+        raise HTTPException(status_code=500, detail="Could not get network")
 
 
 @router.post(
@@ -836,7 +836,7 @@ async def create_network(
             error_message=str(e),
         )
         # Generic message: raw daemon strings can leak internal paths/hostnames.
-        raise HTTPException(status_code=500, detail="Failed to create network")
+        raise HTTPException(status_code=500, detail="Could not create network")
 
 
 @router.put(
@@ -964,7 +964,7 @@ async def update_network(
         raise _lxd_http_error(e, network_name)
     except Exception as e:
         logger.error(f"Unexpected error updating network {network_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update network")
+        raise HTTPException(status_code=500, detail="Could not update network")
 
 
 @router.delete(
@@ -1057,7 +1057,7 @@ async def delete_network(
             result="failure",
             error_message=str(e),
         )
-        raise HTTPException(status_code=500, detail="Failed to delete network")
+        raise HTTPException(status_code=500, detail="Could not delete network")
 
 
 @router.get(
@@ -1123,4 +1123,4 @@ async def get_network_state(
         raise lxd_transport_error(e, host, f"reporting the state of {network_name}")
     except Exception as e:
         logger.error(f"Unexpected error getting network state {network_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get network state")
+        raise HTTPException(status_code=500, detail="Could not get network state")

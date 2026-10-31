@@ -423,9 +423,8 @@ class ConsoleService:
                     logger.info(f"Updated startup order for {instance_name}")
                     
                 except Exception as e:
-                    error_msg = f"Failed to update {instance_name}: {str(e)}"
-                    logger.error(error_msg)
-                    errors.append(error_msg)
+                    logger.error(f"Failed to update {instance_name}: {str(e)}")
+                    errors.append(f"Could not update {instance_name}: {str(e)}")
             
             if errors:
                 return False, "; ".join(errors)
@@ -662,7 +661,7 @@ class ConsoleService:
                 return True, msg
                 
             except Exception as e:
-                return False, f"Failed to attach ISO: {str(e)}"
+                return False, f"Could not attach ISO: {str(e)}"
             
         except Exception as e:
             logger.error(f"Error attaching ISO: {e}")
@@ -719,7 +718,7 @@ class ConsoleService:
                 return True, "ISO ejected successfully"
                 
             except Exception as e:
-                return False, f"Failed to eject ISO: {str(e)}"
+                return False, f"Could not eject ISO: {str(e)}"
             
         except Exception as e:
             logger.error(f"Error ejecting ISO: {e}")

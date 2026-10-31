@@ -49,7 +49,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { FORCE_OFF_HINT, FORCE_ON_HINT, FORCE_OPTION_LABEL } from "@/lib/instance-action-copy";
+import { FORCE_OFF_HINT, FORCE_ON_HINT, FORCE_OPTION_LABEL, POWER_ACTION_PAST } from "@/lib/instance-action-copy";
 import type { InstanceStatus } from "@/lib/console-store";
 import { toast } from "@/hooks/use-toast";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
@@ -104,7 +104,6 @@ const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 10;
 const ICON = "h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95";
-const PAST: Record<PowerOperation, string> = { start: "started", stop: "stopped", restart: "restarted" };
 
 export function ConsoleToolbar({
   instanceName,
@@ -137,7 +136,7 @@ export function ConsoleToolbar({
   const executePowerAction = useInstancePowerAction();
   // important: a reconnect tears down and rebuilds the socket; a double click must not race it.
   const { pending: reconnectPending, run: runReconnect } = useManualRefresh(() => onReconnect?.(), {
-    errorTitle: "Reconnect failed",
+    errorTitle: "Could not reconnect console",
   });
   const [loading, setLoading] = useState<PowerOperation | null>(null);
   const [spamming, setSpamming] = useState(false);
@@ -152,13 +151,13 @@ export function ConsoleToolbar({
     try {
       await executePowerAction(operation, { name: instanceName, host, project, force, timeout: 30 });
       onInstanceStatus(operation === "stop" ? "Stopped" : "Running");
-      toast({ title: `Instance ${PAST[operation]}`, description: instanceName });
+      toast({ title: `Instance ${POWER_ACTION_PAST[operation]}`, description: instanceName });
       onPowerDone?.(operation);
     } catch (error) {
       if (isActorScopeChangedError(error)) return;
       onInstanceStatus("Error");
       toast({
-        title: `Could not ${operation} the instance`,
+        title: `Could not ${operation} instance`,
         description: error instanceof Error ? error.message : "The cluster refused the request.",
         variant: "destructive",
       });
@@ -175,7 +174,7 @@ export function ConsoleToolbar({
       await new Promise((r) => setTimeout(r, 100));
     }
     setSpamming(false);
-    toast({ title: `Sent ${key} 15 times`, description: "Watch the console for the boot menu." });
+    toast({ title: `${key} sent 15 times`, description: "Watch the console for the boot menu." });
   }, [onSendKeys, spamming]);
 
   const numericZoom = typeof zoom === "number" ? zoom : 100;

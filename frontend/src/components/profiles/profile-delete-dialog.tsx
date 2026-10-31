@@ -3,6 +3,7 @@
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { referencesFromUsedBy } from "@/lib/used-by";
 import type { ProfileInfo } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 interface ProfileDeleteDialogProps {
   open: boolean;
@@ -37,7 +38,7 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, pending, erro
       onConfirm={() => onConfirm()}
       dependents={
         names.length
-          ? { summary: `${names.length} instance${names.length === 1 ? "" : "s"} still use this profile; LXD will refuse the delete.`, names }
+          ? { summary: `${plural(names.length, "instance still uses", "instances still use")} this profile; LXD will refuse the delete.`, names }
           : undefined
       }
       error={error}

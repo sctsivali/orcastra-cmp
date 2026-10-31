@@ -7,7 +7,7 @@ import { TableLink } from "@/components/ui/table-link";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
-import { formatDateTime, formatLabel } from "@/lib/utils";
+import { formatDateTime, formatLabel, plural } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
 import {
   warningSeverityDisplay,
@@ -182,9 +182,9 @@ export function WarningDetailDialog({
           <DetailField label="Warning Type" value={formatLabel(record.warning_type ?? "")} />
           <DetailField
             label="Days Until Expiry"
-            value={record.days_until_expiry <= 0 ? "Expired" : `${record.days_until_expiry} days`}
+            value={record.days_until_expiry <= 0 ? "Expired" : plural(record.days_until_expiry, "day")}
           />
-          <DetailField label="Expires at" value={formatDateTime(record.expires_at)} />
+          <DetailField label="Expires At" value={formatDateTime(record.expires_at)} />
         </DetailGrid>
       </RecordDetailDialog>
     );

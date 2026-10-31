@@ -76,7 +76,7 @@ export function OrgPersonalizationSettings() {
     } catch {
       setMeta(null);
       setSettings(DEFAULT_PERSONALIZATION);
-      toast({ title: "Failed to load branding", variant: "destructive" });
+      toast({ title: "Could not load branding", variant: "destructive" });
     }
   }, [showOrg]);
 
@@ -109,7 +109,7 @@ export function OrgPersonalizationSettings() {
         setOrgId(target);
         await loadTarget(target);
       } catch {
-        toast({ title: "Failed to load organizations", description: "Could not fetch your organizations.", variant: "destructive" });
+        toast({ title: "Could not load organizations", description: "Could not fetch your organizations.", variant: "destructive" });
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -175,7 +175,7 @@ export function OrgPersonalizationSettings() {
       await refreshSettings();
       toast({ title: providerId === null ? "Provider removed" : "Provider set" });
     } catch {
-      toast({ title: "Failed to set the provider", variant: "destructive" });
+      toast({ title: "Could not set provider", variant: "destructive" });
     }
   };
 

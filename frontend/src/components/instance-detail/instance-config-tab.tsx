@@ -4,6 +4,7 @@ import * as React from "react";
 import { ConfigPanel } from "@/components/used-by/panels/config-panel";
 import { Button } from "@/components/ui/button";
 import type { VMInfo } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 // note: an LXD instance config is mostly `volatile.*`, which the daemon writes and nobody sets.
 // Showing forty of those above the six an operator actually chose is worse than showing none,
@@ -25,8 +26,8 @@ export function InstanceConfigTab({ instance }: { instance: VMInfo }) {
         <div className="flex justify-end">
           <Button type="button" variant="ghost" size="sm" onClick={() => setShowVolatile((v) => !v)}>
             {showVolatile
-              ? `Hide ${volatileCount} volatile key${volatileCount === 1 ? "" : "s"}`
-              : `Show ${volatileCount} volatile key${volatileCount === 1 ? "" : "s"}`}
+              ? `Hide ${plural(volatileCount, "volatile key")}`
+              : `Show ${plural(volatileCount, "volatile key")}`}
           </Button>
         </div>
       )}

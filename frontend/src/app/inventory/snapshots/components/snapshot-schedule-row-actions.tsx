@@ -51,6 +51,7 @@ export function ScheduleRowActions({ schedule }: { schedule: SnapshotSchedule })
   async function fire(
     run: () => Promise<{ message: string }>,
     title: string,
+    failureTitle: string,
   ): Promise<void> {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
@@ -59,7 +60,7 @@ export function ScheduleRowActions({ schedule }: { schedule: SnapshotSchedule })
       toast({ title, description: result.message });
     } catch (error) {
       toast({
-        title: "That did not work",
+        title: failureTitle,
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -77,7 +78,7 @@ export function ScheduleRowActions({ schedule }: { schedule: SnapshotSchedule })
         unavailableReason ??
         (paused ? "Resume this schedule before running it" : undefined),
       onSelect: () =>
-        void fire(() => runNow.mutateAsync(schedule.id), "Snapshot taken"),
+        void fire(() => runNow.mutateAsync(schedule.id), "Snapshot taken", "Could not take snapshot"),
     },
     paused
       ? {
@@ -86,14 +87,14 @@ export function ScheduleRowActions({ schedule }: { schedule: SnapshotSchedule })
           icon: Play,
           unavailableReason,
           onSelect: () =>
-            void fire(() => resume.mutateAsync(schedule.id), "Schedule resumed"),
+            void fire(() => resume.mutateAsync(schedule.id), "Schedule resumed", "Could not resume schedule"),
         }
       : {
           id: "pause",
           label: "Pause",
           icon: Pause,
           unavailableReason,
-          onSelect: () => void fire(() => pause.mutateAsync(schedule.id), "Schedule paused"),
+          onSelect: () => void fire(() => pause.mutateAsync(schedule.id), "Schedule paused", "Could not pause schedule"),
         },
     {
       id: "delete",

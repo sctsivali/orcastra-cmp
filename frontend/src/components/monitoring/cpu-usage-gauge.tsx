@@ -3,6 +3,7 @@
 import { GaugeChart } from "@/components/monitoring/gauge-chart";
 import { formatVcpuAmount } from "@/lib/instance-metrics-view";
 import type { InstanceRateStatus } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 export interface CpuUsageReading {
   status: InstanceRateStatus;
@@ -43,7 +44,7 @@ export function CpuUsageGauge({
       <p className="text-sm text-muted-foreground mt-2 tabular-nums">{caption(reading, idle, ready)}</p>
       {ready && !idle && reading.reportingInstances < reading.runningInstances ? (
         <p className="text-xs text-muted-foreground tabular-nums">
-          From {reading.reportingInstances} of {reading.runningInstances} running instances
+          From {reading.reportingInstances} of {plural(reading.runningInstances, "running instance")}
         </p>
       ) : null}
     </>
@@ -53,7 +54,7 @@ export function CpuUsageGauge({
 function caption(reading: CpuUsageReading, idle: boolean, ready: boolean): string {
   if (idle) return "No running instances";
   if (ready && reading.busyThreads !== null && reading.threads > 0) {
-    return `${formatVcpuAmount(reading.busyThreads)} of ${reading.threads} hardware threads busy`;
+    return `${formatVcpuAmount(reading.busyThreads)} of ${plural(reading.threads, "hardware thread")} busy`;
   }
   if (reading.status === "calculating") return "Waiting for a second sample";
   return "Live usage not reported by the cluster";

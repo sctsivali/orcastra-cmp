@@ -88,7 +88,7 @@ export function NicAddressSection({ instance }: { instance: VMInfo }) {
       setEditing(null);
     } catch (e) {
       toast({
-        title: "Could not change the address",
+        title: "Could not change address",
         description:
           e instanceof Error ? e.message : "The cluster refused the change.",
         variant: "destructive",
@@ -133,7 +133,7 @@ export function NicAddressSection({ instance }: { instance: VMInfo }) {
                       htmlFor={`nic-addr-${nic.device}`}
                       className="text-xs text-muted-foreground"
                     >
-                      IPv4 address
+                      IPv4 Address
                     </Label>
                     <Input
                       id={`nic-addr-${nic.device}`}

@@ -9,7 +9,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime, plural } from "@/lib/utils";
 import { CertificateStatus, type CertificateInfo } from "@/types/api";
 
 import { certificateStatusMeta } from "./certificate-status";
@@ -31,10 +31,10 @@ function supersededSummary(cert: CertificateInfo): { text: string; failed: boole
   const open = openSuperseded(cert);
   const failed = open.filter((entry) => entry.state === "failed").length;
   if (failed) {
-    return { text: `${failed} old trust ${failed === 1 ? "entry" : "entries"} not removed`, failed: true };
+    return { text: `${plural(failed, "old trust entry", "old trust entries")} not removed`, failed: true };
   }
   if (open.length) {
-    return { text: `${open.length} old trust ${open.length === 1 ? "entry" : "entries"} pending removal`, failed: false };
+    return { text: `${plural(open.length, "old trust entry", "old trust entries")} pending removal`, failed: false };
   }
   if ((cert.superseded ?? []).some((entry) => entry.state === "removed")) {
     return { text: "Old trust entry removed", failed: false };

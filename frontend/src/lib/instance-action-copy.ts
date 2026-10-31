@@ -9,6 +9,8 @@
 // note: this module holds strings only. lib/ must not import from components/, per the
 // layering note on EMPTY_VALUE in lib/utils.ts.
 
+export const POWER_ACTION_PAST = { start: "started", stop: "stopped", restart: "restarted" } as const;
+
 export const FORCE_OPTION_LABEL = "Force (power-cycle, don't wait for the guest)";
 
 export const FORCE_ON_HINT =

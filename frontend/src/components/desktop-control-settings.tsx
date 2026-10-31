@@ -201,8 +201,8 @@ export function DesktopControlSettings() {
       });
     } catch (err) {
       toast({
-        title: "Nothing was changed",
-        description: err instanceof Error ? err.message : "The consent could not be saved",
+        title: "Could not update consent",
+        description: err instanceof Error ? err.message : "The consent could not be saved.",
         variant: "destructive",
       });
     } finally {

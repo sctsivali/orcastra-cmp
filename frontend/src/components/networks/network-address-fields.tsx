@@ -43,7 +43,7 @@ export function NetworkAddressFields({ type, options, onChange, errors, supporte
           (version === 4 || (type === "bridge" && options.stateful === "true"));
         return (
           <div key={family} className="space-y-4">
-            <AddressField label={`IPv${version} address`} which={`IPv${version}`} mode={address.mode}
+            <AddressField label={`IPv${version} Address`} which={`IPv${version}`} mode={address.mode}
               onModeChange={(mode) => update(family, { mode })} custom={address.custom}
               onCustomChange={(custom) => update(family, { custom })} error={errors[family] || ""} disabled={disabled} />
             {enabled && (
@@ -53,14 +53,14 @@ export function NetworkAddressFields({ type, options, onChange, errors, supporte
                 {supports(`${family}.dhcp`) && <BooleanOverrideField id={`net-${family}-dhcp`} label={`IPv${version} DHCP`}
                   value={address.dhcp} onChange={(dhcp) => update(family, { dhcp })} disabled={disabled} />}
                 {version === 6 && address.dhcp !== "false" && supports("ipv6.dhcp.stateful") && (
-                  <BooleanOverrideField id="net-ipv6-stateful" label="IPv6 stateful DHCP" value={options.stateful}
+                  <BooleanOverrideField id="net-ipv6-stateful" label="IPv6 Stateful DHCP" value={options.stateful}
                     onChange={(stateful) => onChange({ ...options, stateful })} disabled={disabled} />
                 )}
               </div>
             )}
             {canSetRanges && (
               <div className="grid gap-2">
-                <Label htmlFor={`net-${family}-ranges`}>IPv{version} DHCP ranges</Label>
+                <Label htmlFor={`net-${family}-ranges`}>IPv{version} DHCP Ranges</Label>
                 <Input id={`net-${family}-ranges`} value={address.ranges} disabled={disabled} maxLength={4096}
                   onChange={(event) => update(family, { ranges: event.target.value })}
                   placeholder={version === 4 ? "10.10.10.10-10.10.10.200" : "fd42:1:2:3::10-fd42:1:2:3::100"}

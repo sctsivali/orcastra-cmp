@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { TableEmptyRow } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -69,7 +70,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, plural } from "@/lib/utils";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import type {
   UserGroupEntry,
@@ -393,7 +394,7 @@ function UserGroupsSettingsContent() {
                       />
                       {email.trim() && !isValidEmail(email.trim()) && (
                         <p className="text-xs text-destructive">
-                          Please enter a valid email address (e.g. user@example.com)
+                          Enter a valid email address (for example, user@example.com).
                         </p>
                       )}
                     </div>
@@ -494,13 +495,11 @@ function UserGroupsSettingsContent() {
               <span>Failed to load users: {(usersError as Error).message}</span>
             </div>
           ) : userRows.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Users className="h-10 w-10 mx-auto mb-3 opacity-40" />
-              <p className="text-sm">No users assigned yet</p>
-              <p className="text-xs mt-1">
-                Click &quot;Assign User&quot; to add a user with a role
-              </p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="No users assigned yet"
+              description={'Click "Assign User" to add a user with a role'}
+            />
           ) : (
             <>
             <TableToolbar filters={filters} noun="users" className="mb-4" />
@@ -529,7 +528,7 @@ function UserGroupsSettingsContent() {
                       direction={userSortDirection}
                       onSort={handleUserSort}
                     />
-                    <TableHead className="w-[120px]">Actions</TableHead>
+                    <TableHead className="w-[120px]"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -538,7 +537,7 @@ function UserGroupsSettingsContent() {
                       colSpan={USER_COLUMN_COUNT}
                       icon={Users}
                       title="No user matches the current filters"
-                      description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${userRows.length} users.`}
+                      description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(userRows.length, "user")}.`}
                       action={
                         <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
                           Clear filters

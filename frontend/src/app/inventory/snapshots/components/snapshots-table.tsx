@@ -171,7 +171,7 @@ export function SnapshotsTable({
                 onSort={onSort}
               />
             ) : (
-              <TableHead key="actions" className="w-12">
+              <TableHead key="actions" pinned="end" className="w-12 text-right">
                 <span className="sr-only">{header.label}</span>
               </TableHead>
             ),
@@ -220,7 +220,7 @@ export function SnapshotsTable({
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{createdCell(snapshot.created_at)}</TableCell>
                 <TableCell className="whitespace-nowrap">{expiryCell(snapshot.expires_at)}</TableCell>
-                <TableCell>
+                <TableCell pinned="end" className="text-right">
                   <SnapshotRowActions
                     snapshot={snapshot}
                     billingLinked={snapshot.source_externally_managed ?? false}

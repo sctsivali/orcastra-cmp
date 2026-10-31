@@ -17,6 +17,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { getAPIKeyStatus } from "@/lib/integration-display";
 import { formatKeyDate, openSyncedOrganizations, ownedKeySentence } from "@/lib/key-ownership-display";
 import type { APIKeyInfo } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 /**
  * Which OrcaHub organizations a key owns, on its card.
@@ -40,7 +41,7 @@ export function KeyOwnershipSummary({ apiKey }: { apiKey: APIKeyInfo }) {
       <div className="flex flex-wrap items-center gap-2">
         <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         <span className="font-medium">
-          Owns {count} {count === 1 ? "organization" : "organizations"}
+          Owns {plural(count, "organization")}
         </span>
         {expiring && <Badge variant="caution">Owner Key Expiring</Badge>}
       </div>

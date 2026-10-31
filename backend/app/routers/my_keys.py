@@ -176,7 +176,7 @@ def save_key_to_vault(vault_client, key_id: str, cert_pem: bytes, key_pem: bytes
         logger.info(f"Successfully stored key {key_id} in Vault")
     except Exception as e:
         logger.error(f"Failed to save key to Vault: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save key to secure storage")
+        raise HTTPException(status_code=500, detail="Could not save key to secure storage")
 
 
 def get_key_from_vault(vault_client, key_id: str) -> tuple[bytes, bytes]:
@@ -411,7 +411,7 @@ async def create_key(
         if identity_response.status_code not in [200, 201, 202]:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create identity: HTTP {identity_response.status_code}"
+                detail=f"Could not create identity: HTTP {identity_response.status_code}"
             )
         
         # Extract identity ID from response
@@ -492,7 +492,7 @@ async def create_key(
                 pass
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create group: {group_response.text}"
+                detail=f"Could not create group: {group_response.text}"
             )
         
         logger.info(f"Group created successfully: {group_name}")
@@ -512,7 +512,7 @@ async def create_key(
         try:
             group_get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if group_get_response.status_code != 200:
-                raise Exception(f"Failed to get group: status={group_get_response.status_code}")
+                raise Exception(f"Could not get group: status={group_get_response.status_code}")
             
             group_info = group_get_response.json().get('metadata', {})
             current_identities = group_info.get('identities', {})
@@ -534,7 +534,7 @@ async def create_key(
             # Get current identity info
             identity_response = client.api.auth.identities["tls"][safe_segment(identity_id)].get(timeout=(5, 30))
             if identity_response.status_code != 200:
-                raise Exception(f"Failed to get identity: status={identity_response.status_code}")
+                raise Exception(f"Could not get identity: status={identity_response.status_code}")
             
             identity_info = identity_response.json().get('metadata', {})
             current_groups = identity_info.get('groups', [])
@@ -583,7 +583,7 @@ async def create_key(
                 pass
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to configure group membership: {str(e)}"
+                detail=f"Could not configure group membership: {str(e)}"
             )
         
         # Prepare metadata

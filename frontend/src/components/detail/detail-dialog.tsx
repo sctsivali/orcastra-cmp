@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { type LucideIcon } from "lucide-react";
+import { AlertTriangle, type LucideIcon } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
   DialogBody,
@@ -125,9 +126,10 @@ export function RecordDetailDialog({
         </DialogHeader>
 
         {error ? (
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            {error}
-          </div>
+          <Alert variant="destructive" className="mb-4 shrink-0">
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            <AlertDescription className="break-words">{error}</AlertDescription>
+          </Alert>
         ) : null}
 
         <DialogBody className="pr-2">

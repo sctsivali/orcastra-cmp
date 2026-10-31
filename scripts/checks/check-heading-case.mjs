@@ -12,7 +12,8 @@
  *
  *   Title Case   anything that NAMES a thing: h1-h4, CardTitle, DialogTitle,
  *                AlertDialogTitle, SheetTitle, TabsTrigger, TableHead, DetailSection
- *                title, DetailField label, StatCard title, and a column `label:`.
+ *                title, DetailField, Field and Row label, StatCard title, and a column
+ *                `label:`.
  *   sentence     anything that SAYS something. Empty and error states are sentences even
  *                when they occupy one of the slots above, so they are checked the other
  *                way round: `No Clusters Registered` is as wrong as `Hardware by node`.
@@ -89,7 +90,9 @@ const ELEMENTS = ['h1', 'h2', 'h3', 'h4', 'CardTitle', 'DialogTitle', 'AlertDial
 const elementRe = (name) =>
   new RegExp(`<${name}\\b[^>]*>((?:\\s*<[^>]*/>\\s*)*)\\s*([A-Za-z][^<>{}\\n]{1,80}?)\\s*</${name}>`, 'g');
 
-const PROPS = [['DetailSection', 'title'], ['DetailField', 'label'], ['StatCard', 'title']];
+// Field and Row are the local label-and-value wrappers of a detail panel: network detail, the node
+// panels, the GPU card, release status and connection details. Same slot as DetailField.
+const PROPS = [['DetailSection', 'title'], ['DetailField', 'label'], ['StatCard', 'title'], ['Field', 'label'], ['Row', 'label']];
 // `[^<]` rather than `[^>]`: an attribute value may itself hold a `>`, and network-acls/page.tsx
 // writes `colSpan={nodes.length > 0 ? 7 : 6}` above its title. A `>`-bounded body stopped there
 // and the empty state went unchecked. `<` still bounds it, so the match cannot cross into a

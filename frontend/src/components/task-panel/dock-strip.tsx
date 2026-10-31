@@ -1,5 +1,6 @@
 "use client";
 
+import { plural } from "@/lib/utils";
 import * as React from "react";
 import { AlertTriangle, ArrowUpRight, ChevronDown, ChevronUp } from "lucide-react";
 import { IntentLink } from "@/components/navigation/route-intent";
@@ -116,7 +117,7 @@ export function DockStrip({
               variant="ghost"
               size="icon"
               className="h-7 w-7 shrink-0 text-status-pending"
-              aria-label={`Live task updates interrupted on ${disconnected.length} ${disconnected.length === 1 ? "cluster" : "clusters"}`}
+              aria-label={`Live task updates interrupted on ${plural(disconnected.length, "cluster")}`}
               onClick={() => onExpandTo("queue")}
             >
               <AlertTriangle className="h-4 w-4" aria-hidden="true" />
@@ -124,8 +125,8 @@ export function DockStrip({
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
             {showOperator
-              ? `Hypervisor sources are unavailable on ${disconnected.join(", ")}.`
-              : `${disconnected.length} ${disconnected.length === 1 ? "hypervisor source is" : "hypervisor sources are"} unavailable in your scope.`}
+              ? `Task collection is interrupted on ${disconnected.join(", ")}.`
+              : `Task collection is interrupted on ${plural(disconnected.length, "cluster")}.`}
             {" "}Tasks and logs may be incomplete or stale until collection recovers.
           </TooltipContent>
         </Tooltip>

@@ -111,7 +111,7 @@ async def send_and_classify(
             await wait_operation(response)
         except LXDAPIException as exc:
             if definitive_lxd_refusal(exc, "waiting"):
-                raise LXDOperationError(f"Failed to delete project: {exc}") from exc
+                raise LXDOperationError(f"Could not delete project: {exc}") from exc
             raise LXDOperationUnknownError("delete", name) from exc
         except (BlockingTimeout, requests.exceptions.RequestException) as exc:
             raise LXDOperationUnknownError("delete", name) from exc

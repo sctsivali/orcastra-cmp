@@ -15,6 +15,7 @@
 
 import type { GPUCardInfo } from "@/types/api";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
+import { plural } from "@/lib/utils";
 
 export type GpuClass = "compute" | "integrated" | "display" | "unknown";
 
@@ -57,7 +58,7 @@ export function gpuCardLabel(card: GPUCardInfo): string {
 /** The line under the name: what physically identifies this card. */
 export function gpuCardQualifier(card: GPUCardInfo): string {
   const parts = [card.vendor, card.driver, card.pci_address || card.drm?.card_name].filter(Boolean);
-  return parts.length > 0 ? parts.join(" • ") : EMPTY_VALUE;
+  return parts.length > 0 ? parts.join(" · ") : EMPTY_VALUE;
 }
 
 /**
@@ -126,25 +127,23 @@ export function summarizeGpus(src: GpuSummarySource | null | undefined): GpuSumm
   };
 }
 
-const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
-
 /** "0 / 1 compute GPUs allocated" */
 export function gpuAllocationCaption(s: GpuSummary): string {
-  return `${s.used} / ${s.computeTotal} compute ${plural(s.computeTotal, "GPU", "GPUs")} allocated`;
+  return `${s.used} / ${plural(s.computeTotal, "compute GPU")} allocated`;
 }
 
 /** "2 cards detected", or null when the card count says nothing the GPU count did not. */
 export function gpuCardsCaption(s: GpuSummary): string | null {
   if (s.extraCards <= 0) return null;
-  return `${s.cardsTotal} ${plural(s.cardsTotal, "card", "cards")} detected`;
+  return `${plural(s.cardsTotal, "card")} detected`;
 }
 
 /** "0 / 1 GPUs", for a dense row that carries the cards count on the line below. */
 export function gpuDenseRatio(s: GpuSummary): string {
-  return `${s.used} / ${s.computeTotal} ${plural(s.computeTotal, "GPU", "GPUs")}`;
+  return `${s.used} / ${plural(s.computeTotal, "GPU")}`;
 }
 
 /** "1 compute GPU" */
 export function gpuComputeCaption(s: GpuSummary): string {
-  return `${s.computeTotal} compute ${plural(s.computeTotal, "GPU", "GPUs")}`;
+  return plural(s.computeTotal, "compute GPU");
 }

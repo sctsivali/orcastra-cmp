@@ -100,7 +100,7 @@ class VaultStorageMixin:
             return True
         except VaultClientError as e:
             logger.error(f"Failed to save cluster metadata: {e}")
-            raise LXDCertManagerError(f"Failed to save metadata: {str(e)}")
+            raise LXDCertManagerError(f"Could not save metadata: {str(e)}")
     
     def save_cluster_secrets(
         self,
@@ -121,7 +121,7 @@ class VaultStorageMixin:
             return True
         except VaultClientError as e:
             logger.error(f"Failed to save cluster secrets: {e}")
-            raise LXDCertManagerError(f"Failed to save secrets: {str(e)}")
+            raise LXDCertManagerError(f"Could not save secrets: {str(e)}")
     
     def generate_and_store_certificate(
         self,
@@ -251,7 +251,7 @@ class VaultStorageMixin:
                     )
             else:
                 logger.error(f"Failed to get cluster info for {cluster_id}: {e}")
-            raise LXDCertManagerError(f"Failed to retrieve cluster info: {str(e)}")
+            raise LXDCertManagerError(f"Could not retrieve cluster info: {str(e)}")
     
     def read_registry(self, use_cache: bool = True, *, on_loop: Optional[bool] = None) -> "RegistryRead":
         """The unfiltered cluster registry, or the last copy of it that Vault answered with.

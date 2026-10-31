@@ -119,7 +119,7 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
         {(gpu.hasCompute || gpu.hasCards) && (
           <p className="text-xs text-muted-foreground text-right">
             {gpu.hasCompute && `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated`}
-            {gpu.hasCompute && gpuCardsCaption(gpu) ? " • " : ""}
+            {gpu.hasCompute && gpuCardsCaption(gpu) ? " · " : ""}
             {gpuCardsCaption(gpu)}
           </p>
         )}
@@ -185,12 +185,10 @@ export const NodeCard = memo(function NodeCard({ node, displayName }: NodeCardPr
           )}
         </div>
         <CardDescription>
-          {node.node_type ? `${formatHypervisorType(node.node_type)} • ` : ""}
+          {node.node_type ? `${formatHypervisorType(node.node_type)} · ` : ""}
           {node.is_online && node.collection_timed_out
             ? "instances not counted in this collection"
-            : node.instance_count === 1
-              ? "1 instance"
-              : `${node.instance_count} instances`}
+            : plural(node.instance_count, "instance")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

@@ -6,7 +6,7 @@ import { ShieldAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import type { CapabilityOption } from "@/types";
 
 interface ApiKeyCapabilitySelectorProps {
@@ -107,7 +107,7 @@ export function ApiKeyCapabilitySelector({
         </Alert>
       )}
       <p className="text-xs text-muted-foreground">
-        Selected: {selected.length} of {safeList.length} capability(s)
+        Selected: {selected.length} of {plural(safeList.length, "capability", "capabilities")}
       </p>
     </div>
   );

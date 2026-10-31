@@ -16,7 +16,7 @@ import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatDateTime, formatLabel } from "@/lib/utils";
+import { formatDateTime, formatLabel, plural } from "@/lib/utils";
 import type { MigrationPlan } from "@/types/migrations";
 import { endpointLabel, endpointPrimary } from "./migration-format";
 
@@ -68,7 +68,7 @@ function draftStatusLabel(plan: MigrationPlan, expired: boolean): string {
   if (plan.status === "preflighting") return "Preflighting";
   if (plan.status === "blocked" || plan.blockers?.length) {
     const blockers = plan.blockers?.length ?? 0;
-    return blockers ? `${blockers} Blocker${blockers === 1 ? "" : "s"}` : "Blocked";
+    return blockers ? plural(blockers, "Blocker") : "Blocked";
   }
   if (plan.status === "ready") return "Ready";
   return "Draft";

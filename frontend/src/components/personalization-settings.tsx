@@ -117,7 +117,7 @@ function ImageUploader({
     }
 
     if (!file.type.startsWith("image/")) {
-      setError("Please upload an image file");
+      setError("Upload an image file.");
       return;
     }
 
@@ -132,7 +132,7 @@ function ImageUploader({
   const handleUrlFetch = async () => {
     const imageUrl = urlValue.trim();
     if (!imageUrl) {
-      setError("Please enter a valid URL");
+      setError("Enter a valid URL.");
       return;
     }
     if (imageUrl.length > MAX_IMAGE_URL_LENGTH) {
@@ -329,7 +329,7 @@ function ImageUploader({
                 Drag & drop or click to upload
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Maximum {maxSizeLabel} • {formats}
+                Maximum {maxSizeLabel} · {formats}
               </p>
             </div>
           </div>
@@ -471,7 +471,7 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
             <div className="border rounded-lg p-4 bg-card flex-1">
               <p className="text-xs text-muted-foreground mb-2">Footer</p>
               <p className="text-sm text-muted-foreground">
-                {settings.branding.appName} • {settings.branding.footerText.replace("{YEAR}", new Date().getFullYear().toString())}
+                {settings.branding.appName} · {settings.branding.footerText.replace("{YEAR}", new Date().getFullYear().toString())}
               </p>
             </div>
           </div>

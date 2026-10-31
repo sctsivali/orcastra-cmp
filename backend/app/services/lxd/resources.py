@@ -161,7 +161,7 @@ class ResourceManager:
             )
         except Exception as e:
             logger.warning(f"Error listing GPUs for {node_name}: {e}")
-            raise LXDOperationError(f"Failed to list GPUs: {str(e)}")
+            raise LXDOperationError(f"Could not list GPUs: {str(e)}")
 
     def get_node_resources(
         self,
@@ -284,7 +284,7 @@ class ResourceManager:
             # whatever get_client returned, so a breaker-tripped cluster arrives here as a
             # None dereference, which is expected operational noise rather than a fault.
             logger.warning(f"Error getting resources for {node_name}: {e}")
-            raise LXDOperationError(f"Failed to get cluster resources: {str(e)}")
+            raise LXDOperationError(f"Could not get cluster resources: {str(e)}")
     
     def check_node_status(
         self,

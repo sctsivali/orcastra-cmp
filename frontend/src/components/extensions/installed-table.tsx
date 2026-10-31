@@ -25,7 +25,7 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { INSTALL_STATUS } from "@/lib/extension-display";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, plural } from "@/lib/utils";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { ExtensionInstall } from "@/types/api";
 import { NodeLink } from "@/components/ui/node-link";
@@ -190,7 +190,9 @@ function InstalledTableContent({
     <div className="space-y-4">
       <TableToolbar filters={filters} noun="installations" />
 
-      <Table>
+      {/* note: overflow-y-hidden because any containerClassName turns on vertical scroll, and
+          this table grows with its rows. The ground is the page, not a card. */}
+      <Table containerClassName="overflow-y-hidden [--pinned-ground:hsl(var(--background))]">
         <TableHeader>
           <TableRow>
             <SortableTableHead
@@ -223,7 +225,7 @@ function InstalledTableContent({
             />
             <TableHead>Clusters</TableHead>
             {/* Named for a screen reader rather than labelled, so it does not read as data. */}
-            <TableHead className="w-12 text-right">
+            <TableHead pinned="end" className="w-12 text-right">
               <span className="sr-only">Actions</span>
             </TableHead>
           </TableRow>
@@ -234,7 +236,7 @@ function InstalledTableContent({
               colSpan={COLUMN_COUNT}
               icon={Puzzle}
               title="No installation matches the current filters"
-              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active`}
+              description={`${plural(filters.activeFilterCount, "filter")} active`}
             />
           ) : (
             paginated.map((row) => (
@@ -275,7 +277,7 @@ function InstalledTableContent({
                     renderInline={(cluster) => <NodeLink clusterId={cluster} />}
                   />
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell pinned="end" className="text-right">
                   <RowActions
                     triggerLabel={`Actions for ${row.extension_name}`}
                     actions={actionsFor(row)}

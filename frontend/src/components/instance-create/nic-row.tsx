@@ -55,7 +55,7 @@ export function NicRow({
       </div>
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground" htmlFor={`nic-name-${nic.id}`}>
-          Interface name
+          Interface Name
         </Label>
         <Input
           id={`nic-name-${nic.id}`}
@@ -81,7 +81,7 @@ export function NicRow({
         {nic.ipv4Address !== undefined && (
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground" htmlFor={`nic-ipv4-${nic.id}`}>
-              IPv4 address
+              IPv4 Address
             </Label>
             <Input
               id={`nic-ipv4-${nic.id}`}

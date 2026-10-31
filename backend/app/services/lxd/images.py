@@ -166,7 +166,7 @@ class ImageManager:
             raise
         except Exception as e:
             logger.error(f"Error reading image {fingerprint} from {host}: {e}")
-            raise LXDOperationError(f"Failed to read image: {str(e)}")
+            raise LXDOperationError(f"Could not read image: {str(e)}")
 
     def delete_image(self, host: str, fingerprint: str, project: Optional[str] = None) -> bool:
         """Delete an image from the store `project` reads. False when it was already gone.
@@ -212,4 +212,4 @@ class ImageManager:
             raise
         except Exception as e:
             logger.error(f"Error listing images from {host}: {e}")
-            raise LXDOperationError(f"Failed to list images: {str(e)}")
+            raise LXDOperationError(f"Could not list images: {str(e)}")

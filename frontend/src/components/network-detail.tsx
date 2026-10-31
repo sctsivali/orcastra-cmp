@@ -7,6 +7,7 @@ import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { IntentLink as Link } from "@/components/navigation/route-intent";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,9 +32,9 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { NetworkInfo } from "@/types/api";
-import { formatBytes, EMPTY_VALUE } from "@/lib/utils";
+import { formatBytes, EMPTY_VALUE, formatLabel } from "@/lib/utils";
 import { networkStatusDisplay } from "@/lib/resource-status";
-import { Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
+import { AlertTriangle, Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
 
 interface NetworkDetailProps {
   name: string;
@@ -98,9 +99,12 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
         <Link href="/inventory/networks" className="text-sm text-primary hover:underline">
           &larr; Back to Networks
         </Link>
-        <div className="p-4 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-          Failed to load network &quot;{name}&quot; on {host}.
-        </div>
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" aria-hidden />
+          <AlertDescription>
+            Failed to load network &quot;{name}&quot; on {host}.
+          </AlertDescription>
+        </Alert>
       </div>
     );
   }
@@ -142,7 +146,7 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
       navigate("/inventory/networks");
     } catch (e) {
       toast({
-        title: "Failed to delete network",
+        title: "Could not delete network",
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -287,12 +291,12 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
         </CardHeader>
         <CardContent className="py-0">
           <Field label="Type">
-            <span className="capitalize">{network.type}</span>
+            {formatLabel(network.type)}
           </Field>
           <Field label="Description">{network.description || EMPTY_VALUE}</Field>
           <Field label="ACLs">{config["security.acls"] || EMPTY_VALUE}</Field>
-          <Field label="IPv4 address">{config["ipv4.address"] || EMPTY_VALUE}</Field>
-          <Field label="IPv6 address">{config["ipv6.address"] || EMPTY_VALUE}</Field>
+          <Field label="IPv4 Address">{config["ipv4.address"] || EMPTY_VALUE}</Field>
+          <Field label="IPv6 Address">{config["ipv6.address"] || EMPTY_VALUE}</Field>
           <Field label="RX">
             {rx != null
               ? `${rx} (${counters.packets_received ?? 0} packets)`
@@ -307,7 +311,7 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
             {network.status ? networkStatusDisplay(network.status).label : EMPTY_VALUE}
           </Field>
           <Field label="Managed">{network.managed ? "Yes" : "No"}</Field>
-          <Field label="Used by profiles">
+          <Field label="Used by Profiles">
             {profiles.length === 0 ? (
               "-"
             ) : (

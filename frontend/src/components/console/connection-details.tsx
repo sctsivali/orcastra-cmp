@@ -61,14 +61,14 @@ export function ConnectionDetails({ status, stats, mouseMode, agentConnected, re
         <p className="mb-1 font-medium">Connection</p>
         <dl className="divide-y">
           <Row
-            label="Round trip"
+            label="Round Trip"
             value={rtt !== null ? `${rtt}ms (${verdict})` : "Move the pointer to measure"}
           />
           <Row label="Frames" value={`${stats?.fps ?? 0} per second`} />
           <Row label="Received" value={formatNetworkRate(stats?.bytesPerSecond ?? 0)} />
           <Row label="Pointer" value={mouseMode === "client" ? "Absolute" : "Relative (captured on click)"} />
-          <Row label="Guest agent" value={agentConnected ? "Running" : "Not running"} />
-          {resolution && <Row label="Guest resolution" value={`${resolution.width} × ${resolution.height}`} />}
+          <Row label="Guest Agent" value={agentConnected ? "Running" : "Not running"} />
+          {resolution && <Row label="Guest Resolution" value={`${resolution.width} × ${resolution.height}`} />}
           {scale !== null && <Row label="Shown at" value={`${Math.round(scale * 100)}%`} />}
         </dl>
         {!agentConnected && (

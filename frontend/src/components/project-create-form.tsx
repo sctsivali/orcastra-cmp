@@ -77,8 +77,8 @@ export function ProjectCreateForm() {
   React.useEffect(() => {
     if (error) {
       toast({
-        title: "Failed to load clusters",
-        description: "Could not fetch available clusters. Please refresh the page.",
+        title: "Could not load clusters",
+        description: "Could not fetch available clusters. Refresh the page.",
         variant: "destructive",
       });
     }
@@ -123,8 +123,8 @@ export function ProjectCreateForm() {
     if (cpuNum > nodeResources.cpu_available) {
       setValue("maxCpu", nodeResources.cpu_available.toString());
       toast({
-        title: "Value exceeded",
-        description: `Max vCPU limited to ${nodeResources.cpu_available} available hardware threads`,
+        title: "vCPU limit exceeded",
+        description: `Max vCPU limited to ${nodeResources.cpu_available} available hardware threads.`,
         variant: "destructive",
       });
     }
@@ -141,8 +141,8 @@ export function ProjectCreateForm() {
     if (ramNum > maxAllowed) {
       setValue("maxRamValue", maxAllowed.toString());
       toast({
-        title: "Value exceeded",
-        description: `Max memory limited to ${maxAllowed} ${maxRamUnitInput} available`,
+        title: "Memory limit exceeded",
+        description: `Max memory limited to ${maxAllowed} ${maxRamUnitInput} available.`,
         variant: "destructive",
       });
     }
@@ -159,8 +159,8 @@ export function ProjectCreateForm() {
     if (storageNum > maxAllowed) {
       setValue("maxStorageValue", maxAllowed.toString());
       toast({
-        title: "Value exceeded",
-        description: `Max Storage limited to ${maxAllowed} ${maxStorageUnitInput} available`,
+        title: "Storage limit exceeded",
+        description: `Max Storage limited to ${maxAllowed} ${maxStorageUnitInput} available.`,
         variant: "destructive",
       });
     }
@@ -228,7 +228,7 @@ export function ProjectCreateForm() {
       });
 
       toast({
-        title: "Project Created",
+        title: "Project created",
         description: `Project '${data.name}' has been created successfully on ${data.host}.`,
         variant: "success",
       });
@@ -242,9 +242,9 @@ export function ProjectCreateForm() {
       const isReadOnlyError = errorMessage.toLowerCase().includes("read-only mode") || errorMessage.includes("read-only");
       
       toast({
-        title: isReadOnlyError ? "Read-Only Mode Active" : "Failed to create project",
+        title: isReadOnlyError ? "Read-only mode active" : "Could not create project",
         description: isReadOnlyError 
-          ? "Cannot create projects while the system is in read-only mode. Please contact your administrator."
+          ? "Cannot create projects while the system is in read-only mode. Contact your administrator."
           : errorMessage,
         variant: "destructive",
       });
@@ -267,7 +267,7 @@ export function ProjectCreateForm() {
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-3xl font-bold">Create New Project</h1>
+          <h1 className="text-3xl font-bold">Create Project</h1>
           <p className="text-muted-foreground mt-2">
             Create a new project to organize your instances
           </p>
@@ -375,7 +375,7 @@ export function ProjectCreateForm() {
                     type="number"
                     min="1"
                     max={nodeResources?.cpu_available}
-                    placeholder="e.g., 2"
+                    placeholder="2"
                     onKeyDown={blockNonNumeric}
                     {...register("maxCpu")}
                     className={errors.maxCpu ? "border-destructive" : ""}
@@ -397,7 +397,7 @@ export function ProjectCreateForm() {
                       type="number"
                       min="1"
                       max={maxRamInBytes ? Math.floor(maxRamInBytes / FORM_UNIT_BYTES[watch("maxRamUnit") as FormSizeUnit]) : undefined}
-                      placeholder="e.g., 1"
+                      placeholder="1"
                       className={errors.maxRamValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
                       {...register("maxRamValue")}
@@ -433,7 +433,7 @@ export function ProjectCreateForm() {
                       type="number"
                       min="1"
                       max={maxStorageInBytes ? Math.floor(maxStorageInBytes / FORM_UNIT_BYTES[watch("maxStorageUnit") as FormSizeUnit]) : undefined}
-                      placeholder="e.g., 10"
+                      placeholder="10"
                       className={errors.maxStorageValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
                       {...register("maxStorageValue")}

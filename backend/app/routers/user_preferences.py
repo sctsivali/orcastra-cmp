@@ -281,7 +281,7 @@ async def update_user_preferences(
     except Exception as e:
         await db.rollback()
         logger.error(f"Error saving user preferences for {x_user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save preferences")
+        raise HTTPException(status_code=500, detail="Could not save preferences")
 
 
 @router.delete(
@@ -327,7 +327,7 @@ async def reset_user_preferences(
     except Exception as e:
         await db.rollback()
         logger.error(f"Error resetting user preferences for {x_user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to reset preferences")
+        raise HTTPException(status_code=500, detail="Could not reset preferences")
 
 
 # ============================================

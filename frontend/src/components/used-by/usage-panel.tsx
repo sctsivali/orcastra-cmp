@@ -19,7 +19,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { orderByProject, referencesFromUsedBy, type LxdReference } from "@/lib/used-by";
 import { countsByKind, referenceKindLabel } from "@/lib/used-by-kinds";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UsageRow } from "./usage-row";
 import type { UsageView } from "./types";
@@ -150,7 +150,7 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
           <TableCell colSpan={4} className="font-medium">
             {reference.project}
             <TableSubText>
-              {`${total} reference${total === 1 ? "" : "s"}${continued ? ", continued" : ""}`}
+              {`${plural(total, "reference")}${continued ? ", continued" : ""}`}
             </TableSubText>
           </TableCell>
         </TableRow>,
@@ -210,7 +210,7 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
             <TableEmptyRow
               colSpan={4}
               title="No references match the current filters"
-              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active`}
+              description={`${plural(filters.activeFilterCount, "filter")} active`}
             />
           ) : (
             rows
@@ -243,10 +243,10 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
  */
 function summarise(total: number, kinds: readonly { label: string; count: number }[]): string {
   if (total === 0) return "No references";
-  const shown = kinds.slice(0, 3).map((k) => `${k.count} ${k.label.toLowerCase()}${k.count === 1 ? "" : "s"}`);
+  const shown = kinds.slice(0, 3).map((k) => plural(k.count, k.label.toLowerCase()));
   const remainder = kinds.slice(3).reduce((sum, k) => sum + k.count, 0);
   if (remainder > 0) shown.push(`${remainder} more`);
-  return `${total} reference${total === 1 ? "" : "s"}. ${shown.join(", ")}.`;
+  return `${plural(total, "reference")}. ${shown.join(", ")}.`;
 }
 
 // important: its own boundary, not the host page's. useTableFilters reads the query string

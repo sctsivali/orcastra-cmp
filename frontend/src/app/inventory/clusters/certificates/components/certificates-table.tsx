@@ -7,7 +7,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TableEmptyRow } from "@/components/ui/table-text";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, plural } from "@/lib/utils";
 import type { CertificateInfo } from "@/types/api";
 
 import { certToTime } from "./certificate-helpers";
@@ -117,7 +117,7 @@ export function CertificatesTable({
           {head("Issued", "issued", "min-w-[120px] hidden lg:table-cell")}
           {head("Expires", "expires", "min-w-[120px]")}
           {head("Days Left", "days", "min-w-[100px]")}
-          <TableHead className="text-right min-w-[100px]">Actions</TableHead>
+          <TableHead className="text-right min-w-[100px]"><span className="sr-only">Actions</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -128,7 +128,7 @@ export function CertificatesTable({
             colSpan={COLUMNS}
             icon={ShieldCheck}
             title="No certificate matches the current filters"
-            description={`${activeFilterCount} filter${activeFilterCount === 1 ? "" : "s"} active on ${total} certificates.`}
+            description={`${plural(activeFilterCount, "filter")} active on ${plural(total, "certificate")}.`}
             action={
               <Button variant="outline" size="sm" onClick={onClearFilters}>
                 Clear filters

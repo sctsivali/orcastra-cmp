@@ -109,7 +109,7 @@ export function DiskRow({
         <Input
           value={disk.source}
           onChange={(e) => onUpdate({ source: e.target.value })}
-          placeholder="Host path (e.g. /srv/data)"
+          placeholder="Host path (for example, /srv/data)"
           aria-label="Host path"
         />
       )}
@@ -118,7 +118,7 @@ export function DiskRow({
         <Input
           value={disk.path}
           onChange={(e) => onUpdate({ path: e.target.value })}
-          placeholder="Mount path (e.g. /data)"
+          placeholder="Mount path (for example, /data)"
           aria-label="Mount path"
         />
       )}

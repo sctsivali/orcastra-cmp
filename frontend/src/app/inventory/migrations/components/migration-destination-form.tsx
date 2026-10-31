@@ -119,7 +119,7 @@ export function MigrationDestinationForm({
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="migration-target-cluster">Destination cluster</Label>
+          <Label htmlFor="migration-target-cluster">Destination Cluster</Label>
           <SearchableSelect
             id="migration-target-cluster"
             value={draft.targetCluster}
@@ -142,7 +142,7 @@ export function MigrationDestinationForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="migration-target-project">Destination project</Label>
+          <Label htmlFor="migration-target-project">Destination Project</Label>
           <SearchableSelect
             id="migration-target-project"
             value={creating ? NEW_PROJECT : draft.targetProject}
@@ -160,7 +160,7 @@ export function MigrationDestinationForm({
           {creating && (
             <div className="space-y-1">
               <Label htmlFor="migration-target-project-new" className="text-xs">
-                New project name
+                New Project Name
               </Label>
               <Input
                 id="migration-target-project-new"
@@ -178,7 +178,7 @@ export function MigrationDestinationForm({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="migration-target-resource">Destination instance name</Label>
+        <Label htmlFor="migration-target-resource">Destination Instance Name</Label>
         <Input
           id="migration-target-resource"
           value={draft.targetResourceName}
@@ -194,7 +194,7 @@ export function MigrationDestinationForm({
       <div className="grid gap-4 sm:grid-cols-2">
         {showMembers && (
           <div className="space-y-2">
-            <Label htmlFor="migration-target-member">Destination member (optional)</Label>
+            <Label htmlFor="migration-target-member">Destination Member (Optional)</Label>
             <SearchableSelect
               id="migration-target-member"
               value={draft.targetMember || AUTO_MEMBER}
@@ -213,7 +213,7 @@ export function MigrationDestinationForm({
           </div>
         )}
         <div className="space-y-2">
-          <Label htmlFor="migration-target-pool">Destination storage pool (optional)</Label>
+          <Label htmlFor="migration-target-pool">Destination Storage Pool (Optional)</Label>
           <SearchableSelect
             id="migration-target-pool"
             value={draft.targetStoragePool || DEFAULT_POOL}

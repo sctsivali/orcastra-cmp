@@ -977,7 +977,7 @@ async def delete_project(
         raise
     except Exception as e:
         logger.error(f"Error deleting project {project_name} on {host}: {type(e).__name__}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to delete project") from e
+        raise HTTPException(status_code=500, detail="Could not delete project") from e
 
     if outcome.already_gone and not outcome.settled_pending:
         _invalidate_project_caches()

@@ -37,7 +37,7 @@ const React = { createElement: (_type, props, ...children) => { lines.push(child
 const module = { exports: {} };
 new Function("require", "module", "exports", "React", output)((name) => {
   if (name === "lucide-react") return { Clock: "Clock", Lock: "Lock" };
-  if (name === "@/lib/utils") return { cn: (...c) => c.filter(Boolean).join(" "), formatDate: (v) => `<${v}>` };
+  if (name === "@/lib/utils") return { cn: (...c) => c.filter(Boolean).join(" "), formatDateTime: (v) => `<${v}>`, plural: (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}` };
   throw new Error(`Unexpected module dependency: ${name}`);
 }, module, module.exports, React);
 const { TenantTermNotice } = module.exports;

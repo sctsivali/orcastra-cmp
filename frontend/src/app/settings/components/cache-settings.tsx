@@ -53,7 +53,7 @@ export function CacheSettings({ isAdmin }: { isAdmin: boolean }) {
       if (!isActorMutationFenceCurrent(fence)) return;
       setResult({
         kind: "error",
-        message: error instanceof Error ? error.message : "Cache could not be cleared. Please retry.",
+        message: error instanceof Error ? error.message : "Cache could not be cleared. Try again.",
       });
     } finally {
       if (isActorMutationFenceCurrent(fence)) {

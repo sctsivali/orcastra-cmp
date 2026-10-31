@@ -314,7 +314,7 @@ async def delete_warning(
                 "message": f"Warning {warning_uuid} deleted successfully"
             }
         else:
-            raise HTTPException(status_code=500, detail="Failed to delete warning")
+            raise HTTPException(status_code=500, detail="Could not delete warning")
     except HTTPException:
         raise
     except Exception as e:

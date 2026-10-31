@@ -93,11 +93,11 @@ export function ConsoleActions({
   const send = React.useCallback(async (combo: KeyCombo) => {
     const sent = await sendCombo(getConnection(), combo);
     if (!sent) {
-      toast({ title: "Keys not sent", description: "The console is not connected yet.", variant: "destructive" });
+      toast({ title: "Could not send keys", description: "The console is not connected yet.", variant: "destructive" });
       return;
     }
     recordConsoleAction(instanceName, { host, project, action: "keys.send", combo: combo.id });
-    toast({ title: `Sent ${combo.label}` });
+    toast({ title: `${combo.label} sent` });
     onAfterSend?.();
   }, [getConnection, instanceName, host, project, onAfterSend]);
 
@@ -113,7 +113,7 @@ export function ConsoleActions({
     const canvas = getCanvas();
     const blob = canvas ? await canvasBlob(canvas) : null;
     if (!blob) {
-      toast({ title: "No screenshot", description: "There is no console picture to capture yet.", variant: "destructive" });
+      toast({ title: "Could not capture screenshot", description: "There is no console picture to capture yet.", variant: "destructive" });
       return;
     }
     if (mode === "copy") {
@@ -121,7 +121,7 @@ export function ConsoleActions({
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         toast({ title: "Screenshot copied" });
       } catch {
-        toast({ title: "Could not copy", description: "This browser refused the clipboard. Save it instead.", variant: "destructive" });
+        toast({ title: "Could not copy screenshot", description: "This browser refused the clipboard. Save it instead.", variant: "destructive" });
         return;
       }
     } else {

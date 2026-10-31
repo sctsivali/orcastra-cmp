@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { useFilesUnavailableReason } from "@/hooks/use-instance-files";
 import { toast } from "@/hooks/use-toast";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import { consoleAPI, type ActiveConsoleSession } from "@/lib/console-api";
 import type { ConsoleCapabilities, ConsoleConnectionStatus, ConsoleTab, InstanceStatus } from "@/lib/console-store";
 import type { SpiceStats, SpiceStatus } from "@/lib/spice/session";
@@ -229,12 +229,12 @@ export function ConsoleWorkspace({
       const handle = graphicsRef.current;
       if (!handle) return;
       if (handle.setGuestClipboard(text)) {
-        toast({ title: "On the guest's clipboard", description: "Paste it in the guest with Ctrl+V." });
+        toast({ title: "Text copied to guest clipboard", description: "Paste it in the guest with Ctrl+V." });
       } else {
         const skipped = await handle.typeText(text);
         toast({
-          title: "Typed into the guest",
-          description: skipped ? `${skipped} character(s) have no key on a US layout and were skipped.` : `${text.length} character(s).`,
+          title: "Text typed into guest",
+          description: skipped ? `${plural(skipped, "character has", "characters have")} no key on a US layout and ${skipped === 1 ? "was" : "were"} skipped.` : `${plural(text.length, "character")}.`,
         });
       }
       handle.focus();

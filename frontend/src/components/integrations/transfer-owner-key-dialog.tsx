@@ -83,7 +83,7 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
     onSuccess: (answer) => {
       void reconcileMutationImpact(queryClient, "integration.write").catch(() => undefined);
       toast({
-        title: answer.changed ? "Owner Key Transferred" : "Owner Key Unchanged",
+        title: answer.changed ? "Owner key transferred" : "Owner key unchanged",
         description: answer.changed
           ? "OrcaHub confirms ownership on that connection's next sync, within about 5 minutes on its default schedule."
           : "That key already owns this organization.",
@@ -91,7 +91,7 @@ export function TransferOwnerKeyDialog({ organization, keys, onOpenChange }: Tra
       onOpenChange(false);
     },
     onError: (error: Error) => {
-      toast({ title: "Failed to transfer the owner key", description: error.message, variant: "destructive" });
+      toast({ title: "Could not transfer owner key", description: error.message, variant: "destructive" });
     },
   });
 

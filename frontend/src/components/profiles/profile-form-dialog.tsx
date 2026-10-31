@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitError } from "@/components/ui/dialog-submit-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
@@ -366,15 +367,18 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
           )}
 
           {readFailed ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-              <span>
-                Could not read this profile:{" "}
-                {editRead.error instanceof Error ? editRead.error.message : "the cluster did not answer"}
-              </span>
-              <Button type="button" variant="outline" size="sm" onClick={reload}>
-                Retry
-              </Button>
-            </div>
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Could not read this profile:{" "}
+                  {editRead.error instanceof Error ? editRead.error.message : "the cluster did not answer"}
+                </span>
+                <Button type="button" variant="outline" size="sm" onClick={reload}>
+                  Retry
+                </Button>
+              </AlertDescription>
+            </Alert>
           ) : reading ? (
             <div className="space-y-3" aria-busy="true" aria-label="Reading the profile">
               <Skeleton className="h-16 w-full" />
@@ -437,13 +441,9 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
             </section>
           </>
         )}
-
-        {error && (
-          <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-            {error}
-          </div>
-        )}
       </DialogBody>
+
+      <DialogSubmitError message={error} />
 
       <DialogFooter className="shrink-0 pt-4 sm:items-center">
         {!canSubmit && !submitting && (
@@ -454,7 +454,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
         </Button>
         <Button onClick={submit} disabled={!canSubmit}>
           {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-          {isEdit ? "Save changes" : "Create"}
+          {isEdit ? "Save Changes" : "Create"}
         </Button>
       </DialogFooter>
     </>

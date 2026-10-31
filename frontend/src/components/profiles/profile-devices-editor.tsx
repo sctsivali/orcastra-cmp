@@ -46,7 +46,7 @@ export function ProfileDevicesEditor({ drafts, onChange, errors, disabled }: Pro
                 <DeviceIcon type={draft.type} className="mt-7" />
                 <div className="space-y-1">
                   <Label htmlFor={`dev-${draft.id}-name`} className="text-xs text-muted-foreground">
-                    Device name
+                    Device Name
                   </Label>
                   <Input
                     id={`dev-${draft.id}-name`}

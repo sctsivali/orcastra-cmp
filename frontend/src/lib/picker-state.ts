@@ -1,4 +1,5 @@
 import { describeReadError } from "@/lib/read-error";
+import { singular } from "@/lib/utils";
 
 export type PickerNoticeKind = "loading" | "error" | "rate-limited" | "unreachable";
 
@@ -74,10 +75,4 @@ export function derivePickerState(input: PickerStateInput): PickerState {
     return { disabled: true, placeholder: emptyText, emptyText };
   }
   return { disabled: false, placeholder: input.selectText ?? `Select ${singular(subjectLower)}`, emptyText };
-}
-
-function singular(plural: string): string {
-  if (plural.endsWith("ies")) return `${plural.slice(0, -3)}y`;
-  if (plural.endsWith("s")) return plural.slice(0, -1);
-  return plural;
 }

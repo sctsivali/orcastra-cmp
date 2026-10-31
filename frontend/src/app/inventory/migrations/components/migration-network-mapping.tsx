@@ -1,5 +1,6 @@
 "use client";
 
+import { formatLabel } from "@/lib/utils";
 import { Network } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -50,7 +51,7 @@ export function MigrationNetworkMapping({
     ...managed.map((network) => ({
       value: network.name,
       label: network.name,
-      sublabel: `${network.type} · ${network.status}`,
+      sublabel: `${formatLabel(network.type)} · ${formatLabel(network.status)}`,
     })),
     ...networks
       .filter((network) => !network.managed && network.type !== "loopback")

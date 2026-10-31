@@ -11,6 +11,7 @@ import {
   isDeleteOutcomeUnknown,
 } from "@/hooks/use-lxd";
 import type { VMInfo } from "@/types/api";
+import { POWER_ACTION_PAST } from "@/lib/instance-action-copy";
 import type { ConfirmActionState } from "./instance-action-dialogs";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 
@@ -170,8 +171,8 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
 
       if (activeActorScopeRef.current === requestActorScope) {
         toast({
-          title: "Success",
-          description: `Instance ${instanceName} ${action} initiated`,
+          title: `Instance ${POWER_ACTION_PAST[action]}`,
+          description: `Instance ${instanceName} ${action} initiated.`,
         });
 
         // The callback belongs to this actor's list query. Never invoke it after a session
@@ -187,8 +188,8 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
     } catch (error) {
       if (activeActorScopeRef.current === requestActorScope) {
         toast({
-          title: "Error",
-          description: error instanceof Error ? error.message : `Failed to ${action} instance`,
+          title: `Could not ${action} instance`,
+          description: error instanceof Error ? error.message : "Try again.",
           variant: "destructive",
         });
       }
@@ -230,11 +231,11 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
       if (activeActorScopeRef.current === requestActorScope) {
         toast(isDeleteOutcomeUnknown(err)
           ? {
-              title: "Still deleting",
+              title: "Still deleting instance",
               description: `"${target.name}" is taking longer than usual on the cluster. It leaves the list when the delete finishes.`,
             }
           : {
-              title: "Failed to delete instance",
+              title: "Could not delete instance",
               description: err instanceof Error ? err.message : String(err),
               variant: "destructive",
             });

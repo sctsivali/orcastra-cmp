@@ -17,7 +17,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatLabel } from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import type { HardwareCategory } from "./hardware-aggregate";
 import { CpuSocketList, StorageDeviceList } from "./hardware-lists";
@@ -181,7 +181,7 @@ function StorageDetail({ node }: { node: NodeStatus }) {
                   <span className="break-words text-sm font-medium">{pool.name}</span>
                   <div className="flex flex-wrap gap-1.5">
                     <Badge variant="outline" className="font-normal">
-                      {pool.driver}
+                      {formatLabel(pool.driver)}
                     </Badge>
                     {pool.scope ? (
                       <Badge variant="secondary" className="font-normal">

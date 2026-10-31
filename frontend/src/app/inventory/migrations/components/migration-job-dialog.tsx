@@ -34,7 +34,7 @@ import { useMigrationJob } from "@/hooks/use-migrations";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
 import { describeReadError } from "@/lib/read-error";
-import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel, plural } from "@/lib/utils";
 import type { MigrationAction, MigrationJob } from "@/types/migrations";
 import { Role } from "@/types/rbac";
 import { MigrationActionDialog, migrationActionCopy } from "./migration-action-dialog";
@@ -308,7 +308,7 @@ function ProjectProgress({ job }: { job: MigrationJob }) {
   const verb = job.strategy === "member_relocation" ? "moved" : "transferred";
   return (
     <p className="text-sm text-muted-foreground" aria-live="polite">
-      {done} of {instances.length} instance{instances.length === 1 ? "" : "s"} {verb}
+      {done} of {plural(instances.length, "instance")} {verb}
     </p>
   );
 }

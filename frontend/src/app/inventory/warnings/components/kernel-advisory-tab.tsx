@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { EmptyState } from "@/components/ui/empty-state";
 import { NodeLink } from "@/components/ui/node-link";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -24,6 +25,7 @@ import { SEVERITY_RANK } from "@/lib/sort";
 import { warningClusterValue } from "@/lib/warning-facets";
 import type { KernelAdvisoryState, KernelAdvisoryWarning } from "@/types/kernel-advisory";
 import { warningSeverityDisplay, warningSeverityLabel } from "./warning-severity";
+import { plural } from "@/lib/utils";
 
 const STATE_ORDER: KernelAdvisoryState[] = ["exposed", "unverified", "patched"];
 
@@ -122,29 +124,28 @@ function KernelAdvisoryTable({
       <CardContent className="p-0 md:p-6 md:pt-0">
         {sorted.length === 0 ? (
           filters.activeFilterCount > 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <ShieldAlert className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No kernel CVE matches the current filters</p>
-              <p className="text-sm mt-1">
-                {filters.activeFilterCount} filter{filters.activeFilterCount === 1 ? "" : "s"} active. This does not
-                mean every kernel is patched.
-              </p>
-              <Button variant="outline" size="sm" className="mt-4" onClick={() => filters.clearAll()}>
-                Clear filters
-              </Button>
-            </div>
+            <EmptyState
+              icon={ShieldAlert}
+              title="No kernel CVE matches the current filters"
+              description={`${plural(filters.activeFilterCount, "filter")} active. This does not mean every kernel is patched.`}
+              action={
+                <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                  Clear filters
+                </Button>
+              }
+            />
           ) : failed ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <ShieldAlert className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>Kernel CVEs could not be assessed</p>
-              <p className="text-sm mt-1">This is not an all-clear. Refresh the page, or read a cluster&apos;s kernels from its card.</p>
-            </div>
+            <EmptyState
+              icon={ShieldAlert}
+              title="Could not assess kernel CVEs"
+              description="This is not an all-clear. Refresh the page, or read a cluster's kernels from its card."
+            />
           ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              <ShieldCheck className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No open kernel CVEs</p>
-              <p className="text-sm mt-1">Every cluster member that answered runs a kernel with the known fixes</p>
-            </div>
+            <EmptyState
+              icon={ShieldCheck}
+              title="No open kernel CVEs"
+              description="Every cluster member that answered runs a kernel with the known fixes"
+            />
           )
         ) : (
           <>

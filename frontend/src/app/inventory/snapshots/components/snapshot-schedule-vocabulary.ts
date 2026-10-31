@@ -1,4 +1,5 @@
 import type { ScheduleFrequency, SnapshotSchedule } from "@/types/api";
+import { plural } from "@/lib/utils";
 
 /**
  * Every word and number the schedule surface uses, in one module.
@@ -135,12 +136,12 @@ export function scheduleSentence(
   const spanDays = spanHours / 24;
   if (spanHours > expiryDays * 24) {
     return (
-      `Each snapshot expires after ${expiryDays} days, which is sooner than the ` +
+      `Each snapshot expires after ${plural(expiryDays, "day")}, which is sooner than the ` +
       `${keepLast}${ordinalSuffix(keepLast)} is taken, so this would keep fewer than ${keepLast}.`
     );
   }
-  const oldest = spanDays >= 1 ? `about ${round(spanDays)} days` : `about ${spanHours} hours`;
-  return `The oldest snapshot kept is ${oldest} old, and the hypervisor prunes each after ${expiryDays} days.`;
+  const oldest = spanDays >= 1 ? `about ${round(spanDays)} ${spanDays === 1 ? "day" : "days"}` : `about ${spanHours} hours`;
+  return `The oldest snapshot kept is ${oldest} old, and the hypervisor prunes each after ${plural(expiryDays, "day")}.`;
 }
 
 function round(value: number): string {

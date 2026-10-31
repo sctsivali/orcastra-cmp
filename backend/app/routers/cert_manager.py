@@ -143,7 +143,7 @@ async def list_certificates(
         logger.error(f"Failed to list certificates: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list certificates: {str(e)}"
+            detail=f"Could not list certificates: {str(e)}"
         )
     return CertificateListResponse(
         certificates=certificates,
@@ -229,7 +229,7 @@ async def initiate_renewal(
         logger.error(f"Failed to initiate renewal for {request.cluster_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate renewal: {str(e)}"
+            detail=f"Could not initiate renewal: {str(e)}"
         )
 
 
@@ -269,7 +269,7 @@ async def verify_renewal(
         logger.error(f"Failed to verify renewal for {request.cluster_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to verify renewal: {str(e)}"
+            detail=f"Could not verify renewal: {str(e)}"
         )
 
 
@@ -293,7 +293,7 @@ async def cancel_renewal(
         logger.error(f"Failed to cancel renewal for {cluster_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to cancel renewal: {str(e)}"
+            detail=f"Could not cancel renewal: {str(e)}"
         )
     if cancelled:
         return {"success": True, "message": "Pending renewal cancelled"}
@@ -443,7 +443,7 @@ async def get_system_warnings(
         logger.error(f"Failed to get system warnings: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get warnings: {str(e)}"
+            detail=f"Could not get warnings: {str(e)}"
         )
 
 

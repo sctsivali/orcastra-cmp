@@ -54,6 +54,7 @@ import {
   useNetworks, 
   useStoragePools 
 } from "@/hooks/use-lxd";
+import { plural } from "@/lib/utils";
 
 interface CreateGroupDialogProps {
   open: boolean;
@@ -200,8 +201,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   const handleAddPermission = () => {
     if (newPermission.entity_type !== "server" && !allResources && selectedResources.length === 0) {
       toast({
-        title: "Validation Error",
-        description: "Please select at least one resource or choose 'All Resources'",
+        title: "Could not add permission",
+        description: "Select at least one resource or choose 'All Resources'.",
         variant: "destructive",
       });
       return;
@@ -266,8 +267,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
     
     if (!formData.name.trim()) {
       toast({
-        title: "Validation Error",
-        description: "Group name is required",
+        title: "Could not create group",
+        description: "Group name is required.",
         variant: "destructive",
       });
       return;
@@ -275,8 +276,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
 
     if (!formData.node) {
       toast({
-        title: "Validation Error",
-        description: "Please select a cluster",
+        title: "Could not create group",
+        description: "Select a cluster.",
         variant: "destructive",
       });
       return;
@@ -296,8 +297,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
       });
 
       toast({
-        title: "Success",
-        description: `Group "${formData.name}" created successfully`,
+        title: "Group created",
+        description: `Group "${formData.name}" created successfully.`,
       });
 
       const created = { node: formData.node, name: formData.name };
@@ -311,8 +312,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
       onSaved?.(created);
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to create group",
+        title: "Could not create group",
+        description: error.message || "Try again.",
         variant: "destructive",
       });
     } finally {
@@ -367,7 +368,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
               <Label htmlFor="name">Group Name *</Label>
               <Input
                 id="name"
-                placeholder="e.g., developers, readonly-users"
+                placeholder="for example, developers, readonly-users"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 required
@@ -586,7 +587,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
 
                   {selectedResources.length > 0 && !allResources && (
                     <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
-                      ✓ {selectedResources.length} resource(s) selected
+                      ✓ {plural(selectedResources.length, "resource")} selected
                     </div>
                   )}
                 </div>

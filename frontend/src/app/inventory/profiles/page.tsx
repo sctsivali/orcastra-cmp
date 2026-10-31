@@ -47,6 +47,7 @@ import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
+import { plural } from "@/lib/utils";
 
 /** One key for a row and for the dialog's report of what it wrote. */
 const profileRowKey = (p: { node?: string | null; project?: string | null; name: string }) =>
@@ -292,7 +293,11 @@ function ProfilesContent() {
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                {canManage && <TableHead className="text-right">Actions</TableHead>}
+                {canManage && (
+                  <TableHead pinned="end" className="w-12 text-right">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -336,7 +341,7 @@ function ProfilesContent() {
                           onClick={() => usedBy.openPanel(profileSubject(profile), "devices")}
                           aria-label={`Show the devices in ${profile.name}`}
                         >
-                          {`${Object.keys(profile.devices).length} devices`}
+                          {plural(Object.keys(profile.devices).length, "device")}
                         </TableLink>
                       ) : (
                         <TableEmptyValue label="No devices" />
@@ -360,7 +365,7 @@ function ProfilesContent() {
                       />
                     </TableCell>
                     {canManage && (
-                      <TableCell className="text-right">
+                      <TableCell pinned="end" className="text-right">
                         <RowActions
                           actions={profileActions({
                             profile,

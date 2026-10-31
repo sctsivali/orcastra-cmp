@@ -68,7 +68,7 @@ export function useFileUploads({ target, folder, active, writeReason }: UploadOp
         enqueueUploads(target, into, tree, "refuse");
       } catch (error) {
         toast({
-          title: "Upload not started",
+          title: "Could not start upload",
           description: error instanceof Error ? error.message : "The folder could not be read.",
           variant: "destructive",
         });
@@ -131,7 +131,7 @@ export function useFileUploads({ target, folder, active, writeReason }: UploadOp
     try {
       await begin(await treeFromDrop(event.dataTransfer.items), into);
     } catch {
-      toast({ title: "Upload not started", description: "What was dropped could not be read.", variant: "destructive" });
+      toast({ title: "Could not start upload", description: "What was dropped could not be read.", variant: "destructive" });
     }
   };
 

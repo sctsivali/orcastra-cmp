@@ -5,6 +5,7 @@ import * as React from "react";
 import { SearchInput } from "@/components/ui/search-input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FileCode } from "lucide-react";
+import { plural } from "@/lib/utils";
 
 // A config map, rendered whole.
 //
@@ -37,8 +38,8 @@ export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
       )}
       <p className="text-sm text-muted-foreground">
         {shown.length === all.length
-          ? `${all.length} key${all.length === 1 ? "" : "s"}`
-          : `${shown.length} of ${all.length} keys`}
+          ? plural(all.length, "key")
+          : `${shown.length} of ${plural(all.length, "key")}`}
       </p>
       <dl className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {shown.map(([key, value]) => (

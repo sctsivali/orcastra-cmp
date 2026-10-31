@@ -932,7 +932,7 @@ def save_api_key_to_vault(
         logger.info(f"Saved API key {key_id} to Vault")
     except Exception as e:
         logger.error(f"Failed to save API key to Vault: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save API key")
+        raise HTTPException(status_code=500, detail="Could not save API key")
 
 
 def save_api_key_secret_to_vault(vault_client, key_id: str, secret_hash: str, raw_secret: str) -> None:
@@ -1078,7 +1078,7 @@ def save_user_mapping_to_vault(vault_client, api_key_id: str, user_mapping: Exte
         logger.info(f"Saved user mapping {user_mapping.external_user_id} for API key {api_key_id}")
     except Exception as e:
         logger.error(f"Failed to save user mapping to Vault: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save user mapping")
+        raise HTTPException(status_code=500, detail="Could not save user mapping")
 
 
 def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[ExternalUserMapping]:
@@ -3062,7 +3062,7 @@ async def update_api_key_capabilities(
         raise
     except Exception as e:
         logger.error(f"Error updating API key capabilities: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update capabilities")
+        raise HTTPException(status_code=500, detail="Could not update capabilities")
 
 
 @router.post(
@@ -3127,7 +3127,7 @@ async def revoke_api_key(
         raise
     except Exception as e:
         logger.error(f"Error revoking API key: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to revoke the API key") from None
+        raise HTTPException(status_code=500, detail="Could not revoke the API key") from None
 
 
 API_KEY_ROTATE = "integration.api_key.secret.rotate"
@@ -3318,7 +3318,7 @@ async def delete_api_key(
         raise
     except Exception as e:
         logger.error(f"Error deleting API key: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to delete the API key") from None
+        raise HTTPException(status_code=500, detail="Could not delete the API key") from None
 
 
 # ============================================
@@ -6226,7 +6226,7 @@ async def list_synced_organizations(
         raise
     except Exception as e:
         logger.error(f"Error listing synced organizations: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to list synced organizations")
+        raise HTTPException(status_code=500, detail="Could not list synced organizations")
 
 
 @router.post(
@@ -6282,7 +6282,7 @@ async def refresh_organizations(
         )
         secret_hash = secret_data.get("hash", "")
     except Exception:
-        raise HTTPException(status_code=500, detail="Failed to read API key credentials")
+        raise HTTPException(status_code=500, detail="Could not read API key credentials")
 
     # important: only a URL the key's current secret stored. One stored with a secret a rotation has
     # replaced would receive this secret's hash. See services/integration_callback_url.py.
@@ -6316,7 +6316,7 @@ async def refresh_organizations(
         raise HTTPException(status_code=502, detail=f"External app returned {e.response.status_code}")
     except Exception as e:
         logger.error(f"Failed to reach external app at {callback_url}: {e}")
-        raise HTTPException(status_code=502, detail="Failed to reach external app")
+        raise HTTPException(status_code=502, detail="Could not reach external app")
 
     # Parse and upsert organizations
     orgs_data = data.get("organizations", [])

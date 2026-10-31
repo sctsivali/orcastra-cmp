@@ -25,6 +25,7 @@ import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
+import { plural, singular } from "@/lib/utils";
 
 // important: the certificate keys stay excluded. They were filtered out of the inline list on
 // purpose, and moving the data into a dialog must not quietly widen what the page discloses.
@@ -59,8 +60,8 @@ function ConfigMapLink({
 
   return (
     <>
-      <TableLink onClick={() => setOpen(true)} aria-label={`Show ${itemCount} ${noun} in ${title}`}>
-        {itemCount} {noun}
+      <TableLink onClick={() => setOpen(true)} aria-label={`Show ${plural(itemCount, singular(noun), noun)} in ${title}`}>
+        {plural(itemCount, singular(noun), noun)}
       </TableLink>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -68,7 +69,7 @@ function ConfigMapLink({
           <DialogHeader className="pr-8 flex-shrink-0 pb-4">
             <DialogTitle className="text-xl">{title}</DialogTitle>
             <DialogDescription>
-              {itemCount} {noun}
+              {plural(itemCount, singular(noun), noun)}
             </DialogDescription>
           </DialogHeader>
 

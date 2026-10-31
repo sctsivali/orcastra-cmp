@@ -154,7 +154,7 @@ export function MigrationActionDialog({
           confirmation: phrase ? confirmation : undefined,
         },
       });
-      toast({ title: `${copy.title} accepted`, description: `Migration is now in ${updated.phase.replaceAll("_", " ")}.` });
+      toast({ title: `${copy.title.charAt(0)}${copy.title.slice(1).toLowerCase()} accepted`, description: `Migration is now in ${updated.phase.replaceAll("_", " ")}.` });
       onCompleted(updated);
       onOpenChange(false);
     } catch (caught) {

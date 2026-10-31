@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import { TableLink } from "@/components/ui/table-link";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatLabel } from "@/lib/utils";
 import type { StoragePoolMetrics } from "@/types/api";
 
 interface StoragePoolsCardProps {
@@ -135,7 +135,7 @@ export function StoragePoolsCard({ pools, selectedNode, labelOf }: StoragePoolsC
                   <div className="flex items-start justify-between gap-3 text-sm">
                     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-medium">{pool.name}</span>
-                      <Badge variant="outline">{pool.driver}</Badge>
+                      <Badge variant="outline">{formatLabel(pool.driver)}</Badge>
                       {/* note: `node` is the registered cluster, named as the Clusters page names
                           it. The bytes of a MicroCloud pool live on its members. */}
                       <span className="text-muted-foreground">{clusterLabel}</span>

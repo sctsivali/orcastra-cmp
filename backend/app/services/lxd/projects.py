@@ -285,7 +285,7 @@ class ProjectManager:
             raise
         except Exception as e:
             logger.error(f"Error listing projects from {host}: {e}")
-            raise LXDOperationError(f"Failed to list projects: {str(e)}")
+            raise LXDOperationError(f"Could not list projects: {str(e)}")
 
     def _read_project_record(
         self,
@@ -502,7 +502,7 @@ class ProjectManager:
                 raise LXDOperationUnknownError("create", name) from e
             if phase in {"submitting", "waiting"} and not _definitive_lxd_refusal(e, phase):
                 raise LXDOperationUnknownError("create", name) from e
-            raise LXDOperationError(f"Failed to create project: {str(e)}")
+            raise LXDOperationError(f"Could not create project: {str(e)}")
         except requests_exceptions.RequestException as e:
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("create", name) from e
@@ -512,7 +512,7 @@ class ProjectManager:
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("create", name) from e
             # note: not str(e): before submit this is client or certificate plumbing, not LXD.
-            raise LXDOperationError("Failed to create project") from e
+            raise LXDOperationError("Could not create project") from e
     
     @audit_operation(
         "lxd.project.update", "project",
@@ -705,7 +705,7 @@ class ProjectManager:
                 raise LXDOperationUnknownError("update", project_name) from e
             if phase in {"submitting", "waiting"} and not _definitive_lxd_refusal(e, phase):
                 raise LXDOperationUnknownError("update", project_name) from e
-            raise LXDOperationError(f"Failed to update project: {str(e)}")
+            raise LXDOperationError(f"Could not update project: {str(e)}")
         except requests_exceptions.RequestException as e:
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("update", project_name) from e
@@ -715,7 +715,7 @@ class ProjectManager:
             if phase in {"submitting", "waiting", "verifying"}:
                 raise LXDOperationUnknownError("update", project_name) from e
             # note: not str(e): before submit this is client or certificate plumbing, not LXD.
-            raise LXDOperationError("Failed to update project") from e
+            raise LXDOperationError("Could not update project") from e
     
     @audit_operation("lxd.project.delete", "project", target_id_param="name")
     async def delete_project(self, host: str, name: str) -> None:

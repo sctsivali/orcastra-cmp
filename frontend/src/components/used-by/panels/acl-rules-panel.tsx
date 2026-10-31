@@ -14,7 +14,7 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, plural } from "@/lib/utils";
 import { Shield } from "lucide-react";
 import type { AclRule } from "../types";
 
@@ -130,7 +130,7 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
               colSpan={6}
               icon={Shield}
               title="No rules match the current filters"
-              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${rules.length} rules.`}
+              description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(rules.length, "rule")}.`}
               action={
                 <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
                   Clear filters

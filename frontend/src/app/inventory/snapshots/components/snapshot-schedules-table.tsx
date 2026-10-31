@@ -27,6 +27,7 @@ import {
   frequencyLabel,
   scheduleState,
 } from "./snapshot-schedule-vocabulary";
+import { plural } from "@/lib/utils";
 
 /**
  * The definition lives beside the rows it renders, for the reason snapshots-table.tsx records:
@@ -165,7 +166,7 @@ export function SnapshotSchedulesTable({
                 onSort={onSort}
               />
             ) : (
-              <TableHead key="actions" className="w-12">
+              <TableHead key="actions" pinned="end" className="w-12 text-right">
                 <span className="sr-only">{header.label}</span>
               </TableHead>
             ),
@@ -207,7 +208,7 @@ export function SnapshotSchedulesTable({
                       />
                     </TableSubText>
                   ) : schedule.missed_runs > 0 ? (
-                    <TableSubText>{schedule.missed_runs} run(s) missed</TableSubText>
+                    <TableSubText>{plural(schedule.missed_runs, "run")} missed</TableSubText>
                   ) : null}
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
@@ -221,7 +222,7 @@ export function SnapshotSchedulesTable({
                 <TableCell className="whitespace-nowrap">
                   {lastRunCell(schedule.last_run_at)}
                 </TableCell>
-                <TableCell>
+                <TableCell pinned="end" className="text-right">
                   <ScheduleRowActions schedule={schedule} />
                 </TableCell>
               </TableRow>

@@ -1,6 +1,6 @@
 "use client";
 
-import { formatBytes, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
+import { formatBytes, formatVcpuCount, EMPTY_VALUE, formatInstanceType, plural } from "@/lib/utils";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useSearchParams } from "next/navigation";
@@ -32,6 +32,7 @@ import {
   type SubmissionFence,
 } from "@/components/instance-create/submission-fence";
 import {
+  AlertTriangle,
   ArrowLeft,
   Monitor,
   Container,
@@ -686,7 +687,7 @@ function InstanceCreateFormContent() {
       ...prev,
       selectedImage: row.value,
       imageServer: row.server,
-      imageLabel: `${row.label} · ${row.type === "virtual-machine" ? "VM" : "container"} · ${row.source}`,
+      imageLabel: `${row.label} · ${formatInstanceType(row.type)} · ${row.source}`,
     }));
     setImageDialogOpen(false);
   };
@@ -1387,12 +1388,10 @@ function InstanceCreateFormContent() {
             here rather than silently: a form that looks pre-filled and is not is worse than
             one that is plainly empty. */}
         {seedDropped && (
-          <div
-            role="status"
-            className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-foreground"
-          >
-            {seedDropped}
-          </div>
+          <Alert variant="warning" role="status">
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            <AlertDescription>{seedDropped}</AlertDescription>
+          </Alert>
         )}
 
         {/* Main configuration */}
@@ -1593,7 +1592,7 @@ function InstanceCreateFormContent() {
                 <div className="grid gap-2">
                   <Label className="flex items-center gap-2">
                     <HardDriveDownload className="h-4 w-4" />
-                    Operating system
+                    Operating System
                   </Label>
                   <div className="flex gap-2">
                     <button
@@ -1702,7 +1701,7 @@ function InstanceCreateFormContent() {
                 <div className="grid gap-2">
                   <Label className="flex items-center gap-2">
                     <HardDriveDownload className="h-4 w-4" />
-                    Base image *
+                    Base Image *
                   </Label>
                   <Button
                     ref={imageButtonRef}
@@ -1785,7 +1784,7 @@ function InstanceCreateFormContent() {
                     if (fieldError?.field === "cpu") setFieldError(null);
                     updateField("cpu", e.target.value);
                   }}
-                  placeholder="e.g. 2"
+                  placeholder="2"
                   aria-invalid={(!cpuValid && form.cpu.trim() !== "") || quota.cpuExceeds || fieldError?.field === "cpu"}
                   aria-describedby={
                     (!cpuValid && form.cpu.trim() !== "") || quota.cpuExceeds || fieldError?.field === "cpu"
@@ -1827,7 +1826,7 @@ function InstanceCreateFormContent() {
                       if (fieldError?.field === "memory") setFieldError(null);
                       updateField("memoryValue", e.target.value);
                     }}
-                    placeholder="e.g. 2"
+                    placeholder="2"
                     className="flex-1"
                     aria-invalid={
                       (!memoryValid && form.memoryValue.trim() !== "") ||
@@ -1961,15 +1960,17 @@ function InstanceCreateFormContent() {
           </Card>
 
         {fieldError?.field === "devices" && (
-          <div
+          <Alert
             ref={devicesErrorRef}
             id="create-devices-error"
             tabIndex={-1}
-            role="alert"
-            className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            variant="destructive"
           >
-            {fieldRefusalText(fieldError)} Review the attached storage, network, and GPU devices.
-          </div>
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            <AlertDescription>
+              {fieldRefusalText(fieldError)} Review the attached storage, network, and GPU devices.
+            </AlertDescription>
+          </Alert>
         )}
 
         {/* Storage */}
@@ -2005,7 +2006,7 @@ function InstanceCreateFormContent() {
                       }
                       updateField("storageValue", e.target.value);
                     }}
-                    placeholder="e.g. 20"
+                    placeholder="20"
                     className="flex-1"
                     aria-invalid={
                       (!storageValid && form.storageValue.trim() !== "") ||
@@ -2075,7 +2076,7 @@ function InstanceCreateFormContent() {
               {/* Additional disk devices */}
               <div className="space-y-3 pt-2 border-t">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm font-medium">Additional disks</Label>
+                  <Label className="text-sm font-medium">Additional Disks</Label>
                   <Button
                     type="button"
                     variant="outline"
@@ -2144,7 +2145,7 @@ function InstanceCreateFormContent() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium">
-                    Network interfaces
+                    Network Interfaces
                   </Label>
                   <Button
                     type="button"
@@ -2276,7 +2277,7 @@ function InstanceCreateFormContent() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium">
-                    Custom GPU devices
+                    Custom GPU Devices
                   </Label>
                   <Button
                     type="button"
@@ -2355,7 +2356,7 @@ function InstanceCreateFormContent() {
                       </div>
                       <div className="space-y-1">
                         <Label className="text-xs text-muted-foreground">
-                          {gpu.identifyBy === "pci" ? "PCI address" : "GPU id"}
+                          {gpu.identifyBy === "pci" ? "PCI Address" : "GPU ID"}
                         </Label>
                         {gpu.identifyBy === "pci" ? (
                           <Input
@@ -2371,7 +2372,7 @@ function InstanceCreateFormContent() {
                             onChange={(e) =>
                               updateGpu(gpu.id, { gid: e.target.value })
                             }
-                            placeholder="e.g. 0"
+                            placeholder="0"
                           />
                         )}
                       </div>
@@ -2411,15 +2412,15 @@ function InstanceCreateFormContent() {
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold">Security Policies</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {advBool("Protect deletion", "secProtectDelete")}
+                    {advBool("Protect Deletion", "secProtectDelete")}
                     {form.type === "container" && (
                       <>
                         {advBool("Privileged", "secPrivileged", "Allow", "Deny")}
                         {advBool("Nesting", "secNesting", "Allow", "Deny")}
-                        {advBool("Protect UID/GID shift", "secProtectShift")}
-                        {advBool("Unique idmap", "secUniqueIdmap")}
-                        {advText("Base host id", "secBaseHostId", "e.g. 1000000", "number")}
-                        {advText("Idmap size", "secIdmapSize", "e.g. 65536", "number")}
+                        {advBool("Protect UID/GID Shift", "secProtectShift")}
+                        {advBool("Unique Idmap", "secUniqueIdmap")}
+                        {advText("Base Host ID", "secBaseHostId", "for example, 1000000", "number")}
+                        {advText("Idmap Size", "secIdmapSize", "for example, 65536", "number")}
                       </>
                     )}
                     {form.type === "vm" && (
@@ -2442,10 +2443,10 @@ function InstanceCreateFormContent() {
                   <h3 className="text-sm font-semibold">Migration</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {form.type === "vm" &&
-                      advBool("Stateful migration", "migStateful", "Allow", "Deny")}
+                      advBool("Stateful Migration", "migStateful", "Allow", "Deny")}
                     <div className="space-y-1">
                       <Label className="text-xs text-muted-foreground">
-                        Cluster evacuation
+                        Cluster Evacuation
                       </Label>
                       <Select
                         value={adv.migEvacuate || "default"}
@@ -2473,10 +2474,10 @@ function InstanceCreateFormContent() {
                   <h3 className="text-sm font-semibold">Boot</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {advBool("Autostart", "bootAutostart")}
-                    {advText("Autostart delay (s)", "bootAutostartDelay", "0", "number")}
-                    {advText("Autostart priority", "bootAutostartPriority", "0", "number")}
-                    {advText("Host shutdown timeout (s)", "bootHostShutdownTimeout", "30", "number")}
-                    {advText("Stop priority", "bootStopPriority", "0", "number")}
+                    {advText("Autostart Delay (s)", "bootAutostartDelay", "0", "number")}
+                    {advText("Autostart Priority", "bootAutostartPriority", "0", "number")}
+                    {advText("Host Shutdown Timeout (s)", "bootHostShutdownTimeout", "30", "number")}
+                    {advText("Stop Priority", "bootStopPriority", "0", "number")}
                   </div>
                 </section>
                   </>
@@ -2489,9 +2490,9 @@ function InstanceCreateFormContent() {
                     Override the instance&apos;s cloud-init config (requires a
                     cloud-init-enabled image).
                   </p>
-                  {advTextarea("User data", "ciUser", "#cloud-config")}
-                  {advTextarea("Vendor data", "ciVendor", "#cloud-config")}
-                  {advTextarea("Network config", "ciNetwork", "version: 2\nethernets:\n  eth0:\n    dhcp4: true")}
+                  {advTextarea("User Data", "ciUser", "#cloud-config")}
+                  {advTextarea("Vendor Data", "ciVendor", "#cloud-config")}
+                  {advTextarea("Network Config", "ciNetwork", "version: 2\nethernets:\n  eth0:\n    dhcp4: true")}
                 </section>
               </CardContent>
             </CollapsibleContent>
@@ -2719,7 +2720,7 @@ function InstanceCreateFormContent() {
                         <TableCell>{row.distribution}</TableCell>
                         <TableCell>{row.release || <TableEmptyValue label="No release" />}</TableCell>
                         <TableCell>{row.variant || <TableEmptyValue label="No variant" />}</TableCell>
-                        <TableCell>{row.type}</TableCell>
+                        <TableCell>{formatInstanceType(row.type)}</TableCell>
                         <TableCell>{row.alias}</TableCell>
                         <TableCell>
                           {row.source}
@@ -2760,8 +2761,7 @@ function InstanceCreateFormContent() {
                 />
               )}
               <p className="text-xs text-muted-foreground">
-                {filteredImageRows.length} image
-                {filteredImageRows.length === 1 ? "" : "s"}
+                {plural(filteredImageRows.length, "image")}
               </p>
             </div>
           </div>

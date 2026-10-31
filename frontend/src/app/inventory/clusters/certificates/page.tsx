@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PageReadError } from "@/components/ui/read-error-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -83,14 +84,14 @@ function CertificatesContent() {
     try {
       await cancelPendingCert.mutateAsync(cancelTarget.cluster_id);
       toast({
-        title: "Cancelled",
+        title: "Certificate renewal cancelled",
         description: "Pending certificate renewal has been cancelled." });
       setCancelTarget(null);
       refetch();
     } catch (error) {
       toast({
-        title: "Error",
-        description: error instanceof Error && error.message ? error.message : "Failed to cancel pending renewal",
+        title: "Could not cancel certificate renewal",
+        description: error instanceof Error && error.message ? error.message : "Try again.",
         variant: "destructive" });
     } finally {
       cancelInFlight.current = false;
@@ -158,9 +159,7 @@ function CertificatesContent() {
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
           {certificates.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No certificates found. Register a cluster first.
-            </div>
+            <EmptyState title="No certificates found" description="Register a cluster first." />
           ) : (
             <>
             <CertificatesTable

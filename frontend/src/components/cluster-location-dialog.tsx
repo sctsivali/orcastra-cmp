@@ -69,15 +69,15 @@ export function ClusterLocationDialog({
         }),
       });
       toast({
-        title: "Location Updated",
+        title: "Location updated",
         description: `${cluster.display_name} is now placed in ${placeName(selected)}.`,
       });
       onOpenChange(false);
       onSuccess?.();
     } catch (error: unknown) {
       toast({
-        title: "Failed to Update Location",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: "Could not update location",
+        description: error instanceof Error ? error.message : "An error occurred.",
         variant: "destructive",
       });
     } finally {

@@ -503,7 +503,7 @@ def _collect_legacy(container: ContainerInfo, host: HostInfo) -> Dict[str, Any]:
 def collect_resource_usage() -> SystemResourceUsage:
     """Synchronous collector; the router runs it on a thread so nothing blocks the loop."""
     if psutil is None:
-        raise ImportError("psutil is not installed. Please install it with: pip install psutil")
+        raise ImportError("psutil is not installed. Install it with: pip install psutil")
     meta = cgroup.detect_container()
     host = _collect_host()
     container = _collect_container(meta, host.cpu.count_logical)

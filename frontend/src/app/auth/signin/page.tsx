@@ -30,17 +30,17 @@ import { forgetReturnPath, recallReturnPath, rememberReturnPath } from "@/lib/au
 
 // Error messages mapping
 const errorMessages: Record<string, string> = {
-  OAuthSignin: "Error starting OAuth sign-in flow. Please try again.",
-  OAuthCallback: "Error during OAuth callback. Please try again.",
-  OAuthCreateAccount: "Could not create account. Please contact support.",
+  OAuthSignin: "Error starting OAuth sign-in flow. Try again.",
+  OAuthCallback: "Error during OAuth callback. Try again.",
+  OAuthCreateAccount: "Could not create account. Contact support.",
   EmailCreateAccount: "Could not create account with email.",
-  Callback: "Authentication callback error. Please try again.",
+  Callback: "Authentication callback error. Try again.",
   OAuthAccountNotLinked:
-    "This email is linked to another account. Please use that method.",
+    "This email is linked to another account. Use that method.",
   EmailSignin: "Error sending sign-in email.",
-  CredentialsSignin: "Invalid credentials. Please check and try again.",
-  SessionRequired: "Please sign in to access this page.",
-  Default: "An authentication error occurred. Please try again.",
+  CredentialsSignin: "Invalid credentials. Check and try again.",
+  SessionRequired: "Sign in to access this page.",
+  Default: "An authentication error occurred. Try again.",
 };
 
 // One automatic hand-off to the identity provider per tab within this window. Coming back here

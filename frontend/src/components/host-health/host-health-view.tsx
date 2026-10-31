@@ -67,7 +67,7 @@ export function HostHealthView() {
             <p className="text-sm">
               {data.attention === 0
                 ? `All ${considered} checked services are healthy.`
-                : `${data.attention} of ${considered} checked services need attention.`}
+                : `${data.attention} of ${considered} checked services ${data.attention === 1 ? "needs" : "need"} attention.`}
             </p>
           </div>
           <p className="text-xs text-muted-foreground sm:text-right">

@@ -206,7 +206,7 @@ class ConnectivityMixin:
                 # Certificate not trusted
                 logger.warning(f"Certificate not trusted for {cluster_id}")
                 return ConnectionProbe(
-                    True, False, "Certificate not trusted by hypervisor. Please add trust via CLI."
+                    True, False, "Certificate not trusted by hypervisor. Add trust via CLI."
                 )
             else:
                 logger.warning(f"Unexpected status {response.status_code} for {cluster_id}")

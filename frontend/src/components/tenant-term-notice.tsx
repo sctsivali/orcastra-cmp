@@ -2,7 +2,7 @@
 
 import { Clock, Lock } from "lucide-react";
 import type { TenantAccessSummary, TenantTermItem } from "@/lib/access-api";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime, plural } from "@/lib/utils";
 
 // The paid term behind a Tenant's own access (backend core/tenant_term.py). After the term the
 // instances are read-only (owner decision 2026-10-27) and after the retention window they are
@@ -48,7 +48,7 @@ export function TenantTermNotice({ summary }: { summary: TenantAccessSummary | n
               {line(item)}
             </p>
           ))}
-          {more > 0 && <p className="text-muted-foreground">and {more} more {more === 1 ? "project" : "projects"}.</p>}
+          {more > 0 && <p className="text-muted-foreground">and {plural(more, "more project")}.</p>}
           {readOnly && (
             <p className="text-muted-foreground">To keep using them, renew the subscription with your provider.</p>
           )}

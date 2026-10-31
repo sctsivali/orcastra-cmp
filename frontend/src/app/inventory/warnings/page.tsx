@@ -35,6 +35,7 @@ import {
   warningSeverityLabel,
 } from "./components/warning-severity";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { OverflowText } from "@/components/ui/overflow-text";
 import {
   Tabs,
@@ -52,7 +53,7 @@ import {
   TooltipTrigger } from "@/components/ui/tooltip";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
-import { formatDateTime, formatLabel, formatCount } from "@/lib/utils";
+import { formatDateTime, formatLabel, formatCount, plural } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -480,11 +481,13 @@ function WarningsContent() {
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
           {sortedWarnings.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {platformFilters.activeFilterCount > 0
-                ? "No warning matches the current filters."
-                : "No warnings found"}
-            </div>
+            <EmptyState
+              title={
+                platformFilters.activeFilterCount > 0
+                  ? "No warning matches the current filters."
+                  : "No warnings found"
+              }
+            />
           ) : (
             <>
             <Table>
@@ -606,24 +609,22 @@ function WarningsContent() {
                    an operator to opposite conclusions, and the filtered one is now easier to
                    reach than it was before this table could be narrowed and paged. */
                 certFilters.activeFilterCount > 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No certificate issue matches the current filters</p>
-                    <p className="text-sm mt-1">
-                      {certFilters.activeFilterCount} filter
-                      {certFilters.activeFilterCount === 1 ? "" : "s"} active. This is not a
-                      clean bill of health.
-                    </p>
-                    <Button variant="outline" size="sm" className="mt-4" onClick={() => certFilters.clearAll()}>
-                      Clear filters
-                    </Button>
-                  </div>
+                  <EmptyState
+                    icon={Shield}
+                    title="No certificate issue matches the current filters"
+                    description={`${plural(certFilters.activeFilterCount, "filter")} active. This is not a clean bill of health.`}
+                    action={
+                      <Button variant="outline" size="sm" onClick={() => certFilters.clearAll()}>
+                        Clear filters
+                      </Button>
+                    }
+                  />
                 ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No certificate issues found</p>
-                    <p className="text-sm mt-1">All certificates are healthy</p>
-                  </div>
+                  <EmptyState
+                    icon={Shield}
+                    title="No certificate issues found"
+                    description="All certificates are healthy"
+                  />
                 )
               ) : (
                 <>
@@ -635,7 +636,7 @@ function WarningsContent() {
                       <SortableTableHead label="Severity" field="severity" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
                       <SortableTableHead label="Days Until Expiry" field="days" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
                       <SortableTableHead label="Expires At" field="expires" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
-                      <TableHead>Action</TableHead>
+                      <TableHead><span className="sr-only">Actions</span></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -674,7 +675,7 @@ function WarningsContent() {
                         </TableCell>
                         <TableCell>
                           <span className={warning.days_until_expiry <= 3 ? "text-status-offline font-bold" : warning.days_until_expiry <= 7 ? "text-status-pending font-medium" : ""}>
-                            {warning.days_until_expiry <= 0 ? "Expired" : `${warning.days_until_expiry} days`}
+                            {warning.days_until_expiry <= 0 ? "Expired" : plural(warning.days_until_expiry, "day")}
                           </span>
                         </TableCell>
                         <TableCell className="whitespace-nowrap">{formatDateTime(warning.expires_at)}</TableCell>
@@ -729,24 +730,22 @@ function WarningsContent() {
                 /* Same reason as the certificate tab: "all nodes are online" is a claim about
                    the fleet and a filter must never be allowed to make it. */
                 nodeFilters.activeFilterCount > 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>No offline cluster matches the current filters</p>
-                    <p className="text-sm mt-1">
-                      {nodeFilters.activeFilterCount} filter
-                      {nodeFilters.activeFilterCount === 1 ? "" : "s"} active. This does not mean
-                      every cluster is online.
-                    </p>
-                    <Button variant="outline" size="sm" className="mt-4" onClick={() => nodeFilters.clearAll()}>
-                      Clear filters
-                    </Button>
-                  </div>
+                  <EmptyState
+                    icon={Wifi}
+                    title="No offline cluster matches the current filters"
+                    description={`${plural(nodeFilters.activeFilterCount, "filter")} active. This does not mean every cluster is online.`}
+                    action={
+                      <Button variant="outline" size="sm" onClick={() => nodeFilters.clearAll()}>
+                        Clear filters
+                      </Button>
+                    }
+                  />
                 ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>All clusters are online</p>
-                    <p className="text-sm mt-1">No connectivity issues detected</p>
-                  </div>
+                  <EmptyState
+                    icon={Wifi}
+                    title="No connectivity issues detected"
+                    description="All clusters are online"
+                  />
                 )
               ) : (
                 <>

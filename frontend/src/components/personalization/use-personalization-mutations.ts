@@ -58,8 +58,8 @@ export function usePersonalizationMutations({
     const actorFence = captureActorMutationFence(scopeKey);
     if (!userId) {
       toast({
-        title: "Cannot save settings",
-        description: "Please sign in to save your theme.",
+        title: "Could not save settings",
+        description: "Sign in to save your theme.",
         variant: "destructive",
       });
       return;
@@ -75,8 +75,8 @@ export function usePersonalizationMutations({
     setIsSaving(false);
     if (!ok) {
       toast({
-        title: "Failed to save your theme",
-        description: "Your choice could not be saved. Please try again.",
+        title: "Could not save theme",
+        description: "Your choice could not be saved. Try again.",
         variant: "destructive",
       });
     }

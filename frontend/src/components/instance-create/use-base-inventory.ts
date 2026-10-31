@@ -68,7 +68,7 @@ export function useBaseCreateInventory({
     error: nodePicker.namesError,
     optionCount: nodeOptions.length,
     subject: "Clusters",
-    selectText: "Select cluster",
+    selectText: "Select a cluster",
     emptyText: "No clusters found.",
   });
 

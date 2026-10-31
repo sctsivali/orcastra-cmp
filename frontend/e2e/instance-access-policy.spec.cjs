@@ -53,7 +53,7 @@ test("Partner safe policy keeps typed create fields and hides host-level control
   await expect(page.getByText("Security Policies")).toHaveCount(0);
   await page.getByText("Cloud-Init", { exact: true }).first().click();
   await expect(page.getByText("Advanced host controls are unavailable")).toBeVisible();
-  await expect(page.getByText("User data", { exact: true })).toBeVisible();
+  await expect(page.getByText("User Data", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Add disk" }).click();
   await page.getByLabel("Disk kind").click();

@@ -2595,7 +2595,7 @@ export function useDeleteSnapshot() {
           await reconcileSnapshotState(queryClient, scopeKey);
           toast({
             variant: "destructive",
-            title: "Snapshot not deleted",
+            title: "Could not delete snapshot",
             description: `The cluster could not delete ${snapshotName}${err ? `: ${err}` : "."}`,
           });
           return;

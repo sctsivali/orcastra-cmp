@@ -8,7 +8,7 @@ import { hasDrafts } from "@/lib/instance-files/draft-store";
 import { setManifestActor } from "@/lib/instance-files/transfer-manifest";
 import { restoreInterrupted } from "@/lib/instance-files/transfer-pump";
 import { hasActiveTransfers, useTransferStore } from "@/lib/instance-files/transfer-store";
-import { formatNetworkRate } from "@/lib/utils";
+import { formatNetworkRate, plural } from "@/lib/utils";
 import { summarizeTransfers } from "./transfer-panel";
 
 /**
@@ -44,7 +44,7 @@ export function TransferTray() {
       <Upload className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex justify-between gap-2">
-          <span className="whitespace-nowrap">Uploading {active.length} {active.length === 1 ? "file" : "files"}</span>
+          <span className="whitespace-nowrap">Uploading {plural(active.length, "file")}</span>
           <span className="shrink-0 tabular-nums text-muted-foreground">{rate > 0 ? formatNetworkRate(rate) : `${percent}%`}</span>
         </div>
         <Progress value={percent} className="mt-1 h-1 motion-reduce:transition-none" aria-label="Upload progress" />

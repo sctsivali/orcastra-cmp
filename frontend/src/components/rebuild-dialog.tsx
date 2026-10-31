@@ -10,6 +10,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +31,7 @@ import {
 import { reconcileInstanceFleet } from "@/lib/instance-reconciliation";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { APIError, type ImageInfo, type RemoteImageInfo } from "@/types/api";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, plural } from "@/lib/utils";
 import {
   Loader2,
   RefreshCw,
@@ -89,7 +90,7 @@ const PROGRESS: Record<RebuildStatus, number> = {
   failed: 100,
 };
 const STATUS_LABEL: Record<RebuildStatus, string> = {
-  pending: "Queued…",
+  pending: "Pending…",
   stopping: "Stopping the instance…",
   rebuilding: "Reinstalling the root disk…",
   starting: "Starting the instance…",
@@ -335,7 +336,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
       if (!(await reconcileAcceptedOutcome())) return;
       setPhase("done");
       toast({
-        title: "Rebuild complete",
+        title: "Instance rebuilt",
         description:
           mode === "empty"
             ? `"${instance.name}" now has a blank root disk. Open the console to attach an ISO and install.`
@@ -413,9 +414,10 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
         {/* Preflight failed */}
         {phase === "error" && (
-          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-            {loadError || "Could not read the instance."}
-          </div>
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" aria-hidden />
+            <AlertDescription>{loadError || "Could not read the instance."}</AlertDescription>
+          </Alert>
         )}
 
         {/* Snapshot block: LXD refuses to rebuild an instance with snapshots */}
@@ -427,7 +429,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
                 <p className="font-medium">Delete snapshots before rebuilding</p>
                 <p className="mt-1 text-muted-foreground">
                   LXD cannot rebuild an instance that has snapshots. Delete the{" "}
-                  {snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} below, then reopen
+                  {plural(snapshots.length, "snapshot")} below, then reopen
                   this dialog.
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -576,7 +578,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
             )}
 
             {/* Destructive warning + name gate */}
-            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+            <div className="space-y-2 rounded-md border border-destructive/40 p-3">
               <div className="flex gap-2 text-sm text-destructive">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <p>
@@ -619,12 +621,10 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
             )}
             <Progress value={phase === "done" ? 100 : PROGRESS[jobStatus]} />
             {(phase === "failed" || phase === "unknown") && runError && (
-              <div className={phase === "failed"
-                ? "rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive"
-                : "rounded-md border border-status-pending/40 p-3 text-xs"}
-              >
-                {runError}
-              </div>
+              <Alert variant={phase === "failed" ? "destructive" : "warning"}>
+                <AlertTriangle className="h-4 w-4" aria-hidden />
+                <AlertDescription className="break-words">{runError}</AlertDescription>
+              </Alert>
             )}
             {phase === "done" && mode === "empty" && (
               <p className="text-xs text-muted-foreground">
@@ -635,7 +635,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="pt-4">
           {phase === "form" && !blocked ? (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>

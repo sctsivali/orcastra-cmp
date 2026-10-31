@@ -92,7 +92,7 @@ export function SpecificationFields({
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="space-y-2">
-        <Label htmlFor="specification-cpu">vCPU count</Label>
+        <Label htmlFor="specification-cpu">vCPU Count</Label>
         <Input
           id="specification-cpu"
           type="number"
@@ -122,7 +122,7 @@ export function SpecificationFields({
 
       <SizeField
         id="specification-memory"
-        label="Memory limit"
+        label="Memory Limit"
         draft={draft.memory}
         onChange={(memory) => onChange({ ...draft, memory })}
         disabled={disabled}
@@ -133,7 +133,7 @@ export function SpecificationFields({
       <div className="sm:col-span-2">
         <SizeField
           id="specification-root-disk"
-          label="Root disk size"
+          label="Root Disk Size"
           draft={draft.rootDisk}
           onChange={(rootDisk) => onChange({ ...draft, rootDisk })}
           disabled={disabled || !specification.root_disk.editable}

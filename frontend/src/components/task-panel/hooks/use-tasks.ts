@@ -331,7 +331,7 @@ export function useKillConsoleSession() {
       }
       toast({
         title: "Session killed",
-        description: `Console session for ${instanceName} has been terminated`,
+        description: `Console session for ${instanceName} has been terminated.`,
       });
       void reconcileMutationImpact(queryClient, "task.session").catch(() => undefined);
     },

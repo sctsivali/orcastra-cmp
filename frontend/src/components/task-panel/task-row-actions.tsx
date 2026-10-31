@@ -28,7 +28,7 @@ export function TaskRowActions({ task, onShow, onCancel, canCancel, readOnly }: 
     toast(
       ok
         ? { title: "Copied", description: "Task id copied to clipboard." }
-        : { title: "Copy failed", description: "Select the id and copy it manually.", variant: "destructive" },
+        : { title: "Could not copy task ID", description: "Select the id and copy it manually.", variant: "destructive" },
     );
   }, [task.id]);
 

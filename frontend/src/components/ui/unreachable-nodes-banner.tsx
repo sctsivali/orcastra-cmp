@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 import type { FanoutReachability } from "@/types/api";
 
 export interface Reachability {
@@ -145,7 +145,7 @@ function UnreachableNodesDetail({
       sentence={
         <>
           <span className="font-medium">
-            {lead} {nodes.length} cluster{nodes.length === 1 ? "" : "s"}.
+            {lead} {plural(nodes.length, "cluster")}.
           </span>{" "}
           {tail}
         </>

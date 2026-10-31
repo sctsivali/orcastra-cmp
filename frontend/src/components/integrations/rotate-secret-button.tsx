@@ -52,7 +52,7 @@ export function RotateSecretButton({
       onRotated(response);
     },
     onError: (error: Error) => {
-      toast({ title: "Failed to rotate the secret", description: error.message, variant: "destructive" });
+      toast({ title: "Could not rotate secret", description: error.message, variant: "destructive" });
     },
     onSettled: () => {
       rotateInFlightRef.current = false;

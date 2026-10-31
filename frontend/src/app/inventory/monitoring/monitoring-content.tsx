@@ -13,6 +13,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +30,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useClusterLabel } from "@/hooks/use-node-picker-options";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { cn, formatBytes, formatNetworkRate } from "@/lib/utils";
+import { cn, formatBytes, formatNetworkRate, formatInstanceType, plural } from "@/lib/utils";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 import { InstanceMonitoringSummary, VMInfo } from "@/types";
 import type {
@@ -215,7 +216,7 @@ const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payl
       <div className="bg-card border rounded-lg shadow-lg p-3">
         <p className="text-xs text-muted-foreground mb-1">{label}</p>
         <p className="text-sm font-medium" style={{ color: CHART_COLORS.memory }}>
-          Memory Usage : {data.memory.toFixed(1)}%
+          Memory Usage: {data.memory.toFixed(1)}%
         </p>
         {data.memoryUsedBytes > 0 && (
           <p className="text-xs text-muted-foreground mt-1">
@@ -512,7 +513,7 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
             {getTitle()}
           </DialogTitle>
           <DialogDescription>
-            {instances.length} instance{instances.length !== 1 ? "s" : ""} found
+            {plural(instances.length, "instance")} found
           </DialogDescription>
         </DialogHeader>
         <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-2">
@@ -555,17 +556,14 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
                   <div className="flex items-center gap-2">
                     {getStatusBadge(instance.status)}
                     <Badge variant="outline" className="text-xs">
-                      {instance.type === "virtual-machine" ? "VM" : "CT"}
+                      {formatInstanceType(instance.type)}
                     </Badge>
                   </div>
                 </div>
               );
             })
           ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              <Box className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No instances found</p>
-            </div>
+            <EmptyState icon={Box} title="No instances found" className="py-8" />
           )}
         </div>
         {/* Absent rather than disabled when everything fits on one page. Sits outside the
@@ -1508,7 +1506,7 @@ export default function MonitoringContent() {
         <MetricCard
           title="Total Instances"
           value={filteredStats.total_instances}
-          subtitle={selectedNode === "all" ? `${filteredStats.container_count} containers • ${filteredStats.vm_count} VMs` : `on ${labelOf(selectedNode)}`}
+          subtitle={selectedNode === "all" ? `${plural(filteredStats.container_count, "container")} · ${plural(filteredStats.vm_count, "VM")}` : `on ${labelOf(selectedNode)}`}
         />
         <MetricCard
           title="Running"
@@ -2305,10 +2303,7 @@ export default function MonitoringContent() {
               <NodeCard key={node.node_name} node={node} displayName={labelOf(node.node_name)} />
             ))}
             {filteredNodes.length === 0 && (
-              <div className="col-span-full text-center py-8 text-muted-foreground">
-                <Server className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>No clusters connected</p>
-              </div>
+              <EmptyState icon={Server} title="No clusters connected" className="col-span-full py-8" />
             )}
           </div>
         </CardContent>

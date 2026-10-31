@@ -82,7 +82,7 @@ export function SpecificationOperationView({
         <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={onClose} disabled={updating}>Close</Button>
           <Button variant="outline" onClick={onReload} disabled={updating}>
-            Reload actual state
+            Reload current state
           </Button>
           <Button
             onClick={() => onRetryAttempt(attempt)}
@@ -105,13 +105,13 @@ export function SpecificationOperationView({
             <AlertTriangle className="h-4 w-4" aria-hidden="true" />
             <AlertTitle>Operation identity conflict</AlertTitle>
             <AlertDescription>
-              {identityConflict} Reload actual state before attempting another update.
+              {identityConflict} Reload current state before attempting another update.
             </AlertDescription>
           </Alert>
         </DialogBody>
         <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={onClose}>Close</Button>
-          <Button onClick={onReload}>Reload actual state</Button>
+          <Button onClick={onReload}>Reload current state</Button>
         </DialogFooter>
       </>
     );
@@ -168,7 +168,7 @@ export function SpecificationOperationView({
         </DialogBody>
         <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={onClose}>Close</Button>
-          <Button onClick={onReload}>Reload actual state</Button>
+          <Button onClick={onReload}>Reload current state</Button>
         </DialogFooter>
       </>
     );
@@ -205,7 +205,7 @@ export function SpecificationOperationView({
         ) : (
           <>
             <Button variant="outline" onClick={onClose}>Close</Button>
-            <Button onClick={onReload}>Reload actual state</Button>
+            <Button onClick={onReload}>Reload current state</Button>
           </>
         )}
       </DialogFooter>

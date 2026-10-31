@@ -20,6 +20,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
+import { EmptyState } from "@/components/ui/empty-state";
 import { OrphanRulesNotice } from "@/components/tenant-access/orphan-rules-notice";
 import { PolicyTermStatus } from "@/components/tenant-access/policy-term-status";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -57,6 +58,7 @@ import {
   TENANT_PERMISSION_LABELS, TENANT_PERMISSION_DESCRIPTIONS,
   ALL_TENANT_PERMISSIONS,
 } from "@/types";
+import { plural } from "@/lib/utils";
 
 // filter out snapshot (not ready yet)
 const VISIBLE_PERMISSIONS = ALL_TENANT_PERMISSIONS.filter((p) => p !== "snapshot");
@@ -386,7 +388,7 @@ function PolicyEditorDialog({
       <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle>
-            {isEdit ? "Edit Policy" : "Create Access Policy"}
+            {isEdit ? "Edit Policy" : "Create Policy"}
           </DialogTitle>
           <DialogDescription>
             {isEdit
@@ -401,7 +403,7 @@ function PolicyEditorDialog({
               <Label htmlFor="mgmt-policy-name" className="text-xs">Policy Name</Label>
               <Input
                 id="mgmt-policy-name"
-                placeholder="e.g. Production Read-Only"
+                placeholder="for example, Production Read-Only"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 maxLength={100}
@@ -410,7 +412,7 @@ function PolicyEditorDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="mgmt-policy-desc" className="text-xs">Description (optional)</Label>
+              <Label htmlFor="mgmt-policy-desc" className="text-xs">Description (Optional)</Label>
               <Textarea
                 id="mgmt-policy-desc"
                 placeholder="Describe what this policy allows…"
@@ -677,10 +679,10 @@ function PolicyManagementSectionContent() {
     onSuccess: (policy) => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setCreateOpen(false);
-      toast({ title: "Policy Created", description: `"${policy.name}" is ready to assign.` });
+      toast({ title: "Policy created", description: `"${policy.name}" is ready to assign.` });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not create policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -690,10 +692,10 @@ function PolicyManagementSectionContent() {
     onSuccess: (policy) => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setEditPolicy(null);
-      toast({ title: "Policy Updated", description: `"${policy.name}" updated.` });
+      toast({ title: "Policy updated", description: `"${policy.name}" updated.` });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not update policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -702,10 +704,10 @@ function PolicyManagementSectionContent() {
     onSuccess: () => {
       void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
       setDeleteId(null);
-      toast({ title: "Policy Deleted" });
+      toast({ title: "Policy deleted" });
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Could not delete policy", description: err.message, variant: "destructive" });
     },
   });
 
@@ -758,23 +760,22 @@ function PolicyManagementSectionContent() {
                 <span className="ml-2 text-sm text-muted-foreground">Loading policies…</span>
               </div>
             ) : policies.length === 0 ? (
-              <div className="text-center py-10 text-muted-foreground">
-                <ShieldCheck className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                <p className="text-sm font-medium">No access policies yet</p>
-                <p className="text-xs mt-1 max-w-sm mx-auto">
-                  Access policies define what clusters, projects, and instances tenant users can access.
-                  Create your first policy to start managing tenant permissions.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-4 text-xs"
-                  onClick={() => setCreateOpen(true)}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  Create Your First Policy
-                </Button>
-              </div>
+              <EmptyState
+                icon={ShieldCheck}
+                title="No access policies yet"
+                description="Access policies define what clusters, projects, and instances tenant users can access. Create your first policy to start managing tenant permissions."
+                action={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setCreateOpen(true)}
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" />
+                    Create Your First Policy
+                  </Button>
+                }
+              />
             ) : (
               <>
                 <TableToolbar filters={filters} noun="policies" className="mb-4" />
@@ -813,7 +814,7 @@ function PolicyManagementSectionContent() {
                         direction={policySortDirection}
                         onSort={handlePolicySort}
                       />
-                      <TableHead className="w-[100px]">Actions</TableHead>
+                      <TableHead className="w-[100px]"><span className="sr-only">Actions</span></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -822,7 +823,7 @@ function PolicyManagementSectionContent() {
                         colSpan={POLICY_COLUMN_COUNT}
                         icon={ShieldCheck}
                         title="No policy matches the current filters"
-                        description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${policies.length} policies.`}
+                        description={`${plural(filters.activeFilterCount, "filter")} active on ${plural(policies.length, "policy", "policies")}.`}
                         action={
                           <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
                             Clear filters
@@ -854,10 +855,10 @@ function PolicyManagementSectionContent() {
                             {org?.name || `ID ${policy.organization_id}`}
                           </TableCell>
                           <TableCell>
-                            {policy.rules?.length || 0} {(policy.rules?.length || 0) === 1 ? "rule" : "rules"}
+                            {plural(policy.rules?.length || 0, "rule")}
                           </TableCell>
                           <TableCell>
-                            {policy.assignments_count} {policy.assignments_count === 1 ? "user" : "users"}
+                            {plural(policy.assignments_count, "user")}
                           </TableCell>
                           <TableCell>
                             <div className="flex gap-1">
@@ -895,7 +896,7 @@ function PolicyManagementSectionContent() {
                                     <DialogDescription>
                                       Delete <strong>&quot;{policy.name}&quot;</strong>?
                                       {policy.assignments_count > 0 && (
-                                        <> This will remove {policy.assignments_count} assignment(s).</>
+                                        <> This will remove {plural(policy.assignments_count, "assignment")}.</>
                                       )}
                                       {" "}This cannot be undone.
                                     </DialogDescription>

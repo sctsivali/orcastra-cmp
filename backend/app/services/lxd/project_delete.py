@@ -72,7 +72,7 @@ def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
     except LXDAPIException as e:
         if definitive_lxd_refusal(e, phase):
             # LXD's own sentence ("Only empty projects can be removed"), not transport text.
-            raise LXDOperationError(f"Failed to delete project: {e}") from e
+            raise LXDOperationError(f"Could not delete project: {e}") from e
         raise LXDOperationUnknownError("delete", name) from e
     except requests_exceptions.RequestException as e:
         if phase == "connecting":
@@ -81,5 +81,5 @@ def delete_project_sync(client_for: ClientFor, host: str, name: str) -> None:
     except Exception as e:  # noqa: BLE001 - after submit, the readback decides
         logger.error(f"Error deleting project '{name}' from {host}: {type(e).__name__}")
         if phase == "connecting":
-            raise LXDOperationError("Failed to delete project") from e
+            raise LXDOperationError("Could not delete project") from e
         raise LXDOperationUnknownError("delete", name) from e

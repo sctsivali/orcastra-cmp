@@ -1359,7 +1359,7 @@ class InstanceManager:
             ) from exc
         except Exception as e:
             logger.error(f"Error getting VM {name} from {host}: {e}")
-            raise LXDOperationError(f"Failed to get VM: {str(e)}")
+            raise LXDOperationError(f"Could not get VM: {str(e)}")
     
     @audit_operation("lxd.instance.start", "instance")
     async def start_vm(
@@ -1395,7 +1395,7 @@ class InstanceManager:
             elif instance.status == "Frozen":
                 raise LXDOperationError(
                     f"Instance {name} is frozen by billing policy and cannot be started. "
-                    f"Please reactivate the subscription through the billing portal."
+                    f"Reactivate the subscription through the billing portal."
                 )
             else:
                 started = await asyncio.to_thread(
@@ -1416,7 +1416,7 @@ class InstanceManager:
             return vm_info
             
         except LXDAPIException as e:
-            raise LXDOperationError(f"Failed to start VM: {str(e)}")
+            raise LXDOperationError(f"Could not start VM: {str(e)}")
         except (requests_exc.ConnectionError, requests_exc.Timeout) as e:
             # important: the cluster stopped answering part-way through the start. That is an
             # upstream availability problem the caller can retry, not an internal fault, and
@@ -1537,7 +1537,7 @@ class InstanceManager:
             return vm_info
 
         except LXDAPIException as e:
-            raise LXDOperationError(f"Failed to stop VM: {str(e)}")
+            raise LXDOperationError(f"Could not stop VM: {str(e)}")
     
     @audit_operation("lxd.instance.restart", "instance")
     async def restart_vm(
@@ -1564,7 +1564,7 @@ class InstanceManager:
             if instance.status == "Frozen":
                 raise LXDOperationError(
                     f"Instance {name} is frozen by billing policy and cannot be restarted. "
-                    f"Please reactivate the subscription through the billing portal."
+                    f"Reactivate the subscription through the billing portal."
                 )
 
             await assert_instance_not_migration_fenced(
@@ -1605,7 +1605,7 @@ class InstanceManager:
             return vm_info
 
         except LXDAPIException as e:
-            raise LXDOperationError(f"Failed to restart VM: {str(e)}")
+            raise LXDOperationError(f"Could not restart VM: {str(e)}")
     
     @audit_operation("lxd.instance.delete", "instance")
     async def delete_vm(
@@ -1665,7 +1665,7 @@ class InstanceManager:
             return project_name
             
         except LXDAPIException as e:
-            raise LXDOperationError(f"Failed to delete VM: {str(e)}")
+            raise LXDOperationError(f"Could not delete VM: {str(e)}")
 
     async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None) -> Dict[str, Any]:
         """Gather what the rebuild flow needs before it starts: the instance status,
@@ -1957,7 +1957,7 @@ class InstanceManager:
             return vm_info
 
         except LXDAPIException as e:
-            raise LXDOperationError(f"Failed to create VM: {_create_error(e)}")
+            raise LXDOperationError(f"Could not create VM: {_create_error(e)}")
 
     async def create_instance(
         self,
@@ -2274,7 +2274,7 @@ class InstanceManager:
         except (ClientConnectionFailed, requests_exc.ConnectionError, requests_exc.Timeout) as e:
             # Cluster unreachable during exists()/POST. Surface as a connection
             # error so the router maps it to 503, not a blanket 500.
-            raise LXDConnectionError(f"Failed to reach {host}: {e}")
+            raise LXDConnectionError(f"Could not reach {host}: {e}")
         except (BlockingPoolFull, BlockingTimeout) as e:
             raise LXDConnectionError(
                 f"Create capacity is temporarily unavailable on {host}"
@@ -2284,8 +2284,8 @@ class InstanceManager:
             # a field. Everything else stays the free text it always was.
             hit = project_limit_from_lxd_error(str(e))
             if hit is not None:
-                raise LXDProjectLimitError(f"Failed to create VM: {_create_error(e)}", hit)
-            raise LXDOperationError(f"Failed to create VM: {_create_error(e)}")
+                raise LXDProjectLimitError(f"Could not create VM: {_create_error(e)}", hit)
+            raise LXDOperationError(f"Could not create VM: {_create_error(e)}")
         finally:
             if not heartbeat_transferred:
                 await _stop_create_heartbeat(heartbeat_task)

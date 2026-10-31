@@ -207,15 +207,15 @@ test("Partner creates a durable draft and resumes it after reload", async ({ pag
     await expect(page.getByText("Step 1 of 7: Choose the source", { exact: true })).toBeVisible();
   }
 
-  await choose(page, "Source cluster", "Cluster A");
-  await choose(page, "Source project", "default");
-  await choose(page, "Instance name", "source-vm");
+  await choose(page, "Source Cluster", "Cluster A");
+  await choose(page, "Source Project", "default");
+  await choose(page, "Instance Name", "source-vm");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
-  await choose(page, "Destination cluster", "Cluster B");
-  await choose(page, "Destination project", "target-project");
-  await expect(page.getByLabel("Destination member (optional)")).toBeVisible();
+  await choose(page, "Destination Cluster", "Cluster B");
+  await choose(page, "Destination Project", "target-project");
+  await expect(page.getByLabel("Destination Member (Optional)")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
 
   await expect(page).toHaveURL(/\bplan=plan-resume\b/);
@@ -292,15 +292,15 @@ test("editing a resumed source detaches to a new plan without reusing the stale 
     await expect(page.getByRole("dialog").getByRole("heading", { name: expectedHeading })).toBeVisible();
   }
 
-  await choose(page, "Source cluster", "Cluster B");
+  await choose(page, "Source Cluster", "Cluster B");
   await expect(page).not.toHaveURL(new RegExp(`plan=${resumed.plan_id}`));
   await expect(page).toHaveURL(/\bnew=1\b/);
-  await expect(page.getByLabel("Instance name", { exact: true })).toHaveText("Choose an instance");
+  await expect(page.getByLabel("Instance Name", { exact: true })).toHaveText("Choose an instance");
   await expect(page.getByRole("dialog").getByRole("button", { name: "Continue" })).toBeDisabled();
 
-  await choose(page, "Source cluster", "Cluster A");
-  await choose(page, "Source project", "default");
-  await choose(page, "Instance name", "source-vm");
+  await choose(page, "Source Cluster", "Cluster A");
+  await choose(page, "Source Project", "default");
+  await choose(page, "Instance Name", "source-vm");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
@@ -481,7 +481,7 @@ test("a dir-pool source the target cannot bound waits for the operator to accept
   await dialog.getByRole("button", { name: "Continue" }).click();
   await expect(dialog.getByRole("heading", { name: "Approve execution" })).toBeVisible();
 
-  await page.getByLabel("Reason for this migration").fill("Copy within Pandora's pool");
+  await page.getByLabel("Reason for This Migration").fill("Copy within Pandora's pool");
   for (const label of [
     "I reviewed the transfer impact. The copy is a new, independent instance.",
     "I reviewed snapshot schedule and billing impact for every source workload.",
@@ -577,7 +577,7 @@ test("read-only mode still opens the wizard from the row menu and the center, an
   await move.click();
   await expect(page).toHaveURL(/\/inventory\/migrations\?.*\bnew=1\b/);
   await expect(dialog.getByRole("heading", { name: "Choose the source" })).toBeVisible();
-  await expect(page.getByLabel("Instance name", { exact: true })).toContainText("source-vm");
+  await expect(page.getByLabel("Instance Name", { exact: true })).toContainText("source-vm");
   await expect(dialog.getByText("Execution is unavailable", { exact: true })).toBeVisible();
   await expect(dialog.getByText(/Disabled in read-only mode\. A saved draft can still be reviewed/)).toBeVisible();
   await closeDialog(page);
@@ -602,13 +602,13 @@ test("the source cluster picker does not wait for the project inventory", async 
   const api = await installMigrationFixtures(page, "partner", { projectsGate });
 
   await page.goto("/inventory/migrations?new=1");
-  await choose(page, "Source cluster", "Cluster A");
-  const project = page.getByLabel("Source project", { exact: true });
+  await choose(page, "Source Cluster", "Cluster A");
+  const project = page.getByLabel("Source Project", { exact: true });
   await expect(project).toBeDisabled();
   await expect(project).toContainText("Loading projects");
 
   releaseProjects();
-  await choose(page, "Source project", "default");
+  await choose(page, "Source Project", "default");
   await expectCleanMigrationHarness(api);
 });
 
@@ -618,16 +618,16 @@ test("copy can target a specific destination member under a suggested new name",
 
   await page.goto("/inventory/migrations?new=1");
   await choose(page, "Intent", "Copy");
-  await choose(page, "Source cluster", "Cluster A");
-  await choose(page, "Source project", "default");
-  await choose(page, "Instance name", "source-vm");
+  await choose(page, "Source Cluster", "Cluster A");
+  await choose(page, "Source Project", "default");
+  await choose(page, "Instance Name", "source-vm");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByRole("dialog").getByRole("heading", { name: "Choose the destination" })).toBeVisible();
-  await choose(page, "Destination cluster", "Cluster B");
-  await choose(page, "Destination project", "target-project");
-  await expect(page.getByLabel("Destination instance name")).toHaveValue("source-vm-copy");
-  await choose(page, "Destination member (optional)", "member-b2");
+  await choose(page, "Destination Cluster", "Cluster B");
+  await choose(page, "Destination Project", "target-project");
+  await expect(page.getByLabel("Destination Instance Name")).toHaveValue("source-vm-copy");
+  await choose(page, "Destination Member (Optional)", "member-b2");
   await page.getByRole("dialog").getByRole("button", { name: "Continue" }).click();
 
   await expect(page).toHaveURL(/\bplan=plan-copy-member\b/);
@@ -698,7 +698,7 @@ test("an enabled project relocation opens the wizard at the project source", asy
   await expect(dialog.getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   // The member is the whole destination here, so Continue waits for it.
   await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled();
-  await choose(page, "Destination member", "member-a2");
+  await choose(page, "Destination Member", "member-a2");
   await dialog.getByRole("button", { name: "Continue" }).click();
   await expect.poll(() => api.createdBodies.length).toBe(1);
   expect(api.createdBodies[0]).toMatchObject({
@@ -720,10 +720,10 @@ test("relocating a project to another cluster names a new project and refuses an
   await dialog.getByRole("button", { name: "Continue" }).click();
   await expect(dialog.getByRole("heading", { name: "Choose the destination" })).toBeVisible();
   // The source cluster is offered but cannot be chosen: renaming covers that case.
-  await dialog.getByLabel("Destination cluster", { exact: true }).click();
+  await dialog.getByLabel("Destination Cluster", { exact: true }).click();
   await expect(page.getByRole("option", { name: /cluster-a/i })).toHaveAttribute("aria-disabled", "true");
   await page.getByRole("option", { name: /cluster-b/i }).click();
-  const name = dialog.getByLabel("Project name on the destination", { exact: true });
+  const name = dialog.getByLabel("Project Name on the Destination", { exact: true });
   await expect(name).toHaveValue("default");
   await name.fill("target-project");
   await expect(dialog.getByText("already exists there", { exact: false })).toBeVisible();
@@ -750,7 +750,7 @@ test("renaming a project stays on its cluster and needs a different name", async
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("Relocation", { exact: true })).toContainText("Rename Project on This Cluster");
   await dialog.getByRole("button", { name: "Continue" }).click();
-  const name = dialog.getByLabel("New project name", { exact: true });
+  const name = dialog.getByLabel("New Project Name", { exact: true });
   await name.fill("default");
   await expect(dialog.getByText("Choose a name other than the current one.")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Continue" })).toBeDisabled();
@@ -780,7 +780,7 @@ test("execution retry reuses the idempotency key for the same reviewed payload",
     "I understand the source is kept stopped for the retention window and then deleted.",
     "I reviewed snapshot schedule and billing impact for every source workload.",
   ];
-  await page.getByLabel("Reason for this migration").fill("Approved change CHG-1024");
+  await page.getByLabel("Reason for This Migration").fill("Approved change CHG-1024");
   for (const label of acknowledgements) await page.getByLabel(label).check();
 
   await page.getByRole("dialog").getByRole("button", { name: "Start move" }).click();

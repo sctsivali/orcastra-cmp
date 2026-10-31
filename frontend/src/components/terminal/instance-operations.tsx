@@ -32,6 +32,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { POWER_ACTION_PAST } from "@/lib/instance-action-copy";
 import { LXDInstanceStatus, useTerminalStore } from "@/lib/terminal-store";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -57,7 +58,6 @@ interface ConfirmDialogState {
 }
 
 
-const PAST_TENSE: Record<string, string> = { start: "started", stop: "stopped", restart: "restarted" };
 export function InstanceOperations({
   terminalId,
   instanceName,
@@ -129,8 +129,8 @@ export function InstanceOperations({
       }
       
       toast({
-        title: `Instance ${PAST_TENSE[operation]}`,
-        description: `${instanceName} is now ${newStatus.toLowerCase()}`,
+        title: `Instance ${POWER_ACTION_PAST[operation]}`,
+        description: `${instanceName} is now ${newStatus.toLowerCase()}.`,
       });
       
     } catch (error) {
@@ -138,8 +138,8 @@ export function InstanceOperations({
       console.error(`Failed to ${operation} instance:`, error);
       updateInstanceStatus(terminalId, 'Error');
       toast({
-        title: `Failed to ${operation} instance`,
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
+        title: `Could not ${operation} instance`,
+        description: error instanceof Error ? error.message : 'Unknown error occurred.',
         variant: 'destructive',
       });
     } finally {

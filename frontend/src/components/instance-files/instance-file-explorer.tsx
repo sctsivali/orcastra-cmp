@@ -21,7 +21,7 @@ import { guestText } from "@/lib/instance-files/guest-text";
 import { directoryKey } from "@/lib/instance-files/keys";
 import { joinPath } from "@/lib/instance-files/path";
 import { describeReadError } from "@/lib/read-error";
-import { cn, formatBytes, formatCount } from "@/lib/utils";
+import { cn, formatBytes, formatCount, plural } from "@/lib/utils";
 import { ConflictDialog } from "./conflict-dialog";
 import { ExplorerDialogs, type Prompt } from "./explorer-dialogs";
 import { isDirectoryLike, isImageName, type FileActionId } from "./file-actions";
@@ -135,7 +135,7 @@ export function InstanceFileExplorer({
         anchor.remove();
       } catch (error) {
         toast({
-          title: "Download not started",
+          title: "Could not start download",
           description: error instanceof Error ? error.message : "This could not be downloaded.",
           variant: "destructive",
         });
@@ -151,7 +151,7 @@ export function InstanceFileExplorer({
       else if (entry.type === "file" || entry.target_type === "file") {
         dispatch({ type: "open", file: { path, kind: isImageName(entry.name) ? "image" : "text" } });
       } else {
-        toast({ title: "This cannot be opened", description: `${guestText(entry.name)} is not a regular file.` });
+        toast({ title: "Could not open item", description: `${guestText(entry.name)} is not a regular file.` });
       }
     },
     [dispatch, enter, state.path],
@@ -267,7 +267,6 @@ export function InstanceFileExplorer({
         filter={state.filter}
         showHidden={state.showHidden}
         treeShown={mode === "wide" ? treePinned : treeOverlay}
-        refreshing={listing.isFetching}
         writeReason={writeReason}
         editingPath={editingPath}
         onEditingPath={setEditingPath}
@@ -278,7 +277,10 @@ export function InstanceFileExplorer({
         onFilter={(value) => dispatch({ type: "filter", value })}
         onShowHidden={(value) => dispatch({ type: "hidden", value })}
         onToggleTree={() => (mode === "wide" ? setTreePinned(!treePinned) : setTreeOverlay(!treeOverlay))}
-        onRefresh={refresh}
+        // important: refetch rather than refresh. invalidateQueries swallows a failed read, which
+        // the button would report as a success. And refetch, unlike an invalidation, runs a
+        // disabled query, so it is guarded: this toolbar stays up for an account without files.
+        onRefresh={() => (canUse ? listing.refetch({ throwOnError: true }) : undefined)}
         onNewFolder={() => setPrompt({ kind: "new-folder" })}
         onNewFile={() => setPrompt({ kind: "new-file" })}
         onUploadFiles={() => filesInput.current?.click()}
@@ -324,10 +326,10 @@ export function InstanceFileExplorer({
       {data && data.stale_uploads.length > 0 && !writeReason && (
         <Alert className="rounded-none border-x-0 border-t-0 py-1.5">
           <AlertDescription className="flex flex-wrap items-center gap-2 text-xs">
-            {data.stale_uploads.length} unfinished {data.stale_uploads.length === 1 ? "upload left" : "uploads left"} a temporary file here.
+            {plural(data.stale_uploads.length, "unfinished upload left", "unfinished uploads left")} a temporary file here.
             <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => {
               void actions.purgeUploads(state.path).catch((error: unknown) => {
-                toast({ title: "Temporary files not removed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+                toast({ title: "Could not remove temporary files", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
               });
             }}>Remove</Button>
           </AlertDescription>

@@ -55,6 +55,7 @@ import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
+import { plural } from "@/lib/utils";
 
 // note: no local ACLInfo. It duplicated NetworkACLInfo and drifted from it, which is how a
 // field the API had started sending stayed invisible to this page.
@@ -258,7 +259,7 @@ function NetworkACLsContent() {
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                {canManageACL && <TableHead className="text-right">Actions</TableHead>}
+                {canManageACL && <TableHead className="text-right"><span className="sr-only">Actions</span></TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -397,9 +398,7 @@ function NetworkACLsContent() {
             <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingDelete?.used_by?.length
-                ? `This ACL is attached to ${pendingDelete.used_by.length} resource${
-                    pendingDelete.used_by.length === 1 ? "" : "s"
-                  }. LXD refuses to delete an ACL that is still in use.`
+                ? `This ACL is attached to ${plural(pendingDelete.used_by.length, "resource")}. LXD refuses to delete an ACL that is still in use.`
                 : "This removes the policy from the cluster. It cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -423,7 +422,7 @@ function NetworkACLsContent() {
                   refreshNow();
                 } catch (e) {
                   toast({
-                    title: "Could not delete the network ACL",
+                    title: "Could not delete network ACL",
                     description:
                       e instanceof Error ? e.message : "The cluster refused the delete.",
                     variant: "destructive",
@@ -490,8 +489,8 @@ function RuleCountCell({
 }) {
   if (count === 0) return <TableEmptyValue label={`No ${direction} rules`} />;
   return (
-    <TableLink onClick={onOpen} aria-label={`Show the ${count} ${direction} rules on ${aclName}`}>
-      {`${count} rule${count === 1 ? "" : "s"}`}
+    <TableLink onClick={onOpen} aria-label={`Show the ${plural(count, `${direction} rule`)} on ${aclName}`}>
+      {plural(count, "rule")}
     </TableLink>
   );
 }

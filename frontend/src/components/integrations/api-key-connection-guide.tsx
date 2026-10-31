@@ -1,6 +1,6 @@
 "use client";
 
-import { formatDate } from "@/lib/utils";
+import { formatDate, plural } from "@/lib/utils";
 import { useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -116,14 +116,14 @@ export function ApiKeyConnectionGuide({
       setResult(answer);
       if (!answer.valid) {
         toast({
-          title: "Key was refused",
+          title: "API key refused",
           description: answer.error || "The server did not accept this key.",
           variant: "destructive",
         });
       }
     } catch (error) {
       toast({
-        title: "Could not reach the server",
+        title: "Could not reach server",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       });
@@ -175,7 +175,7 @@ export function ApiKeyConnectionGuide({
           )}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          {key.cluster_permissions.length} cluster(s).{" "}
+          {plural(key.cluster_permissions.length, "cluster")}.{" "}
           {key.expires_at
             ? `Expires ${formatDate(key.expires_at)}. Nothing warns you before that date, so have the integration read
                 expires_in_days from GET /integrations/whoami.`
@@ -287,7 +287,7 @@ export function ApiKeyConnectionGuide({
             <AlertDescription>
               {result.valid ? (
                 <span>
-                  Reaches {result.cluster_permissions.length} cluster(s)
+                  Reaches {plural(result.cluster_permissions.length, "cluster")}
                   {result.cluster_permissions.length > 0 && (
                     <>
                       {": "}
