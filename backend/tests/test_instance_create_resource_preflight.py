@@ -217,9 +217,10 @@ def test_project_aggregate_cpu_memory_and_disk_are_projected(monkeypatch):
     assert response.ready is False
     assert _codes(response).count("PROJECT_QUOTA_EXCEEDED") == 3
     messages = " ".join(issue.message for issue in response.blockers)
-    assert "limits.cpu" in messages
-    assert "limits.memory" in messages
-    assert "root disk size" in messages
+    assert "vCPUs" in messages
+    assert "of memory" in messages
+    assert "of root disk" in messages
+    assert "limits." not in messages
 
 
 def test_incomplete_usage_only_blocks_a_configured_relevant_quota(monkeypatch):
@@ -394,3 +395,18 @@ def test_an_omitted_pool_is_left_to_the_daemon_default():
 
     assert response.ready is True
     assert not any(path[:1] == ("storage-pools",) for path, _params, _timeout in client.reads)
+
+
+def test_a_quota_refusal_reads_in_the_operators_words() -> None:
+    """The figure carries its unit, so a config key beside it only said the limit twice."""
+    from app.services.lxd.create_preflight import _quota_refusal
+
+    assert _quota_refusal("cpu", "", 6, 4) == (
+        "Creating this instance would allocate 6 vCPUs, over the project's limit of 4 vCPUs."
+    )
+    assert _quota_refusal("memory_bytes", " of memory", 5_000_000_000, 4_000_000_000) == (
+        "Creating this instance would allocate 5 GB of memory, over the project's limit of 4 GB."
+    )
+    assert _quota_refusal("disk_bytes", " of root disk", 30_000_000_000, 20_000_000_000) == (
+        "Creating this instance would allocate 30 GB of root disk, over the project's limit of 20 GB."
+    )

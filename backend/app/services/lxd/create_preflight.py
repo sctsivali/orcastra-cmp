@@ -63,6 +63,13 @@ def _quota_amount(quota_field: str, amount: int) -> str:
     return format_size(amount)
 
 
+def _quota_refusal(quota_field: str, what: str, projected: int, limit: int) -> str:
+    return (
+        f"Creating this instance would allocate {_quota_amount(quota_field, projected)}{what}, "
+        f"over the project's limit of {_quota_amount(quota_field, limit)}."
+    )
+
+
 def _ordered_unique(values: Optional[Iterable[str]], default: str) -> List[str]:
     return list(dict.fromkeys(values or [default]))
 
@@ -281,11 +288,11 @@ def _quota_state(
         "disk_bytes": parse_lxd_size(root.get("size")),
     }
     fields = {
-        "cpu": ("config", "limits.cpu"),
-        "memory_bytes": ("config", "limits.memory"),
-        "disk_bytes": ("devices", "root disk size"),
+        "cpu": ("config", "vCPU", ""),
+        "memory_bytes": ("config", "memory", " of memory"),
+        "disk_bytes": ("devices", "root disk", " of root disk"),
     }
-    for quota_field, (request_field, label) in fields.items():
+    for quota_field, (request_field, label, what) in fields.items():
         limit = usage.limits.get(quota_field)
         if limit is None:
             continue
@@ -320,10 +327,7 @@ def _quota_state(
                 InstanceCreatePreflightIssue(
                     code="PROJECT_QUOTA_EXCEEDED",
                     field=request_field,
-                    message=(
-                        f"Creating this instance would allocate {_quota_amount(quota_field, projected)} "
-                        f"of the project's {_quota_amount(quota_field, limit)} {label} limit."
-                    ),
+                    message=_quota_refusal(quota_field, what, projected, limit),
                 )
             )
 
