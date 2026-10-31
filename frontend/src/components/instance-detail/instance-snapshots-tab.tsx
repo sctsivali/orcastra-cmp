@@ -88,7 +88,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
   // dialog owns the ambiguous-outcome guard and draft; replacing this subtree during its Check
   // snapshots flow would erase both after a non-idempotent request may have reached the cluster.
   if (isLoading && !creating && !pendingSnapshot) {
-    return <p className="text-sm text-muted-foreground py-6">Reading snapshots...</p>;
+    return <p className="text-sm text-muted-foreground py-6">Reading snapshots…</p>;
   }
   if (isError && !creating && !pendingSnapshot) {
     return (

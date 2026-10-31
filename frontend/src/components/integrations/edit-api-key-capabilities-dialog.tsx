@@ -154,11 +154,11 @@ export function EditAPIKeyCapabilitiesDialog({
             </Button>
             {warning ? (
               <Button type="button" variant="destructive" disabled={isSubmitting} onClick={() => void save(true)}>
-                {isSubmitting ? "Saving..." : "Withdraw Anyway"}
+                {isSubmitting ? "Saving…" : "Withdraw Anyway"}
               </Button>
             ) : (
               <Button type="submit" disabled={isSubmitting || selected.length === 0}>
-                {isSubmitting ? "Saving..." : "Save Capabilities"}
+                {isSubmitting ? "Saving…" : "Save Capabilities"}
               </Button>
             )}
           </DialogFooter>

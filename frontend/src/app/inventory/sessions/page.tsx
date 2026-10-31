@@ -520,7 +520,7 @@ function ActiveSessionsTab() {
               action={<Button variant="outline" size="sm" onClick={() => void fetchSessions(true).catch(() => {})}>Retry</Button>}
             />
           ) : currentLoading && currentSessions.length === 0 ? (
-            <EmptyState icon={Loader2} title="Loading sessions..." iconClassName="animate-spin" />
+            <EmptyState icon={Loader2} title="Loading sessions…" iconClassName="animate-spin" />
           ) : sorted.length === 0 ? (
             currentSessions.length > 0 && filters.activeFilterCount > 0 ? (
               <EmptyState
@@ -923,7 +923,7 @@ function SessionHistoryTab() {
               action={<Button variant="outline" size="sm" onClick={() => void fetchLogs(true).catch(() => {})}>Retry</Button>}
             />
           ) : currentLoading && currentLogs.length === 0 ? (
-            <EmptyState icon={Loader2} title="Loading history..." iconClassName="animate-spin" />
+            <EmptyState icon={Loader2} title="Loading history…" iconClassName="animate-spin" />
           ) : sorted.length === 0 ? (
             <EmptyState
               icon={History}

@@ -270,7 +270,7 @@ function ImageUploader({
               onClick={handleUrlFetch}
               disabled={isLoadingUrl || !urlValue.trim()}
             >
-              {isLoadingUrl ? "Loading..." : "Load"}
+              {isLoadingUrl ? "Loading…" : "Load"}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -717,7 +717,7 @@ export function PersonalizationSettings() {
               <Label htmlFor="tagline">Landing Page Tagline</Label>
               <Textarea
                 id="tagline"
-                placeholder="A unified dashboard for managing..."
+                placeholder="A unified dashboard for managing…"
                 value={settings.branding.tagline}
                 onChange={(e) => updateBranding({ tagline: e.target.value })}
                 rows={3}

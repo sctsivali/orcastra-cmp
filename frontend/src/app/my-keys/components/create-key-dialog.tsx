@@ -102,8 +102,8 @@ export function CreateKeyDialog({
               value={formData.node}
               onValueChange={handleNodeChange}
               options={nodeOptions}
-              placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
-              searchPlaceholder="Search clusters..."
+              placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
+              searchPlaceholder="Search clusters…"
               emptyText="No clusters available."
               disabled={loadingNodes}
             />
@@ -138,12 +138,12 @@ export function CreateKeyDialog({
                   !formData.node
                     ? "Select a cluster first"
                     : projectsLoading
-                      ? "Loading projects..."
+                      ? "Loading projects…"
                       : uniqueProjects.length === 0
                         ? `No projects available for ${formData.node}`
                         : "Select a project"
                 }
-                searchPlaceholder="Search projects..."
+                searchPlaceholder="Search projects…"
                 emptyText="No projects found."
                 disabled={projectsLoading || !formData.node || uniqueProjects.length === 0}
               />
@@ -218,7 +218,7 @@ export function CreateKeyDialog({
         </div>
         <DialogFooter>
           <Button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? "Generating..." : "Generate Key"}
+            {isSubmitting ? "Generating…" : "Generate Key"}
           </Button>
         </DialogFooter>
       </form>

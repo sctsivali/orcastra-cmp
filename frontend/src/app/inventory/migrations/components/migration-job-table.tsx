@@ -91,7 +91,7 @@ export function MigrationJobTable({
   onOpen,
 }: MigrationJobTableProps) {
   return (
-    <Suspense fallback={<p className="text-sm text-muted-foreground" role="status">Loading migration filters...</p>}>
+    <Suspense fallback={<p className="text-sm text-muted-foreground" role="status">Loading migration filters…</p>}>
       <MigrationJobTableContent
         jobs={jobs}
         emptyTitle={emptyTitle}

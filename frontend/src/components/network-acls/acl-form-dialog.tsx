@@ -305,8 +305,8 @@ export function AclFormDialog({
                 value={host}
                 onValueChange={setHost}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
-                searchPlaceholder="Search clusters..."
+                placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
+                searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={isEdit || loadingNodes}
               />
@@ -346,7 +346,7 @@ export function AclFormDialog({
                 onValueChange={setProject}
                 options={projectOptions.map((p) => ({ value: p, label: p }))}
                 placeholder="default"
-                searchPlaceholder="Search projects..."
+                searchPlaceholder="Search projects…"
                 emptyText="No projects found."
                 disabled={isEdit}
               />
@@ -420,7 +420,7 @@ export function AclFormDialog({
             Cancel
           </Button>
           <Button onClick={submit} disabled={!canSubmit}>
-            {submitting ? "Saving..." : isEdit ? "Save changes" : "Create ACL"}
+            {submitting ? "Saving…" : isEdit ? "Save changes" : "Create ACL"}
           </Button>
         </DialogFooter>
       </DialogContent>

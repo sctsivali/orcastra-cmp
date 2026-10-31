@@ -310,8 +310,8 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
                     setProject("default");
                   }}
                   options={nodeOptions}
-                  placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
-                  searchPlaceholder="Search clusters..."
+                  placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
+                  searchPlaceholder="Search clusters…"
                   emptyText="No clusters found."
                   disabled={loadingNodes}
                 />
@@ -333,7 +333,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
                   onValueChange={setProject}
                   options={projectOptions.map((p) => ({ value: p, label: p }))}
                   placeholder="default"
-                  searchPlaceholder="Search projects..."
+                  searchPlaceholder="Search projects…"
                   emptyText="No projects found."
                   disabled={!node}
                 />

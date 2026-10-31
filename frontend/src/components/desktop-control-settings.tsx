@@ -231,7 +231,7 @@ export function DesktopControlSettings() {
 
       <CardContent className="space-y-5">
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading organizations...</p>
+          <p className="text-sm text-muted-foreground">Loading organizations…</p>
         ) : organizations.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             You are not a member of an organization, so there is no consent to give here.
@@ -299,7 +299,7 @@ export function DesktopControlSettings() {
 
             <div className="flex items-center gap-3">
               <Button onClick={save} disabled={!dirty || saving || loadingPolicy}>
-                {saving ? "Saving..." : "Save consent"}
+                {saving ? "Saving…" : "Save consent"}
               </Button>
               {dirty ? (
                 <span className="text-sm text-muted-foreground">Not saved yet</span>

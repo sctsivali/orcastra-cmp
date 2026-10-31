@@ -341,7 +341,7 @@ export function NodeRegisterForm() {
                 {isCheckingAuth ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Checking...
+                    Checking…
                   </>
                 ) : (
                   <>
@@ -518,7 +518,7 @@ export function NodeRegisterForm() {
                 {isSubmitting ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Registering Cluster...
+                    Registering Cluster…
                   </>
                 ) : (
                   "Register Cluster"

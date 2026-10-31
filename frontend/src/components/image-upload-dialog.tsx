@@ -363,8 +363,8 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
                 value={node}
                 onValueChange={selectNode}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select cluster"}
-                searchPlaceholder="Search clusters..."
+                placeholder={loadingNodes ? "Loading…" : "Select cluster"}
+                searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={loadingNodes || busy}
               />
@@ -385,7 +385,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
                 onValueChange={(v) => setImageType(v as ImageType)}
                 options={TYPE_OPTIONS}
                 placeholder="Select type"
-                searchPlaceholder="Search..."
+                searchPlaceholder="Search…"
                 emptyText="No types."
                 disabled={busy}
               />
@@ -399,8 +399,8 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
               value={project}
               onValueChange={setProject}
               options={projectOptions}
-              placeholder={loadingProjects ? "Loading..." : "Select project"}
-              searchPlaceholder="Search projects..."
+              placeholder={loadingProjects ? "Loading…" : "Select project"}
+              searchPlaceholder="Search projects…"
               emptyText="No projects found."
               disabled={!node || loadingProjects || busy}
             />

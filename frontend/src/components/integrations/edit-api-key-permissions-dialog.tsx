@@ -293,7 +293,7 @@ export function EditAPIKeyPermissionsDialog({
                 isSubmitting || selectedClusterIds.length === 0 || specificScopeIncomplete
               }
             >
-              {isSubmitting ? "Saving..." : "Save Access"}
+              {isSubmitting ? "Saving…" : "Save Access"}
             </Button>
           </DialogFooter>
         </form>

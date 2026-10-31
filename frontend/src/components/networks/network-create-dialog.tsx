@@ -149,7 +149,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   const optionsError = Object.values(fieldErrors).find(Boolean) || "";
   const capabilityError = !node ? "" : creation.capabilities.isError
     ? "Network capabilities could not be verified. Retry before creating."
-    : creation.capabilities.isFetching || !creation.capabilities.data ? "Checking network capabilities..."
+    : creation.capabilities.isFetching || !creation.capabilities.data ? "Checking network capabilities…"
     : !creation.capabilities.data.types.includes(type) ? "This cluster does not advertise support for this network type." : "";
   const aclSelectionError = options.acls.length > 0 && (!creation.aclSupported || creation.acls.isError ||
     creation.aclIncomplete || options.acls.some((selected) => !creation.aclNames.includes(selected)))
@@ -243,8 +243,8 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                   setType("bridge");
                 }}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select cluster"}
-                searchPlaceholder="Search clusters..."
+                placeholder={loadingNodes ? "Loading…" : "Select cluster"}
+                searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={loadingNodes || submitting}
               />
@@ -297,7 +297,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
               }}
               options={projectOptions.map((p) => ({ value: p, label: p }))}
               placeholder="default"
-              searchPlaceholder="Search projects..."
+              searchPlaceholder="Search projects…"
               emptyText="No projects found."
               disabled={type !== "ovn" || !node || submitting}
             />
@@ -359,7 +359,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
                       ? "No usable uplink on this cluster"
                       : "Select uplink network"
                 }
-                searchPlaceholder="Search networks..."
+                searchPlaceholder="Search networks…"
                 emptyText="No managed bridge or physical network here."
                 disabled={!node || uplinkOptions.length === 0 || submitting}
               />

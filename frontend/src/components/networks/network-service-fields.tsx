@@ -65,7 +65,7 @@ export function NetworkServiceFields({ type, options, onChange, errors, disabled
         {!aclSupported ? (
           <p className="text-sm text-muted-foreground">{aclUnavailableReason}</p>
         ) : aclLoading ? (
-          <p role="status" className="text-sm text-muted-foreground">Loading network ACLs...</p>
+          <p role="status" className="text-sm text-muted-foreground">Loading network ACLs…</p>
         ) : aclError ? (
           <div className="flex items-center gap-3 text-sm">
             <p role="alert" className="text-destructive">Network ACLs could not be loaded.</p>

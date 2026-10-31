@@ -68,7 +68,7 @@ const MIGRATION_RESOURCES = defineTable<MigrationPlannedResource>()({
 
 export function MigrationResourceTable({ resources }: { resources: MigrationPlannedResource[] }) {
   return (
-    <Suspense fallback={<p className="text-sm text-muted-foreground" role="status">Loading resource filters...</p>}>
+    <Suspense fallback={<p className="text-sm text-muted-foreground" role="status">Loading resource filters…</p>}>
       <MigrationResourceTableContent resources={resources} />
     </Suspense>
   );

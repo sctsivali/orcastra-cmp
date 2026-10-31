@@ -28,7 +28,7 @@ interface TagManagerProps {
   maxTags?: number;
   placeholder?: string;
   className?: string;
-  maxVisible?: number; // Number of tags to show before "more tags..."
+  maxVisible?: number; // Number of tags to show before "more tags…"
 }
 
 export function TagManager({
@@ -36,7 +36,7 @@ export function TagManager({
   onTagsChange,
   readonly = false,
   maxTags = 10,
-  placeholder = "Add tag...",
+  placeholder = "Add tag…",
   className,
   maxVisible = 3,
 }: TagManagerProps) {

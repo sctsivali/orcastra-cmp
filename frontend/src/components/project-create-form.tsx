@@ -309,8 +309,8 @@ export function ProjectCreateForm() {
                   onValueChange={(value) => setValue("host", value)}
                   disabled={nodesLoading}
                   className={errors.host ? "border-destructive" : ""}
-                  placeholder={nodesLoading ? "Loading clusters..." : "Select a cluster"}
-                  searchPlaceholder="Search clusters..."
+                  placeholder={nodesLoading ? "Loading clusters…" : "Select a cluster"}
+                  searchPlaceholder="Search clusters…"
                   emptyText="No clusters available"
                   options={nodeOptions}
                 />
@@ -540,7 +540,7 @@ export function ProjectCreateForm() {
               {createProject.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  Creating…
                 </>
               ) : (
                 "Create Project"

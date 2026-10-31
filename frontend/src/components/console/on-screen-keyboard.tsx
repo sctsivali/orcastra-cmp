@@ -282,7 +282,7 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
           onKeyDown={handleKeyDown}
         />
         <div className="absolute left-3 text-muted-foreground text-sm pointer-events-none">
-          Tap here to type...
+          Tap here to type…
         </div>
         <Button
           variant="ghost"

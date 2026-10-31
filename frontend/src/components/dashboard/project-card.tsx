@@ -241,7 +241,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
             onTagsChange={handleTagsChange}
             readonly={isReadOnly}
             maxTags={10}
-            placeholder="Add project tag..."
+            placeholder="Add project tag…"
           />
         </div>
         

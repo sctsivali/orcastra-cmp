@@ -340,8 +340,8 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                 value={formData.node}
                 onValueChange={(value) => setFormData({ ...formData, node: value })}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select a cluster"}
-                searchPlaceholder="Search clusters..."
+                placeholder={loadingNodes ? "Loading…" : "Select a cluster"}
+                searchPlaceholder="Search clusters…"
                 emptyText="No clusters available."
                 disabled={loadingNodes}
               />
@@ -480,7 +480,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                     {isLoadingResources() && (
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Loading...</span>
+                        <span>Loading…</span>
                       </div>
                     )}
                   </div>
@@ -520,7 +520,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                       {isLoadingResources() ? (
                         <div className="p-6 text-center text-sm text-muted-foreground">
                           <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                          Loading {newPermission.entity_type}s from {formData.node}...
+                          Loading {newPermission.entity_type}s from {formData.node}…
                         </div>
                       ) : availableResources.length === 0 ? (
                         <div className="p-6 text-center text-sm text-muted-foreground">
@@ -645,7 +645,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
               {createGroupMutation.isPending && (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               )}
-              {createGroupMutation.isPending ? "Creating..." : "Create Group"}
+              {createGroupMutation.isPending ? "Creating…" : "Create Group"}
             </Button>
           </DialogFooter>
         </form>

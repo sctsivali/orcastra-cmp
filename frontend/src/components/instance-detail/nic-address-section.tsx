@@ -144,7 +144,7 @@ export function NicAddressSection({ instance }: { instance: VMInfo }) {
                     />
                   </div>
                   <Button size="sm" onClick={() => save(nic)} disabled={saving}>
-                    {saving ? "Saving..." : "Save"}
+                    {saving ? "Saving…" : "Save"}
                   </Button>
                   <Button
                     size="sm"

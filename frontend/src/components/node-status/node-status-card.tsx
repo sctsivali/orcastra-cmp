@@ -332,7 +332,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             onTagsChange={handleTagsChange}
                   readonly={isReadOnly || !isPartner}
             maxTags={10}
-            placeholder="Add cluster tag..."
+            placeholder="Add cluster tag…"
           />
         </div>
 
@@ -404,7 +404,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               Cancel
             </Button>
             <Button onClick={handleSaveDisplayName} disabled={isSavingName || !newDisplayName.trim()}>
-              {isSavingName ? "Saving..." : "Save Changes"}
+              {isSavingName ? "Saving…" : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

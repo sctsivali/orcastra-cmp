@@ -377,7 +377,7 @@ export function ISOManagerPanel({
           </div>
           
           <Input
-            placeholder="Search ISOs..."
+            placeholder="Search ISOs…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="h-8"

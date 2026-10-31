@@ -108,7 +108,7 @@ export function BreakGlassPanel() {
       <CardContent>
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading grants...
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading grants…
           </div>
         ) : grants.length === 0 ? (
           <p className="text-sm text-muted-foreground py-6">No break-glass grants.</p>

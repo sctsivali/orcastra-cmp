@@ -292,7 +292,7 @@ export function InstanceOperations({
                 <Loader2 className="terminal-status h-4 w-4 animate-spin text-status-pending" />
               </div>
             </TooltipTrigger>
-            <TooltipContent>{instanceStatus}...</TooltipContent>
+            <TooltipContent>{instanceStatus}…</TooltipContent>
           </Tooltip>
         )}
       </div>

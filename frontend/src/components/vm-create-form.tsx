@@ -302,7 +302,7 @@ export function VMCreateForm() {
                     }}
                     className={errors.host ? "border-destructive" : ""}
                     placeholder="Select a cluster"
-                    searchPlaceholder="Search clusters..."
+                    searchPlaceholder="Search clusters…"
                     emptyText="No clusters available"
                     options={nodeOptions}
                   />
@@ -388,7 +388,7 @@ export function VMCreateForm() {
               {createVM.isPending ? (
                 <>
                   <LoadingLottieSmall className="mr-2" />
-                  Creating...
+                  Creating…
                 </>
               ) : (
                 <>

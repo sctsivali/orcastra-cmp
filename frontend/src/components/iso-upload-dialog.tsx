@@ -321,8 +321,8 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
                   setPool("");
                 }}
                 options={nodeOptions}
-                placeholder={loadingNodes ? "Loading..." : "Select cluster"}
-                searchPlaceholder="Search clusters..."
+                placeholder={loadingNodes ? "Loading…" : "Select cluster"}
+                searchPlaceholder="Search clusters…"
                 emptyText="No clusters found."
                 disabled={loadingNodes || busy}
               />
@@ -344,7 +344,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
                 onValueChange={setPool}
                 options={poolOptions}
                 placeholder={node ? "Select pool" : "Select a cluster first"}
-                searchPlaceholder="Search pools..."
+                searchPlaceholder="Search pools…"
                 emptyText="No pools found."
                 disabled={!node || busy}
               />

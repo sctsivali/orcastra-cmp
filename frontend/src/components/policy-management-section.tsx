@@ -206,7 +206,7 @@ function RuleEditor({
                   instance_name: "*",
                 })}
                 className="h-7 text-xs"
-                searchPlaceholder="Search clusters..."
+                searchPlaceholder="Search clusters…"
                 options={[
                   { value: "*", label: "* (All Clusters)" },
                   // note: a scope picker, not a target picker. An offline cluster is a
@@ -236,14 +236,14 @@ function RuleEditor({
                 disabled={rule.cluster_id === "*"}
               >
                 <SelectTrigger className="h-7 text-xs">
-                  <SelectValue placeholder={projectsLoading ? "Loading..." : "* (all)"} />
+                  <SelectValue placeholder={projectsLoading ? "Loading…" : "* (all)"} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="*">* (All Projects)</SelectItem>
                   {projectsLoading ? (
                     <div className="flex items-center justify-center py-2">
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      <span className="ml-1.5 text-xs text-muted-foreground">Loading projects...</span>
+                      <span className="ml-1.5 text-xs text-muted-foreground">Loading projects…</span>
                     </div>
                   ) : (
                     projects.map((p: any) => (
@@ -261,14 +261,14 @@ function RuleEditor({
                 disabled={rule.cluster_id === "*"}
               >
                 <SelectTrigger className="h-7 text-xs">
-                  <SelectValue placeholder={instancesLoading ? "Loading..." : "* (all)"} />
+                  <SelectValue placeholder={instancesLoading ? "Loading…" : "* (all)"} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="*">* (All Instances)</SelectItem>
                   {instancesLoading ? (
                     <div className="flex items-center justify-center py-2">
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      <span className="ml-1.5 text-xs text-muted-foreground">Loading instances...</span>
+                      <span className="ml-1.5 text-xs text-muted-foreground">Loading instances…</span>
                     </div>
                   ) : (
                     instances.map((i: any) => (
@@ -413,7 +413,7 @@ function PolicyEditorDialog({
               <Label htmlFor="mgmt-policy-desc" className="text-xs">Description (optional)</Label>
               <Textarea
                 id="mgmt-policy-desc"
-                placeholder="Describe what this policy allows..."
+                placeholder="Describe what this policy allows…"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 maxLength={500}
@@ -428,10 +428,10 @@ function PolicyEditorDialog({
                 </Label>
                 <Select value={orgId || "__none__"} onValueChange={(v) => setOrgId(v === "__none__" ? "" : v)}>
                   <SelectTrigger className="h-8 text-sm">
-                    <SelectValue placeholder="Select organization..." />
+                    <SelectValue placeholder="Select organization…" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__" disabled>Select organization...</SelectItem>
+                    <SelectItem value="__none__" disabled>Select organization…</SelectItem>
                     {organizations.map((org) => (
                       <SelectItem key={org.id} value={String(org.id)}>{org.name}</SelectItem>
                     ))}
@@ -755,7 +755,7 @@ function PolicyManagementSectionContent() {
             {policiesLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-sm text-muted-foreground">Loading policies...</span>
+                <span className="ml-2 text-sm text-muted-foreground">Loading policies…</span>
               </div>
             ) : policies.length === 0 ? (
               <div className="text-center py-10 text-muted-foreground">

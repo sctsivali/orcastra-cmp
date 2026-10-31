@@ -297,7 +297,7 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
             <Textarea
               value={newText}
               onChange={(e) => setNewText(e.target.value)}
-              placeholder="Enter or paste text here..."
+              placeholder="Enter or paste text here…"
               className="min-h-[80px] text-sm resize-none"
               autoFocus
             />

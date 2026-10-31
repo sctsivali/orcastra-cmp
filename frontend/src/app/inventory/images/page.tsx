@@ -355,7 +355,7 @@ function ImagesContent() {
                     {/* important: the row names itself by whatever a human or a registry wrote,
                         and only falls back to the fingerprint when an image carries neither. It
                         used to name itself with a 12 character slice of the fingerprint, so the
-                        aliases control announced "Show all 3 aliases on 1a4eed830630...". */}
+                        aliases control announced "Show all 3 aliases on 1a4eed830630…". */}
                     <TableCell className="max-w-[18rem] font-mono">
                       <OverflowText
                         value={image.fingerprint}

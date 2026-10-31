@@ -76,7 +76,7 @@ export function CacheSettings({ isAdmin }: { isAdmin: boolean }) {
             Clear inventory and monitoring data in this browser. Your sign-in, preferences, and active operations stay available.
           </p>
           <Button disabled={busy !== null} onClick={() => void clear("browser")}>
-            {busy === "browser" ? "Clearing Browser Cache..." : "Clear Browser Cache"}
+            {busy === "browser" ? "Clearing Browser Cache…" : "Clear Browser Cache"}
           </Button>
         </div>
         {isAdmin && (
@@ -86,7 +86,7 @@ export function CacheSettings({ isAdmin }: { isAdmin: boolean }) {
               Clear shared caches for all organizations. Active application views refresh after the backend confirms completion.
             </p>
             <Button variant="destructive" disabled={busy !== null} onClick={() => void clear("shared")}>
-              {busy === "shared" ? "Clearing Shared Cache..." : "Clear Shared Backend Cache"}
+              {busy === "shared" ? "Clearing Shared Cache…" : "Clear Shared Backend Cache"}
             </Button>
           </div>
         )}

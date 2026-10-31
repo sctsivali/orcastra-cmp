@@ -310,7 +310,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               onTagsChange={handleTagsChange}
               readonly={isReadOnly}
               maxTags={10}
-              placeholder="Add instance tag..."
+              placeholder="Add instance tag…"
             />
           </div>
         </div>

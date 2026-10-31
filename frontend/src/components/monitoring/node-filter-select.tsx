@@ -80,7 +80,7 @@ export function NodeFilterSelect({
       icon={Server}
       ariaLabel="Filter by cluster"
       placeholder="All Clusters"
-      searchPlaceholder="Search clusters..."
+      searchPlaceholder="Search clusters…"
       emptyText="No clusters found."
       // The trigger sits in a toolbar beside the pause and refresh buttons, so it keeps its own
       // width and the 36px height those share rather than the form-field default.

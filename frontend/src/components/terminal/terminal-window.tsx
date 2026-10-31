@@ -463,7 +463,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              placeholder="Search... (Enter to find, Shift+Enter for previous)"
+              placeholder="Search… (Enter to find, Shift+Enter for previous)"
               className="flex-1 bg-transparent text-sm text-gray-200 outline-none placeholder:text-gray-500"
               autoFocus
             />

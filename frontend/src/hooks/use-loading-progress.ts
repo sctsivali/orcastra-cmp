@@ -26,80 +26,80 @@ export interface LoadingState {
 export const DYNAMIC_MESSAGES = {
   // Phase 1: Initializing (0-15%)
   initializing: [
-    "Initializing dashboard...",
-    "Waking up the system...",
-    "Getting things ready...",
-    "Starting up...",
-    "Preparing environment...",
-    "Booting up services...",
-    "Setting things in motion...",
+    "Initializing dashboard…",
+    "Waking up the system…",
+    "Getting things ready…",
+    "Starting up…",
+    "Preparing environment…",
+    "Booting up services…",
+    "Setting things in motion…",
     "This is the part where magic happens",
   ],
   
   // Phase 2: Connecting (15-30%)
   connecting: [
-    "Connecting to backend services...",
-    "Establishing connection...",
-    "Reaching out to servers...",
-    "Opening secure channels...",
-    "Syncing with backend...",
-    "Handshaking with services...",
-    "Building connections...",
+    "Connecting to backend services…",
+    "Establishing connection…",
+    "Reaching out to servers…",
+    "Opening secure channels…",
+    "Syncing with backend…",
+    "Handshaking with services…",
+    "Building connections…",
     "Please wait, the cloud is thinking",
   ],
   
   // Phase 3: Fetching (30-50%)
   fetching: [
-    "Fetching data from servers...",
-    "Retrieving information...",
-    "Gathering data...",
-    "Pulling latest records...",
-    "Loading resources...",
-    "Collecting data points...",
-    "Requesting data...",
-    "Downloading content...",
+    "Fetching data from servers…",
+    "Retrieving information…",
+    "Gathering data…",
+    "Pulling latest records…",
+    "Loading resources…",
+    "Collecting data points…",
+    "Requesting data…",
+    "Downloading content…",
     "Yes, it's doing something important",
     "Still faster than explaining cloud to management",
   ],
   
   // Phase 4: Processing (50-70%)
   processing: [
-    "Processing received data...",
-    "Crunching the numbers...",
-    "Analyzing information...",
-    "Organizing data...",
-    "Sorting things out...",
-    "Making sense of it all...",
-    "Transforming data...",
-    "Computing results...",
+    "Processing received data…",
+    "Crunching the numbers…",
+    "Analyzing information…",
+    "Organizing data…",
+    "Sorting things out…",
+    "Making sense of it all…",
+    "Transforming data…",
+    "Computing results…",
     "Optimizing things you'll never see",
     "Loading… because physics exists",
   ],
   
   // Phase 5: Rendering (70-90%)
   rendering: [
-    "Preparing display...",
-    "Building the view...",
-    "Assembling components...",
-    "Painting the interface...",
-    "Laying out elements...",
-    "Constructing the page...",
-    "Rendering visuals...",
+    "Preparing display…",
+    "Building the view…",
+    "Assembling components…",
+    "Painting the interface…",
+    "Laying out elements…",
+    "Constructing the page…",
+    "Rendering visuals…",
     "Clouds move slowly when they're being careful",
   ],
   
   // Phase 6: Almost done (90-100%)
   almostDone: [
-    "Almost done...",
-    "Nearly there...",
-    "Just a moment...",
-    "Finishing up...",
-    "Final touches...",
-    "Wrapping things up...",
-    "One moment please...",
-    "Almost ready...",
-    "Hang tight...",
-    "Just about done...",
+    "Almost done…",
+    "Nearly there…",
+    "Just a moment…",
+    "Finishing up…",
+    "Final touches…",
+    "Wrapping things up…",
+    "One moment please…",
+    "Almost ready…",
+    "Hang tight…",
+    "Just about done…",
     "Almost done. Probably.",
   ],
   
@@ -128,25 +128,25 @@ export const LOADING_MESSAGES = {
   processingData: DYNAMIC_MESSAGES.processing[0],
   renderingContent: DYNAMIC_MESSAGES.rendering[0],
   almostDone: DYNAMIC_MESSAGES.almostDone[0],
-  finalizing: "Finalizing...",
+  finalizing: "Finalizing…",
   complete: DYNAMIC_MESSAGES.complete[0],
   
   // Context-specific (legacy)
-  fetchingVMs: "Loading virtual machines...",
-  processingVMs: "Processing VM information...",
-  fetchingNetworks: "Loading network configurations...",
-  processingNetworks: "Analyzing network topology...",
-  fetchingImages: "Loading container images...",
-  processingImages: "Processing image metadata...",
-  fetchingProfiles: "Loading profiles...",
-  processingProfiles: "Processing profile configurations...",
-  fetchingStorage: "Loading storage pools...",
-  processingStorage: "Analyzing storage configurations...",
-  fetchingClusters: "Loading cluster information...",
-  processingClusters: "Processing cluster data...",
-  fetchingServer: "Loading server information...",
-  processingServer: "Processing server details...",
-  authenticating: "Authenticating session...",
+  fetchingVMs: "Loading virtual machines…",
+  processingVMs: "Processing VM information…",
+  fetchingNetworks: "Loading network configurations…",
+  processingNetworks: "Analyzing network topology…",
+  fetchingImages: "Loading container images…",
+  processingImages: "Processing image metadata…",
+  fetchingProfiles: "Loading profiles…",
+  processingProfiles: "Processing profile configurations…",
+  fetchingStorage: "Loading storage pools…",
+  processingStorage: "Analyzing storage configurations…",
+  fetchingClusters: "Loading cluster information…",
+  processingClusters: "Processing cluster data…",
+  fetchingServer: "Loading server information…",
+  processingServer: "Processing server details…",
+  authenticating: "Authenticating session…",
 };
 
 // Predefined loading phases for different page types
@@ -261,7 +261,7 @@ export function useLoadingProgress(
           phases,
           currentPhase: phaseId,
           progress,
-          statusMessage: `${phaseLabel}...`,
+          statusMessage: `${phaseLabel}…`,
         };
       });
     },
@@ -290,7 +290,7 @@ export function useLoadingProgress(
         : phases;
       
       const statusMessage = nextPhase
-        ? `${nextPhase.label}...`
+        ? `${nextPhase.label}…`
         : LOADING_MESSAGES.finalizing;
       
       return {

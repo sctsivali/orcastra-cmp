@@ -81,7 +81,7 @@ export function DiskRow({
               onValueChange={(v) => onUpdate({ pool: v, source: "" })}
               options={poolOptions}
               placeholder={poolState.disabled ? poolState.placeholder : "Select pool"}
-              searchPlaceholder="Search pools..."
+              searchPlaceholder="Search pools…"
               emptyText={poolState.emptyText}
               disabled={poolState.disabled}
               ariaInvalid={poolState.notice?.kind === "error"}
@@ -97,7 +97,7 @@ export function DiskRow({
               onValueChange={(v) => onUpdate({ source: v })}
               options={volumeOptions}
               placeholder={volumeState.placeholder}
-              searchPlaceholder="Search volumes..."
+              searchPlaceholder="Search volumes…"
               emptyText={volumeState.emptyText}
               disabled={volumeState.disabled}
               ariaDescribedBy={volumeState.notice ? volumeNoticeId : undefined}

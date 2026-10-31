@@ -119,7 +119,7 @@ export function ProjectDeleteDialog({ project, instanceCount, open, onOpenChange
           {isDeleting ? (
             <>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Deleting...
+              Deleting…
             </>
           ) : (
             "Delete Project"
@@ -387,7 +387,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={isSaving}>
-            {isSaving ? "Saving..." : "Save Changes"}
+            {isSaving ? "Saving…" : "Save Changes"}
           </Button>
         </DialogFooter>
       </DialogContent>

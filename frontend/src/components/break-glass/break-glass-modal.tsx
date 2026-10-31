@@ -117,7 +117,7 @@ export function BreakGlassModal() {
             Cancel
           </Button>
           <Button onClick={onSubmit} disabled={submitting || reason.trim().length === 0}>
-            {submitting ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Granting...</>) : "Grant & open"}
+            {submitting ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Granting…</>) : "Grant & open"}
           </Button>
         </DialogFooter>
       </DialogContent>

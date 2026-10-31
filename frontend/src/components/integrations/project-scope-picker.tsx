@@ -139,7 +139,7 @@ export function ProjectScopePicker({
   else triggerLabel = `${value.length} projects selected`;
 
   let emptyText: string;
-  if (isLoading) emptyText = "Loading projects...";
+  if (isLoading) emptyText = "Loading projects…";
   else if (isError) emptyText = "Projects could not be loaded.";
   // "visible" is load-bearing: the projects read applies the tenant ACL, so an empty list can
   // mean the operator may not see them rather than the cluster not having any.

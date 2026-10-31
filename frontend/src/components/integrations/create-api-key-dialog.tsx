@@ -379,7 +379,7 @@ export function CreateAPIKeyDialog({
                 specificScopeIncomplete
               }
             >
-              {isSubmitting ? "Creating..." : "Create API Key"}
+              {isSubmitting ? "Creating…" : "Create API Key"}
             </Button>
           </DialogFooter>
         </form>

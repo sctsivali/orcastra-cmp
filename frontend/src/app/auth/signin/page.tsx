@@ -143,7 +143,7 @@ function SignInContent() {
             <div className="flex flex-col items-center gap-4 py-8">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">
-                Redirecting to sign in...
+                Redirecting to sign in…
               </p>
             </div>
           )}
@@ -165,7 +165,7 @@ function SignInContent() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Redirecting...
+                  Redirecting…
                 </>
               ) : (
                 <>

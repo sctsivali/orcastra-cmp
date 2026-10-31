@@ -52,7 +52,7 @@ export function useTerminal() {
       if (newTerminal) {
         toast({
           title: "Terminal Opened",
-          description: `Connecting to ${instanceName}@${host}...`,
+          description: `Connecting to ${instanceName}@${host}…`,
         });
       } else if (terminals.length >= useTerminalStore.getState().maxTerminals) {
         toast({

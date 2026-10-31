@@ -1673,7 +1673,7 @@ export default function MonitoringContent() {
             {(isTimeRangePending || historyFetching) && (
               <div className="inline-flex items-center gap-1.5 ml-3 align-middle">
                 <RefreshCw className="h-3 w-3 animate-spin text-primary" />
-                <span className="text-xs text-muted-foreground">Updating...</span>
+                <span className="text-xs text-muted-foreground">Updating…</span>
               </div>
             )}
             <TabsList className="grid w-full max-w-2xl grid-cols-4 h-auto p-1">

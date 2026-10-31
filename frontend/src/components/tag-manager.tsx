@@ -53,7 +53,7 @@ export function TagManager({
   onTagsChange,
   readonly = false,
   maxTags = 20,
-  placeholder = "Add tag...",
+  placeholder = "Add tag…",
   className,
   maxVisible = 3,
   showGrouped = false,
@@ -131,7 +131,7 @@ export function TagManager({
     return (
       <div className={cn("flex items-center gap-2", className)}>
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">Loading tags...</span>
+        <span className="text-xs text-muted-foreground">Loading tags…</span>
       </div>
     );
   }
@@ -411,7 +411,7 @@ export function TagFilter({
           <div className="flex items-center gap-2">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search tags..."
+              placeholder="Search tags…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-8"

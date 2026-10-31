@@ -75,8 +75,8 @@ export function RegionPicker({ id, value, onValueChange, disabled, ariaInvalid, 
       options={options}
       icon={MapPin}
       disabled={disabled || isLoading}
-      placeholder={isLoading ? "Loading regions..." : "Select a regency, city or country"}
-      searchPlaceholder="Search by name, province, city or country..."
+      placeholder={isLoading ? "Loading regions…" : "Select a regency, city or country"}
+      searchPlaceholder="Search by name, province, city or country…"
       emptyText="No region matches that search."
       ariaInvalid={ariaInvalid}
       ariaDescribedBy={ariaDescribedBy}

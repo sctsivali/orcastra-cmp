@@ -166,7 +166,7 @@ function ClustersContent() {
       if (response.authenticated) {
         toast({
           title: "Authentication Successful",
-          description: `Cluster ${clusterId} is online. Refreshing instance data...` });
+          description: `Cluster ${clusterId} is online. Refreshing instance data…` });
         // the mutation's onSuccess reconciles cluster.auth-check, which covers every list a
         // newly trusted cluster adds to (instances, projects, images, pickers)
       } else {
@@ -591,7 +591,7 @@ function ClustersContent() {
               {deleteCluster.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Deleting...
+                  Deleting…
                 </>
               ) : (
                 "Remove Cluster"

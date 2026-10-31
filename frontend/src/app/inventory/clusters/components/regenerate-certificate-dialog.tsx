@@ -158,7 +158,7 @@ export function RegenerateCertificateDialog({
                   {verify.isPending || checkAuth.isPending ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Verifying...
+                      Verifying…
                     </>
                   ) : pendingId ? (
                     "Verify & Activate"
@@ -191,7 +191,7 @@ export function RegenerateCertificateDialog({
         title="Discard the new certificate?"
         description="The current certificate stays active. If the new one was already added to the cluster's trust, that entry is removed automatically later."
         confirmLabel="Discard certificate"
-        pendingLabel="Discarding..."
+        pendingLabel="Discarding…"
         pending={discard.isPending}
         onConfirm={() => void handleDiscard()}
       />

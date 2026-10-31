@@ -88,7 +88,7 @@ export function InstanceResourcesPanel({
     return (
       <div className="flex items-center justify-center py-4 text-gray-500">
         <Loader2 className="h-4 w-4 animate-spin mr-2" aria-hidden="true" />
-        Loading metrics...
+        Loading metrics…
       </div>
     );
   }

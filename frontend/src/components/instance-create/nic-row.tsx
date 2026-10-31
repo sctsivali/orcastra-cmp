@@ -46,7 +46,7 @@ export function NicRow({
           onValueChange={(v) => onUpdate({ network: v })}
           options={networkOptions}
           placeholder={networkState.placeholder}
-          searchPlaceholder="Search networks..."
+          searchPlaceholder="Search networks…"
           emptyText={networkState.emptyText}
           disabled={networkState.disabled}
           ariaDescribedBy={networkState.notice ? networkNoticeId : undefined}

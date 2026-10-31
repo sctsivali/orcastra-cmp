@@ -239,7 +239,7 @@ function ClusterMembersContent() {
             onValueChange={handleNodeChange}
             className="w-[300px]"
             placeholder="Select a cluster"
-            searchPlaceholder="Search clusters..."
+            searchPlaceholder="Search clusters…"
             // important: not disabled when the list is empty. SearchableSelect carries
             // `emptyText` for exactly this, every other picker in the app stays operable, and
             // node-picker-status-coverage.spec.ts opens this control before deciding whether

@@ -82,7 +82,7 @@ export function MigrationDraftTable({
   onOpen: (planId: string) => void;
 }) {
   return (
-    <Suspense fallback={<p className="text-sm text-muted-foreground" role="status">Loading draft filters...</p>}>
+    <Suspense fallback={<p className="text-sm text-muted-foreground" role="status">Loading draft filters…</p>}>
       <MigrationDraftTableContent plans={plans} onOpen={onOpen} />
     </Suspense>
   );

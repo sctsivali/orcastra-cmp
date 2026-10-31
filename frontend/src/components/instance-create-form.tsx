@@ -1543,7 +1543,7 @@ function InstanceCreateFormContent() {
                     onValueChange={selectNodeWithDisks}
                     options={nodeOptions}
                     placeholder={nodeState.placeholder}
-                    searchPlaceholder="Search clusters..."
+                    searchPlaceholder="Search clusters…"
                     emptyText={nodeState.emptyText}
                     disabled={nodeState.disabled}
                     ariaDescribedBy={nodeState.notice ? "create-node-notice" : undefined}
@@ -1572,7 +1572,7 @@ function InstanceCreateFormContent() {
                     onValueChange={selectProject}
                     options={projectOptions}
                     placeholder={projectState.placeholder}
-                    searchPlaceholder="Search projects..."
+                    searchPlaceholder="Search projects…"
                     emptyText={projectState.emptyText}
                     disabled={projectState.disabled}
                     ariaDescribedBy={projectState.notice ? "create-project-notice" : undefined}
@@ -1670,7 +1670,7 @@ function InstanceCreateFormContent() {
                         ? form.selectedIsoLabel
                         : isoState.placeholder
                     }
-                    searchPlaceholder="Search ISOs..."
+                    searchPlaceholder="Search ISOs…"
                     emptyText={isoState.emptyText}
                     disabled={isoState.disabled}
                     ariaDescribedBy={isoState.notice ? "create-iso-notice" : undefined}
@@ -2059,7 +2059,7 @@ function InstanceCreateFormContent() {
                   onValueChange={(v) => updateField("selectedPool", v)}
                   options={poolOptions}
                   placeholder={poolState.placeholder}
-                  searchPlaceholder="Search storage pools..."
+                  searchPlaceholder="Search storage pools…"
                   emptyText={poolState.emptyText}
                   disabled={poolState.disabled}
                   ariaDescribedBy={poolState.notice ? "create-pool-notice" : undefined}

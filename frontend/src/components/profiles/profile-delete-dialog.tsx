@@ -32,7 +32,7 @@ export function ProfileDeleteDialog({ open, onOpenChange, profile, pending, erro
           : ""
       }
       confirmLabel="Delete profile"
-      pendingLabel="Deleting..."
+      pendingLabel="Deleting…"
       pending={pending}
       onConfirm={() => onConfirm()}
       dependents={

@@ -177,7 +177,7 @@ export function TrustCleanupDialog({ certificate, isReadOnly, onClose }: TrustCl
               {removal.isPending ? (
                 <>
                   <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Removing...
+                  Removing…
                 </>
               ) : (
                 `Remove all ${openCount}`

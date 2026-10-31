@@ -232,7 +232,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
                 {renewal.isPending ? (
                   <>
                     <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    Renewing...
+                    Renewing…
                   </>
                 ) : (
                   "Renew Certificate"
@@ -290,7 +290,7 @@ export function RenewCertificateDialog({ certificate, mode, onClose }: RenewCert
                 {verification.isPending ? (
                   <>
                     <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    Verifying...
+                    Verifying…
                   </>
                 ) : (
                   "Verify & Activate"

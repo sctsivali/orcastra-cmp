@@ -631,7 +631,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                   type="submit"
                   disabled={updateGroupMutation.isPending}
                 >
-                  {updateGroupMutation.isPending ? "Saving..." : "Save Changes"}
+                  {updateGroupMutation.isPending ? "Saving…" : "Save Changes"}
                 </Button>
               </DialogFooter>
             </form>
@@ -745,7 +745,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     {isLoadingResources() && (
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Loading...</span>
+                        <span>Loading…</span>
                       </div>
                     )}
                   </div>
@@ -778,7 +778,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <input
                           type="text"
-                          placeholder={`Search ${newPermission.entity_type}s...`}
+                          placeholder={`Search ${newPermission.entity_type}s…`}
                           value={resourceSearchQuery}
                           onChange={(e) => setResourceSearchQuery(e.target.value)}
                           className="w-full h-9 pl-9 pr-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -788,7 +788,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                         {isLoadingResources() ? (
                           <div className="p-4 text-center text-xs text-muted-foreground">
                             <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" />
-                            Loading {newPermission.entity_type}s...
+                            Loading {newPermission.entity_type}s…
                           </div>
                         ) : getAvailableResources().length === 0 ? (
                           <div className="p-4 text-center text-xs text-muted-foreground">
@@ -901,7 +901,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                 disabled={updateGroupMutation.isPending}
                 variant={isPermissionsDirty ? "default" : "secondary"}
               >
-                {updateGroupMutation.isPending ? "Saving..." : "Save Permissions"}
+                {updateGroupMutation.isPending ? "Saving…" : "Save Permissions"}
               </Button>
             </DialogFooter>
           </TabsContent>
@@ -1022,7 +1022,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               {loadingIdentities ? (
                 <div className="flex items-center justify-center py-6">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  <span className="ml-2 text-sm text-muted-foreground">Loading identities...</span>
+                  <span className="ml-2 text-sm text-muted-foreground">Loading identities…</span>
                 </div>
               ) : (
                 <>
@@ -1064,7 +1064,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                               {allIdentities.find(i => i.id === newIdentity.identity_id)?.name || newIdentity.identity_id}
                             </span>
                           ) : (
-                            <span className="text-muted-foreground">Search and select identity...</span>
+                            <span className="text-muted-foreground">Search and select identity…</span>
                           )}
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
@@ -1072,13 +1072,13 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                       <PopoverContent className="p-0" align="start" style={{ width: 'var(--radix-popover-trigger-width)' }}>
                         <Command shouldFilter={false}>
                           <CommandInput 
-                            placeholder={`Search ${newIdentity.auth_type.toUpperCase()} identities...`}
+                            placeholder={`Search ${newIdentity.auth_type.toUpperCase()} identities…`}
                             value={identitySearchValue}
                             onValueChange={setIdentitySearchValue}
                           />
                           <CommandList>
                             <CommandEmpty>
-                              {loadingIdentities ? "Loading identities..." : "No identities found."}
+                              {loadingIdentities ? "Loading identities…" : "No identities found."}
                             </CommandEmpty>
                             <CommandGroup>
                               {(allIdentities || [])
@@ -1164,7 +1164,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     {addIdentityMutation.isPending ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Adding...
+                        Adding…
                       </>
                     ) : (
                       "Add Selected Identity"
@@ -1203,7 +1203,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               Discard Changes
             </Button>
             <Button onClick={handleSaveAndClose} disabled={updateGroupMutation.isPending}>
-              {updateGroupMutation.isPending ? "Saving..." : "Save & Close"}
+              {updateGroupMutation.isPending ? "Saving…" : "Save & Close"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1236,7 +1236,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               onClick={handleRemoveIdentity} 
               disabled={removeIdentityMutation.isPending}
             >
-              {removeIdentityMutation.isPending ? "Removing..." : "Remove Identity"}
+              {removeIdentityMutation.isPending ? "Removing…" : "Remove Identity"}
             </Button>
           </DialogFooter>
         </DialogContent>

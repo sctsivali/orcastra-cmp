@@ -230,7 +230,7 @@ function CertificatesContent() {
           </>
         }
         confirmLabel="Cancel renewal"
-        pendingLabel="Cancelling..."
+        pendingLabel="Cancelling…"
         pending={cancelPendingCert.isPending}
         onConfirm={() => void handleCancelPending()}
       />

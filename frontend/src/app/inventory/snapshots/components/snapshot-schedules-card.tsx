@@ -37,7 +37,7 @@ import { SNAPSHOT_SCHEDULES, SnapshotSchedulesTable } from "./snapshot-schedules
  */
 export function SnapshotSchedulesCard() {
   return (
-    <Suspense fallback={<SchedulesCardShell><p className="text-sm text-muted-foreground">Reading schedules...</p></SchedulesCardShell>}>
+    <Suspense fallback={<SchedulesCardShell><p className="text-sm text-muted-foreground">Reading schedules…</p></SchedulesCardShell>}>
       <SchedulesCardContent />
     </Suspense>
   );
@@ -120,7 +120,7 @@ function SchedulesCardContent() {
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {isFetching
-              ? "Reading schedules..."
+              ? "Reading schedules…"
               : "No schedules yet. Open an instance, go to its Snapshots tab, and schedule one there."}
           </p>
         ) : (
