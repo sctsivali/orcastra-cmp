@@ -91,6 +91,22 @@ test("a reason cannot be rendered as markup", async ({ page, context }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
 
+for (const [role, sentence] of [
+  ["admin", "Could not fully read 1 cluster. Some of their networks are not shown, so this list may be incomplete."],
+  ["tenant", "Some networks could not be loaded right now, so this list may be incomplete."],
+]) {
+  test(`${role}: a cluster that lost rows from the network list is not silent`, async ({ page, context }) => {
+    await authenticate(context, role);
+    await installInventoryHardeningFixtures(page, role);
+    await page.route(/\/api\/v1\/networks(\?|$)/, (route) => route.fulfill({ json: {
+      total: 0, networks: [], nodes: ["cluster-a"], unreachable_nodes: [], partial_nodes: ["cluster-a"],
+      node_errors: role === "tenant" ? {} : { "cluster-a": "partial: the network list did not finish" },
+    } }));
+    await page.goto("/inventory/networks");
+    await expect(page.locator('[data-slot="unreachable-banner"]').getByRole("status")).toHaveText(sentence);
+  });
+}
+
 test("a tenant gets the sentence and nothing to open", async ({ page, context }) => {
   const banner = await open(page, context, "tenant", () => list("tenant", ["secret-cluster"]));
   await expect(banner.getByRole("status")).toHaveText(

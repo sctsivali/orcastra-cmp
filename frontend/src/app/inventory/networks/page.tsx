@@ -3,7 +3,7 @@
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -140,7 +140,7 @@ function NetworksContent() {
   const [createOpen, setCreateOpen] = useState(false);
   // Nodes we could not reach: their networks are absent from the list, so warn
   // rather than silently showing "0 networks" (indistinguishable from empty).
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+  const reach = reachabilityOf(data);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -250,7 +250,8 @@ function NetworksContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="networks" nodes={unreachableNodes} reasons={(data as any)?.node_errors} />
+      <UnreachableNodesBanner noun="networks" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="networks" nodes={reach.partial} reasons={reach.reasons} partial />
 
       <Card>
         <CardHeader className="space-y-4">

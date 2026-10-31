@@ -62,6 +62,12 @@ for (const router of reporting) {
     if (!source.includes('<UnreachableNodesBanner')) {
       offenders.push(`${page} drops the unreachable_nodes that ${router} reports`);
     }
+    // A cluster that answered and lost rows is a shorter list with no outage to explain it, so it
+    // needs its own banner. The leading space keeps `nodes={reach.partial}` from counting as one.
+    const losesRows = readFileSync(join(routersDir, router), 'utf8').includes('partial_nodes');
+    if (losesRows && !openingTags(source, 'UnreachableNodesBanner').some((t) => /\spartial\b/.test(t.text))) {
+      offenders.push(`${page} drops the partial_nodes that ${router} reports`);
+    }
   }
 }
 
