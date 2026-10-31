@@ -699,7 +699,7 @@ async function _fetchAPIInternal<T>(
       // A 429 used to surface as the bare detail; the picker notices count down from this.
       const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
       if (response.status === 429) {
-        errorMessage = `Rate limited by the API. Try again in ${retryAfter ?? 30} s.`;
+        errorMessage = `Rate limited by the API. Try again in ${retryAfter ?? 30}s.`;
       }
 
       // On 401, trigger session refresh and retry once after token is refreshed

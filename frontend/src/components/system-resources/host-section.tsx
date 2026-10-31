@@ -106,7 +106,7 @@ function HostCpuCard({ host, reading }: { host: HostInfo | null; reading: Window
               : reading
                 ? `Busy share of all ${plural(cpu.count_logical, unit)} over the last ${formatWindow(reading.windowSeconds)}.`
                 : canMeasure
-                  ? "Measured between two updates. The first reading arrives with the next one, in about 5 s."
+                  ? "Measured between two updates. The first reading arrives with the next one, in about 5s."
                   : "This backend does not report CPU counters, so usage cannot be measured."
           }
         />

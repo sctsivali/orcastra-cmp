@@ -164,7 +164,7 @@ function ContainerCpuCard({
       : "No limit set";
   const windowText = reading
     ? `Over the last ${formatWindow(reading.windowSeconds)}.`
-    : "Measured between two updates. The first reading arrives with the next one, in about 5 s.";
+    : "Measured between two updates. The first reading arrives with the next one, in about 5s.";
   const throttleText =
     !limit || !throttle
       ? ""

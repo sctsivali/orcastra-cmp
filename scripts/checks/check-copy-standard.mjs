@@ -26,6 +26,7 @@ const RULES = [
   [/\bcapability\(s\)/, 'use plural() instead of a (s) suffix'],
   [/\btitle:\s*["'`](?:Error|Success|Validation Error|Configuration Error|Copied!)["'`]/, 'a toast title names its object: Could not delete cluster, Cluster deleted'],
   [/\.toLocaleString\(/, 'use formatCount, which does not change with the browser locale'],
+  [/(?:\b\d+(?:\.\d+)?|\}) (?:ms|s|min|sec|secs)\b(?=[\s.,;:)"'`<]|$)/, 'a single time is glued: 30s, 120ms'],
   [/ • /, 'the separator is a middle dot'],
   [/\be\.g\.[, ]/, 'write "for example" in product copy'],
   [/\bbg-(?:warning|destructive)\/\d+\b[^"]*\bborder\b|\bborder-(?:warning|destructive)\/\d+\b[^"]*\bbg-(?:warning|destructive)\/\d+\b/, 'use Alert, DialogSubmitError or PartialReadNotice instead of a hand-rolled box'],
