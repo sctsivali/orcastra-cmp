@@ -110,7 +110,7 @@ async def read_statuses(
                 timed_out[name] = "status"
                 return _not_answering(
                     name,
-                    f"Did not answer within {int(STATUS_WALL_SECONDS)} s during this collection. "
+                    f"Did not answer within {int(STATUS_WALL_SECONDS)}s during this collection. "
                     "It is asked again on the next one.",
                 )
             except BlockingPoolFull:

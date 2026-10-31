@@ -12,7 +12,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatBytes, formatLabel, formatMemory } from "@/lib/utils";
+import { formatBytes, formatLabel, formatVcpuCount, plural, EMPTY_VALUE } from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
@@ -70,7 +70,7 @@ export function NodeCpuPanel({
                 value={
                   resources.cpu_sockets > 0
                     ? String(Math.floor(resources.cpu_total / resources.cpu_sockets))
-                    : "N/A"
+                    : EMPTY_VALUE
                 }
               />
             </div>
@@ -82,14 +82,14 @@ export function NodeCpuPanel({
                   label="Allocated"
                   total={cpu.threads}
                   used={cpu.allocated}
-                  value={`${cpu.allocated} vCPU / ${cpu.threads} hardware threads (${cpu.ratioLabel})`}
+                  value={`${formatVcpuCount(cpu.allocated)} / ${plural(cpu.threads, "hardware thread")} (${cpu.ratioLabel})`}
                 />
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
                     {cpu.over > 0 ? "Beyond capacity" : "Unallocated"}
                   </span>
                   <span className={`font-semibold tabular-nums ${cpu.over > 0 ? cpu.textClassName : ""}`}>
-                    {cpu.over > 0 ? `${cpu.over} vCPU (${cpuAllocationText(cpu)})` : `${cpu.unallocated} hardware threads`}
+                    {cpu.over > 0 ? `${formatVcpuCount(cpu.over)} (${cpuAllocationText(cpu)})` : plural(cpu.unallocated, "hardware thread")}
                   </span>
                 </div>
               </div>
@@ -147,10 +147,10 @@ export function NodeMemoryPanel({ resources }: { resources: NodeResources | null
         {resources ? (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Total Memory" value={formatMemory(resources.memory_total)} />
+              <Field label="Total Memory" value={formatBytes(resources.memory_total)} />
               <Field
                 label="Available Memory"
-                value={formatMemory(resources.memory_available)}
+                value={formatBytes(resources.memory_available)}
               />
             </div>
 
@@ -160,7 +160,7 @@ export function NodeMemoryPanel({ resources }: { resources: NodeResources | null
                 label="Used"
                 total={resources.memory_total}
                 used={resources.memory_used}
-                value={`${formatMemory(resources.memory_used)} / ${formatMemory(
+                value={`${formatBytes(resources.memory_used)} / ${formatBytes(
                   resources.memory_total,
                 )} (${usagePercent(resources.memory_used, resources.memory_total).toFixed(1)}%)`}
               />

@@ -638,7 +638,7 @@ def timed_out_reason(kind: str) -> str:
     """
     if kind == "busy":
         return "unreachable: not read, every inventory reader on this server was busy"
-    return f"unreachable: did not answer within {int(_INSTANCE_NODE_TIMEOUT_SECONDS)} s"
+    return f"unreachable: did not answer within {int(_INSTANCE_NODE_TIMEOUT_SECONDS)}s"
 _INSTANCE_DETAIL_TIMEOUT_SECONDS = 30.0
 _INSTANCE_INVENTORY_WORKERS = 20
 _INSTANCE_DETAIL_WORKERS = 8

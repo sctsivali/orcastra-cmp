@@ -1,6 +1,7 @@
+import { formatBytes, formatVcpuCount } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 
-import { formatLimitBytes, type ProjectLimits } from "@/lib/lxd-limits";
+import { type ProjectLimits } from "@/lib/lxd-limits";
 
 export interface ProjectUsed {
   cpu: number;
@@ -54,13 +55,13 @@ interface ProjectQuotaLineProps {
 export function ProjectQuotaLine({ id, project, limits, used, check }: ProjectQuotaLineProps) {
   const parts: string[] = [];
   if (limits.cpu !== undefined) {
-    parts.push(used ? `${used.cpu} of ${limits.cpu} vCPU` : `${limits.cpu} vCPU`);
+    parts.push(used ? `${used.cpu} of ${formatVcpuCount(limits.cpu)}` : formatVcpuCount(limits.cpu));
   }
   if (limits.memoryBytes !== undefined) {
     parts.push(
       used
-        ? `${formatLimitBytes(used.memoryBytes)} of ${formatLimitBytes(limits.memoryBytes)} memory`
-        : `${formatLimitBytes(limits.memoryBytes)} memory`,
+        ? `${formatBytes(used.memoryBytes, { decimals: 1 })} of ${formatBytes(limits.memoryBytes, { decimals: 1 })} memory`
+        : `${formatBytes(limits.memoryBytes, { decimals: 1 })} memory`,
     );
   }
   if (limits.instances !== undefined) {

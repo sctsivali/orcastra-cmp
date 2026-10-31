@@ -7,7 +7,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { TableCell } from "@/components/ui/table";
 import { TableLink } from "@/components/ui/table-link";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
-import { formatDateTime, formatLabel, formatRelativeTime } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel, formatRelativeTime } from "@/lib/utils";
 import type { LogSeverity, TaskRecord } from "@/types/tasks";
 import {
   actorLabel,
@@ -122,7 +122,7 @@ export function StartedCell({ task }: TaskCellProps) {
   return (
     <TableCell className="whitespace-nowrap">
       {formatRelativeTime(started)}
-      <TableSubText>{formatDateTime(task.started_at ?? task.created_at)}</TableSubText>
+      <TableSubText>{formatDateTimeSeconds(task.started_at ?? task.created_at)}</TableSubText>
     </TableCell>
   );
 }

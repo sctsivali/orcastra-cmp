@@ -31,7 +31,7 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { NetworkInfo } from "@/types/api";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, EMPTY_VALUE } from "@/lib/utils";
 import { networkStatusDisplay } from "@/lib/resource-status";
 import { Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
 
@@ -61,7 +61,7 @@ function parseUsedBy(url: string): UsedByRef {
   return { kind, name, project };
 }
 
-/** Wrap the shared formatBytes (lib/utils) so RX/TX render "-" when absent. */
+/** Wrap the shared formatBytes (lib/utils) so RX/TX render the empty value when absent. */
 function formatCounter(bytes?: number): string | null {
   if (bytes == null || Number.isNaN(bytes)) return null;
   return formatBytes(bytes);
@@ -289,22 +289,22 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
           <Field label="Type">
             <span className="capitalize">{network.type}</span>
           </Field>
-          <Field label="Description">{network.description || "-"}</Field>
-          <Field label="ACLs">{config["security.acls"] || "-"}</Field>
-          <Field label="IPv4 address">{config["ipv4.address"] || "-"}</Field>
-          <Field label="IPv6 address">{config["ipv6.address"] || "-"}</Field>
+          <Field label="Description">{network.description || EMPTY_VALUE}</Field>
+          <Field label="ACLs">{config["security.acls"] || EMPTY_VALUE}</Field>
+          <Field label="IPv4 address">{config["ipv4.address"] || EMPTY_VALUE}</Field>
+          <Field label="IPv6 address">{config["ipv6.address"] || EMPTY_VALUE}</Field>
           <Field label="RX">
             {rx != null
               ? `${rx} (${counters.packets_received ?? 0} packets)`
-              : "-"}
+              : EMPTY_VALUE}
           </Field>
           <Field label="TX">
             {tx != null
               ? `${tx} (${counters.packets_sent ?? 0} packets)`
-              : "-"}
+              : EMPTY_VALUE}
           </Field>
           <Field label="Status">
-            {network.status ? networkStatusDisplay(network.status).label : "-"}
+            {network.status ? networkStatusDisplay(network.status).label : EMPTY_VALUE}
           </Field>
           <Field label="Managed">{network.managed ? "Yes" : "No"}</Field>
           <Field label="Used by profiles">

@@ -17,7 +17,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import type { HardwareCategory } from "./hardware-aggregate";
 import { CpuSocketList, StorageDeviceList } from "./hardware-lists";
@@ -130,21 +130,21 @@ function MemoryDetail({ node }: { node: NodeStatus }) {
 
   return (
     <DetailGrid cols={4}>
-      <DetailField label="Total" value={formatMemory(resources.memory_total)} />
+      <DetailField label="Total" value={formatBytes(resources.memory_total)} />
       {/* note: host memory in use (LXD's resources API), not what instances were allocated. */}
-      <DetailField label="In Use" value={formatMemory(resources.memory_used)} />
-      <DetailField label="Available" value={formatMemory(resources.memory_available)} />
+      <DetailField label="In Use" value={formatBytes(resources.memory_used)} />
+      <DetailField label="Available" value={formatBytes(resources.memory_available)} />
       <DetailField
         label="Hugepages"
-        value={topology ? formatMemory(topology.hugepages_total) : undefined}
+        value={topology ? formatBytes(topology.hugepages_total) : undefined}
       />
       <DetailField
         label="Hardware-reported Used"
-        value={topology ? formatMemory(topology.used) : undefined}
+        value={topology ? formatBytes(topology.used) : undefined}
       />
       <DetailField
         label="Hardware-reported Free"
-        value={topology ? formatMemory(topology.free) : undefined}
+        value={topology ? formatBytes(topology.free) : undefined}
       />
     </DetailGrid>
   );

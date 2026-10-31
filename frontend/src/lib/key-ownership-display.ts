@@ -1,3 +1,4 @@
+import { formatDate } from "@/lib/utils";
 import { getAPIKeyStatus } from "@/lib/integration-display";
 import type {
   APIKeyInfo,
@@ -86,13 +87,9 @@ export function uncoveredClusters(org: IntegrationOrganization, key: APIKeyInfo)
   return (org.cluster_ids ?? []).filter((clusterId) => !granted.has(clusterId));
 }
 
-/** A stored timestamp as a date. A value without an offset is UTC, as the backend writes it. */
+/** A stored timestamp as a date, empty when there is none. */
 export function formatKeyDate(value: string | null | undefined): string {
-  if (!value) return "";
-  const iso = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`;
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  return value ? formatDate(value) : "";
 }
 
 /** The structured 409 a revoke or delete of an owner key answers with, if this error is one. */

@@ -1,5 +1,6 @@
 "use client";
 
+import { formatConfigValue } from "@/lib/lxd-limits";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -41,7 +42,7 @@ export function DevicesPanel({ devices }: { devices?: Record<string, Record<stri
                 {Object.entries(config).map(([key, value]) => (
                   <div key={key} className="rounded-md bg-muted/50 p-2">
                     <dt className="font-mono text-xs text-muted-foreground break-all">{key}</dt>
-                    <dd className="mt-1 break-all text-sm font-medium">{String(value)}</dd>
+                    <dd className="mt-1 break-all text-sm font-medium">{formatConfigValue(key, value)}</dd>
                   </div>
                 ))}
               </dl>

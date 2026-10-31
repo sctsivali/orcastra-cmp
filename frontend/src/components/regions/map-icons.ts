@@ -1,5 +1,5 @@
 import L from "leaflet";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import { escapeHtml } from "@/lib/map-basemap";
 import { placeDetail } from "@/lib/regions/place";
 import { RegionSummary } from "@/types/api";
@@ -186,7 +186,7 @@ export function createPopupContent(region: RegionSummary): string {
       : "";
   const hardwareSection = hardware
     ? row("Hardware threads", hardware.cpu_total) +
-      row("Memory", formatMemory(hardware.memory_total)) +
+      row("Memory", formatBytes(hardware.memory_total)) +
       gpuSection
     : "";
 

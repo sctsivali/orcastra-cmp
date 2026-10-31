@@ -15,7 +15,7 @@ import { DetailField, DetailGrid, DetailSection } from "@/components/detail/deta
 import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { formatDateTime, formatLabel } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import { Role } from "@/types/rbac";
 import type { ClusterLogEntry, TaskRecord } from "@/types/tasks";
 import { useKillConsoleSession, useTaskDetail } from "./hooks/use-tasks";
@@ -45,7 +45,7 @@ export interface TaskDetailDialogProps {
 
 function logLines(entries: ClusterLogEntry[]): string {
   return entries
-    .map((entry) => `${formatDateTime(entry.ts)} [${logSeverityLabel(entry.severity)}] ${entry.message}`)
+    .map((entry) => `${formatDateTimeSeconds(entry.ts)} [${logSeverityLabel(entry.severity)}] ${entry.message}`)
     .join("\n");
 }
 
@@ -118,10 +118,10 @@ function OverviewTab({ task }: { task: TaskRecord }) {
 
       <DetailSection title="When">
         <DetailGrid cols={3}>
-          <DetailField label="Started" value={task.started_at ? formatDateTime(task.started_at) : undefined} />
-          <DetailField label="Finished" value={task.finished_at ? formatDateTime(task.finished_at) : undefined} />
+          <DetailField label="Started" value={task.started_at ? formatDateTimeSeconds(task.started_at) : undefined} />
+          <DetailField label="Finished" value={task.finished_at ? formatDateTimeSeconds(task.finished_at) : undefined} />
           <DetailField label="Duration" value={duration === null ? undefined : formatDuration(duration)} />
-          <DetailField label="Updated" value={formatDateTime(task.updated_at)} />
+          <DetailField label="Updated" value={formatDateTimeSeconds(task.updated_at)} />
           <DetailField label="Cancellable" value={task.may_cancel ? "Yes" : "No"} />
         </DetailGrid>
       </DetailSection>

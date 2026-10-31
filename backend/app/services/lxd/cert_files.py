@@ -29,6 +29,8 @@ from typing import Any, Dict, Tuple
 
 from .exceptions import LXDLocalStorageError
 
+from app.core.units import format_size
+
 logger = logging.getLogger(__name__)
 
 # Anything outside this set is replaced, which is what makes the slug a single path component.
@@ -230,9 +232,7 @@ def describe_disk_usage(path: str) -> str:
     """
     try:
         usage = shutil.disk_usage(path)
-        free_mib = usage.free / 1024 / 1024
-        total_mib = usage.total / 1024 / 1024
-        return f"{path} has {free_mib:.1f} MiB free of {total_mib:.1f} MiB."
+        return f"{path} has {format_size(usage.free)} free of {format_size(usage.total)}."
     except OSError:
         return f"Unable to read disk usage for {path}."
 

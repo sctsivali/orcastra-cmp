@@ -28,7 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { myKeysActivityAPI } from "@/lib/my-keys-activity-api";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime, formatCount } from "@/lib/utils";
 import { Role } from "@/types/rbac";
 import type { KeyActivityEntry } from "@/types/my-keys";
 import { activityLabel, clientText } from "../components/key-activity-line";
@@ -196,7 +196,7 @@ function KeyActivityContent() {
         <CardContent className="space-y-4">
           {data && data.total > data.rows.length && (
             <PartialReadNotice data-testid="key-activity-partial">
-              Showing the newest {data.rows.length.toLocaleString("en-US")} of {data.total.toLocaleString("en-US")} events.
+              Showing the newest {formatCount(data.rows.length)} of {formatCount(data.total)} events.
               Narrow the time range to read the rest, or export them.
             </PartialReadNotice>
           )}
@@ -227,7 +227,7 @@ function KeyActivityContent() {
                   ) : (
                     paged.map((entry) => (
                       <TableRow key={entry.id} data-row-key={entry.id} data-kind={entry.kind}>
-                        <TableCell className="whitespace-nowrap">{formatDate(entry.ts)}</TableCell>
+                        <TableCell className="whitespace-nowrap">{formatDateTime(entry.ts)}</TableCell>
                         <TableCell>
                           {entry.key_name ?? entry.key_id ?? <TableEmptyValue />}
                           {entry.key_name && entry.key_id && <TableSubText>{entry.key_id}</TableSubText>}

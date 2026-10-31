@@ -1,12 +1,13 @@
 "use client";
 
+import { EMPTY_VALUE } from "@/lib/utils";
 import { Info } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { KernelAdvisoryBadge } from "@/components/kernel-advisory/kernel-advisory-badge";
 import type { NodeStatus } from "@/types";
 
-const EMPTY = "N/A";
+const EMPTY = EMPTY_VALUE;
 
 function Field({ label, value }: { label: string; value: string }) {
   return (

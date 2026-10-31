@@ -18,7 +18,7 @@ import {
   gpuIdentifier,
   sortGpuCards,
 } from "@/lib/gpu";
-import { cn, formatBytes, formatMemory } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import type { GPUCardInfo } from "@/types/api";
 import { OverflowText } from "@/components/ui/overflow-text";
 
@@ -146,7 +146,7 @@ export function GpuPickerDialog({
                       <span className="font-mono">{identifier.display}</span>
                       {card.memory_total ? (
                         <span>
-                          {formatMemory(card.memory_total)}
+                          {formatBytes(card.memory_total)}
                           {card.memory_shared ? " unified" : ""}
                         </span>
                       ) : null}

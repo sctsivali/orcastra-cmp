@@ -8,7 +8,7 @@ import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-di
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { APIError, type OrphanRule } from "@/types/api";
 
 // A rule naming a project or instance deleted outside Orcastra (lxc delete) hands whatever is
@@ -71,7 +71,7 @@ export function OrphanRulesNotice() {
             <div className="min-w-0">
               <p className="font-medium break-words">{rule.policy_name}</p>
               <p className="text-xs text-muted-foreground break-words">
-                {target(rule)}, {rule.organization_name}. Missing since {formatDate(rule.first_missing_at)}.
+                {target(rule)}, {rule.organization_name}. Missing since {formatDateTime(rule.first_missing_at)}.
               </p>
             </div>
             <Button

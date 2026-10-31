@@ -1,3 +1,4 @@
+import { FORM_SIZE_UNITS } from "@/lib/lxd-limits";
 import type { GpuClass } from "@/lib/gpu";
 
 export type InstanceType = "container" | "vm";
@@ -37,10 +38,8 @@ export interface GpuDevice {
   gpuClass?: GpuClass;
 }
 
-export const MEMORY_UNITS = ["B", "kB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB"];
-export const STORAGE_UNITS = [
-  "kB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB", "PB", "PiB", "EB", "EiB",
-];
+export const MEMORY_UNITS = FORM_SIZE_UNITS;
+export const STORAGE_UNITS = FORM_SIZE_UNITS;
 
 export const ADVANCED_DEFAULTS = {
   secProtectDelete: "",
@@ -83,12 +82,12 @@ export const DEFAULT_INSTANCE_CREATE_FORM: InstanceCreateFormState = {
   selectedPool: "",
   cpu: "1",
   memoryValue: "1",
-  memoryUnit: "GiB",
+  memoryUnit: "GB",
   memorySwap: "true",
   diskPriority: "5",
   maxProcesses: "",
   storageValue: "10",
-  storageUnit: "GiB",
+  storageUnit: "GB",
   tags: [],
 };
 

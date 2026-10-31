@@ -77,7 +77,7 @@ def test_a_record_that_breaks_a_rule_is_refused(change, message) -> None:
 
 
 def test_size_and_shape_limits() -> None:
-    with pytest.raises(RecordInvalid, match="2 MiB"):
+    with pytest.raises(RecordInvalid, match="2.1 MB"):
         parse(b" " * (MAX_BYTES + 1), CVE)
     with pytest.raises(RecordInvalid, match="not JSON"):
         parse(b"<html>", CVE)

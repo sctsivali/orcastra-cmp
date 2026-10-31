@@ -358,8 +358,8 @@ requireText(operationE2EPath, operationE2E, [
 const summaryPath = "frontend/src/components/instance-specification/operation-summary.tsx";
 const summary = read(summaryPath);
 requireText(summaryPath, summary, [
-  'change.field === "root_disk_bytes" ? formatLxdLimit(value) : formatMemory(value)',
-  "<dd>{formatLxdLimit(disk)}</dd>",
+  "return formatBytes(value);",
+  "<dd>{formatBytes(disk)}</dd>",
 ]);
 
 if (failures.length > 0) {

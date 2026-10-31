@@ -45,7 +45,10 @@ def check(ctx: CheckContext) -> CheckResult:
     scratch = describe_usage()
     if scratch.get("available"):
         percent = float(scratch.get("percent_used") or 0)
-        facts.append(fact("Certificate Scratch Space", f"{percent:.1f}% used of {scratch.get('total_mib')} MiB"))
+        facts.append(fact(
+            "Certificate Scratch Space",
+            f"{percent:.1f}% used of {size(float(scratch.get('total_mib') or 0) * 1024 * 1024)}",
+        ))
         if percent >= SCRATCH_CRITICAL_PCT:
             status, severity = "down", "critical"
             summary = "The certificate scratch space is full. New cluster connections will fail."

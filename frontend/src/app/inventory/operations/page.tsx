@@ -59,7 +59,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { currentQuery, replaceQuery } from "@/lib/url-state";
-import { formatDateTime, formatRelativeTime, toMillis } from "@/lib/utils";
+import { formatDateTimeSeconds, formatRelativeTime, toMillis } from "@/lib/utils";
 import { Role } from "@/types/rbac";
 import type { TaskRecord } from "@/types/tasks";
 
@@ -179,7 +179,7 @@ function FinishedCell({ task }: { task: TaskRecord }) {
   return (
     <TableCell className="whitespace-nowrap">
       {formatRelativeTime(finished)}
-      <TableSubText>{formatDateTime(task.finished_at)}</TableSubText>
+      <TableSubText>{formatDateTimeSeconds(task.finished_at)}</TableSubText>
     </TableCell>
   );
 }

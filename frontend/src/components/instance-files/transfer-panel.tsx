@@ -14,9 +14,9 @@ import { formatBytes, formatNetworkRate } from "@/lib/utils";
 function etaText(remaining: number, rate: number): string {
   if (rate <= 0) return "";
   const seconds = Math.ceil(remaining / rate);
-  if (seconds < 60) return `${seconds} s left`;
-  if (seconds < 3600) return `${Math.ceil(seconds / 60)} min left`;
-  return `${(seconds / 3600).toFixed(1)} h left`;
+  if (seconds < 60) return `${seconds}s left`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)}m left`;
+  return `${(seconds / 3600).toFixed(1)}h left`;
 }
 
 export function summarizeTransfers(transfers: Transfer[]) {

@@ -205,7 +205,7 @@ def test_a_cluster_past_the_wall_is_named_with_the_wall(monkeypatch):
     monkeypatch.setattr(host_kernels, "run_blocking", timing_out)
     fleet = asyncio.run(fleet_kernels(object(), ["slow"], _Cache(), fresh=True, wall=12))
     assert fleet.unreachable_nodes == ["slow"]
-    assert "within 12 s" in fleet.node_errors["slow"]
+    assert "within 12s" in fleet.node_errors["slow"]
 
 
 def test_a_host_answering_non_text_facts_reads_as_invalid_not_as_a_crash():

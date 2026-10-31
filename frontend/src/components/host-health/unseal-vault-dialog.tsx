@@ -46,7 +46,7 @@ interface UnsealVaultDialogProps {
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof APIError && error.status === 429) {
     const minutes = Math.max(1, Math.round((error.retryAfter ?? 600) / 60));
-    return `Too many unseal submissions from this account. Try again in ${minutes} min.`;
+    return `Too many unseal submissions from this account. Try again in ${minutes}m.`;
   }
   return error instanceof Error ? error.message : fallback;
 }

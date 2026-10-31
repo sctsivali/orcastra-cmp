@@ -57,12 +57,12 @@ const requiredContracts = [
   ["components/project-create-form.tsx", "Max vCPUs", "project allocation uses vCPU"],
   ["components/project-create-form.tsx", "Max Memory", "project allocation uses Memory"],
   ["components/project-create-form.tsx", "hardware threads", "host capacity uses hardware threads"],
-  ["app/inventory/monitoring/monitoring-content.tsx", 'formatMemory(', "monitoring memory uses the memory formatter"],
+  ["app/inventory/monitoring/monitoring-content.tsx", 'formatBytes(data.memoryUsedBytes)', "monitoring memory uses the one size formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", 'formatNetworkRate(', "monitoring rate uses the network formatter"],
   ["app/inventory/monitoring/monitoring-content.tsx", "CPU Usage", "utilization is CPU usage"],
   // The utilization gauges moved out of monitoring-content.tsx; the contract moved with them.
   ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'label="CPU Usage"', "the utilization gauge is CPU usage"],
-  ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'formatMemory(', "the memory gauge uses the memory formatter"],
+  ["app/inventory/monitoring/components/resource-utilization-card.tsx", 'formatBytes(stats.used_memory_bytes)', "the memory gauge uses the one size formatter"],
   ["components/regions/regions-page.tsx", "Hardware Threads", "region capacity uses hardware threads"],
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Reporting Clusters"', "technology coverage uses clusters"],
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Memory per Cluster"', "technology averages use clusters"],
@@ -130,8 +130,8 @@ const backendRequiredContracts = [
   ],
   [
     "backend/app/routers/projects.py",
-    'f"Storage limit ({_format_storage(storage_bytes)})',
-    "project storage refusal uses the decimal formatter",
+    'f"Storage limit ({format_size(storage_bytes)})',
+    "project storage refusal uses the one size formatter",
   ],
 ];
 

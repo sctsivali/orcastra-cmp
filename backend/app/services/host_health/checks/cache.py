@@ -45,7 +45,7 @@ def check(ctx: CheckContext) -> CheckResult:
         return down
     used = memory.get("used_memory")
     limit = memory.get("maxmemory") or 0
-    facts += [fact("Version", server.get("redis_version")), fact("Response Time", f"{latency} ms"),
+    facts += [fact("Version", server.get("redis_version")), fact("Response Time", f"{latency}ms"),
               fact("Memory Used", size(used) + (f" of {size(limit)}" if limit else " (no limit set)"))]
     if limit and isinstance(used, (int, float)) and used / limit >= MEMORY_WARN_RATIO:
         return CheckResult(id="cache", label=LABEL, status="degraded", severity="warning", checked_at=ctx.now,

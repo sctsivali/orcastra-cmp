@@ -191,7 +191,7 @@ async def unseal_vault(request: Request, response: Response, user: Authenticated
                {"outcome": "rate_limited"}, "rate_limited")
         raise HTTPException(status_code=429, headers={"Retry-After": str(retry_after)}, detail={
             "error": "unseal_rate_limited",
-            "message": f"Too many unseal submissions from this account. Try again in {max(1, round(retry_after / 60))} min.",
+            "message": f"Too many unseal submissions from this account. Try again in {max(1, round(retry_after / 60))}m.",
         })
     action = "vault.unseal.reset" if body.reset else "vault.unseal.submit"
     try:

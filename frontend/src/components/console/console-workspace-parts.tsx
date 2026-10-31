@@ -11,7 +11,7 @@ import { ChevronDown, ChevronUp, MonitorX, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InstanceFileExplorer } from "@/components/instance-files/instance-file-explorer";
-import { cn } from "@/lib/utils";
+import { cn, formatClockTime } from "@/lib/utils";
 import type { ActiveConsoleSession } from "@/lib/console-api";
 import type { ConsoleConnectionStatus, ConsoleTab } from "@/lib/console-store";
 
@@ -84,7 +84,7 @@ function clock(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime())
     ? ""
-    : new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+    : formatClockTime(date.getTime());
 }
 
 /**

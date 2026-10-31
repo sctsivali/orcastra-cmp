@@ -1,7 +1,7 @@
 import { APIError, type InstanceMetricSection, type VMStatus } from "@/types/api";
 
 export const METRIC_SECTION_LABELS: Record<InstanceMetricSection, string> = {
-  cpu: "CPU",
+  cpu: "vCPU",
   memory: "Memory",
   disk: "Disk",
   network: "Network",
@@ -70,7 +70,7 @@ export function notRunningCopy(status: VMStatus): { title: string; description: 
     case "Stopped":
       return {
         title: "Instance is not running",
-        description: "Start the instance to see live CPU, memory, disk and network figures.",
+        description: "Start the instance to see live vCPU, memory, disk and network figures.",
       };
     case "Frozen":
       return {

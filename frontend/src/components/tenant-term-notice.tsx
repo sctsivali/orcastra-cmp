@@ -2,7 +2,7 @@
 
 import { Clock, Lock } from "lucide-react";
 import type { TenantAccessSummary, TenantTermItem } from "@/lib/access-api";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 // The paid term behind a Tenant's own access (backend core/tenant_term.py). After the term the
 // instances are read-only (owner decision 2026-10-27) and after the retention window they are
@@ -14,15 +14,15 @@ const SHOWN = 3;
 function line(item: TenantTermItem): string {
   const project = item.project_name;
   if (item.phase === "ending") {
-    return `Subscription for ${project} ends ${formatDate(item.term_ended_at ?? item.access_ends_at)}. After that its instances become read-only.`;
+    return `Subscription for ${project} ends ${formatDateTime(item.term_ended_at ?? item.access_ends_at)}. After that its instances become read-only.`;
   }
   if (item.inferred || !item.term_ended_at) {
     return `Subscription for ${project} ended. Its instances are read-only until your provider removes them.`;
   }
   if (item.access_ends_at) {
-    return `Subscription for ${project} ended ${formatDate(item.term_ended_at)}. Read-only access until ${formatDate(item.access_ends_at)}, then the project is deleted.`;
+    return `Subscription for ${project} ended ${formatDateTime(item.term_ended_at)}. Read-only access until ${formatDateTime(item.access_ends_at)}, then the project is deleted.`;
   }
-  return `Subscription for ${project} ended ${formatDate(item.term_ended_at)}. Its instances are read-only until your provider removes them.`;
+  return `Subscription for ${project} ended ${formatDateTime(item.term_ended_at)}. Its instances are read-only until your provider removes them.`;
 }
 
 export function TenantTermNotice({ summary }: { summary: TenantAccessSummary | null }) {

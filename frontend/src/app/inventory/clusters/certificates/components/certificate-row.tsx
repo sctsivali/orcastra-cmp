@@ -9,7 +9,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { CertificateStatus, type CertificateInfo } from "@/types/api";
 
 import { certificateStatusMeta } from "./certificate-status";
@@ -108,10 +108,10 @@ export function CertificateRow({
         </span>
       </TableCell>
       <TableCell className="hidden lg:table-cell">
-        <span className="text-sm whitespace-nowrap">{formatDate(cert.issued_at)}</span>
+        <span className="text-sm whitespace-nowrap">{formatDateTime(cert.issued_at)}</span>
       </TableCell>
       <TableCell>
-        <span className="text-sm whitespace-nowrap">{formatDate(cert.expires_at)}</span>
+        <span className="text-sm whitespace-nowrap">{formatDateTime(cert.expires_at)}</span>
       </TableCell>
       <TableCell>
         <span className={cn("text-xs md:text-sm font-medium whitespace-nowrap", daysTone(cert.days_until_expiry))}>

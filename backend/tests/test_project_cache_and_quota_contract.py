@@ -63,7 +63,7 @@ def test_project_quota_refusals_use_canonical_resource_vocabulary() -> None:
             storage_bytes=None,
         )
     assert memory_error.value.detail == (
-        "Memory limit (512 GiB) exceeds this cluster's capacity of 256 GiB"
+        "Memory limit (549.76 GB) exceeds this cluster's capacity of 274.88 GB"
     )
 
     with pytest.raises(HTTPException) as storage_error:

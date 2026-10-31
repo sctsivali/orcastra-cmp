@@ -1,5 +1,5 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { formatLxdLimit, formatMemory } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import type {
   InstanceOperationJob,
   InstanceSpecificationChange,
@@ -15,7 +15,7 @@ function fieldLabel(field: string): string {
 function changeValue(change: InstanceSpecificationChange, value: number | null): string {
   if (value === null) return "Not set";
   if (change.field === "cpu_count") return String(value);
-  return change.field === "root_disk_bytes" ? formatLxdLimit(value) : formatMemory(value);
+  return formatBytes(value);
 }
 
 export function ChangeSummary({ changes }: { changes: InstanceSpecificationChange[] }) {
@@ -73,8 +73,8 @@ export function OperationReadback({ job }: { job: InstanceOperationJob }) {
           </h3>
           <dl className="mt-2 grid gap-x-4 gap-y-2 rounded-md border p-3 text-sm sm:grid-cols-2">
             {cpu !== null && <div><dt className="text-muted-foreground">vCPU count</dt><dd>{cpu}</dd></div>}
-            {memory !== null && <div><dt className="text-muted-foreground">Memory limit</dt><dd>{formatMemory(memory)}</dd></div>}
-            {disk !== null && <div><dt className="text-muted-foreground">Root disk</dt><dd>{formatLxdLimit(disk)}</dd></div>}
+            {memory !== null && <div><dt className="text-muted-foreground">Memory limit</dt><dd>{formatBytes(memory)}</dd></div>}
+            {disk !== null && <div><dt className="text-muted-foreground">Root disk</dt><dd>{formatBytes(disk)}</dd></div>}
             {status !== null && <div><dt className="text-muted-foreground">Instance status</dt><dd>{status}</dd></div>}
           </dl>
         </div>

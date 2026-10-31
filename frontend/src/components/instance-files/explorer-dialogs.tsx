@@ -1,5 +1,6 @@
 "use client";
 
+import { formatCount } from "@/lib/utils";
 import type { TreeChange, useFileActions } from "@/hooks/use-instance-files";
 import { toast } from "@/hooks/use-toast";
 import { fileErrorCode, type GuestEntry, type GuestTarget } from "@/lib/instance-files/api";
@@ -34,7 +35,7 @@ function reportTreeChange(outcomes: (TreeChange | undefined)[]): void {
   if (skipped > 0) {
     toast({
       title: "Some items were left as they were",
-      description: `${skipped.toLocaleString()} could not be changed, for example a device, a pipe or an immutable file.`,
+      description: `${formatCount(skipped)} could not be changed, for example a device, a pipe or an immutable file.`,
     });
   }
 }

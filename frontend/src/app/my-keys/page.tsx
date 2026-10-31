@@ -14,7 +14,8 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow } from "@/components/ui/table";
+  TableRow,
+} from "@/components/ui/table";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RowActions, type RowAction } from "@/components/ui/row-actions";
@@ -32,7 +33,7 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { IntentLink } from "@/components/navigation/route-intent";
-import { formatDate, formatLabel } from "@/lib/utils";
+import { formatDateTime, formatLabel, formatDate } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -434,15 +435,15 @@ function MyKeysContent() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {new Date(key.created_at).toLocaleDateString('en-GB')}
+                      {formatDate(key.created_at)}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {key.expires_at
-                        ? new Date(key.expires_at).toLocaleDateString('en-GB')
+                        ? formatDate(key.expires_at)
                         : "Never"}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {key.last_used_at ? formatDate(key.last_used_at) : <TableEmptyValue label="Not recorded" />}
+                      {key.last_used_at ? formatDateTime(key.last_used_at) : <TableEmptyValue label="Not recorded" />}
                     </TableCell>
                     <TableCell>
                       {key.is_expired ? (

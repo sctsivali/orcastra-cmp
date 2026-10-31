@@ -4,7 +4,7 @@
  * cpu_allocation.py and project_usage.py so both ends count the same way.
  */
 
-import { formatLxdLimit } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 
 const SIZE_UNITS: Record<string, number> = {
   "": 1,
@@ -23,43 +23,21 @@ const SIZE_UNITS: Record<string, number> = {
   eib: 1024 ** 6,
 };
 
-export type LxdLimitUnit = "GiB" | "MiB";
-export type StorageLimitUnit = "GB" | "MB";
+/** The units a size field offers. The API takes any LXD spelling; these are what the console writes. */
+export const FORM_SIZE_UNITS = ["MB", "GB", "TB"] as const;
+export type FormSizeUnit = (typeof FORM_SIZE_UNITS)[number];
+export const FORM_UNIT_BYTES: Record<FormSizeUnit, number> = { MB: 1e6, GB: 1e9, TB: 1e12 };
 
 /**
- * Convert any absolute LXD size spelling into the edit control's binary units.
- * `preservedRaw` remains set until the operator changes the control, so a valid SI/raw-byte
- * limit is not rounded or cleared by an unrelated project edit. Unsupported values such as a
- * percentage are also preserved and identified instead of being misreported as unlimited.
+ * An absolute LXD size as the edit control shows it.
+ *
+ * important: `preservedRaw` stays set until the operator changes the control, so opening and saving
+ * a project cannot rewrite a limit stored as `8GiB` into a rounded `8.59GB`. A value the control
+ * cannot show, such as a percentage, is preserved and identified rather than read as unlimited.
  */
-export function editableLxdLimit(raw: string | undefined): {
+export function editableLimit(raw: string | undefined): {
   value: number;
-  unit: LxdLimitUnit;
-  preservedRaw: string | null;
-} {
-  const text = raw?.trim() ?? "";
-  if (!text || text === "0") return { value: 0, unit: "GiB", preservedRaw: null };
-  const bytes = parseLxdSize(text);
-  if (bytes === null || bytes <= 0) {
-    return { value: 0, unit: "GiB", preservedRaw: text };
-  }
-  const unit: LxdLimitUnit = bytes >= 1024 ** 3 ? "GiB" : "MiB";
-  const divisor = unit === "GiB" ? 1024 ** 3 : 1024 ** 2;
-  return {
-    value: Number((bytes / divisor).toPrecision(12)),
-    unit,
-    preservedRaw: text,
-  };
-}
-
-/**
- * Convert an absolute LXD size into the project storage editor's decimal units.
- * The original spelling is preserved until the operator changes this field, matching
- * `editableLxdLimit` without presenting storage capacity as binary memory.
- */
-export function editableStorageLimit(raw: string | undefined): {
-  value: number;
-  unit: StorageLimitUnit;
+  unit: FormSizeUnit;
   preservedRaw: string | null;
 } {
   const text = raw?.trim() ?? "";
@@ -68,13 +46,8 @@ export function editableStorageLimit(raw: string | undefined): {
   if (bytes === null || bytes <= 0) {
     return { value: 0, unit: "GB", preservedRaw: text };
   }
-  const unit: StorageLimitUnit = bytes >= 1_000_000_000 ? "GB" : "MB";
-  const divisor = unit === "GB" ? 1_000_000_000 : 1_000_000;
-  return {
-    value: Number((bytes / divisor).toPrecision(12)),
-    unit,
-    preservedRaw: text,
-  };
+  const unit: FormSizeUnit = bytes >= FORM_UNIT_BYTES.TB ? "TB" : bytes >= FORM_UNIT_BYTES.GB ? "GB" : "MB";
+  return { value: Number((bytes / FORM_UNIT_BYTES[unit]).toPrecision(12)), unit, preservedRaw: text };
 }
 
 /** Cores a `limits.cpu` value pins or counts; `fallback` for unset or unparseable. */
@@ -115,9 +88,28 @@ export function parseLxdSize(value: unknown): number | null {
   return Math.round(parseFloat(m[1]) * unit);
 }
 
-/** A byte count in the unit an operator types, ex; "8 GiB", "512 MiB". */
-export function formatLimitBytes(bytes: number): string {
-  return formatLxdLimit(bytes, { decimals: 1 });
+/** A raw LXD size in the console's standard ("8GiB" reads "8.59 GB"); anything else as it came. */
+export function formatLxdSize(raw: unknown): string {
+  const bytes = parseLxdSize(raw);
+  return bytes === null ? String(raw ?? "") : formatBytes(bytes);
+}
+
+// The config and device keys that hold a byte size. An allow-list, because a value elsewhere can
+// look like one: a label "2", `limits.cpu` "4", a read limit "30iops", which parseLxdSize refuses.
+const SIZE_KEYS = new Set([
+  "limits.memory",
+  "limits.disk",
+  "limits.read",
+  "limits.write",
+  "limits.max",
+  "size",
+  "size.state",
+  "volume.size",
+]);
+
+/** A config or device value for display. Only a size key is converted; the stored value is untouched. */
+export function formatConfigValue(key: string, value: unknown): string {
+  return SIZE_KEYS.has(key) ? formatLxdSize(value) : String(value);
 }
 
 export interface ProjectLimits {

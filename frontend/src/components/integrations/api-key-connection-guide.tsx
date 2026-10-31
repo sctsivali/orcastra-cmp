@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDate } from "@/lib/utils";
 import { useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -176,11 +177,7 @@ export function ApiKeyConnectionGuide({
         <p className="mt-2 text-xs text-muted-foreground">
           {key.cluster_permissions.length} cluster(s).{" "}
           {key.expires_at
-            ? `Expires ${new Date(key.expires_at).toLocaleDateString("en-GB", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-              })}. Nothing warns you before that date, so have the integration read
+            ? `Expires ${formatDate(key.expires_at)}. Nothing warns you before that date, so have the integration read
                 expires_in_days from GET /integrations/whoami.`
             : "Does not expire."}
         </p>

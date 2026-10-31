@@ -1,5 +1,6 @@
 "use client";
 
+import { formatLxdSize } from "@/lib/lxd-limits";
 import * as React from "react";
 import {
   Cpu,
@@ -119,7 +120,7 @@ function buildTenantCategories(instances: readonly InstanceSpecification[]): Ten
     {
       id: "cpu",
       icon: Cpu,
-      title: "CPU",
+      title: "vCPU",
       description: "vCPU limits applied to your instances",
       items: limitItems("cpu"),
     },
@@ -189,8 +190,8 @@ function buildTenantCategories(instances: readonly InstanceSpecification[]): Ten
   ];
 }
 
-function resourceValue(resource: InstanceResourceSpecification) {
-  if (resource.value) return resource.value;
+function resourceValue(resource: InstanceResourceSpecification, format: (raw: string) => string = String) {
+  if (resource.value) return format(resource.value);
   if (resource.source === "explicit") return "Explicit value not reported";
   if (resource.source === "inherited") return "Inherited value not reported";
   if (resource.source === "default") return "LXD default";
@@ -199,7 +200,7 @@ function resourceValue(resource: InstanceResourceSpecification) {
 }
 
 function rootDiskValue(instance: InstanceSpecification) {
-  if (instance.root_disk.value) return instance.root_disk.value;
+  if (instance.root_disk.value) return formatLxdSize(instance.root_disk.value);
   if (instance.root_disk.source === "explicit") return "Explicit size not reported";
   if (instance.root_disk.source === "inherited") return "Inherited size not reported";
   if (instance.root_disk.source === "pool_default") return "Pool default";
@@ -226,7 +227,7 @@ function InstanceCategoryFields({
   if (category === "memory") {
     return (
       <DetailGrid cols={3}>
-        <DetailField label="Memory Limit" value={resourceValue(instance.memory)} mono />
+        <DetailField label="Memory Limit" value={resourceValue(instance.memory, formatLxdSize)} mono />
         <DetailField label="Limit Source" value={RESOURCE_SOURCE_LABEL[instance.memory.source]} />
         <DetailField label="Architecture" value={instance.architecture || "Not reported"} mono />
       </DetailGrid>

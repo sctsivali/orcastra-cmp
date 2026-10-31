@@ -17,11 +17,6 @@ export function formatUptime(seconds: number): string {
   return parts.length > 0 ? parts.join(" ") : "< 1m";
 }
 
-/** "1 vCPU", "6 vCPUs". */
-export function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
 /** "80.5% · High", the level in words beside the number so the state never rests on colour. */
 export function StatusPercent({ percent }: { percent: number }) {
   return (

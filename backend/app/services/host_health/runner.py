@@ -45,7 +45,7 @@ async def _blocking(check_id: str, label: str, fn: Callable[[CheckContext], Chec
         return await run_blocking(fn, ctx, timeout=deadline, label=f"host_health.{check_id}",
                                   executor=_executor, max_in_flight=12)
     except BlockingTimeout:
-        return _unknown(check_id, label, ctx, f"no answer within {deadline:.0f} s")
+        return _unknown(check_id, label, ctx, f"no answer within {deadline:.0f}s")
     except BlockingPoolFull:
         return _unknown(check_id, label, ctx, "earlier checks are still waiting on it")
     except Exception as exc:  # noqa: BLE001 - one broken check must not hide the others

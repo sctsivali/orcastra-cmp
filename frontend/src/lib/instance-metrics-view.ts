@@ -1,4 +1,4 @@
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, formatVcpuCount } from "@/lib/utils";
 import type { InstanceMetrics } from "@/types/api";
 
 /**
@@ -57,14 +57,14 @@ export function formatVcpuAmount(value: number): string {
   return String(Number(value.toFixed(value < 10 ? 2 : 1)));
 }
 
-export function formatVcpuCount(count: number): string {
-  return `${count} vCPU${count === 1 ? "" : "s"}`;
+export function formatVcpuBusy(value: number): string {
+  return formatVcpuCount(Number(formatVcpuAmount(value)));
 }
 
-/** The window a rate covers, ex; "last 5 s". Null when the sample carries none. */
+/** The window a rate covers, ex; "last 5s". Null when the sample carries none. */
 export function formatSampleWindow(seconds: number | null | undefined): string | null {
   if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return null;
-  return `last ${seconds < 10 ? Number(seconds.toFixed(1)) : Math.round(seconds)} s`;
+  return `last ${seconds < 10 ? Number(seconds.toFixed(1)) : Math.round(seconds)}s`;
 }
 
 /** Why disk I/O is missing, in the dialog's words. Null when the server gave no reason. */

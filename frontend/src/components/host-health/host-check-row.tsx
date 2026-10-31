@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useRelativeTime } from "@/hooks/use-relative-time";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTimeSeconds } from "@/lib/utils";
 import type { HostCheck } from "@/types/host-health";
 import { HOST_CHECK_ICON, HOST_STATUS, NEEDS_ATTENTION } from "./status-display";
 
@@ -53,7 +53,7 @@ export function HostCheckRow({ check, onUnseal }: HostCheckRowProps) {
                 {sinceMs !== null && check.status !== "not_configured" && (
                   <span className="text-xs text-muted-foreground">
                     {"since "}
-                    <time dateTime={new Date(sinceMs).toISOString()}>{formatDateTime(new Date(sinceMs).toISOString())}</time>
+                    <time dateTime={new Date(sinceMs).toISOString()}>{formatDateTimeSeconds(new Date(sinceMs).toISOString())}</time>
                     {` (${since})`}
                   </span>
                 )}
@@ -115,7 +115,7 @@ export function HostCheckRow({ check, onUnseal }: HostCheckRowProps) {
                 ))}
               </dl>
               {check.latency_ms !== null && (
-                <p className="pt-2 text-xs text-muted-foreground">Checked in {check.latency_ms} ms.</p>
+                <p className="pt-2 text-xs text-muted-foreground">Checked in {check.latency_ms}ms.</p>
               )}
             </CollapsibleContent>
           </Collapsible>

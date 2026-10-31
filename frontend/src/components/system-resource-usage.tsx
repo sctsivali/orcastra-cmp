@@ -114,7 +114,7 @@ export function SystemResourceUsagePanel() {
       {isError && (
         <PartialReadNotice data-testid="host-resources-stale">
           Could not refresh: {describeReadError(error).reason}. Showing figures from{" "}
-          {formatClockTime(dataUpdatedAt)}; the panel keeps trying every 5 s.
+          {formatClockTime(dataUpdatedAt)}; the panel keeps trying every 5s.
         </PartialReadNotice>
       )}
 

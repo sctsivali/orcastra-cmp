@@ -42,7 +42,7 @@ async def check(ctx: CheckContext) -> CheckResult:
         version, revisions, in_use, size = await asyncio.wait_for(_read(), TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         return CheckResult(id="database", label=LABEL, status="down", severity="critical", checked_at=ctx.now,
-                           summary=f"Postgres did not answer within {TIMEOUT_SECONDS:.0f} s. The dashboard cannot read or save anything.",
+                           summary=f"Postgres did not answer within {TIMEOUT_SECONDS:.0f}s. The dashboard cannot read or save anything.",
                            remediation="Check the postgres container and the connection pool (DB_POOL_SIZE).")
     except Exception as exc:  # noqa: BLE001 - a down database is a result, not an error
         return CheckResult(id="database", label=LABEL, status="down", severity="critical", checked_at=ctx.now,
@@ -50,7 +50,7 @@ async def check(ctx: CheckContext) -> CheckResult:
                            facts=[fact("Reason", type(exc).__name__)],
                            remediation="Check that the postgres container is running and DATABASE_URL is correct.")
     latency = int((time.monotonic() - started) * 1000)
-    facts: List[HealthFact] = [fact("Server Version", version), fact("Response Time", f"{latency} ms"),
+    facts: List[HealthFact] = [fact("Server Version", version), fact("Response Time", f"{latency}ms"),
                                fact("Schema Revision", ", ".join(revisions) or "none")]
     if in_use is not None and size is not None:
         facts.append(fact("Pool Connections in Use", f"{in_use} of {size} (plus overflow)"))

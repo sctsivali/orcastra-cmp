@@ -19,6 +19,7 @@
  * is happening.
  */
 
+import { formatClockTime } from "@/lib/utils";
 import * as React from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -112,7 +113,7 @@ export function AgentActivityBadge({
         </Badge>
       </TooltipTrigger>
       <TooltipContent>
-        An AI agent drove this desktop at {lastSeen.toLocaleTimeString()}. It acts as the
+        An AI agent drove this desktop at {formatClockTime(lastSeen.getTime())}. It acts as the
         logged-in user, so anything it types happens in this same session.
       </TooltipContent>
     </Tooltip>

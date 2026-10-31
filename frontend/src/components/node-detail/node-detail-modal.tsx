@@ -19,7 +19,7 @@ import { useNodeResources } from "@/hooks/use-lxd";
 import { STALE_AFTER_MS } from "@/lib/query-config";
 import { ClusterStatus, type NodeStatus } from "@/types/api";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import { toMillis } from "@/lib/utils";
+import { toMillis, EMPTY_VALUE } from "@/lib/utils";
 import { NodeSystemPanel } from "./node-system-panel";
 import {
   NodeCpuPanel,
@@ -164,7 +164,7 @@ export function NodeDetailModal({
 
             <TabsContent className="space-y-4" value="cpu">
               <NodeCpuPanel
-                architecture={String(node.environment?.kernel_architecture || "N/A")}
+                architecture={String(node.environment?.kernel_architecture || EMPTY_VALUE)}
                 resources={resources}
               />
             </TabsContent>

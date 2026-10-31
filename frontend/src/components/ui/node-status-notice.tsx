@@ -3,7 +3,7 @@
 import { AlertTriangle, Info, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
-import { cn } from "@/lib/utils";
+import { cn, formatRelativeTime } from "@/lib/utils";
 import { ClusterStatus } from "@/types/api";
 import type { ClusterStatusMeta } from "@/lib/cluster-status";
 
@@ -26,14 +26,6 @@ interface NodeStatusNoticeProps {
   updatedAt?: number | null;
   onRecheck?: () => Promise<unknown> | void;
   className?: string;
-}
-
-function ageLabel(updatedAt?: number | null): string {
-  if (!updatedAt) return "";
-  const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
-  if (seconds < 60) return "moments ago";
-  const minutes = Math.round(seconds / 60);
-  return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
 }
 
 /**
@@ -98,7 +90,7 @@ export function NodeStatusNotice({
       : `${name}did not answer the last reachability check. Creating here will fail until it responds.`;
   // note: the age is its own sentence. Folding it into the headline produced "did not answer
   // when last checked just now", which reads as a contradiction.
-  const checked = updatedAt ? ` Checked ${ageLabel(updatedAt)}.` : "";
+  const checked = updatedAt ? ` Checked ${formatRelativeTime(updatedAt)}.` : "";
   // The curated reason repeats the headline for offline and untrusted clusters, so it only
   // earns its place when the status is one the headline cannot explain.
   const detail = meta.status === ClusterStatus.ERROR && reason ? ` ${reason}` : "";

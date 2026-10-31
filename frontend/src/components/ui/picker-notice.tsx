@@ -46,8 +46,8 @@ export function PickerNotice({ id, notice, onRetry, className }: PickerNoticePro
   const waiting = rateLimited && left > 0;
   const text = rateLimited
     ? waiting
-      ? notice.text.replace(/\d+ s\./, `${left} s.`)
-      : notice.text.replace(/, try again in \d+ s\./, ". Retry when ready.")
+      ? notice.text.replace(/\d+s\./, `${left}s.`)
+      : notice.text.replace(/, try again in \d+s\./, ". Retry when ready.")
     : notice.text;
 
   const handleRetry = async () => {

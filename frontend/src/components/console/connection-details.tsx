@@ -46,7 +46,7 @@ export function ConnectionDetails({ status, stats, mouseMode, agentConnected, re
   // The round trip is measured from pointer ACKs only (a fake move would keep the guest awake),
   // so before the first move the chip shows frames, and "Idle" on a still screen.
   const fps = stats?.fps ?? 0;
-  const chip = rtt !== null ? `${rtt} ms` : fps > 0 ? `${fps} fps` : "Idle";
+  const chip = rtt !== null ? `${rtt}ms` : fps > 0 ? `${fps} fps` : "Idle";
 
   return (
     <Popover>
@@ -62,7 +62,7 @@ export function ConnectionDetails({ status, stats, mouseMode, agentConnected, re
         <dl className="divide-y">
           <Row
             label="Round trip"
-            value={rtt !== null ? `${rtt} ms (${verdict})` : "Move the pointer to measure"}
+            value={rtt !== null ? `${rtt}ms (${verdict})` : "Move the pointer to measure"}
           />
           <Row label="Frames" value={`${stats?.fps ?? 0} per second`} />
           <Row label="Received" value={formatNetworkRate(stats?.bytesPerSecond ?? 0)} />

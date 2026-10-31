@@ -77,7 +77,7 @@ export function describeReadError(error: unknown): ReadError {
 
     if (error.status === 429) {
       const wait = error.retryAfter ?? 30;
-      return { kind: "rate-limited", reason: `rate limited by the API, try again in ${wait} s`, retryAfterSeconds: wait };
+      return { kind: "rate-limited", reason: `rate limited by the API, try again in ${wait}s`, retryAfterSeconds: wait };
     }
     if (error.status === 504 || /timeout/i.test(error.message)) {
       return { kind: "timeout", reason: "the request timed out" };

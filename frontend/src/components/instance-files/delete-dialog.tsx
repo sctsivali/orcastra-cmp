@@ -1,5 +1,6 @@
 "use client";
 
+import { formatCount } from "@/lib/utils";
 import * as React from "react";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { instanceFilesAPI, type GuestEntry, type GuestTarget, type SelectionSummary } from "@/lib/instance-files/api";
@@ -52,7 +53,7 @@ export function DeleteDialog({ target, folder, entries, open, onConfirm, onClose
   let description = entries.length === 1 ? `${guestText(entries[0].name)} will be deleted. This cannot be undone.` : "This cannot be undone.";
   if (folders > 0 && summary) {
     const total = summary.files + summary.folders;
-    description = `${summary.complete ? "" : "At least "}${total.toLocaleString()} ${total === 1 ? "item" : "items"} will be deleted. This cannot be undone.`;
+    description = `${summary.complete ? "" : "At least "}${formatCount(total)} ${total === 1 ? "item" : "items"} will be deleted. This cannot be undone.`;
   } else if (unknownSize) {
     description = "This folder could not be counted, so what it holds is not known. This cannot be undone.";
   }
@@ -66,7 +67,7 @@ export function DeleteDialog({ target, folder, entries, open, onConfirm, onClose
       title={entries.length === 1 ? "Delete Item" : "Delete Items"}
       description={description}
       confirmLabel={entries.length === 1 ? "Delete" : `Delete ${entries.length} items`}
-      pendingLabel={deleted > 0 ? `Deleted ${deleted.toLocaleString()}` : "Deleting"}
+      pendingLabel={deleted > 0 ? `Deleted ${formatCount(deleted)}` : "Deleting"}
       pending={pending}
       preparing={counting}
       preparingLabel="Counting what this holds"

@@ -49,9 +49,9 @@ def test_a_file_that_is_not_the_image_it_claims_is_refused() -> None:
 
 
 def test_an_image_over_its_limit_is_refused() -> None:
-    with pytest.raises(BrandingInvalid, match="larger than 500 KB"):
+    with pytest.raises(BrandingInvalid, match="larger than 512 kB"):
         validate_branding({"logo": {"lightModeLogo": _uri("image/png", PNG + b"\x00" * LOGO_BYTES)}})
-    with pytest.raises(BrandingInvalid, match="larger than 64 KB"):
+    with pytest.raises(BrandingInvalid, match="larger than 65.54 kB"):
         validate_branding({"logo": {"favicon": _uri("image/png", PNG + b"\x00" * FAVICON_BYTES)}})
 
 

@@ -1,35 +1,36 @@
+import { FORM_UNIT_BYTES, type FormSizeUnit } from "@/lib/lxd-limits";
 import type {
   EditableSpecificationSource,
   InstanceSpecificationDetail,
   InstanceSpecificationPreflightRequest,
 } from "@/types/api";
 
-export type SizeUnit = "MiB" | "GiB";
-
 export interface SizeDraft {
   value: string;
-  unit: SizeUnit;
+  unit: FormSizeUnit;
+  /** What the instance holds, as first shown, so an untouched field cannot change it. */
+  original?: { value: string; unit: FormSizeUnit; bytes: number };
 }
-
-const UNIT_BYTES: Record<SizeUnit, number> = {
-  MiB: 1024 ** 2,
-  GiB: 1024 ** 3,
-};
 
 export function draftFromBytes(
   bytes: number | null,
-  preferred: SizeUnit = "GiB",
+  preferred: FormSizeUnit = "GB",
 ): SizeDraft {
   if (bytes === null) return { value: "", unit: preferred };
-  const unit = bytes >= UNIT_BYTES.GiB ? "GiB" : "MiB";
-  return { value: String(bytes / UNIT_BYTES[unit]), unit };
+  const unit: FormSizeUnit = bytes >= FORM_UNIT_BYTES.TB ? "TB" : bytes >= FORM_UNIT_BYTES.GB ? "GB" : "MB";
+  const value = String(Number((bytes / FORM_UNIT_BYTES[unit]).toFixed(2)));
+  return { value, unit, original: { value, unit, bytes } };
 }
 
 export function bytesFromDraft(draft: SizeDraft): number | null {
   if (!draft.value.trim()) return null;
+  // important: 2GiB shows as 2.15 GB. Read back it would be 2150000000 and apply as a change the
+  // operator never made, so a field left alone answers with the bytes it came from.
+  const { original } = draft;
+  if (original && original.value === draft.value && original.unit === draft.unit) return original.bytes;
   const numeric = Number(draft.value);
   if (!Number.isFinite(numeric) || numeric <= 0) return null;
-  const bytes = Math.round(numeric * UNIT_BYTES[draft.unit]);
+  const bytes = Math.round(numeric * FORM_UNIT_BYTES[draft.unit]);
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null;
 }
 

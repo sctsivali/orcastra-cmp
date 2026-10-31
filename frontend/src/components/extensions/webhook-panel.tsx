@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTimeSeconds } from "@/lib/utils";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { DELIVERY_STATE, SUBSCRIPTION_STATUS } from "@/lib/extension-display";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
@@ -353,7 +353,7 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
                     {row.response_ms ? ` · ${row.response_ms}ms` : ""}
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground">
-                    {formatDateTime(row.created_at)}
+                    {formatDateTimeSeconds(row.created_at)}
                   </span>
                   {RETRYABLE.has(row.state) ? (
                     <Button

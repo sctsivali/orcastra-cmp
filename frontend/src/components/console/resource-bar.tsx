@@ -29,7 +29,7 @@ import {
   ArrowUpFromLine,
   Loader2,
 } from "lucide-react";
-import { cn, formatBytes, formatNetworkRate } from "@/lib/utils";
+import { cn, formatBytes, formatNetworkRate, EMPTY_VALUE } from "@/lib/utils";
 import { useSession } from "next-auth/react";
 import { useInstanceMetrics } from "@/hooks";
 import { OverflowText } from "@/components/ui/overflow-text";
@@ -383,7 +383,7 @@ export function ConsoleResourceBar({
                 mono
               />
               <InfoRow label="Protocol" value={displayProtocol} />
-              <InfoRow label="Session" value={sessionId ?? "-"} mono />
+              <InfoRow label="Session" value={sessionId ?? EMPTY_VALUE} mono />
               <div className="border-t border-terminal-border my-1.5 pt-1.5">
                 <InfoRow
                   label="Download"
@@ -403,7 +403,7 @@ export function ConsoleResourceBar({
               User Info
             </h4>
             <div className="space-y-1.5 bg-terminal rounded-lg p-3">
-              <InfoRow label="Email" value={displayEmail || "—"} />
+              <InfoRow label="Email" value={displayEmail || EMPTY_VALUE} />
               <InfoRow label="Role" value={displayRole} />
               <InfoRow label="Instance" value={instanceName} mono />
               <InfoRow label="Cluster" value={host} mono />

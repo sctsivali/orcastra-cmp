@@ -90,7 +90,7 @@ def test_a_late_cluster_is_named_and_the_rest_of_the_fleet_answers(monkeypatch):
     assert sorted(vm["name"] for vm in body["vms"]) == ["web-1", "web-2"]
     assert body["nodes"] == [FAST]
     assert body["unreachable_nodes"] == [LATE]
-    assert body["node_errors"] == {LATE: "unreachable: did not answer within 30 s"}
+    assert body["node_errors"] == {LATE: "unreachable: did not answer within 30s"}
 
 
 def test_a_full_inventory_pool_is_not_blamed_on_the_cluster(monkeypatch):
@@ -138,4 +138,4 @@ def test_the_late_cluster_picked_alone_is_unreachable_not_empty(monkeypatch):
 
     assert body["vms"] == []
     assert body["unreachable_nodes"] == [LATE]
-    assert body["node_errors"] == {LATE: "unreachable: did not answer within 30 s"}
+    assert body["node_errors"] == {LATE: "unreachable: did not answer within 30s"}

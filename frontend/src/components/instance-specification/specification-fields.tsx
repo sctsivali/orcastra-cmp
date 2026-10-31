@@ -1,3 +1,4 @@
+import { FORM_SIZE_UNITS, type FormSizeUnit } from "@/lib/lxd-limits";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,7 +13,6 @@ import type { InstanceSpecificationDetail } from "@/types/api";
 import {
   sourceLabel,
   type SizeDraft,
-  type SizeUnit,
   type SpecificationDraft,
   type SpecificationValidation,
 } from "./rules";
@@ -48,15 +48,16 @@ function SizeField({ id, label, draft, onChange, disabled, error, help }: SizeFi
         />
         <Select
           value={draft.unit}
-          onValueChange={(unit) => onChange({ ...draft, unit: unit as SizeUnit })}
+          onValueChange={(unit) => onChange({ ...draft, unit: unit as FormSizeUnit })}
           disabled={disabled}
         >
           <SelectTrigger aria-label={`${label} unit`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="MiB">MiB</SelectItem>
-            <SelectItem value="GiB">GiB</SelectItem>
+            {FORM_SIZE_UNITS.map((unit) => (
+              <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>

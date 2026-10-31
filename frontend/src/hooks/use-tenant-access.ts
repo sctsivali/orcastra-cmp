@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import type { MyAccessResponse, TenantPermission, ResolvedAccess } from "@/types";
 
 /**
@@ -175,7 +175,7 @@ export function useTenantAccess(): UseTenantAccessResult {
       const ended = rules.find((rule) => rule.read_only);
       if (!ended) return undefined;
       return ended.access_ends_at
-        ? `Subscription ended: read-only until ${formatDate(ended.access_ends_at)}`
+        ? `Subscription ended: read-only until ${formatDateTime(ended.access_ends_at)}`
         : "Subscription ended: read-only";
     };
   }, [access, isPartner]);

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { AccessGateState, AccessRecheck } from "@/hooks/use-access-gate";
 import { federatedSignOut } from "@/lib/sign-out";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 
 // Issue #17: a signed-in account Orcastra has given nothing used to see an empty dashboard that
 // read as a broken deployment. This replaces the whole shell, so none of the dashboard's global
@@ -74,7 +74,7 @@ export function AccessBlockedNotice({ state, email, endedAt, rechecking, onCheck
             <h1 className="text-xl font-semibold">{title}</h1>
             <p className="text-sm text-muted-foreground">{body}</p>
             {state === "no_tenant_access" && endedAt && (
-              <p className="text-sm text-muted-foreground">Your access ended on {formatDate(endedAt)}.</p>
+              <p className="text-sm text-muted-foreground">Your access ended on {formatDateTime(endedAt)}.</p>
             )}
             {email && (
               <p className="text-sm">

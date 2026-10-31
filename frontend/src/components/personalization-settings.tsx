@@ -20,7 +20,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getAccessToken } from "@/lib/api";
 import { personalizationAPI } from "@/lib/personalization-api";
-import { formatMemory } from "@/lib/utils";
+import { formatBytes, formatDateTime } from "@/lib/utils";
 import { APIError } from "@/types/api";
 
 // The picker fills an empty field with the shipped default, so it has to read the same
@@ -55,7 +55,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-// Binary limits: 500 KiB for logos, 2 MiB for backgrounds.
+// Logos 512 kB, backgrounds 2.1 MB. The backend holds the same byte counts.
 const MAX_LOGO_SIZE = 500 * 1024;
 const MAX_BACKGROUND_SIZE = 2 * 1024 * 1024;
 // The server refuses a favicon over 64 KiB (backend services/branding/validation.py).
@@ -106,7 +106,7 @@ function ImageUploader({
   const [urlValue, setUrlValue] = React.useState("");
   const [isLoadingUrl, setIsLoadingUrl] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const maxSizeLabel = formatMemory(maxSize, 0);
+  const maxSizeLabel = formatBytes(maxSize, 0);
 
   const handleFile = async (file: File) => {
     setError(null);
@@ -1185,14 +1185,7 @@ export function PersonalizationSettings() {
       {/* Last Modified Info */}
       {settings.lastModified && (
         <div className="text-xs text-muted-foreground text-right">
-          Last modified: {new Date(settings.lastModified).toLocaleString('en-GB', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          })}
+          Last modified: {formatDateTime(settings.lastModified)}
         </div>
       )}
     </div>

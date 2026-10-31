@@ -4,7 +4,7 @@ import { Clock3, Info, Power, Route } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatDateTime, formatLabel } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import type { MigrationPlan } from "@/types/migrations";
 import { planHasRunningSource, strategyLabel } from "./migration-format";
 import { MigrationFindings } from "./migration-findings";
@@ -105,7 +105,7 @@ export function MigrationStagePreflight({ plan }: { plan: MigrationPlan }) {
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
         <div>
           <p className="text-sm font-medium">Plan revision {plan.revision}</p>
-          <p className="text-xs text-muted-foreground">Expires {formatDateTime(plan.expires_at)}</p>
+          <p className="text-xs text-muted-foreground">Expires {formatDateTimeSeconds(plan.expires_at)}</p>
         </div>
         <Badge variant={expired || plan.blockers?.length ? "negative" : "positive"}>
           {expired ? "Expired" : plan.blockers?.length ? "Blocked" : "Ready"}

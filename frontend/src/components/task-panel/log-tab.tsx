@@ -18,7 +18,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { toast } from "@/hooks/use-toast";
 import { copyText } from "@/lib/clipboard";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatClockTime, formatDate, formatDateTime, formatLabel, toMillis } from "@/lib/utils";
+import { formatClockTime,  formatDateTimeSeconds, formatLabel, toMillis } from "@/lib/utils";
 import type { ClusterLogEntry } from "@/types/tasks";
 import { useClusterLog } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
@@ -75,7 +75,7 @@ export interface LogTabProps {
 }
 
 function logLine(entry: ClusterLogEntry): string {
-  return `${formatDateTime(entry.ts)} [${logSeverityLabel(entry.severity)}] ${entry.message}`;
+  return `${formatDateTimeSeconds(entry.ts)} [${logSeverityLabel(entry.severity)}] ${entry.message}`;
 }
 
 function dayOf(ts: string): string {
@@ -104,7 +104,7 @@ function LogRow({
     <TableRow data-log-id={entry.id} data-log-severity={entry.severity}>
       <TableCell className="whitespace-nowrap">
         {formatClockTime(toMillis(entry.ts))}
-        {showDate ? <TableSubText>{formatDate(entry.ts)}</TableSubText> : null}
+        {showDate ? <TableSubText>{formatDateTimeSeconds(entry.ts)}</TableSubText> : null}
       </TableCell>
       <SeverityCell severity={entry.severity} />
       <TableCell className="whitespace-nowrap">{formatLabel(entry.kind)}</TableCell>

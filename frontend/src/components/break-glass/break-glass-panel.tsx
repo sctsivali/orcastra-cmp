@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDateTime } from "@/lib/utils";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldAlert, Loader2 } from "lucide-react";
@@ -139,7 +140,7 @@ export function BreakGlassPanel() {
                     />
                   </TableCell>
                   <TableCell><StatusBadge status={g.status} /></TableCell>
-                  <TableCell className="text-muted-foreground">{new Date(g.expires_at).toLocaleString()}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatDateTime(g.expires_at)}</TableCell>
                   {isAdmin ? (
                     <TableCell className="text-right">
                       {g.status === "active" ? (

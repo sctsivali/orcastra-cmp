@@ -14,7 +14,7 @@ import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { UsageBar } from "@/components/ui/usage-bar";
 import { usageLevel, usagePercent } from "@/lib/usage-tone";
-import { formatBytes, formatDate, formatFrequency, formatMemory } from "@/lib/utils";
+import { formatBytes, formatDateTime, formatFrequency, plural } from "@/lib/utils";
 import {
   Fact,
   FactList,
@@ -22,7 +22,6 @@ import {
   StatusPercent,
   Tile,
   formatUptime,
-  plural,
 } from "@/components/system-resources/primitives";
 import { formatWindow, type WindowedReading } from "@/components/system-resources/rates";
 
@@ -138,7 +137,7 @@ function HostMemoryCard({ host }: { host: HostInfo | null }) {
         <CardTitle>Host Memory</CardTitle>
         <CardDescription>
           {memory
-            ? `${formatMemory(memory.used)} of ${formatMemory(memory.total)} in use`
+            ? `${formatBytes(memory.used)} of ${formatBytes(memory.total)} in use`
             : "Memory not reported by this backend"}
         </CardDescription>
       </CardHeader>
@@ -148,18 +147,18 @@ function HostMemoryCard({ host }: { host: HostInfo | null }) {
           <MeterRow
             label="Swap"
             percent={memory.swap_percent}
-            caption={`${formatMemory(memory.swap_used)} of ${formatMemory(memory.swap_total)} swapped out to disk.`}
+            caption={`${formatBytes(memory.swap_used)} of ${formatBytes(memory.swap_total)} swapped out to disk.`}
           />
         )}
         {memory && memory.swap_total === 0 && (
           <p className="text-xs text-muted-foreground">No swap configured, so nothing is paged out to disk.</p>
         )}
         <div className="grid grid-cols-3 gap-4 pt-2">
-          <Tile label="Total" value={memory ? formatMemory(memory.total) : EMPTY_VALUE} />
-          <Tile label="In Use" value={memory ? formatMemory(memory.used) : EMPTY_VALUE} />
+          <Tile label="Total" value={memory ? formatBytes(memory.total) : EMPTY_VALUE} />
+          <Tile label="In Use" value={memory ? formatBytes(memory.used) : EMPTY_VALUE} />
           <Tile
             label="Available"
-            value={memory ? formatMemory(memory.available) : EMPTY_VALUE}
+            value={memory ? formatBytes(memory.available) : EMPTY_VALUE}
             sub="free plus reclaimable cache"
           />
         </div>
@@ -267,7 +266,7 @@ function HostSystemCard({ host, os, containerised }: { host: HostInfo | null; os
           <Fact label="Uptime">
             {formatUptime(uptime)}
             {bootedAt && (
-              <span className="block text-xs font-normal text-muted-foreground">since {formatDate(bootedAt)}</span>
+              <span className="block text-xs font-normal text-muted-foreground">since {formatDateTime(bootedAt)}</span>
             )}
           </Fact>
           {!containerised && (

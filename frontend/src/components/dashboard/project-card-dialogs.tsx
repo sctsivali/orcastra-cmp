@@ -31,10 +31,10 @@ import {
 import { isProjectDeleteUnknown, useDeleteProject, useUpdateProject } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
 import {
-  editableLxdLimit,
-  editableStorageLimit,
-  type LxdLimitUnit,
-  type StorageLimitUnit,
+  FORM_SIZE_UNITS,
+  editableLimit,
+  formatLxdSize,
+  type FormSizeUnit,
 } from "@/lib/lxd-limits";
 import { ProjectInfo } from "@/types";
 
@@ -139,11 +139,11 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
   const [editDescription, setEditDescription] = React.useState(project.description || "");
   const [editMaxCpu, setEditMaxCpu] = React.useState(0);
   const [editMaxRamValue, setEditMaxRamValue] = React.useState(0);
-  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<LxdLimitUnit>("GiB");
+  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<FormSizeUnit>("GB");
   const [editMaxRamSource, setEditMaxRamSource] = React.useState<string | null>(null);
   const [ramLimitDirty, setRamLimitDirty] = React.useState(false);
   const [editMaxStorageValue, setEditMaxStorageValue] = React.useState(0);
-  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<StorageLimitUnit>("GB");
+  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<FormSizeUnit>("GB");
   const [editMaxStorageSource, setEditMaxStorageSource] = React.useState<string | null>(null);
   const [storageLimitDirty, setStorageLimitDirty] = React.useState(false);
 
@@ -159,13 +159,13 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
       const cpuLimitStr = config["limits.cpu"];
       setEditMaxCpu(cpuLimitStr ? parseInt(cpuLimitStr) || 0 : 0);
 
-      const ram = editableLxdLimit(config["limits.memory"]);
+      const ram = editableLimit(config["limits.memory"]);
       setEditMaxRamValue(ram.value);
       setEditMaxRamUnit(ram.unit);
       setEditMaxRamSource(ram.preservedRaw);
       setRamLimitDirty(false);
 
-      const storage = editableStorageLimit(config["limits.disk"]);
+      const storage = editableLimit(config["limits.disk"]);
       setEditMaxStorageValue(storage.value);
       setEditMaxStorageUnit(storage.unit);
       setEditMaxStorageSource(storage.preservedRaw);
@@ -312,7 +312,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 className="flex-1"
               />
               <Select value={editMaxRamUnit} onValueChange={(v) => {
-                setEditMaxRamUnit(v as LxdLimitUnit);
+                setEditMaxRamUnit(v as FormSizeUnit);
                 setEditMaxRamSource(null);
                 setRamLimitDirty(true);
               }}>
@@ -320,14 +320,15 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MiB">MiB</SelectItem>
-                  <SelectItem value="GiB">GiB</SelectItem>
+                  {FORM_SIZE_UNITS.map((unit) => (
+                    <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             {editMaxRamSource && !ramLimitDirty && (
               <p className="text-xs text-muted-foreground">
-                Current daemon value: {editMaxRamSource}. It remains unchanged until you edit this limit.
+                Current daemon value: {formatLxdSize(editMaxRamSource)}. It remains unchanged until you edit this limit.
               </p>
             )}
           </div>
@@ -355,7 +356,7 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                 className="flex-1"
               />
               <Select value={editMaxStorageUnit} onValueChange={(v) => {
-                setEditMaxStorageUnit(v as StorageLimitUnit);
+                setEditMaxStorageUnit(v as FormSizeUnit);
                 setEditMaxStorageSource(null);
                 setStorageLimitDirty(true);
               }}>
@@ -363,14 +364,15 @@ export function ProjectEditDialog({ project, open, onOpenChange, refetch, isRead
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="MB">MB</SelectItem>
-                  <SelectItem value="GB">GB</SelectItem>
+                  {FORM_SIZE_UNITS.map((unit) => (
+                    <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             {editMaxStorageSource && !storageLimitDirty && (
               <p className="text-xs text-muted-foreground">
-                Current daemon value: {editMaxStorageSource}. It remains unchanged until you edit this limit.
+                Current daemon value: {formatLxdSize(editMaxStorageSource)}. It remains unchanged until you edit this limit.
               </p>
             )}
           </div>

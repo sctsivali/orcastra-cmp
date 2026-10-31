@@ -1,5 +1,6 @@
 "use client";
 
+import { EMPTY_VALUE } from "@/lib/utils";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
 import {
@@ -56,9 +57,9 @@ export function CreatePreflightDialog({
           ))}
           <dl className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1 rounded-md border p-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
             <dt className="text-muted-foreground">Profiles</dt>
-            <dd className="min-w-0 break-words">{preflight.effective.profiles.join(", ") || "None"}</dd>
+            <dd className="min-w-0 break-words">{preflight.effective.profiles.join(", ") || EMPTY_VALUE}</dd>
             <dt className="text-muted-foreground">Interfaces</dt>
-            <dd className="min-w-0 break-words">{preflight.effective.nic_names.join(", ") || "None"}</dd>
+            <dd className="min-w-0 break-words">{preflight.effective.nic_names.join(", ") || EMPTY_VALUE}</dd>
             <dt className="text-muted-foreground">Root device</dt>
             <dd className="min-w-0 break-all">{preflight.effective.root_device || "Not resolved"}</dd>
           </dl>

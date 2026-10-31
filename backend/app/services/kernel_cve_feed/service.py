@@ -118,7 +118,7 @@ async def _check_one(cve_id: str, state: Dict[str, Any], now: float) -> Dict[str
     except (SafeHTTPError, record_module.RecordInvalid) as exc:
         error = str(exc)
     except TimeoutError:
-        error = f"no complete answer within {int(READ_DEADLINE_SECONDS)} s"
+        error = f"no complete answer within {int(READ_DEADLINE_SECONDS)}s"
     except Exception as exc:  # noqa: BLE001 - recorded, so the backoff still applies
         logger.warning("Kernel CVE read of %s failed unexpectedly", cve_id, exc_info=True)
         error = f"unexpected {type(exc).__name__}"

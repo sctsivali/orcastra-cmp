@@ -1,5 +1,6 @@
 "use client";
 
+import { formatBytes, formatVcpuCount, EMPTY_VALUE } from "@/lib/utils";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useSearchParams } from "next/navigation";
@@ -71,7 +72,7 @@ import {
   projectChangeNotice,
 } from "@/components/instance-create/project-change-notice";
 import { imageStoreEmptyHint } from "@/components/instance-create/image-store-copy";
-import { formatLimitBytes, parseLxdSize } from "@/lib/lxd-limits";
+import { parseLxdSize } from "@/lib/lxd-limits";
 import {
   gpuCardLabel,
   gpuClassOf,
@@ -1063,7 +1064,7 @@ function InstanceCreateFormContent() {
     setPendingSubmission(null);
 
     if (!resourcesValid) {
-      setError("CPU, Memory and Storage must be positive whole numbers.");
+      setError("vCPU, Memory and Storage must be positive whole numbers.");
       submitInFlightRef.current = false;
       return;
     }
@@ -1802,7 +1803,7 @@ function InstanceCreateFormContent() {
                   </p>
                 ) : quota.cpuExceeds ? (
                   <p id="create-cpu-error" className="text-xs text-destructive">
-                    Exceeds the project limit of {projectLimits.cpu} vCPU.
+                    Exceeds the project limit of {formatVcpuCount(projectLimits.cpu ?? 0)}.
                   </p>
                 ) : null}
               </div>
@@ -1865,7 +1866,7 @@ function InstanceCreateFormContent() {
                   </p>
                 ) : quota.memoryExceeds ? (
                   <p id="create-memory-error" className="text-xs text-destructive">
-                    Exceeds the project limit of {formatLimitBytes(projectLimits.memoryBytes ?? 0)}.
+                    Exceeds the project limit of {formatBytes(projectLimits.memoryBytes ?? 0, { decimals: 1 })}.
                   </p>
                 ) : null}
               </div>
@@ -2199,7 +2200,7 @@ function InstanceCreateFormContent() {
                         <span className="font-medium">{inh.name}</span>
                         <span className="text-muted-foreground">
                           {" "}
-                          → {inh.network || "—"}
+                          → {inh.network || EMPTY_VALUE}
                         </span>
                         <div className="text-xs text-muted-foreground">
                           {overridden

@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, KeyRound, Server, ShieldAlert, Trash2, type LucideIcon } from "lucide-react";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import type { KeyActivityEntry } from "@/types/my-keys";
 
 // note: `text`, not `label`: these are event descriptions read in a table cell, written as sentences.
@@ -47,7 +47,7 @@ export function KeyActivityLine({ entry }: { entry: KeyActivityEntry }) {
       <div className="min-w-0 space-y-0.5">
         <p className="font-medium break-words">{activityLabel(entry)}</p>
         <p className="text-xs text-muted-foreground break-words">
-          {formatDate(entry.ts)}
+          {formatDateTime(entry.ts)}
           {where ? ` · ${where}` : ""}
           {entry.kind === "usage" ? " · with this key's certificate" : entry.actor_email ? ` · ${entry.actor_email}` : ""}
         </p>

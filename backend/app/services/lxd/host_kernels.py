@@ -205,7 +205,7 @@ def _read_members(client: Any, listed: List[Tuple[str, str, str]], endpoint: str
             future.cancel()
             name = members[futures[future]].member
             members[futures[future]] = MemberKernel(
-                member=name, error=f"unreachable: did not answer within {int(MEMBER_PHASE_SECONDS)} s"
+                member=name, error=f"unreachable: did not answer within {int(MEMBER_PHASE_SECONDS)}s"
             )
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -280,7 +280,7 @@ async def fleet_kernels(
             fleet.clusters.append(result)
             continue
         if isinstance(result, BlockingTimeout):
-            reason = f"unreachable: did not answer within {int(wall)} s; it keeps reading in the background"
+            reason = f"unreachable: did not answer within {int(wall)}s; it keeps reading in the background"
         elif isinstance(result, BlockingPoolFull):
             reason = "unreachable: still being read by an earlier request"
         elif isinstance(result, BaseException):

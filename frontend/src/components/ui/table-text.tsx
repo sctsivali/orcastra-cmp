@@ -1,6 +1,6 @@
 import * as React from "react";
 import { type LucideIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, EMPTY_VALUE } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TableCell, TableRow } from "@/components/ui/table";
 
@@ -8,7 +8,7 @@ import { TableCell, TableRow } from "@/components/ui/table";
 // this ("—", "N/A", "-", "None", "No description", "No groups"). The em dash wins because
 // formatLabel() in lib/utils.ts already returns it for empty input, so any other choice
 // would put the helper and the convention in conflict.
-export const EMPTY_VALUE = "—";
+export { EMPTY_VALUE };
 
 // important: the label replaces the glyph for assistive tech. A screen reader announcing
 // "em dash" tells the user nothing about why the cell is blank.

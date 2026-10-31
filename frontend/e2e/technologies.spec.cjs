@@ -67,19 +67,19 @@ test("tenant sees only scoped instance specifications", async ({ page }, testInf
   await expect(page.getByRole("tab", { name: "Software" })).toHaveCount(0);
   await expect(page.getByText("Some instance specifications could not be loaded right now")).toBeVisible();
 
-  const cpuCard = page.getByRole("button", { name: "View CPU details" });
+  const cpuCard = page.getByRole("button", { name: "View vCPU details" });
   await cpuCard.focus();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("heading", { name: "CPU by Instance" })).toBeVisible();
-  await expect(dialog.getByRole("region", { name: "tenant-owned-vm CPU specification" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "vCPU by Instance" })).toBeVisible();
+  await expect(dialog.getByRole("region", { name: "tenant-owned-vm vCPU specification" })).toBeVisible();
   await expect(dialog.getByText("Running", { exact: true })).toBeVisible();
   await expect(dialog.getByText("running", { exact: true })).toHaveCount(0);
 
   // Foreign tenant data and platform capacity are planted as sentinels. Neither may reach DOM.
   await expect(page.getByText("foreign-customer-vm", { exact: true })).toHaveCount(0);
   await expect(page.getByText("customer-secret-cluster", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("987654321 GiB", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/987654321/)).toHaveCount(0);
 
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();

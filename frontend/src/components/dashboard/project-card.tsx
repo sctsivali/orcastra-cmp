@@ -12,7 +12,8 @@ import {
   MemoryStick,
   Settings,
   ArrowLeftRight,
-  Boxes } from "lucide-react";
+  Boxes,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TagManager } from "@/components/tag-manager";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -20,7 +21,8 @@ import {
   Card,
   CardContent,
   CardHeader,
-  CardTitle } from "@/components/ui/card";
+  CardTitle,
+} from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableEmptyValue } from "@/components/ui/table-text";
@@ -33,7 +35,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { InstanceRow } from "./instance-row";
 import { ProjectDeleteDialog, ProjectEditDialog } from "./project-card-dialogs";
 import { NodeLink } from "@/components/ui/node-link";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
@@ -268,7 +270,7 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, coun
               Icon: MemoryStick,
               label: "Memory",
               spec: limits.ramLimitBytes
-                ? limitSpec(formatMemory(limits.ramLimitBytes, { split: true }))
+                ? limitSpec(formatBytes(limits.ramLimitBytes, { split: true }))
                 : { value: "Unlimited", unit: "Memory" },
             },
             {

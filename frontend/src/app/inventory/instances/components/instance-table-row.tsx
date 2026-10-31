@@ -1,5 +1,6 @@
 "use client";
 
+import { formatLxdSize } from "@/lib/lxd-limits";
 import { Lock, Settings } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { OverflowCell } from "@/components/ui/overflow-cell";
@@ -77,7 +78,7 @@ function rootDiskLabel(
   if (!effective) return null;
   const size = String(effective.size ?? "").trim();
   const pool = String(effective.pool ?? "").trim();
-  return { value: size || "Pool default", pool: pool || undefined };
+  return { value: size ? formatLxdSize(size) : "Pool default", pool: pool || undefined };
 }
 
 const IN_FLIGHT: Record<InstanceAction, string> = {

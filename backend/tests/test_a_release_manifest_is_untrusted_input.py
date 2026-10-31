@@ -52,7 +52,7 @@ def test_a_manifest_that_breaks_a_rule_is_refused(change, message) -> None:
 
 
 def test_size_and_shape_limits() -> None:
-    with pytest.raises(ManifestInvalid, match="64 KiB"):
+    with pytest.raises(ManifestInvalid, match="65.54 kB"):
         parse(b" " * (MAX_BYTES + 1))
     with pytest.raises(ManifestInvalid, match="not JSON"):
         parse(b"<html>")

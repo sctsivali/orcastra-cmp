@@ -9,7 +9,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { INSTALL_STATUS } from "@/lib/extension-display";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTimeSeconds } from "@/lib/utils";
 import type {
   ExtensionInstall,
   WebhookDeliveryState,
@@ -86,7 +86,7 @@ export function AddonHealthPanel({
         <Alert>
           <PauseCircle className="h-4 w-4" aria-hidden="true" />
           <AlertDescription>
-            Suspended {install.suspended_at ? formatDateTime(install.suspended_at) : ""}
+            Suspended {install.suspended_at ? formatDateTimeSeconds(install.suspended_at) : ""}
             {install.suspended_by ? ` by ${install.suspended_by}` : ""}.{" "}
             {install.suspend_reason || "No reason was recorded."} The credential is refused while
             this lasts.
@@ -119,7 +119,7 @@ export function AddonHealthPanel({
           <dt className="text-sm text-muted-foreground">Credential last used</dt>
           <dd className="text-sm">
             {readable && install.credential_last_used_at
-              ? formatDateTime(install.credential_last_used_at)
+              ? formatDateTimeSeconds(install.credential_last_used_at)
               : readable
                 ? "Never. The add-on has not authenticated yet."
                 : UNKNOWN}
@@ -130,7 +130,7 @@ export function AddonHealthPanel({
           <dd className="flex items-center gap-2 text-sm">
             {readable && install.credential_expires_at ? (
               <>
-                <span>{formatDateTime(install.credential_expires_at)}</span>
+                <span>{formatDateTimeSeconds(install.credential_expires_at)}</span>
                 {expiresInDays !== null && expiresInDays <= 14 && (
                   <Badge variant={expiresInDays <= 0 ? "destructive" : "caution"}>
                     {expiresInDays <= 0 ? "Expired" : `${expiresInDays} days left`}
@@ -217,13 +217,13 @@ export function AddonHealthPanel({
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 Last failure{" "}
-                {subscription.last_failure_at ? formatDateTime(subscription.last_failure_at) : UNKNOWN}
+                {subscription.last_failure_at ? formatDateTimeSeconds(subscription.last_failure_at) : UNKNOWN}
                 {subscription.last_failure_reason ? `: ${subscription.last_failure_reason}` : ""}
               </p>
               <p className="text-xs text-muted-foreground">
                 Last success{" "}
                 {subscription.last_success_at
-                  ? formatDateTime(subscription.last_success_at)
+                  ? formatDateTimeSeconds(subscription.last_success_at)
                   : "never"}
               </p>
             </li>

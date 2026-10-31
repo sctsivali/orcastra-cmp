@@ -7,10 +7,9 @@ export function cn(...inputs: ClassValue[]) {
 
 // note: the placeholder glyph, kept in step with components/ui/table-text.tsx. Importing
 // it from there would point lib/ at components/, which nothing else in lib/ does.
-const EMPTY_VALUE = "\u2014";
+export const EMPTY_VALUE = "\u2014";
 
-const SI_BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
-const IEC_BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] as const;
+const SI_BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"] as const;
 
 export type FormattedByteValue = { value: string; unit: string };
 export type FormattedByteQuota = { value: string; unit: string };
@@ -81,12 +80,11 @@ function joinByteValue(value: FormattedByteValue): string {
 }
 
 /**
- * A size on disk, on the wire, or in a file.
+ * Every size in the console: memory, disks, pools, images, files and transfers.
  *
- * important: decimal, because the label says decimal. This divided by 1024 while printing
- * "GB", so a 1050 GB pool read as 977.89 GB and no screen agreed with what LXD, the disk
- * vendor or `lxc storage info` says the hardware holds. Memory is the exception and has its
- * own formatter: see formatMemory.
+ * important: decimal, and labelled decimal, on every screen. One disk used to read 10GiB in a
+ * column and 10.74 GB on its usage meter, because memory and limits were binary and storage was
+ * decimal. documentation/ui/byte-units.md has the decision and what it costs.
  */
 export function formatBytes(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
 export function formatBytes(bytes: number, options?: number | ByteFormatOptions): string;
@@ -98,56 +96,13 @@ export function formatBytes(
   return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
 }
 
-/**
- * Installed or allocated memory.
- *
- * important: binary, and labelled binary. A DIMM is a power of two and every other tool an
- * operator has open says so, so dividing 70866960384 by 1000 and printing "70.87 GB" for a
- * host that the kernel, `free -h` and the hypervisor all call 66 GiB is a legibility
- * regression, not a unit fix. Storage keeps the decimal formatter above.
- */
-export function formatMemory(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
-export function formatMemory(bytes: number, options?: number | ByteFormatOptions): string;
-export function formatMemory(
-  bytes: number,
-  options: number | ByteFormatOptions = {},
-): string | FormattedByteValue {
-  const formatted = scaleBytes(bytes, 1024, IEC_BYTE_UNITS, options);
-  return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
-}
-
-/**
- * An explicit LXD/Incus size limit entered as MiB or GiB.
- *
- * This is intentionally separate from storage capacity. Pools, images, files, and counters are
- * decimal; daemon configuration limits preserve the binary unit the operator selected.
- */
-export function formatLxdLimit(bytes: number, options: SplitByteFormatOptions): FormattedByteValue;
-export function formatLxdLimit(bytes: number, options?: number | ByteFormatOptions): string;
-export function formatLxdLimit(
-  bytes: number,
-  options: number | ByteFormatOptions = {},
-): string | FormattedByteValue {
-  const formatted = scaleBytes(bytes, 1024, IEC_BYTE_UNITS, options);
-  return typeof options === "object" && options.split ? formatted : joinByteValue(formatted);
-}
-
-/** Storage usage and its limit, kept on one decimal SI scale for compact quota cards. */
+/** Usage and its limit on one scale, for compact quota cards. */
 export function formatByteQuota(
   usedBytes: number,
   limitBytes: number,
   decimals = 1,
 ): FormattedByteQuota {
   return scaleByteQuota(usedBytes, limitBytes, 1000, SI_BYTE_UNITS, decimals);
-}
-
-/** Memory usage and its limit, kept on one binary IEC scale for compact quota cards. */
-export function formatMemoryQuota(
-  usedBytes: number,
-  limitBytes: number,
-  decimals = 1,
-): FormattedByteQuota {
-  return scaleByteQuota(usedBytes, limitBytes, 1024, IEC_BYTE_UNITS, decimals);
 }
 
 /** Network throughput in bytes per second, scaled with decimal SI units. */
@@ -200,39 +155,69 @@ export function formatLinkSpeed(mbit: number | null | undefined): string {
   return `${parseFloat((mbit / 1000).toFixed(1))} Gb/s`;
 }
 
-export function formatDate(dateString: string | null | undefined): string {
-  if (!dateString) return "N/A";
-  
-  try {
-    const date = new Date(dateString);
-    return new Intl.DateTimeFormat("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date);
-  } catch {
-    return "N/A";
-  }
+// An API timestamp with no offset is UTC, and new Date() would read it as local. That was a small
+// error before the zone label; with one it is a wrong time stated with confidence.
+const OFFSETLESS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseTimestamp(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(OFFSETLESS.test(value) ? `${value}Z` : value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
-// Format datetime to DD/MM/YYYY, HH:MM:SS
-export function formatDateTime(dateString: string | null | undefined): string {
-  if (!dateString) return "N/A";
-  try {
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return "N/A";
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
-  } catch {
-    return "N/A";
-  }
+// en-US names Indonesia's zones GMT+7, GMT+8 and GMT+9, which no operator here says.
+const ZONE_NAMES: Record<string, string> = {
+  "Asia/Jakarta": "WIB",
+  "Asia/Pontianak": "WIB",
+  "Asia/Makassar": "WITA",
+  "Asia/Jayapura": "WIT",
+};
+
+function zoneLabel(date: Date): string {
+  const named = ZONE_NAMES[Intl.DateTimeFormat().resolvedOptions().timeZone];
+  if (named) return named;
+  const parts = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(date);
+  return parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+}
+
+function dateAndTime(value: string | null | undefined, withSeconds: boolean): string {
+  const date = parseTimestamp(value);
+  if (!date) return EMPTY_VALUE;
+  const text = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    ...(withSeconds ? { second: "2-digit" } : {}),
+  }).format(date);
+  return `${text} ${zoneLabel(date)}`;
+}
+
+/** "Oct 30, 2026", for a day rather than a moment, so it carries no zone. */
+export function formatDate(value: string | null | undefined): string {
+  if (!value) return EMPTY_VALUE;
+  // important: a bare date is that day everywhere. Read as UTC midnight and shown in a zone west of
+  // Greenwich it would print the day before.
+  const date = DATE_ONLY.test(value) ? new Date(`${value}T00:00:00Z`) : parseTimestamp(value);
+  if (!date || Number.isNaN(date.getTime())) return EMPTY_VALUE;
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    ...(DATE_ONLY.test(value) ? { timeZone: "UTC" } : {}),
+  }).format(date);
+}
+
+/** "Oct 30, 2026, 10:55 PM WIB": the one format for a moment, in the operator's own time. */
+export function formatDateTime(value: string | null | undefined): string {
+  return dateAndTime(value, false);
+}
+
+/** "Oct 30, 2026, 10:55:04 PM WIB", where the order of events matters: logs, tasks, sessions. */
+export function formatDateTimeSeconds(value: string | null | undefined): string {
+  return dateAndTime(value, true);
 }
 
 // Generate a UUID that also works in non-secure contexts. `crypto.randomUUID`
@@ -367,22 +352,16 @@ export function formatRelativeTime(timestamp: number | null | undefined): string
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-// Wall-clock time only (HH:MM:SS, 24h), for the precise value behind a
-// relative label. Replaces four hand-rolled copies of this formatter.
+// Wall-clock time only ("10:55:04 PM"), for the precise value behind a relative label.
 export function formatClockTime(timestamp: number | null | undefined): string {
-  if (!timestamp || timestamp <= 0) return "N/A";
-  try {
-    const date = new Date(timestamp);
-    if (isNaN(date.getTime())) return "N/A";
-    return date.toLocaleTimeString("en-GB", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "N/A";
-  }
+  if (!timestamp || timestamp <= 0) return EMPTY_VALUE;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return EMPTY_VALUE;
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
 }
 
 // Words that keep a fixed casing instead of plain title-case (acronyms, brands, and the
@@ -427,7 +406,7 @@ const LABEL_ACRONYMS: Record<string, string> = {
 // a registry authored (instance, profile, project, image alias, cluster) through this, and
 // never pass `architecture`: "x86_64" comes back as "X86 64".
 export function formatLabel(value: string | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return EMPTY_VALUE;
   return String(value)
     .trim()
     .split(/[-_\s]+/)
@@ -464,4 +443,19 @@ export function toMillis(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** "1 cluster", "3 clusters". Name the plural when it is not an added s: plural(2, "entry", "entries"). */
+export function plural(count: number, word: string, pluralWord = `${word}s`): string {
+  return `${count} ${count === 1 ? word : pluralWord}`;
+}
+
+/** "1 vCPU", "4 vCPUs", "0.94 vCPUs". Used as a modifier it stays singular: "the 4 vCPU limit". */
+export function formatVcpuCount(count: number): string {
+  return plural(count, "vCPU");
+}
+
+/** "1,234": one grouping everywhere, not whatever the browser's locale happens to use. */
+export function formatCount(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
 }

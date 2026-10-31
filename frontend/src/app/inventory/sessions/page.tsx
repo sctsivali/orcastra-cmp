@@ -56,7 +56,7 @@ import {
   History,
   ShieldAlert,
   AlertTriangle } from "lucide-react";
-import { formatBytes, formatLabel, formatNetworkRate } from "@/lib/utils";
+import { formatBytes, formatLabel, formatNetworkRate, formatDateTimeSeconds, formatCount } from "@/lib/utils";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
@@ -116,7 +116,7 @@ interface AuditLogEntry {
 // ============ Utility functions ============
 
 function formatDuration(seconds: number | null): string {
-  if (!seconds || seconds === 0) return "—";
+  if (!seconds || seconds === 0) return EMPTY_VALUE;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
@@ -125,14 +125,6 @@ function formatDuration(seconds: number | null): string {
   parts.push(`${m}m`);
   parts.push(`${s}s`);
   return parts.join(" ");
-}
-
-function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return "—";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "—";
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 // Use relative URLs - Next.js rewrites proxy to backend
@@ -912,8 +904,8 @@ function SessionHistoryTab() {
           {currentTrailTotal > currentLogs.length && (
             <div className="mb-3">
               <PartialReadNotice>
-                Showing the {currentLogs.length.toLocaleString()} most recent entries of{" "}
-                {currentTrailTotal.toLocaleString()}. Narrow the scope or the filters to reach older
+                Showing the {formatCount(currentLogs.length)} most recent entries of{" "}
+                {formatCount(currentTrailTotal)}. Narrow the scope or the filters to reach older
                 sessions.
               </PartialReadNotice>
             </div>
@@ -1051,7 +1043,7 @@ function ActiveRow({ session, onSelect, scope }: {
               <span className="font-mono">{formatDuration(session.duration_seconds)}</span>
             </div>
           </TooltipTrigger>
-          <TooltipContent>Started {formatDateTime(new Date(session.started_at * 1000).toISOString())}</TooltipContent>
+          <TooltipContent>Started {formatDateTimeSeconds(new Date(session.started_at * 1000).toISOString())}</TooltipContent>
         </Tooltip>
       </TableCell>
       <TableCell>
@@ -1133,7 +1125,7 @@ function HistoryRow({ log, onSelect, scope }: {
       </TableCell>
       <TableCell>
         <span className="text-sm text-muted-foreground">
-          {formatDateTime(log.created_at)}
+          {formatDateTimeSeconds(log.created_at)}
         </span>
       </TableCell>
     </TableRow>

@@ -136,7 +136,7 @@ export function InstanceMetricsTab({
         {toolbar}
         <EmptyState
           className="py-8"
-          description="The instance is running, but the cluster reports no CPU, memory, disk or network figures. A missing guest agent is the usual cause."
+          description="The instance is running, but the cluster reports no vCPU, memory, disk or network figures. A missing guest agent is the usual cause."
           icon={Activity}
           title="No readings reported"
         />

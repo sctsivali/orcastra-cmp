@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from app.core.blocking import run_blocking
 from app.core.lxd_path import safe_segment
+from app.core.units import format_size
 from app.models.schemas import (
     InstanceCreateEffectiveSummary,
     InstanceCreatePreflightIssue,
@@ -53,6 +54,13 @@ _MAX_IN_FLIGHT = 8
 _MAX_IN_FLIGHT_PER_CLUSTER = 2
 _WALL_TIMEOUT_SECONDS = 45.0
 _READ_TIMEOUT = (3, 12)
+
+
+def _quota_amount(quota_field: str, amount: int) -> str:
+    """A quota figure as a person reads it; memory and disk figures are bytes on the wire."""
+    if quota_field == "cpu":
+        return f"{amount} vCPU" if amount == 1 else f"{amount} vCPUs"
+    return format_size(amount)
 
 
 def _ordered_unique(values: Optional[Iterable[str]], default: str) -> List[str]:
@@ -313,7 +321,8 @@ def _quota_state(
                     code="PROJECT_QUOTA_EXCEEDED",
                     field=request_field,
                     message=(
-                        f"Creating this instance would allocate {projected} of the project's {limit} {label} limit."
+                        f"Creating this instance would allocate {_quota_amount(quota_field, projected)} "
+                        f"of the project's {_quota_amount(quota_field, limit)} {label} limit."
                     ),
                 )
             )

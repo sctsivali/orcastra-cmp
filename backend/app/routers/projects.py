@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import re
 
+from app.core.units import format_size
 from app.models.schemas import (
     ProjectInfo,
     ProjectListResponse,
@@ -178,31 +179,6 @@ def _parse_size_to_bytes(size_str: str) -> int:
     return int(value * _SIZE_FACTORS[unit])
 
 
-def _format_size(bytes_value: int, units: tuple[tuple[str, int], ...]) -> str:
-    """Format a byte amount using the semantic unit family supplied by the caller."""
-    value = max(0, int(bytes_value))
-    for unit, factor in units:
-        if value >= factor:
-            amount = Decimal(value) / Decimal(factor)
-            rendered = f"{amount:.2f}".rstrip("0").rstrip(".")
-            return f"{rendered} {unit}"
-    return f"{value} B"
-
-
-def _format_memory(bytes_value: int) -> str:
-    return _format_size(
-        bytes_value,
-        (("TiB", 1024**4), ("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024)),
-    )
-
-
-def _format_storage(bytes_value: int) -> str:
-    return _format_size(
-        bytes_value,
-        (("TB", 10**12), ("GB", 10**9), ("MB", 10**6), ("KB", 10**3)),
-    )
-
-
 def _invalidate_project_caches() -> None:
     """Fence and clear every cached projection a project write changes (core/cache.py)."""
     get_cache_manager().invalidate_resource_cache(*PROJECT_CACHE_KINDS)
@@ -235,16 +211,16 @@ def _refuse_cap_above_hardware(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Memory limit ({_format_memory(ram_bytes)}) exceeds this cluster's capacity "
-                f"of {_format_memory(resources.get('memory_total', 0))}"
+                f"Memory limit ({format_size(ram_bytes)}) exceeds this cluster's capacity "
+                f"of {format_size(resources.get('memory_total', 0))}"
             ),
         )
     if storage_bytes is not None and storage_bytes > resources.get("storage_total", 0):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Storage limit ({_format_storage(storage_bytes)}) exceeds this cluster's "
-                f"capacity of {_format_storage(resources.get('storage_total', 0))}"
+                f"Storage limit ({format_size(storage_bytes)}) exceeds this cluster's "
+                f"capacity of {format_size(resources.get('storage_total', 0))}"
             ),
         )
 

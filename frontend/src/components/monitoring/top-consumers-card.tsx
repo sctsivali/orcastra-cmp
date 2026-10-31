@@ -11,8 +11,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatVcpuAmount, formatVcpuCount } from "@/lib/instance-metrics-view";
-import { formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
+import { formatVcpuAmount, formatVcpuBusy } from "@/lib/instance-metrics-view";
+import { formatBytes, formatNetworkRate, formatVcpuCount } from "@/lib/utils";
 import type { InstanceMonitoringSummary, MonitoringDashboardResponse } from "@/types/api";
 
 type Resource = "cpu" | "memory" | "storage" | "network";
@@ -74,7 +74,7 @@ function rank(pool: InstanceMonitoringSummary[], resource: Resource, topN: numbe
 }
 
 const EMPTY: Record<Resource, string> = {
-  cpu: "CPU readings appear after the next collection",
+  cpu: "vCPU readings appear after the next collection",
   memory: "No running instances",
   storage: "No running instances",
   network: "Network rates appear after the next collection",
@@ -128,7 +128,7 @@ export function TopConsumersCard({
       <CardContent>
         <Tabs defaultValue="cpu">
           <TabsList className="grid w-full grid-cols-4 mb-4 h-auto p-1">
-            <TabsTrigger value="cpu" className="text-xs px-2 py-1.5">CPU</TabsTrigger>
+            <TabsTrigger value="cpu" className="text-xs px-2 py-1.5">vCPU</TabsTrigger>
             <TabsTrigger value="memory" className="text-xs px-2 py-1.5">Memory</TabsTrigger>
             <TabsTrigger value="storage" className="text-xs px-2 py-1.5">Storage</TabsTrigger>
             <TabsTrigger value="network" className="text-xs px-2 py-1.5">Network</TabsTrigger>
@@ -204,14 +204,14 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
           <p className="text-sm font-bold tabular-nums">
             {instance.cpu_usage !== null && instance.cpu_usage !== undefined
               ? `${instance.cpu_usage.toFixed(1)}%`
-              : `${formatVcpuAmount(busy ?? 0)} vCPUs`}
+              : formatVcpuBusy(busy ?? 0)}
           </p>
           <p className="text-xs text-muted-foreground tabular-nums">
             {busy !== null && busy !== undefined && instance.cpu_limit_set === false
-              ? `${formatVcpuAmount(busy)} vCPUs busy · no CPU limit`
+              ? `${formatVcpuBusy(busy)} busy · no vCPU limit`
               : busy !== null && busy !== undefined && vcpus
                 ? `${formatVcpuAmount(busy)} of ${formatVcpuCount(vcpus)} busy`
-                : "CPU Usage"}
+                : "vCPU Usage"}
           </p>
         </>
       );
@@ -219,7 +219,7 @@ function ConsumerValue({ instance, type }: { instance: InstanceMonitoringSummary
     case "memory":
       return (
         <>
-          <p className="text-sm font-bold tabular-nums">{formatMemory(instance.memory_usage_bytes)}</p>
+          <p className="text-sm font-bold tabular-nums">{formatBytes(instance.memory_usage_bytes)}</p>
           <p className="text-xs text-muted-foreground">
             {instance.memory_includes_cache === false ? "Memory in use" : "Memory, with page cache"}
           </p>

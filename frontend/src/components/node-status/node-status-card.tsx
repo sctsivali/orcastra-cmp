@@ -37,7 +37,7 @@ import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn, formatMemory } from "@/lib/utils";
+import { cn, formatBytes, formatVcpuCount, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
@@ -261,7 +261,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">
-                  {cpu.allocated} vCPU / {cpu.threads} hardware threads
+                  {formatVcpuCount(cpu.allocated)} / {plural(cpu.threads, "hardware thread")}
                 </div>
                 <div className={cpu.textClassName}>{cpuAllocationText(cpu)}</div>
               </div>
@@ -275,7 +275,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">
-                  {formatMemory(node.resources.memory_used)} / {formatMemory(node.resources.memory_total)}
+                  {formatBytes(node.resources.memory_used)} / {formatBytes(node.resources.memory_total)}
                 </div>
                 <div className="text-muted-foreground">
                   {getUsagePercentage(node.resources.memory_used, node.resources.memory_total)}

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Progress } from "@/components/ui/progress";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatCount } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import { Database } from "lucide-react";
 import type { UsageDict } from "../types";
@@ -64,7 +64,7 @@ export function CapacityPanel({ space, inodes }: { space?: UsageDict; inodes?: U
   return (
     <div className="space-y-3">
       <Meter title="Space" usage={space} format={formatBytes} />
-      <Meter title="Inodes" usage={inodes} format={(value) => value.toLocaleString()} />
+      <Meter title="Inodes" usage={inodes} format={(value) => formatCount(value)} />
     </div>
   );
 }

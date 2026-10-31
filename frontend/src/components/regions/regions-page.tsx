@@ -11,12 +11,13 @@ import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger } from "@/components/ui/collapsible";
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Globe,
   Server,
@@ -24,7 +25,6 @@ import {
   MemoryStick,
   HardDrive,
   Sparkles,
-  
   ChevronDown,
   ChevronUp,
   RefreshCw,
@@ -32,7 +32,8 @@ import {
   Activity,
   Box,
   Building2,
-  type LucideIcon } from "lucide-react";
+  type LucideIcon,
+} from "lucide-react";
 import { useRegionsOverview } from "@/hooks/use-lxd";
 import { HardwareSummary } from "./regions-hardware-summary";
 import { BasemapConfig } from "@/lib/map-basemap";
@@ -220,7 +221,7 @@ function RegionCard({
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span>{node.hardware.cpu_total} hardware threads</span>
                         <span>•</span>
-                        <span>{formatMemory(node.hardware.memory_total)}</span>
+                        <span>{formatBytes(node.hardware.memory_total)}</span>
                         {node.hardware.gpu_total > 0 && (
                           <>
                             <span>•</span>
@@ -386,7 +387,7 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
           <StatTile icon={Globe} label="Regions" value={data.regions.length} />
           <StatTile icon={Server} label="Clusters" value={data.total_nodes} />
           <StatTile icon={Cpu} label="Hardware Threads" value={nothingRead ? NOT_READ : fleet.cpu} />
-          <StatTile icon={MemoryStick} label="Memory" value={nothingRead ? NOT_READ : formatMemory(fleet.memory)} />
+          <StatTile icon={MemoryStick} label="Memory" value={nothingRead ? NOT_READ : formatBytes(fleet.memory)} />
           <StatTile icon={HardDrive} label="Storage" value={nothingRead ? NOT_READ : formatBytes(fleet.storage)} />
           <StatTile
             icon={Sparkles}

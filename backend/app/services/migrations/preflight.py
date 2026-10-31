@@ -11,6 +11,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app.core.lxd_path import safe_segment
+from app.core.units import format_size
 from app.services.lxd import mobility
 from app.services.lxd.project_usage import parse_lxd_size
 
@@ -563,8 +564,8 @@ def _check_capacity(
             message = f"Target pool '{target_pool}' has insufficient measured free space."
             if bound:
                 message = (
-                    f"Target pool '{target_pool}' has {_gib(free)} free, and the measured part of the "
-                    f"transfer alone needs {_gib(measured)}."
+                    f"Target pool '{target_pool}' has {format_size(free)} free, and the measured part of the "
+                    f"transfer alone needs {format_size(measured)}."
                 )
             result.block(
                 "target_pool_insufficient_capacity",
@@ -576,10 +577,6 @@ def _check_capacity(
 # Drivers that report no per-volume usage without project quotas: LXD answers 0 for every volume on
 # them, so a 0 from one is not a measurement.
 _UNMEASURED_USAGE_DRIVERS = frozenset({"dir"})
-
-
-def _gib(value: int) -> str:
-    return f"{value / 1024**3:.1f} GiB"
 
 
 def _unmeasured_pool_bound(

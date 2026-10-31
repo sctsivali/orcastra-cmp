@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDate } from "@/lib/utils";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -211,9 +212,7 @@ export function CreateKeyDialog({
             />
             <p className="text-xs text-muted-foreground">
               Key will expire on{" "}
-              {new Date(
-                Date.now() + (formData.expire_days || 365) * 24 * 60 * 60 * 1000
-              ).toLocaleDateString('en-GB')}
+              {formatDate(new Date(Date.now() + (formData.expire_days || 365) * 86_400_000).toISOString())}
             </p>
           </div>
         </div>

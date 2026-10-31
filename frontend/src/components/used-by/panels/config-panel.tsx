@@ -1,5 +1,6 @@
 "use client";
 
+import { formatConfigValue } from "@/lib/lxd-limits";
 import * as React from "react";
 import { SearchInput } from "@/components/ui/search-input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -17,7 +18,12 @@ export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
   const shown = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return all;
-    return all.filter(([k, v]) => k.toLowerCase().includes(needle) || String(v).toLowerCase().includes(needle));
+    return all.filter(
+      ([k, v]) =>
+        k.toLowerCase().includes(needle) ||
+        String(v).toLowerCase().includes(needle) ||
+        formatConfigValue(k, v).toLowerCase().includes(needle),
+    );
   }, [all, query]);
 
   if (all.length === 0) {
@@ -38,7 +44,7 @@ export function ConfigPanel({ entries }: { entries?: Record<string, string> }) {
         {shown.map(([key, value]) => (
           <div key={key} className="rounded-md border bg-muted/30 p-2">
             <dt className="font-mono text-xs text-muted-foreground break-all">{key}</dt>
-            <dd className="mt-1 break-all font-mono text-sm">{String(value)}</dd>
+            <dd className="mt-1 break-all font-mono text-sm">{formatConfigValue(key, value)}</dd>
           </div>
         ))}
       </dl>

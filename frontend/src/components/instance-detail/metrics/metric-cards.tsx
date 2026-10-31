@@ -10,15 +10,14 @@ import {
   diskIoUnavailableText,
   formatSampleWindow,
   formatVcpuAmount,
-  formatVcpuCount,
+  formatVcpuBusy,
   memoryReading,
 } from "@/lib/instance-metrics-view";
 import {
   formatByteQuota,
   formatBytes,
-  formatMemory,
-  formatMemoryQuota,
   formatNetworkRate,
+  formatVcpuCount,
 } from "@/lib/utils";
 import type { InstanceMetrics } from "@/types/api";
 
@@ -45,7 +44,7 @@ export function CpuCard({ metrics }: { metrics: InstanceMetrics }) {
   const window = formatSampleWindow(metrics.sample_window_seconds);
   return (
     <Card className="space-y-3 p-4">
-      <CardHeading icon={Cpu} title="CPU" />
+      <CardHeading icon={Cpu} title="vCPU" />
       {reading.state === "calculating" ? (
         <Pending value="Calculating…" detail="Waiting for a second live sample" />
       ) : reading.state === "unavailable" ? (
@@ -53,7 +52,7 @@ export function CpuCard({ metrics }: { metrics: InstanceMetrics }) {
           value="Unavailable"
           detail={
             reading.busy !== null
-              ? `${formatVcpuAmount(reading.busy)} vCPUs busy; the vCPU count was not reported`
+              ? `${formatVcpuBusy(reading.busy)} busy; the vCPU count was not reported`
               : "Not reported by the cluster"
           }
         />
@@ -67,7 +66,7 @@ export function CpuCard({ metrics }: { metrics: InstanceMetrics }) {
           />
           {reading.busy !== null && reading.unlimited ? (
             <p className="text-xs text-muted-foreground tabular-nums">
-              {formatVcpuAmount(reading.busy)} vCPUs busy · no CPU limit
+              {formatVcpuBusy(reading.busy)} busy · no vCPU limit
               {window ? ` · ${window}` : ""}
             </p>
           ) : reading.busy !== null && reading.vcpus ? (
@@ -97,15 +96,15 @@ export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
             label="Used"
             total={reading.total}
             used={reading.used}
-            value={`${quota(formatMemoryQuota(reading.used, reading.total, 2))} (${reading.percent.toFixed(1)}%)`}
+            value={`${quota(formatByteQuota(reading.used, reading.total, 2))} (${reading.percent.toFixed(1)}%)`}
           />
           {reading.available !== null || reading.cache !== null ? (
             <DetailGrid cols={2}>
               {reading.available !== null ? (
-                <DetailField label="Available" value={formatMemory(reading.available)} />
+                <DetailField label="Available" value={formatBytes(reading.available)} />
               ) : null}
               {reading.cache !== null ? (
-                <DetailField label="Page Cache" value={formatMemory(reading.cache)} />
+                <DetailField label="Page Cache" value={formatBytes(reading.cache)} />
               ) : null}
             </DetailGrid>
           ) : null}
@@ -118,7 +117,7 @@ export function MemoryCard({ metrics }: { metrics: InstanceMetrics }) {
         </>
       ) : (
         <p className="text-sm font-medium tabular-nums">
-          {formatMemory(reading.used)} used, {reading.unlimited ? "no memory limit set" : "no limit reported"}
+          {formatBytes(reading.used)} used, {reading.unlimited ? "no memory limit set" : "no limit reported"}
         </p>
       )}
     </Card>

@@ -9,12 +9,12 @@ import { AlertTriangle, Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lu
 import { Badge } from "@/components/ui/badge";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
-import { formatLabel, formatMemory } from "@/lib/utils";
+import { formatLabel, formatVcpuCount, plural } from "@/lib/utils";
 import { usageTone } from "@/lib/usage-tone";
 import type { MemberResources } from "@/types/api";
 import { GpuPanel } from "../gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
-import { formatBytes, formatBytesCompact, formatMemoryCompact } from "./format";
+import { formatBytes, formatBytesCompact } from "./format";
 
 interface MemberResourcePanelsProps {
   resources: MemberResources;
@@ -95,8 +95,10 @@ export function MemberResourcePanels({
           <CardContent>
             <div className="space-y-2" data-partial={instancesLost ? "true" : undefined}>
               <div className="flex items-baseline justify-center gap-1">
-                <span className="text-2xl font-bold">{instancesLost ? "?" : cpu.allocated}</span>
-                <span className="text-sm text-muted-foreground">vCPU on {cpu.threads} hardware threads</span>
+                <span className="text-2xl font-bold">{instancesLost ? "?" : cpu.allocated}</span>{" "}
+                <span className="text-sm text-muted-foreground">
+                  {cpu.allocated === 1 ? "vCPU" : "vCPUs"} on {plural(cpu.threads, "hardware thread")}
+                </span>
               </div>
               <Progress
                 value={instancesLost ? 0 : cpu.percentClamped}
@@ -123,11 +125,11 @@ export function MemberResourcePanels({
           <CardContent>
             <div className="space-y-2">
               <div className="text-center text-sm">
-                <span className="text-2xl font-bold">{formatMemoryCompact(resources.memory_used).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatMemoryCompact(resources.memory_used).unit}</span>
+                <span className="text-2xl font-bold">{formatBytesCompact(resources.memory_used).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_used).unit}</span>
                 <span className="text-xs text-muted-foreground"> / </span>
-                <span className="text-base font-semibold">{formatMemoryCompact(resources.memory_total).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatMemoryCompact(resources.memory_total).unit}</span>
+                <span className="text-base font-semibold">{formatBytesCompact(resources.memory_total).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_total).unit}</span>
               </div>
               <Progress 
                 value={resources.memory_usage_percent} 
@@ -304,13 +306,13 @@ export function MemberResourcePanels({
                 {instancesLost
                   ? "unknown"
                   : cpu.over > 0
-                    ? `${cpu.over} vCPU beyond capacity (${cpu.ratioLabel})`
+                    ? `${formatVcpuCount(cpu.over)} beyond capacity (${cpu.ratioLabel})`
                     : `${cpu.unallocated} hardware threads`}
               </p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Available Memory</p>
-              <p className="font-medium">{formatMemory(resources.memory_available)}</p>
+              <p className="font-medium">{formatBytes(resources.memory_available)}</p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">{storage.summaryLabel}</p>

@@ -10,8 +10,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
-import { formatMemory } from "@/lib/utils";
-import { MeterRow, Tile, formatUptime, plural } from "@/components/system-resources/primitives";
+import { formatBytes, plural, formatCount } from "@/lib/utils";
+import { MeterRow, Tile, formatUptime } from "@/components/system-resources/primitives";
 import {
   formatWindow,
   type ThrottleReading,
@@ -87,7 +87,7 @@ export function ContainerSection({
 }
 
 function bytesOrEmpty(value: number | null | undefined): string {
-  return value === null || value === undefined ? EMPTY_VALUE : formatMemory(value);
+  return value === null || value === undefined ? EMPTY_VALUE : formatBytes(value);
 }
 
 function ContainerMemoryCard({ container }: { container: ContainerInfo }) {
@@ -97,11 +97,11 @@ function ContainerMemoryCard({ container }: { container: ContainerInfo }) {
   const headline =
     used === null
       ? limit
-        ? `${formatMemory(limit)} limit`
+        ? `${formatBytes(limit)} limit`
         : "No limit set"
       : limit
-        ? `${formatMemory(used)} of ${formatMemory(limit)} limit, ${formatMemory(Math.max(limit - used, 0))} headroom`
-        : `${formatMemory(used)} in use, no limit set`;
+        ? `${formatBytes(used)} of ${formatBytes(limit)} limit, ${formatBytes(Math.max(limit - used, 0))} headroom`
+        : `${formatBytes(used)} in use, no limit set`;
   return (
     <Card>
       <CardHeader>
@@ -123,7 +123,7 @@ function ContainerMemoryCard({ container }: { container: ContainerInfo }) {
         <div className="space-y-2 pt-2">
           <div className="grid grid-cols-2 gap-4">
             <Tile label="In Use" value={bytesOrEmpty(used)} sub="counted against the limit" />
-            <Tile label="Limit" value={limit ? formatMemory(limit) : "No limit set"} sub="set in .env" />
+            <Tile label="Limit" value={limit ? formatBytes(limit) : "No limit set"} sub="set in .env" />
             <Tile label="Process Memory" value={bytesOrEmpty(m?.anon)} sub="heap and stacks" />
             <Tile label="File Cache" value={bytesOrEmpty(m?.file)} sub="partly reclaimable" />
           </div>
@@ -139,7 +139,7 @@ function ContainerMemoryCard({ container }: { container: ContainerInfo }) {
 
 function throttledTime(usec: number): string {
   const seconds = usec / 1e6;
-  return seconds < 60 ? `${seconds.toFixed(1)} s` : formatUptime(seconds);
+  return seconds < 60 ? `${seconds.toFixed(1)}s` : formatUptime(seconds);
 }
 
 function ContainerCpuCard({
@@ -188,10 +188,10 @@ function ContainerCpuCard({
           caption={counting ? `${windowText}${throttleText}` : "The container's CPU counter is not readable here."}
         />
         <div className="grid grid-cols-3 gap-4 pt-2">
-          <Tile label="CPU Limit" value={limit ? plural(limit, "vCPU") : "No limit set"} sub="set in .env" />
+          <Tile label="vCPU Limit" value={limit ? plural(limit, "vCPU") : "No limit set"} sub="set in .env" />
           <Tile
             label="Times Throttled"
-            value={c?.nr_throttled !== null && c?.nr_throttled !== undefined ? c.nr_throttled.toLocaleString("en-US") : EMPTY_VALUE}
+            value={c?.nr_throttled !== null && c?.nr_throttled !== undefined ? formatCount(c.nr_throttled) : EMPTY_VALUE}
             sub={since}
           />
           <Tile

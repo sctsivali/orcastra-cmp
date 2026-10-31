@@ -9,7 +9,7 @@ import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
-import { formatBytes, formatDateTime, formatLabel } from "@/lib/utils";
+import { formatBytes, formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
 import { sessionConnectionStatusDisplay } from "./session-connection-status";
@@ -88,7 +88,7 @@ export function SessionDetailDialog({
                 </TableLink>
               }
             />
-            <DetailField label="Started" value={formatDateTime(started)} />
+            <DetailField label="Started" value={formatDateTimeSeconds(started)} />
           </DetailGrid>
         </DetailSection>
 

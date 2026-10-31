@@ -106,7 +106,7 @@ export function throttleReading(prev: SystemResourceUsage | null, curr: SystemRe
   return { count: b - a, windowSeconds: window };
 }
 
-/** "5.0 s", the window a reading covers. */
+/** "5.0s", the window a reading covers. */
 export function formatWindow(seconds: number): string {
-  return `${seconds.toFixed(1)} s`;
+  return `${seconds.toFixed(1)}s`;
 }

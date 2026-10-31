@@ -21,7 +21,7 @@ import { guestText } from "@/lib/instance-files/guest-text";
 import { directoryKey } from "@/lib/instance-files/keys";
 import { joinPath } from "@/lib/instance-files/path";
 import { describeReadError } from "@/lib/read-error";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn, formatBytes, formatCount } from "@/lib/utils";
 import { ConflictDialog } from "./conflict-dialog";
 import { ExplorerDialogs, type Prompt } from "./explorer-dialogs";
 import { isDirectoryLike, isImageName, type FileActionId } from "./file-actions";
@@ -309,7 +309,7 @@ export function InstanceFileExplorer({
       {data?.truncated && (
         <Alert className="rounded-none border-x-0 border-t-0 py-1.5">
           <AlertDescription className="text-xs">
-            Showing the first {data.entries.length.toLocaleString()} items. This folder has more. Filter searches only what is shown. Type a path to reach anything else.
+            Showing the first {formatCount(data.entries.length)} items. This folder has more. Filter searches only what is shown. Type a path to reach anything else.
           </AlertDescription>
         </Alert>
       )}
@@ -378,7 +378,7 @@ export function InstanceFileExplorer({
       {!state.open && canUse && (
         <footer className="flex min-h-[26px] items-center gap-3 border-t px-2 text-xs text-muted-foreground">
           <span className="shrink-0 tabular-nums">
-            {state.selected.size ? `${state.selected.size} of ` : ""}{rows.length.toLocaleString()} {rows.length === 1 ? "item" : "items"}
+            {state.selected.size ? `${state.selected.size} of ` : ""}{formatCount(rows.length)} {rows.length === 1 ? "item" : "items"}
           </span>
           {state.selected.size > 0 && (
             <span className="shrink-0 tabular-nums">

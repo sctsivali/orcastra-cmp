@@ -34,7 +34,7 @@ import { useMigrationJob } from "@/hooks/use-migrations";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useMigrationCapabilities } from "@/hooks/use-read-only-mode";
 import { describeReadError } from "@/lib/read-error";
-import { formatDateTime, formatLabel } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import type { MigrationAction, MigrationJob } from "@/types/migrations";
 import { Role } from "@/types/rbac";
 import { MigrationActionDialog, migrationActionCopy } from "./migration-action-dialog";
@@ -192,7 +192,7 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                     <DetailField label="Destination" value={endpointLabel(job.target)} mono />
                     <DetailField label="Strategy" value={strategyLabel(job)} />
                     <DetailField label="Current Phase" value={formatLabel(job.phase)} />
-                    <DetailField label="Started" value={formatDateTime(job.created_at)} />
+                    <DetailField label="Started" value={formatDateTimeSeconds(job.created_at)} />
                     <DetailField
                       label={
                         job.intent === "copy" || job.strategy === "member_relocation"
@@ -203,7 +203,7 @@ export function MigrationJobDialog({ jobId, onOpenChange, writeDisabledReason }:
                         job.intent === "copy" || job.strategy === "member_relocation"
                           ? "Not applicable"
                           : job.retention_deadline
-                            ? formatDateTime(job.retention_deadline)
+                            ? formatDateTimeSeconds(job.retention_deadline)
                             : "Not started"
                       }
                     />
@@ -340,7 +340,7 @@ function Timeline({ job }: { job: MigrationJob }) {
         <li key={entry.sequence} className="grid gap-1 p-3 sm:grid-cols-[180px_minmax(0,1fr)]">
           <div>
             <p className="text-sm font-medium">{formatLabel(entry.phase)}</p>
-            <p className="text-xs text-muted-foreground">{formatDateTime(entry.created_at)}</p>
+            <p className="text-xs text-muted-foreground">{formatDateTimeSeconds(entry.created_at)}</p>
           </div>
           <div className="text-sm text-muted-foreground">
             {entry.message}

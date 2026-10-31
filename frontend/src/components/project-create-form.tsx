@@ -1,5 +1,6 @@
 "use client";
 
+import { FORM_SIZE_UNITS, FORM_UNIT_BYTES, type FormSizeUnit } from "@/lib/lxd-limits";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
@@ -26,7 +27,7 @@ import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
 import { projectRowKey, requestRowFocus } from "@/lib/row-focus";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 
 const projectCreateSchema = z.object({
   name: z
@@ -101,7 +102,7 @@ export function ProjectCreateForm() {
       enableNetworks: true,
       maxCpu: "",
       maxRamValue: "",
-      maxRamUnit: "GiB",
+      maxRamUnit: "GB",
       maxStorageValue: "",
       maxStorageUnit: "GB",
     },
@@ -134,7 +135,7 @@ export function ProjectCreateForm() {
     if (!maxRamValueInput || !maxRamInBytes || !maxRamUnitInput) return;
     
     const ramNum = parseInt(maxRamValueInput);
-    const multiplier = maxRamUnitInput === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024;
+    const multiplier = FORM_UNIT_BYTES[maxRamUnitInput as FormSizeUnit];
     const maxAllowed = Math.floor(maxRamInBytes / multiplier);
     
     if (ramNum > maxAllowed) {
@@ -152,7 +153,7 @@ export function ProjectCreateForm() {
     if (!maxStorageValueInput || !maxStorageInBytes || !maxStorageUnitInput) return;
     
     const storageNum = parseInt(maxStorageValueInput);
-    const multiplier = maxStorageUnitInput === "MB" ? 1_000_000 : 1_000_000_000;
+    const multiplier = FORM_UNIT_BYTES[maxStorageUnitInput as FormSizeUnit];
     const maxAllowed = Math.floor(maxStorageInBytes / multiplier);
     
     if (storageNum > maxAllowed) {
@@ -358,7 +359,7 @@ export function ProjectCreateForm() {
                       Hardware threads: {nodeResources.cpu_available} available (of {nodeResources.cpu_total})
                     </div>
                     <div className="text-muted-foreground">
-                      Memory: {formatMemory(nodeResources.memory_available, 1)} available (of {formatMemory(nodeResources.memory_total, 1)})
+                      Memory: {formatBytes(nodeResources.memory_available, 1)} available (of {formatBytes(nodeResources.memory_total, 1)})
                     </div>
                     <div className="text-muted-foreground">
                       Storage: {formatBytes(nodeResources.storage_available, 1)} available (of {formatBytes(nodeResources.storage_total, 1)})
@@ -395,7 +396,7 @@ export function ProjectCreateForm() {
                       id="maxRamValue"
                       type="number"
                       min="1"
-                      max={maxRamInBytes ? Math.floor(maxRamInBytes / (watch("maxRamUnit") === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024)) : undefined}
+                      max={maxRamInBytes ? Math.floor(maxRamInBytes / FORM_UNIT_BYTES[watch("maxRamUnit") as FormSizeUnit]) : undefined}
                       placeholder="e.g., 1"
                       className={errors.maxRamValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
@@ -409,8 +410,9 @@ export function ProjectCreateForm() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="MiB">MiB</SelectItem>
-                        <SelectItem value="GiB">GiB</SelectItem>
+                        {FORM_SIZE_UNITS.map((unit) => (
+                          <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -430,7 +432,7 @@ export function ProjectCreateForm() {
                       id="maxStorageValue"
                       type="number"
                       min="1"
-                      max={maxStorageInBytes ? Math.floor(maxStorageInBytes / (watch("maxStorageUnit") === "MB" ? 1_000_000 : 1_000_000_000)) : undefined}
+                      max={maxStorageInBytes ? Math.floor(maxStorageInBytes / FORM_UNIT_BYTES[watch("maxStorageUnit") as FormSizeUnit]) : undefined}
                       placeholder="e.g., 10"
                       className={errors.maxStorageValue ? "flex-1 border-destructive" : "flex-1"}
                       onKeyDown={blockNonNumeric}
@@ -444,8 +446,9 @@ export function ProjectCreateForm() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="MB">MB</SelectItem>
-                        <SelectItem value="GB">GB</SelectItem>
+                        {FORM_SIZE_UNITS.map((unit) => (
+                          <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>

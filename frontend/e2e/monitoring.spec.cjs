@@ -299,7 +299,7 @@ test("tenant: Monitoring shows its instances and cluster status, no host figure"
   for (const absent of ["Resource Utilization", "Resource Metrics", "Warnings"]) {
     await expect(main.getByText(absent, { exact: true })).toHaveCount(0);
   }
-  await expect(main).not.toContainText(/hardware threads|vCPU Allocation|GiB \/|NaN|undefined/);
+  await expect(main).not.toContainText(/hardware threads|vCPU Allocation|GB \/|NaN|undefined/);
   await expect(main.getByText("Running", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh monitoring" }).click();
@@ -347,15 +347,15 @@ test("an instance without limits says so instead of showing the host's size", as
     name: "Open resource details for tenant-owned-vm on cluster-a in project tenant-a",
   });
   await expect(consumer).toBeVisible();
-  await expect(consumer).toContainText("no CPU limit");
+  await expect(consumer).toContainText("no vCPU limit");
   await expect(consumer).not.toContainText(/of 64 vCPUs/);
 
   await consumer.click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("tab", { name: "Metrics" }).click();
-  await expect(dialog.getByText(/vCPUs busy · no CPU limit/)).toBeVisible({ timeout: 10_000 });
-  await expect(dialog.getByText(/2(\.00)? GiB used, no memory limit set/)).toBeVisible();
-  await expect(dialog).not.toContainText(/of 64 vCPUs|62(\.00)? GiB/);
+  await expect(dialog.getByText(/vCPUs? busy · no vCPU limit/)).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByText(/2\.15 GB used, no memory limit set/)).toBeVisible();
+  await expect(dialog).not.toContainText(/of 64 vCPUs|66\.57 GB/);
   await expectCleanHarness(api);
 });
 

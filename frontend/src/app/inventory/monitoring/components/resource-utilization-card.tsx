@@ -6,7 +6,7 @@ import { GaugeChart } from "@/components/monitoring/gauge-chart";
 import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
 import { cpuAllocation } from "@/lib/cpu-allocation";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import { formatBytes, formatMemory } from "@/lib/utils";
+import { formatBytes, formatVcpuCount, plural } from "@/lib/utils";
 import { ClusterStatus, type MonitoringDashboardResponse } from "@/types/api";
 
 /** The scope's host figures, as MonitoringContent's filteredStats carries them. */
@@ -116,7 +116,7 @@ export function ResourceUtilizationCard({ stats, scope, scopeLabel, isPartner }:
                   statusMessage={stats.cpu_reading.status !== "ready" ? statusMessage : undefined}
                 />
                 <p className="text-sm text-muted-foreground mt-2">
-                  Allocated: {stats.used_cpu} vCPU / {stats.total_cpu} hardware threads (
+                  Allocated: {formatVcpuCount(stats.used_cpu)} / {plural(stats.total_cpu, "hardware thread")} (
                   {cpuAllocation({ cpu_total: stats.total_cpu, cpu_used: stats.used_cpu }).ratioLabel})
                 </p>
               </>
@@ -129,7 +129,7 @@ export function ResourceUtilizationCard({ stats, scope, scopeLabel, isPartner }:
               <>
                 <GaugeChart value={memory} label="Memory Usage" />
                 <p className="text-sm text-muted-foreground mt-2">
-                  {formatMemory(stats.used_memory_bytes)} / {formatMemory(stats.total_memory_bytes)}
+                  {formatBytes(stats.used_memory_bytes)} / {formatBytes(stats.total_memory_bytes)}
                 </p>
               </>
             )}

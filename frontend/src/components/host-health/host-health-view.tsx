@@ -71,7 +71,7 @@ export function HostHealthView() {
             </p>
           </div>
           <p className="text-xs text-muted-foreground sm:text-right">
-            Checked by the backend every {data.interval_seconds} s.
+            Checked by the backend every {data.interval_seconds}s.
           </p>
         </CardContent>
       </Card>

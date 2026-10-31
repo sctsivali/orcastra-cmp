@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDate, EMPTY_VALUE } from "@/lib/utils";
 import * as React from "react";
 import { Suspense, useCallback, useMemo, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -545,7 +546,7 @@ function IntegrationsSettingsContent() {
             const permLevel = summarizeClusterAccessLevel(clusterAccess);
 
             const expiryLabel = apiKey.expires_at
-              ? new Date(apiKey.expires_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+              ? formatDate(apiKey.expires_at)
               : "Never";
             // note: the state is computed on the server, from the same helper the authentication
             // path uses, so the badge and the refusal cannot disagree. Deriving it here would
@@ -570,7 +571,7 @@ function IntegrationsSettingsContent() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 space-y-1">
                       <CardTitle className="text-lg">
-                        {String(apiKey.name || 'N/A')}
+                        {String(apiKey.name || EMPTY_VALUE)}
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <span className="min-w-0 font-mono text-xs bg-muted px-2 py-0.5 rounded">
@@ -585,7 +586,7 @@ function IntegrationsSettingsContent() {
                         <span className="min-w-0">
                           <OverflowText
                             value={String(apiKey.app_name || '')}
-                            label={`application for ${String(apiKey.name || 'N/A')}`}
+                            label={`application for ${String(apiKey.name || EMPTY_VALUE)}`}
                           />
                         </span>
                       </CardDescription>
@@ -651,7 +652,7 @@ function IntegrationsSettingsContent() {
                   </div>
                   <IntegrationClusterAccessList
                     clusters={clusterAccess}
-                    keyName={String(apiKey.name || "N/A")}
+                    keyName={String(apiKey.name || EMPTY_VALUE)}
                   />
                   <KeyOwnershipSummary apiKey={apiKey} />
                   

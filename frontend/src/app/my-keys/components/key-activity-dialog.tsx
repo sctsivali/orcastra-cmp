@@ -17,7 +17,7 @@ import { IntentLink } from "@/components/navigation/route-intent";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { myKeysActivityAPI } from "@/lib/my-keys-activity-api";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import type { KeyInfo } from "@/types/api";
 import { KeyActivityLine } from "./key-activity-line";
 
@@ -62,7 +62,7 @@ export function KeyActivityDialog({
           <DialogDescription>
             What was done with this key in the last {WINDOW_DAYS} days: on the dashboard, and on {shown?.node} under its
             certificate. Last change on the cluster:{" "}
-            {shown?.last_used_at ? formatDate(shown.last_used_at) : "not recorded"}. Reads such as a list leave no record.
+            {shown?.last_used_at ? formatDateTime(shown.last_used_at) : "not recorded"}. Reads such as a list leave no record.
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3" data-testid="key-activity-dialog">

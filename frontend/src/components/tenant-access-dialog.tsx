@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDate } from "@/lib/utils";
 import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1046,10 +1047,10 @@ function AssignedPolicyCard({
       <div className="px-3 py-1.5 border-t flex items-center gap-4 text-[10px] text-muted-foreground bg-muted/10">
         <span>Organization: <strong className="text-foreground">{assignment.organization_name}</strong></span>
         <span>Assigned by: {assignment.assigned_by}</span>
-        <span>{new Date(assignment.assigned_at).toLocaleDateString()}</span>
+        <span>{formatDate(assignment.assigned_at)}</span>
         {assignment.expires_at && (
           <span className="text-status-pending">
-            Expires: {new Date(assignment.expires_at).toLocaleDateString()}
+            Expires: {formatDate(assignment.expires_at)}
           </span>
         )}
       </div>

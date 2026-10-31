@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
 import type { GuestEntry } from "@/lib/instance-files/api";
 import { guestText } from "@/lib/instance-files/guest-text";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatCount } from "@/lib/utils";
 import { formatMode, formatTime } from "./file-table";
 
 interface PropertiesDialogProps {
@@ -120,7 +120,7 @@ export function PropertiesDialog({ entry, path, writeReason, onSave, onClose }: 
                 <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1">
                   <Fact label="Path" value={<OverflowText label="Path" value={guestText(path)} mono />} />
                   <Fact label="Type" value={entry.type} />
-                  <Fact label="Size" value={`${formatBytes(entry.size)} (${entry.size.toLocaleString()} bytes)`} />
+                  <Fact label="Size" value={`${formatBytes(entry.size)} (${formatCount(entry.size)} bytes)`} />
                   <Fact label="Modified" value={formatTime(entry.mtime)} />
                   {entry.link_target && <Fact label="Link Target" value={<OverflowText label="Link Target" value={guestText(entry.link_target)} mono />} />}
                 </dl>

@@ -1,3 +1,5 @@
+import { formatVcpuCount } from "@/lib/utils";
+import { formatLxdSize } from "@/lib/lxd-limits";
 import { APIError, type InstanceCreateIssue } from "@/types/api";
 
 export type CreateErrorField =
@@ -125,7 +127,7 @@ export function fieldRefusalText(err: CreateError): string {
     return err.message;
   }
   const project = err.project ? `${err.project} allows` : "The project allows";
-  if (err.field === "cpu") return `The cluster refused this value: ${project} ${err.max ?? "this many"} vCPU in total across its instances.`;
-  if (err.field === "memory") return `The cluster refused this value: ${project} ${err.max ?? "this much"} memory in total across its instances.`;
+  if (err.field === "cpu") return `The cluster refused this value: ${project} ${err.max ? formatVcpuCount(Number(err.max)) : "this many vCPUs"} in total across its instances.`;
+  if (err.field === "memory") return `The cluster refused this value: ${project} ${err.max ? formatLxdSize(err.max) : "this much"} memory in total across its instances.`;
   return `The cluster refused this create: ${project} no more instances of this kind.`;
 }

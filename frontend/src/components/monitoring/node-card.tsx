@@ -22,7 +22,7 @@ import {
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { formatBytes, formatHypervisorType, formatMemory } from "@/lib/utils";
+import { formatBytes, formatHypervisorType, formatVcpuCount, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
@@ -76,7 +76,7 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">vCPU Allocation</span>
-          <span className="font-medium">{cpu.allocated} vCPU / {cpu.threads} hardware threads</span>
+          <span className="font-medium">{formatVcpuCount(cpu.allocated)} / {plural(cpu.threads, "hardware thread")}</span>
         </div>
         <Progress value={cpu.percentClamped} className={`h-2 ${cpu.meterClassName}`} />
         <p className={`text-xs text-right ${cpu.textClassName}`}>{cpuAllocationText(cpu)}</p>
@@ -86,7 +86,7 @@ function NodeHostFigures({ host }: { host: NonNullable<ReturnType<typeof hostFig
       <div className="space-y-1.5">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Memory</span>
-          <span className="font-medium">{formatMemory(host.memoryUsed)} / {formatMemory(host.memoryTotal)}</span>
+          <span className="font-medium">{formatBytes(host.memoryUsed)} / {formatBytes(host.memoryTotal)}</span>
         </div>
         {memory && <Progress value={memory.percent} className="h-2" />}
         <p className="text-xs text-muted-foreground text-right">{memory ? `${memory.percent.toFixed(1)}%` : "Usage unavailable"}</p>

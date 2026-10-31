@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Guard the console's semantic byte contract.
+ * Guard the console's byte contract: one standard, the GB family, on every screen.
  *
- * Storage, images, files, transfers, and network counters use decimal SI labels. Memory,
- * swap, VRAM, and explicit LXD binary limits use binary IEC labels. Keeping this parser-free
- * lets the CI guards job run before frontend dependencies are installed.
+ * One disk used to read 10GiB in a column and 10.74 GB on its meter, because memory and limits were
+ * binary and storage was decimal. documentation/ui/byte-units.md has the decision. Binary labels
+ * survive only where they are wire format: parsers that read what LXD stores. Keeping this
+ * parser-free lets the CI guards job run before frontend dependencies are installed.
  */
 
 import assert from "node:assert/strict";
@@ -18,21 +19,23 @@ const src = join(root, "frontend", "src");
 const utilsPath = join(src, "lib", "utils.ts");
 const utils = readFileSync(utilsPath, "utf8");
 
-const SI = /\b(?:KB|MB|GB|TB|PB)(?:\/s)?\b/;
+const SI = /\b(?:kB|MB|GB|TB|PB)(?:\/s)?\b/;
 const IEC = /\b(?:KiB|MiB|GiB|TiB|PiB)(?:\/s)?\b/;
+// A number or an interpolation stuck to a unit: `8GB`, `${size}GB`. A wire join writes
+// `${value}${unit}`, which has no literal unit in it.
+const GLUED = /(?:\b\d+(?:\.\d+)?|\})(?:kB|MB|GB|TB|PB)(?:\/s)?\b/;
 const SCALE_1024 = /Math\.pow\(\s*1024|1024\s*\*\*|\/\s*1024(?:\s*\/\s*1024)+|\/\s*\(1024\s*\*|\bk\s*=\s*1024\b/;
-const SCALE_1000 = /Math\.pow\(\s*1000|1000\s*\*\*|\/\s*1000(?:\s*\/\s*1000)+|\/\s*\(1000\s*\*|\bk\s*=\s*1000\b/;
-const MEMORY_ARG = /\b(?:memory|ram|swap|vram)\w*/i;
-const STORAGE_ARG =
-  /\b(?:storage|disk|space|pool)\w*|\b(?:image|file|transfer|network)\w*(?:_|\.|\?\.)?(?:size|bytes)\w*|\bbytes_(?:rx|tx)\w*/i;
 
 const PRIVATE_DISPLAY_FORMATTER =
   /\b(?:function\s+|const\s+)(format(?:Bytes|Memory|Size|Rate|NetworkSpeed|BytesAuto|Quota))\b/g;
 const PRIVATE_FORMATTER_ALLOWLIST = new Set([
-  // Compatibility re-exports only. The implementation delegates to the semantic shared helpers.
+  // Compatibility re-exports only. The implementation delegates to the shared helpers.
   "components/member-resources/format.ts",
-  // Explicit LXD limit strings are a separate binary-input contract, not display arithmetic.
-  "lib/lxd-limits.ts",
+]);
+
+// Where a binary label is a value on the wire, or read off it. Nothing here reaches a screen as text.
+const WIRE_FILES = new Set([
+  "lib/lxd-limits.ts", // parseLxdSize reads whatever LXD stores
 ]);
 
 function* walk(dir) {
@@ -64,49 +67,22 @@ function windows(lines, pattern) {
   return hits;
 }
 
-function crossedFormatters(source) {
-  const hits = [];
-  const call = /\b(formatBytes|formatMemory|formatLxdLimit|formatBytesCompact|formatMemoryCompact|formatByteQuota|formatMemoryQuota)\(\s*([^)]{0,180}?)\s*[,)]/gs;
-  let match;
-  while ((match = call.exec(source)) !== null) {
-    const [, formatter, argument] = match;
-    if (formatter === "formatLxdLimit") continue;
-    const decimal = formatter === "formatBytes" || formatter === "formatBytesCompact" || formatter === "formatByteQuota";
-    if (decimal && MEMORY_ARG.test(argument) && !STORAGE_ARG.test(argument)) {
-      hits.push({ line: lineOf(source, match.index), why: `${formatter} receives a memory value` });
-    }
-    if (!decimal && STORAGE_ARG.test(argument) && !MEMORY_ARG.test(argument)) {
-      hits.push({ line: lineOf(source, match.index), why: `${formatter} receives a storage or network value` });
-    }
-  }
-  return hits;
-}
-
 const failures = [];
 let scanned = 0;
 
 const requiredUtilsContracts = [
-  ['const SI_BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]', "decimal SI unit list"],
-  ['const IEC_BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]', "binary IEC unit list"],
-  ["scaleBytes(bytes, 1000, SI_BYTE_UNITS", "decimal storage formatter"],
-  ["scaleBytes(bytes, 1024, IEC_BYTE_UNITS", "binary memory formatter"],
-  ["export function formatLxdLimit", "explicit LXD binary-limit formatter"],
-  ["scaleBytes(bytesPerSecond, 1000, SI_BYTE_UNITS", "decimal network-rate formatter"],
-  ["scaleByteQuota(usedBytes, limitBytes, 1000, SI_BYTE_UNITS", "decimal storage quota formatter"],
-  ["scaleByteQuota(usedBytes, limitBytes, 1024, IEC_BYTE_UNITS", "binary memory quota formatter"],
+  ['const SI_BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"]', "the one unit list"],
+  ["scaleBytes(bytes, 1000, SI_BYTE_UNITS", "the one size formatter"],
+  ["scaleBytes(bytesPerSecond, 1000, SI_BYTE_UNITS", "the rate formatter on the same scale"],
+  ["scaleByteQuota(usedBytes, limitBytes, 1000, SI_BYTE_UNITS", "the quota formatter on the same scale"],
 ];
 
-const limitCompatibility = readFileSync(join(src, "lib", "lxd-limits.ts"), "utf8");
-if (!limitCompatibility.includes("return formatLxdLimit(bytes, { decimals: 1 })")) {
-  failures.push("frontend/src/lib/lxd-limits.ts: formatLimitBytes must delegate to formatLxdLimit");
+for (const retired of ["formatMemory", "formatMemoryQuota", "formatLxdLimit", "IEC_BYTE_UNITS"]) {
+  if (utils.includes(retired)) {
+    failures.push(`frontend/src/lib/utils.ts: ${retired} is back, and with it a second byte standard`);
+  }
 }
-const operationSummary = readFileSync(
-  join(src, "components", "instance-specification", "operation-summary.tsx"),
-  "utf8",
-);
-if (!operationSummary.includes("formatLxdLimit(disk)")) {
-  failures.push("instance specification root-disk readback must preserve the LXD binary unit");
-}
+
 const fileLimits = readFileSync(
   join(root, "backend", "app", "core", "config.py"),
   "utf8",
@@ -139,11 +115,9 @@ const projectEdit = readFileSync(
   "utf8",
 );
 for (const snippet of [
-  'editableLxdLimit(config["limits.memory"])',
-  'editableStorageLimit(config["limits.disk"])',
-  'type StorageLimitUnit',
-  '<SelectItem value="MB">MB</SelectItem>',
-  '<SelectItem value="GB">GB</SelectItem>',
+  'editableLimit(config["limits.memory"])',
+  'editableLimit(config["limits.disk"])',
+  'FORM_SIZE_UNITS.map(',
   'if (ramLimitDirty)',
   'if (storageLimitDirty)',
   'Current daemon value:',
@@ -157,14 +131,14 @@ if (/match\(\/\^\(\\d\+[^\n]+GiB\|MiB/.test(projectEdit)) {
 }
 const projectCreate = readFileSync(join(src, "components", "project-create-form.tsx"), "utf8");
 for (const snippet of [
+  'maxRamUnit: "GB"',
   'maxStorageUnit: "GB"',
-  'maxStorageUnitInput === "MB" ? 1_000_000 : 1_000_000_000',
-  'watch("maxStorageUnit") === "MB" ? 1_000_000 : 1_000_000_000',
-  '<SelectItem value="MB">MB</SelectItem>',
-  '<SelectItem value="GB">GB</SelectItem>',
+  'FORM_UNIT_BYTES[maxRamUnitInput as FormSizeUnit]',
+  'FORM_UNIT_BYTES[maxStorageUnitInput as FormSizeUnit]',
+  'FORM_SIZE_UNITS.map(',
 ]) {
   if (!projectCreate.includes(snippet)) {
-    failures.push(`project create storage is missing decimal SI contract ${JSON.stringify(snippet)}`);
+    failures.push(`project create is missing the form unit contract ${JSON.stringify(snippet)}`);
   }
 }
 const backendProjects = readFileSync(join(root, "backend", "app", "routers", "projects.py"), "utf8");
@@ -173,13 +147,31 @@ for (const snippet of [
   '"GB": 10**9',
   '"MIB": 1024**2',
   '"GIB": 1024**3',
-  '(("TiB", 1024**4), ("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024))',
-  '(("TB", 10**12), ("GB", 10**9), ("MB", 10**6), ("KB", 10**3))',
+  'format_size(ram_bytes)',
   'f"{resources.get(\'cpu_total\', 0)} hardware threads"',
 ]) {
   if (!backendProjects.includes(snippet)) {
-    failures.push(`backend project quotas are missing semantic unit contract ${JSON.stringify(snippet)}`);
+    failures.push(`backend project quotas are missing unit contract ${JSON.stringify(snippet)}`);
   }
+}
+
+// Backend text a person reads goes through one function. A parser or a wire example is not display.
+const DISPLAY_PRINT = /f"[^"\n]*\{[^}\n]*\}\s*(?:KiB|MiB|GiB|TiB)\b/;
+function* walkPython(dir) {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) yield* walkPython(path);
+    else if (name.endsWith(".py")) yield path;
+  }
+}
+for (const file of walkPython(join(root, "backend", "app"))) {
+  const lines = readFileSync(file, "utf8").split("\n");
+  lines.forEach((text, index) => {
+    if (!DISPLAY_PRINT.test(text) || /logger\.|^\s*#/.test(text)) return;
+    // A log call spread over lines carries its arguments below `logger.x(`.
+    if (lines.slice(Math.max(0, index - 12), index).some((above) => /logger\.\w+\(/.test(above))) return;
+    failures.push(`${relative(root, file)}:${index + 1} prints a binary unit by hand; use format_size`);
+  });
 }
 
 const backendByteFiles = [
@@ -223,7 +215,7 @@ function loadNumericModule(path, imports) {
   return loaded.exports;
 }
 const numeric = loadNumericModule(utilsPath, requireFromFrontend);
-for (const format of [numeric.formatBytes, numeric.formatMemory, numeric.formatLxdLimit, numeric.formatNetworkRate]) {
+for (const format of [numeric.formatBytes, numeric.formatNetworkRate]) {
   for (const value of [NaN, Infinity, -Infinity, -1, null, undefined]) assert.equal(format(value), "\u2014");
   for (const value of [0, 0.5, 1, Number.MIN_VALUE, Number.MAX_VALUE]) {
     assert.doesNotMatch(format(value), /NaN|undefined|Infinity/);
@@ -231,8 +223,9 @@ for (const format of [numeric.formatBytes, numeric.formatMemory, numeric.formatL
 }
 assert.equal(numeric.formatBytes(0.5), "0.5 B");
 assert.equal(numeric.formatNetworkRate(0.5), "0.5 B/s");
-assert.equal(numeric.formatBytes(1000), "1 KB");
-assert.equal(numeric.formatMemory(1024), "1 KiB");
+assert.equal(numeric.formatBytes(1000), "1 kB");
+assert.equal(numeric.formatBytes(8589934592), "8.59 GB");
+assert.equal(numeric.formatNetworkRate(12500), "12.5 kB/s");
 assert.equal(numeric.formatBytes(0), "0 B");
 assert.equal(numeric.formatBytes(0, { zeroDisplay: "empty" }), "\u2014");
 assert.equal(numeric.formatBytes(NaN, { split: true }).unit, "");
@@ -253,34 +246,30 @@ for (const input of [null, {}, { total: 100 }, { used: "", total: 100 }, { used:
 assert.deepEqual(capacityReading({ used: 0, total: 0 }), { used: 0, total: 0, percent: 0 });
 assert.deepEqual(capacityReading({ used: "25", total: "100" }), { used: 25, total: 100, percent: 25 });
 assert.equal(capacityReading({ used: 120, total: 100 }).percent, 100);
-const limitsPath = join(src, "lib", "lxd-limits.ts");
-const limitsOutput = ts.transpileModule(readFileSync(limitsPath, "utf8"), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  fileName: limitsPath,
-}).outputText;
-const limitsModule = { exports: {} };
-new Function("require", "module", "exports", limitsOutput)(
-  (specifier) => {
-    if (specifier === "@/lib/utils") return { formatLxdLimit: () => "unused" };
-    throw new Error(`Unexpected runtime import in LXD limits: ${specifier}`);
-  },
-  limitsModule,
-  limitsModule.exports,
-);
-const { editableLxdLimit, editableStorageLimit } = limitsModule.exports;
-assert.deepEqual(editableLxdLimit(undefined), { value: 0, unit: "GiB", preservedRaw: null });
-assert.deepEqual(editableLxdLimit("8GiB"), { value: 8, unit: "GiB", preservedRaw: "8GiB" });
-assert.equal(editableLxdLimit("8GB").preservedRaw, "8GB");
-assert.ok(Math.abs(editableLxdLimit("8GB").value - 7.45058059692) < 1e-10);
-assert.equal(editableLxdLimit("512MB").preservedRaw, "512MB");
-assert.equal(editableLxdLimit("1024").preservedRaw, "1024");
-assert.deepEqual(editableLxdLimit("50%"), { value: 0, unit: "GiB", preservedRaw: "50%" });
-assert.deepEqual(editableStorageLimit(undefined), { value: 0, unit: "GB", preservedRaw: null });
-assert.deepEqual(editableStorageLimit("8GB"), { value: 8, unit: "GB", preservedRaw: "8GB" });
-assert.equal(editableStorageLimit("8GiB").preservedRaw, "8GiB");
-assert.ok(Math.abs(editableStorageLimit("8GiB").value - 8.589934592) < 1e-10);
-assert.deepEqual(editableStorageLimit("512MB"), { value: 512, unit: "MB", preservedRaw: "512MB" });
-assert.deepEqual(editableStorageLimit("50%"), { value: 0, unit: "GB", preservedRaw: "50%" });
+const limits = loadNumericModule(join(src, "lib", "lxd-limits.ts"), (specifier) => {
+  if (specifier === "@/lib/utils") return numeric;
+  throw new Error(`Unexpected runtime import in LXD limits: ${specifier}`);
+});
+const { editableLimit, formatLxdSize, formatConfigValue } = limits;
+assert.deepEqual(editableLimit(undefined), { value: 0, unit: "GB", preservedRaw: null });
+assert.deepEqual(editableLimit("8GB"), { value: 8, unit: "GB", preservedRaw: "8GB" });
+assert.deepEqual(editableLimit("512MB"), { value: 512, unit: "MB", preservedRaw: "512MB" });
+assert.deepEqual(editableLimit("2TB"), { value: 2, unit: "TB", preservedRaw: "2TB" });
+assert.deepEqual(editableLimit("50%"), { value: 0, unit: "GB", preservedRaw: "50%" });
+assert.equal(editableLimit("8GiB").preservedRaw, "8GiB", "an untouched binary limit stays as stored");
+assert.ok(Math.abs(editableLimit("8GiB").value - 8.589934592) < 1e-10);
+assert.equal(editableLimit("1024").preservedRaw, "1024");
+assert.equal(formatLxdSize("8GiB"), "8.59 GB");
+assert.equal(formatLxdSize("10GB"), "10 GB");
+assert.equal(formatLxdSize("8589934592B"), "8.59 GB", "a spec edit stores bare bytes");
+assert.equal(formatLxdSize("512 MiB"), "536.87 MB");
+assert.equal(formatLxdSize("50%"), "50%");
+assert.equal(formatLxdSize("not a size"), "not a size");
+assert.equal(formatLxdSize(undefined), "");
+assert.equal(formatConfigValue("limits.memory", "8GiB"), "8.59 GB");
+assert.equal(formatConfigValue("limits.cpu", "4"), "4", "a count is not bytes");
+assert.equal(formatConfigValue("limits.read", "30iops"), "30iops");
+assert.equal(formatConfigValue("user.note", "8GiB"), "8GiB", "an authored value is left alone");
 const tableFilters = readFileSync(join(src, "hooks", "use-table-filters.ts"), "utf8");
 if (!tableFilters.includes('if (unit === "bps") return formatNetworkRate(value)')) {
   failures.push("table-filter network bounds must preserve the API's bytes-per-second value");
@@ -304,10 +293,6 @@ for (const file of walk(src)) {
     failures.push(`${displayPath}: formats a rate with formatBytes(...)/s; use formatNetworkRate`);
   }
 
-  for (const hit of crossedFormatters(source)) {
-    failures.push(`${displayPath}:${hit.line} ${hit.why}; use the matching semantic formatter`);
-  }
-
   if (rel !== "lib/utils.ts" && !PRIVATE_FORMATTER_ALLOWLIST.has(rel)) {
     PRIVATE_DISPLAY_FORMATTER.lastIndex = 0;
     let match;
@@ -320,14 +305,15 @@ for (const file of walk(src)) {
 
   const lines = source.split("\n");
   for (const hit of windows(lines, SCALE_1024)) {
-    if (SI.test(hit.text) && !IEC.test(hit.text)) {
-      failures.push(`${displayPath}:${hit.line} scales by 1024 beside a decimal SI label`);
+    if (SI.test(hit.text) && !WIRE_FILES.has(rel)) {
+      failures.push(`${displayPath}:${hit.line} scales by 1024 beside a decimal label`);
     }
   }
-  for (const hit of windows(lines, SCALE_1000)) {
-    if (IEC.test(hit.text) && !SI.test(hit.text)) {
-      failures.push(`${displayPath}:${hit.line} scales by 1000 beside a binary IEC label`);
-    }
+  if (!WIRE_FILES.has(rel)) {
+    lines.forEach((text, index) => {
+      if (IEC.test(text)) failures.push(`${displayPath}:${index + 1} shows a binary unit; use formatBytes`);
+      if (GLUED.test(text)) failures.push(`${displayPath}:${index + 1} glues a value to its unit`);
+    });
   }
 }
 
@@ -336,9 +322,8 @@ if (scanned < 200) failures.push(`only scanned ${scanned} TypeScript files; expe
 if (failures.length) {
   console.error("byte units: FAILED");
   for (const failure of failures) console.error(`  ${failure}`);
-  console.error("  Use formatBytes/formatByteQuota for decimal storage and network values.");
-  console.error("  Use formatMemory/formatMemoryQuota for binary memory, swap, and VRAM values.");
+  console.error("  Every size on screen goes through formatBytes, formatByteQuota or formatLxdSize.");
   process.exit(1);
 }
 
-console.log(`byte units: ${scanned} files follow the SI storage/network and IEC memory contract`);
+console.log(`byte units: ${scanned} files print one standard, the GB family`);

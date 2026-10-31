@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { PythonInfo, WorkersInfo } from "@/types";
 import { api } from "@/lib/api";
 import { STATIC_DATA_CONFIG } from "@/lib/query-config";
-import { formatDate, formatMemory } from "@/lib/utils";
+import { formatDateTime, formatBytes } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -51,7 +51,7 @@ export function WorkersCard({ workers, python }: { workers: WorkersInfo | null; 
               )
             }
           />
-          <Tile icon={MemoryStick} label="Worker Memory" value={w ? formatMemory(w.total_rss) : EMPTY_VALUE} sub="resident, all workers" />
+          <Tile icon={MemoryStick} label="Worker Memory" value={w ? formatBytes(w.total_rss) : EMPTY_VALUE} sub="resident, all workers" />
           <Tile icon={Cpu} label="Served This Refresh" value={w ? `PID ${w.answering_pid}` : EMPTY_VALUE} sub="changes between updates" />
           <Tile
             icon={Clock}
@@ -65,7 +65,7 @@ export function WorkersCard({ workers, python }: { workers: WorkersInfo | null; 
             {w.workers.map((p) => (
               <li key={p.pid}>
                 <Badge variant="outline" className="font-mono text-xs">
-                  PID {p.pid} · {formatMemory(p.memory_rss)} · up {formatUptime(p.uptime_seconds)}
+                  PID {p.pid} · {formatBytes(p.memory_rss)} · up {formatUptime(p.uptime_seconds)}
                 </Badge>
               </li>
             ))}
@@ -101,7 +101,7 @@ function BackendRuntime({ python }: { python: PythonInfo }) {
               </span>
             )}
             {version.build_date && (
-              <span className="block text-xs font-normal text-muted-foreground">built {formatDate(version.build_date)}</span>
+              <span className="block text-xs font-normal text-muted-foreground">built {formatDateTime(version.build_date)}</span>
             )}
           </>
         ) : isError ? (

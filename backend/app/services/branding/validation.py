@@ -20,6 +20,8 @@ import re
 from typing import Any, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
+from app.core.units import format_size
+
 MAX_BODY_BYTES = 3_500_000
 LOGO_BYTES = 500 * 1024
 FAVICON_BYTES = 64 * 1024
@@ -78,7 +80,7 @@ def _image(field: str, value: Any, *, types: Tuple[str, ...], limit: int) -> Opt
         except BrandingInvalid as exc:
             raise BrandingInvalid(f"{field} {exc}") from exc
         if len(data) > limit:
-            raise BrandingInvalid(f"{field} is larger than {limit // 1024} KB")
+            raise BrandingInvalid(f"{field} is larger than {format_size(limit)}")
         actual = _magic_type(data)
         allowed = set(types) | ({"image/x-icon"} if "image/vnd.microsoft.icon" in types else set())
         if actual is None or actual not in allowed:

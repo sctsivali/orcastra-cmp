@@ -52,7 +52,7 @@ import {
   TooltipTrigger } from "@/components/ui/tooltip";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
-import { formatDateTime, formatLabel} from "@/lib/utils";
+import { formatDateTime, formatLabel, formatCount } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -552,7 +552,7 @@ function WarningsContent() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {warning.count.toLocaleString()}
+                      {formatCount(warning.count)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {formatDateTime(warning.last_seen_at)}

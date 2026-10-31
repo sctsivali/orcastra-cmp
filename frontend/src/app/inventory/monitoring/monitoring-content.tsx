@@ -29,7 +29,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useClusterLabel } from "@/hooks/use-node-picker-options";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { cn, formatBytes, formatMemory, formatNetworkRate } from "@/lib/utils";
+import { cn, formatBytes, formatNetworkRate } from "@/lib/utils";
 import { instanceStatusDisplay } from "@/lib/instance-status";
 import { InstanceMonitoringSummary, VMInfo } from "@/types";
 import type {
@@ -219,7 +219,7 @@ const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payl
         </p>
         {data.memoryUsedBytes > 0 && (
           <p className="text-xs text-muted-foreground mt-1">
-            Used: {formatMemory(data.memoryUsedBytes)}
+            Used: {formatBytes(data.memoryUsedBytes)}
           </p>
         )}
       </div>
@@ -373,7 +373,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
       {getStatusBadge(nodeName, value, data)}
       {metricType === "memory" && data?.memoryUsedBytes > 0 && (
         <p className="text-xs text-muted-foreground mt-1">
-          Used: {formatMemory(data.memoryUsedBytes)}
+          Used: {formatBytes(data.memoryUsedBytes)}
         </p>
       )}
       {metricType === "storage" && data?.storageUsedBytes > 0 && (

@@ -18,7 +18,7 @@ import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/ta
 import { TableLink } from "@/components/ui/table-link";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatDateTime, formatLabel } from "@/lib/utils";
+import { formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import type { MigrationJob } from "@/types/migrations";
 import { endpointLabel, endpointPrimary, jobProgress, migrationStatusMeta, operationLabel, strategyLabel } from "./migration-format";
 
@@ -171,10 +171,10 @@ function MigrationJobTableContent({
                       <TableEmptyValue label="Progress not reported" />
                     )}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">{formatDateTime(job.updated_at)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{formatDateTimeSeconds(job.updated_at)}</TableCell>
                   <TableCell className="whitespace-nowrap">
                     {job.retention_deadline ? (
-                      formatDateTime(job.retention_deadline)
+                      formatDateTimeSeconds(job.retention_deadline)
                     ) : (
                       <TableEmptyValue label="No source retention deadline" />
                     )}

@@ -7,8 +7,8 @@ const { fullInstance } = require("./support/api-fixture-data.cjs");
 // answers with the other clusters and names the late one; the Overview no longer waits for it.
 
 const LATE = "cluster-b";
-const REASON = "unreachable: did not answer within 30 s";
-const SHOWN_REASON = "did not answer within 30 s";
+const REASON = "unreachable: did not answer within 30s";
+const SHOWN_REASON = "did not answer within 30s";
 
 const project = (host, name) => ({ name, description: "", config: {}, used_by: [], host, tags: [] });
 
