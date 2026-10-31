@@ -41,6 +41,7 @@ from app.core.org_scope import (
 )
 from app.core.tenant_visibility import tenant_acl_active, tenant_may_see_project
 from app.services.activity_logger import get_activity_logger
+from app.services.lxd.fanout import failure_text
 from app.services.remote_image_catalog import _fetch_remote_catalog, _REMOTE_FETCH_TIMEOUT
 from app.services.migration_fence import (
     MigrationFenceConflict,
@@ -110,7 +111,12 @@ async def _fetch_images_for_node(
         # not an outage and must not be labelled as one.
         logger.warning(f"Image read on {node_name} refused: {e}")
         return ImageListResponse(
-            host=node_name, images=[], total=0, reachable=True, error=str(e), project=project
+            host=node_name,
+            images=[],
+            total=0,
+            reachable=True,
+            error=failure_text(node_name, e),
+            project=project,
         )
     except Exception as e:
         # important: this except, not the gather below, is the path a dead cluster takes.
@@ -125,7 +131,7 @@ async def _fetch_images_for_node(
             images=[],
             total=0,
             reachable=False,
-            error=str(e) or e.__class__.__name__,
+            error=failure_text(node_name, e),
         )
 
 
@@ -219,12 +225,13 @@ async def list_all_images(
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(f"Error fetching images from node: {result}")
+            host = node_names[i] if i < len(node_names) else "unknown"
             response.append(ImageListResponse(
-                host=node_names[i] if i < len(node_names) else "unknown",
+                host=host,
                 images=[],
                 total=0,
                 reachable=False,
-                error=str(result) or result.__class__.__name__,
+                error=failure_text(host, result),
             ))
         else:
             # important: count hosts that actually answered, not calls that returned.

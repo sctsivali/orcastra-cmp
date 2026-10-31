@@ -38,6 +38,7 @@ from app.services.lxd.exceptions import (
     LXDAuthorizationError,
     LXDConnectionError,
     LXDLocalStorageError,
+    LXDOperationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -245,6 +246,18 @@ def complete_reasons(
         else text
         for cluster, text in reasons.items()
     }
+
+
+def failure_text(cluster: str, failure: BaseException) -> Optional[str]:
+    """`error` for a list that reports one row per cluster, in complete_reasons' terms.
+
+    important: never str(failure). LXDOperationError is a sentence repeating what a service caught,
+    endpoint included, so the reason comes from what it wraps. None for a Tenant, like the lists.
+    """
+    while isinstance(failure, LXDOperationError) and (failure.__cause__ or failure.__context__):
+        failure = failure.__cause__ or failure.__context__
+    kind, reason = classify(failure)
+    return complete_reasons([cluster], {cluster: f"{kind}: {reason}"}).get(cluster)
 
 
 def unattempted(seeded: Sequence[str], connection_manager: object) -> List[str]:

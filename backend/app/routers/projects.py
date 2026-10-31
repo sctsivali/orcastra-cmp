@@ -31,6 +31,7 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
+from app.services.lxd.fanout import failure_text
 from app.services.lxd.exceptions import (
     LXDLocalUnavailableError,
     LXDOperationUnknownError,
@@ -271,7 +272,7 @@ async def list_all_projects(
                     projects=[],
                     total=0,
                     reachable=False,
-                    error=str(e) or e.__class__.__name__,
+                    error=failure_text(host, e),
                 )
         
         # Bound each wave below the service pool's admission limit. A single fleet refresh
@@ -308,12 +309,13 @@ async def list_all_projects(
                 ))
             elif isinstance(result, Exception):
                 logger.warning(f"Project fetch error: {result}")
+                host = node_names[index] if index < len(node_names) else "unknown"
                 all_projects.append(ProjectListResponse(
-                    host=node_names[index] if index < len(node_names) else "unknown",
+                    host=host,
                     projects=[],
                     total=0,
                     reachable=False,
-                    error=str(result) or result.__class__.__name__,
+                    error=failure_text(host, result),
                 ))
 
         # important: an outage must not be remembered as the answer. See instances.py.

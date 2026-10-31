@@ -517,13 +517,14 @@ class ConsoleService:
                 
             except Exception as e:
                 logger.error(f"Error listing storage pools: {e}")
-                return [], str(e)
+                return [], "ISO discovery failed. Retry the request."
             
             return isos, None
             
         except Exception as e:
+            # important: this route is open to a Tenant, and str(e) can carry the cluster's address.
             logger.error(f"Error getting ISOs: {e}")
-            return [], str(e)
+            return [], "ISO discovery failed. Retry the request."
     
     def get_instance_iso(
         self,

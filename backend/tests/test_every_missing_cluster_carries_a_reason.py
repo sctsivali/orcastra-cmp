@@ -6,7 +6,7 @@ for, carried nothing. The text is an operator diagnosis, so a Tenant gets none o
 cluster shared with another organization it must not name what that organization owns.
 """
 
-import re
+import ast
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,8 @@ from app.core import org_scope
 from app.services.lxd import health
 from app.services.lxd.fanout import complete_reasons
 
-ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
+APP = Path(__file__).resolve().parents[1] / "app"
+ROUTERS = APP / "routers"
 RAW_FAILURE = "HTTPSConnectionPool(host='10.0.0.1', port=8443): Max retries exceeded"
 
 
@@ -105,15 +106,43 @@ def test_lxd_error_text_is_withheld_on_a_shared_cluster_too():
     }
 
 
-@pytest.mark.parametrize(
-    "router",
-    sorted(path.name for path in ROUTERS.glob("*.py") if "unreachable_nodes=" in path.read_text()),
-)
-def test_every_router_that_names_a_missing_cluster_goes_through_the_helper(router):
-    source = (ROUTERS / router).read_text()
-
-    responses = len(re.findall(r"^\s+unreachable_nodes=(?!\[\])", source, re.MULTILINE))
-    assert source.count("complete_reasons(") >= responses, (
-        f"{router} reports unreachable_nodes without complete_reasons, so a cluster it names can "
-        "reach the banner with no reason"
+def _is_helper(value: ast.expr) -> bool:
+    return (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "complete_reasons"
     )
+
+
+def _reason_answers(path: Path):
+    """Each `node_errors` a response is given in this file, and whether the helper produced it."""
+    tree = ast.parse(path.read_text())
+    bound = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and _is_helper(node.value)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            values = [keyword.value for keyword in node.keywords if keyword.arg == "node_errors"]
+        elif isinstance(node, ast.Dict):
+            values = [
+                value
+                for key, value in zip(node.keys, node.values)
+                if isinstance(key, ast.Constant) and key.value == "node_errors"
+            ]
+        else:
+            continue
+        for value in values:
+            helped = _is_helper(value) or (isinstance(value, ast.Name) and value.id in bound)
+            yield f"{path.relative_to(APP)}:{value.lineno}", helped
+
+
+def test_every_node_errors_a_response_carries_comes_from_the_helper():
+    answers = [answer for path in sorted(APP.rglob("*.py")) for answer in _reason_answers(path)]
+
+    assert [site for site, helped in answers if not helped] == []
+    # A walk over nothing passes for the wrong reason.
+    assert len(answers) >= 16

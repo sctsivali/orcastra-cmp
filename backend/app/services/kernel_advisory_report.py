@@ -26,6 +26,7 @@ from app.services.kernel_advisory import HostKernelFacts, KernelAdvisory, assess
 from app.services.kernel_advisory_data import ADVISORIES
 from app.services.kernel_cve_feed import service as cve_feed
 from app.services.kernel_cve_feed.record import UbuntuSnapshot
+from app.services.lxd.fanout import complete_reasons
 from app.services.lxd.host_kernels import ClusterKernels, MemberKernel, fleet_kernels
 
 logger = logging.getLogger(__name__)
@@ -213,7 +214,7 @@ async def build_kernel_report(
         hosts=hosts,
         counts=counts,
         unreachable_nodes=fleet.unreachable_nodes,
-        node_errors=fleet.node_errors,
+        node_errors=complete_reasons(fleet.unreachable_nodes, fleet.node_errors),
         ubuntu_check_enabled=status.enabled,
     )
 
