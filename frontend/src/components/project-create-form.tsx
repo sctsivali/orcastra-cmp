@@ -374,7 +374,9 @@ export function ProjectCreateForm() {
                     id="maxCpu"
                     type="number"
                     min="1"
-                    max={nodeResources?.cpu_available}
+                    // note: zero on an over-committed cluster, which is no cap: the API checks the
+                    // total, and max={0} under min="1" stops the browser submitting at all.
+                    max={nodeResources?.cpu_available || undefined}
                     placeholder="2"
                     onKeyDown={blockNonNumeric}
                     {...register("maxCpu")}
