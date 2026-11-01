@@ -25,7 +25,9 @@ from app.core.task_scope import caller_tier
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, Field
+from pylxd.exceptions import LXDAPIException
 from app.services.activity_logger import get_activity_logger
+from app.core.lxd_errors import lxd_http_error
 from app.core.lxd_path import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
@@ -96,6 +98,13 @@ class StoragePoolInfo(BaseModel):
     used_by: List[str] = Field(default_factory=list, description="Resources using this pool")
     status: Optional[str] = Field("", description="Pool status; null for a Tenant")
     node: str = Field("", description="Cluster where the pool is defined")
+
+
+def _pool_write_error(exc: Exception, pool_name: str) -> HTTPException:
+    """The daemon's refusal as its real status. Anything else is a server fault."""
+    if isinstance(exc, LXDAPIException):
+        return lxd_http_error(exc, "Storage pool", pool_name)
+    return HTTPException(status_code=500, detail=str(exc))
 
 
 class StoragePoolCreateRequest(BaseModel):
@@ -507,7 +516,7 @@ async def create_storage_pool(
             result="failure",
             error_message=str(e)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _pool_write_error(e, request.name)
 
 
 @router.put(
@@ -560,7 +569,7 @@ async def update_storage_pool(
         raise
     except Exception as e:
         logger.error(f"Error updating storage pool {pool_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _pool_write_error(e, pool_name)
 
 
 @router.delete(
@@ -623,7 +632,7 @@ async def delete_storage_pool(
             result="failure",
             error_message=str(e)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _pool_write_error(e, pool_name)
 
 
 # note: renamed off get_all_storage_pool_resources, which this shared with the /resources-all
