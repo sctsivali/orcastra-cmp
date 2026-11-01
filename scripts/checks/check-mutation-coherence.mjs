@@ -403,14 +403,14 @@ const seenCustomSites = new Set();
 const RAW_FETCH_WRITE_ALLOWLIST = [
   {
     id: "oidc-token-exchange",
-    path: "frontend/src/auth.ts",
+    path: "frontend/src/lib/auth-refresh.ts",
     method: "POST",
     endpointMarker: "tokenEndpoint",
     markers: ["application/x-www-form-urlencoded", "response.ok"],
   },
   {
     id: "oidc-refresh-token-revocation",
-    path: "frontend/src/auth.ts",
+    path: "frontend/src/lib/auth-refresh.ts",
     method: "POST",
     endpointMarker: "revocationEndpoint",
     markers: ["application/x-www-form-urlencoded", "response.ok"],

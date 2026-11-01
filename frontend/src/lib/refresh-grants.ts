@@ -25,13 +25,15 @@ export interface RefreshedFields {
 
 export type GrantOutcome =
   | { ok: true; fields: RefreshedFields }
-  | { ok: false; forgotten?: boolean; orphanedRefreshToken?: string };
+  // revoked: the IdP refused the token itself (invalid_grant), so no later grant with it can work.
+  | { ok: false; revoked?: boolean; forgotten?: boolean; orphanedRefreshToken?: string };
 
 interface Entry {
   sub: string;
   outcome: Promise<GrantOutcome>;
   state: "pending" | "kept" | "failed";
   kept?: { fields: RefreshedFields; nextKey: string; at: number };
+  failure?: GrantOutcome;
   keepUntil: number;
   joined: number;
 }
@@ -137,7 +139,9 @@ export async function grantOnce(
   if (tombstoned(key, now)) return { outcome: Promise.resolve({ ok: false, forgotten: true }) };
   const existing = entries.get(key);
   if (existing && existing.keepUntil > now) {
-    if (existing.sub !== sub || existing.state === "failed") return { outcome: Promise.resolve({ ok: false }) };
+    if (existing.sub !== sub) return { outcome: Promise.resolve({ ok: false }) };
+    // A remembered refusal is answered as it was given: a revoked token stays revoked.
+    if (existing.state === "failed") return { outcome: Promise.resolve(existing.failure ?? { ok: false }) };
     if (existing.state === "pending") {
       existing.joined += 1;
       return { outcome: existing.outcome };
@@ -180,6 +184,7 @@ export async function grantOnce(
       entry.keepUntil = settledAt + KEEP_MS;
     } else if (!outcome.ok) {
       entry.state = "failed";
+      entry.failure = outcome.revoked ? { ok: false, revoked: true } : { ok: false };
       entry.keepUntil = settledAt + FAILED_MS;
     } else {
       entries.delete(key);

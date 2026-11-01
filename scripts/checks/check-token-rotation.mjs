@@ -2,8 +2,10 @@
 // Token refresh against an IdP that rotates refresh tokens like Authentik 2025.10 does by default:
 // a grant commits the rotation (revokes the old token, issues a new one) before it answers, and a
 // revoked token presented again answers invalid_grant and counts as a SUSPICIOUS_REQUEST. This
-// runs the real auth.ts, lib/refresh-grants.ts and middleware.ts against that IdP. Unless a case
-// says otherwise, no refresh token may ever be presented twice.
+// runs the real auth.ts, lib/auth-refresh.ts, lib/refresh-grants.ts and middleware.ts against that
+// IdP. Unless a case says otherwise, no refresh token may ever be presented twice. An invalid_grant
+// ends the session (RefreshTokenRevoked); only a failure that says nothing about the token cools
+// down and retries (check-auth-refresh-contract.mjs holds that split).
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -124,6 +126,7 @@ function world() {
     "@/lib/auth-redirect": { callbackPath() {}, redirectTo() {}, safeCallbackPath() {} },
     "@/lib/token-claims": tokenClaims,
     "@/lib/refresh-grants": registry,
+    "@/lib/auth-refresh": load("frontend/src/lib/auth-refresh.ts"),
   });
   return { jwt: auth.authConfig.callbacks.jwt, config: auth.authConfig, registry };
 }
@@ -212,7 +215,8 @@ try {
   }
 
   // Past the cap the answer is lost. The IdP has committed the rotation, so this session ends: the
-  // documented residual, announced once and cooled down.
+  // documented residual. The timeout itself says nothing about the token and cools down; the retry
+  // after it is refused with invalid_grant, which ends the session instead of cooling down again.
   {
     resetIdp();
     idp.latencyMs = 25_000;
@@ -224,8 +228,10 @@ try {
     assert.equal((await grantsDuring(() => jwt({ token: { ...lost } }))).granted, 0, "the cooldown holds");
     offsetMs += 61_000;
     const after = await jwt({ token: { ...lost } });
-    assert.equal(after.error, "RefreshAccessTokenError");
+    assert.equal(after.error, "RefreshTokenRevoked");
+    assert.equal(after.refreshToken, undefined, "a refused refresh token is dropped");
     assert.equal(idp.suspicious, 1);
+    assert.equal((await grantsDuring(() => jwt({ token: { ...after } }))).granted, 0, "an ended session asks nothing more");
     offsetMs = 0;
   }
 
@@ -237,7 +243,7 @@ try {
     assert.equal(lost.error, "RefreshAccessTokenError");
     idp.mode = "up";
     offsetMs += 61_000;
-    assert.equal((await jwt({ token: { ...lost } })).error, "RefreshAccessTokenError");
+    assert.equal((await jwt({ token: { ...lost } })).error, "RefreshTokenRevoked");
     assert.equal(idp.suspicious, 1);
     offsetMs = 0;
   }
@@ -251,7 +257,7 @@ try {
     await jwt({ token: { ...c0 } });
     offsetMs += 16_000;
     const stale = await jwt({ token: { ...c0, expiresAt: nowS() - 5 } });
-    assert.equal(stale.error, "RefreshAccessTokenError");
+    assert.equal(stale.error, "RefreshTokenRevoked", "a copy the IdP refused is over");
     assert.equal(idp.suspicious, 1, "past the window the reuse is the IdP's to see");
     offsetMs = 0;
   }
@@ -370,13 +376,13 @@ try {
     offsetMs = 0;
   }
 
-  // No refresh token: fails without asking the IdP.
+  // No refresh token: nothing can renew it, so the session is over, without asking the IdP.
   {
     resetIdp();
     const { jwt } = world();
     const none = await grantsDuring(() => jwt({ token: expired({ refreshToken: undefined }) }));
     assert.equal(none.granted, 0);
-    assert.equal(none.out.error, "RefreshAccessTokenError");
+    assert.equal(none.out.error, "RefreshTokenRevoked");
   }
 
   // A grant without a groups claim carries the session's groups into the registry, so a healed
@@ -436,7 +442,7 @@ try {
       await many.jwt({ token: expired({ authentikId: `user-${i}`, sub: `user-${i}`, refreshToken: `seed-${i}` }) });
     }
     const evicted = await many.jwt({ token: expired({ authentikId: "user-0", sub: "user-0", refreshToken: "seed-0" }) });
-    assert.equal(evicted.error, "RefreshAccessTokenError", "the oldest rotation was evicted");
+    assert.equal(evicted.error, "RefreshTokenRevoked", "the oldest rotation was evicted, so the IdP saw the spent token");
     const kept = await grantsDuring(() => many.jwt({ token: expired({ authentikId: "user-4100", sub: "user-4100", refreshToken: "seed-4100" }) }));
     assert.equal(kept.granted, 0, "a recent rotation is still served");
   }

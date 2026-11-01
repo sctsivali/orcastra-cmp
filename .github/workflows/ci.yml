@@ -341,6 +341,12 @@ jobs:
       - name: Session cookie echo
         run: node scripts/checks/check-session-cookie-echo.mjs .
 
+      # An invalid_grant ends the session and sends a deep link through sign-in; a timeout, a 5xx
+      # or a 429 cools down instead. Treating every failure as transient kept an expired token in
+      # the cookie and every socket ticket came back 401.
+      - name: Auth refresh contract
+        run: node scripts/checks/check-auth-refresh-contract.mjs .
+
       - name: Access gate
         run: node scripts/checks/check-access-gate.mjs .
 

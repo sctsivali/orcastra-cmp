@@ -11,6 +11,7 @@ import type { JWT } from "next-auth/jwt";
 import { callbackPath, redirectTo, safeCallbackPath } from "@/lib/auth-redirect";
 import { readGroupsClaim, roleGroups } from "@/lib/token-claims";
 import { forget, grantOnce, holdTombstones, upgradeSpent, type GrantOutcome, type RefreshedFields } from "@/lib/refresh-grants";
+import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED, createIdpClient } from "@/lib/auth-refresh";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -49,7 +50,8 @@ declare module "next-auth/jwt" {
     // Unix seconds. Earliest a failed refresh may be retried. Kept separate from expiresAt
     // so the cooldown never has to lie about when the access token actually expires.
     retryAfter?: number;
-    // Unix seconds the groups were last read from an issued access token.
+    // Unix seconds the groups were last read from an issued access token. Stamped by every
+    // successful grant and at sign-in, so it is also when the session last refreshed.
     groupsReadAt?: number;
   }
 }
@@ -105,77 +107,43 @@ const GRANT_CAP_MS = 20_000;
 // and the poll is what spends the IdP round trip, never a navigation.
 const REFRESH_SKEW_S = 120;
 
-// Cached OIDC discovery to avoid re-fetching it on every refresh
-interface Discovery {
-  token_endpoint: string;
-  revocation_endpoint?: string;
-}
-let _cachedDiscovery: Discovery | null = null;
-
-async function resolveDiscovery(signal: AbortSignal): Promise<Discovery> {
-  if (_cachedDiscovery) return _cachedDiscovery;
-
-  const issuer = process.env.AUTHENTIK_ISSUER;
-  if (!issuer) throw new Error("AUTHENTIK_ISSUER not configured");
-
-  try {
-    const response = await fetch(`${issuer}.well-known/openid-configuration`, { signal });
-    if (!response.ok) throw new Error(`discovery HTTP ${response.status}`);
-    const discovery: Partial<Discovery> = await response.json();
-    if (!discovery.token_endpoint) throw new Error("discovery returned no token_endpoint");
-    _cachedDiscovery = { token_endpoint: discovery.token_endpoint, revocation_endpoint: discovery.revocation_endpoint };
-    return _cachedDiscovery;
-  } catch (error) {
-    // important: only a discovery failure invalidates the cache. Clearing it on a failed grant
-    // made the next refresh pay a second round trip, 2.05s instead of 1.27s.
-    _cachedDiscovery = null;
-    throw error;
-  }
-}
+// note: the route handlers run on nodejs. Middleware and the layout's session read never reach the
+// IdP (they have their own non-refreshing NextAuth instances), so this is the only client.
+const idp = createIdpClient({
+  issuer: process.env.AUTHENTIK_ISSUER,
+  clientId: process.env.AUTHENTIK_CLIENT_ID || "",
+  clientSecret: process.env.AUTHENTIK_CLIENT_SECRET || "",
+  timeoutMs: GRANT_CAP_MS,
+  fetch: (input, init) => fetch(input, init),
+  now: () => Date.now(),
+  log: (level, line) => console[level](line),
+  runtime: process.env.NEXT_RUNTIME ?? "nodejs",
+});
 
 // One refresh_token grant. important: never rejects; a failure is an outcome, so every caller
 // sharing the grant in lib/refresh-grants.ts sees the same answer.
 async function grantTokens(refreshToken: string): Promise<GrantOutcome> {
   const nowSeconds = Math.floor(Date.now() / 1000);
-  try {
-    // One deadline shared by discovery and the grant.
-    const signal = AbortSignal.timeout(GRANT_CAP_MS);
-    const { token_endpoint: tokenEndpoint } = await resolveDiscovery(signal);
-    const response = await fetch(tokenEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.AUTHENTIK_CLIENT_ID || "",
-        client_secret: process.env.AUTHENTIK_CLIENT_SECRET || "",
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-      }),
-      signal,
-    });
-    const tokens = await response.json();
-    if (!response.ok) throw new Error(typeof tokens?.error === "string" ? tokens.error : `HTTP ${response.status}`);
-
-    // A role granted or removed in Authentik reaches the session here (issue #17). A token with
-    // no readable claim keeps the groups it had: Authentik sends [] for "none", so a missing
-    // claim is a broken mapping, and /me/access still answers for the backend's own reading.
-    const groups = readGroupsClaim(tokens.access_token);
-    if (!groups) console.warn("[AUTH] Refreshed access token carried no groups claim; keeping the session's groups");
-    return {
-      ok: true,
-      fields: {
-        accessToken: tokens.access_token,
-        expiresAt: Math.floor(Date.now() / 1000) + tokens.expires_in,
-        refreshToken: tokens.refresh_token ?? refreshToken,
-        // important: stamped on every successful grant, claim or not. It is the floor under the
-        // notice's forced refresh, and a token without the claim must not lift it.
-        groupsReadAt: nowSeconds,
-        ...(groups ? { groups, roles: roleGroups(groups) } : {}),
-      },
-    };
-  } catch (error) {
-    console.warn(`[AUTH] Token refresh failed: ${error instanceof Error ? error.message : String(error)}`);
-    return { ok: false };
-  }
+  const result = await idp.grant(refreshToken);
+  if (!result.ok) return { ok: false, revoked: result.kind === "revoked" };
+  const { accessToken, refreshToken: next, expiresIn } = result.tokens;
+  // A role granted or removed in Authentik reaches the session here (issue #17). A token with
+  // no readable claim keeps the groups it had: Authentik sends [] for "none", so a missing
+  // claim is a broken mapping, and /me/access still answers for the backend's own reading.
+  const groups = readGroupsClaim(accessToken);
+  if (!groups) console.warn("[AUTH] Refreshed access token carried no groups claim; keeping the session's groups");
+  return {
+    ok: true,
+    fields: {
+      accessToken,
+      expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
+      refreshToken: next,
+      // important: stamped on every successful grant, claim or not. It is the floor under the
+      // notice's forced refresh, and a token without the claim must not lift it.
+      groupsReadAt: nowSeconds,
+      ...(groups ? { groups, roles: roleGroups(groups) } : {}),
+    },
+  };
 }
 
 function withFields(token: JWT, fields: RefreshedFields): JWT {
@@ -184,12 +152,20 @@ function withFields(token: JWT, fields: RefreshedFields): JWT {
 
 function failed(token: JWT): JWT {
   // Cooldown lives here, not in expiresAt, so expiresAt stays truthful.
-  return { ...token, error: "RefreshAccessTokenError", retryAfter: Math.floor(Date.now() / 1000) + TOKEN_REFRESH_COOLDOWN_SECONDS };
+  return { ...token, error: REFRESH_FAILED, retryAfter: Math.floor(Date.now() / 1000) + TOKEN_REFRESH_COOLDOWN_SECONDS };
+}
+
+// important: the IdP refused the refresh token itself, so the session is over. The refresh token
+// goes (nothing can use it) and the error tells middleware and the page to sign in again, which
+// is silent while the IdP session lives. The stale access token stays so an open page keeps its
+// identity until the operator chooses to sign in; the backend refuses it either way.
+function revoked(token: JWT): JWT {
+  return { ...token, refreshToken: undefined, retryAfter: undefined, error: REFRESH_TOKEN_REVOKED };
 }
 
 async function refresh(token: JWT): Promise<JWT | null> {
   const refreshToken = token.refreshToken;
-  if (!refreshToken) return failed(token);
+  if (!refreshToken) return revoked(token);
   const { outcome } = await grantOnce(sessionSubject(token), refreshToken, async () => {
     const result = await grantTokens(refreshToken);
     // A grant whose token carried no groups claim keeps this session's groups, and so does every
@@ -204,37 +180,12 @@ async function refresh(token: JWT): Promise<JWT | null> {
     if (settled.orphanedRefreshToken) void revokeAtIdp(settled.orphanedRefreshToken);
     return null;
   }
-  if (!settled.ok) return failed(token);
+  if (!settled.ok) return settled.revoked ? revoked(token) : failed(token);
   return withFields(token, settled.fields);
 }
 
-// RFC 7009: a signed-out refresh token is revoked at the IdP, so no copy of the cookie can use it.
-// note: a 200 does not prove the token existed (RFC 7009 answers 200 for unknown tokens).
-async function revokeAtIdp(refreshToken: string): Promise<boolean> {
-  try {
-    const signal = AbortSignal.timeout(5_000);
-    const { revocation_endpoint: revocationEndpoint } = await resolveDiscovery(signal);
-    if (!revocationEndpoint) {
-      console.warn("[AUTH] the IdP advertises no revocation_endpoint; a signed-out refresh token stays valid there");
-      return false;
-    }
-    const response = await fetch(revocationEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: process.env.AUTHENTIK_CLIENT_ID || "",
-        client_secret: process.env.AUTHENTIK_CLIENT_SECRET || "",
-        token: refreshToken,
-        token_type_hint: "refresh_token",
-      }),
-      signal,
-    });
-    if (!response.ok) console.warn(`[AUTH] refresh token revocation answered ${response.status}`);
-    return response.ok;
-  } catch (error) {
-    console.warn(`[AUTH] refresh token revocation failed: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
-  }
+function revokeAtIdp(refreshToken: string): Promise<boolean> {
+  return idp.revoke(refreshToken);
 }
 
 // When the IdP could not revoke at sign-out, this process refuses the chain for a day and keeps
@@ -259,6 +210,8 @@ type JwtParams = Parameters<NonNullable<NonNullable<NextAuthConfig["callbacks"]>
 // The access notice's "Check again" may force one refresh, at most this often per session, so a
 // held-down button cannot spend the rotating refresh token in a loop.
 const ROLE_RECHECK_FLOOR_S = 20;
+// A socket whose ticket came back 401 may force one refresh, at most this often per session.
+const FORCE_REFRESH_FLOOR_S = 30;
 
 async function jwtCallback({ token, user, account, trigger, session }: JwtParams): Promise<JWT | null> {
   // Initial sign in
@@ -280,8 +233,17 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
       // CRITICAL: use email as the persistent user ID. The Authentik sub changes per
       // session, email is stable.
       authentikId: persistentUserId,
+      error: undefined,
+      retryAfter: undefined,
     };
   }
+
+  // important: only the nodejs route handlers refresh. Middleware runs on the edge with its own
+  // instance whose jwt never refreshes (middleware.ts); this holds even if one ever reaches here.
+  if (process.env.NEXT_RUNTIME === "edge") return token;
+
+  // The IdP already refused this session's refresh token: nothing left to present.
+  if (token.error === REFRESH_TOKEN_REVOKED) return token;
 
   // A cookie whose refresh token was spent moments ago (a read that was already in flight when
   // the rotation landed, another tab) takes the newest tokens of its chain; the registry logs it.
@@ -295,12 +257,13 @@ async function jwtCallback({ token, user, account, trigger, session }: JwtParams
 
   // important: the client's update() payload is only a signal here. Nothing in it is copied into
   // the token; the groups come from the IdP's answer to the refresh grant.
-  const recheckRoles =
-    trigger === "update" &&
-    (session as { refreshRoles?: unknown } | null | undefined)?.refreshRoles === true &&
-    nowSeconds - (token.groupsReadAt ?? 0) >= ROLE_RECHECK_FLOOR_S &&
-    !coolingDown;
-  if (recheckRoles) return refresh(token);
+  const signal = trigger === "update" ? (session as { refreshRoles?: unknown; forceRefresh?: unknown } | null | undefined) : null;
+  const sinceGrant = nowSeconds - (token.groupsReadAt ?? 0);
+  const recheckRoles = signal?.refreshRoles === true && sinceGrant >= ROLE_RECHECK_FLOOR_S && !coolingDown;
+  // A socket ticket refused with 401 although the session thought its token valid (a clock
+  // ahead of ours, a token the backend no longer accepts): one fresh grant settles which.
+  const forced = signal?.forceRefresh === true && sinceGrant >= FORCE_REFRESH_FLOOR_S && !coolingDown;
+  if (recheckRoles || forced) return refresh(token);
 
   // Still comfortably valid: the session poll spends the round trip before it is needed.
   if (token.expiresAt && nowSeconds < token.expiresAt - REFRESH_SKEW_S) return token;
@@ -355,7 +318,12 @@ export const authConfig: NextAuthConfig = {
     authorized({ auth, request }) {
       const { nextUrl } = request;
       const host = request.headers.get("host");
-      const isLoggedIn = !!auth?.user;
+      // important: a session whose refresh token the IdP refused is over, whatever the cookie still
+      // holds. Read as signed in, a deep link rendered with an expired token and every socket
+      // ticket came back 401; read as signed out, it goes through /auth/signin, which is silent
+      // while the IdP session lives, and comes back to the same link.
+      const sessionEnded = auth?.error === REFRESH_TOKEN_REVOKED;
+      const isLoggedIn = !!auth?.user && !sessionEnded;
       const isOnAuthPage = nextUrl.pathname === "/auth" || nextUrl.pathname.startsWith("/auth/");
       const isApiRoute = nextUrl.pathname === "/api" || nextUrl.pathname.startsWith("/api/");
       // Only known root-level public assets and API routes bypass the page gate.
@@ -369,7 +337,8 @@ export const authConfig: NextAuthConfig = {
       }
 
       // Redirect logged-in users away from auth pages, to the page the sign-in was for when it
-      // names a safe one (a second tab, a bookmarked sign-in step), else home.
+      // names a safe one (a second tab, a bookmarked sign-in step), else home. An ended session
+      // is not logged in, so its sign-in page stays put and signs in again.
       if (isOnAuthPage) {
         if (isLoggedIn) {
           const target = safeCallbackPath(nextUrl.searchParams.get("callbackUrl"), nextUrl.origin) ?? "/";
