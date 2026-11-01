@@ -422,14 +422,18 @@ function IsoImagesContent() {
 
       <UsedByDialog {...usedBy.dialogProps} />
 
-      <IsoUploadDialog
-        open={uploadOpen}
-        onOpenChange={closeUpload}
-        onUploaded={(volume) => {
-          uploaded.current = volume;
-          void refetch();
-        }}
-      />
+      {/* important: gated, not only its trigger. The dialog's picker reads /nodes/names, which
+          refuses a Tenant. */}
+      {canUpload && (
+        <IsoUploadDialog
+          open={uploadOpen}
+          onOpenChange={closeUpload}
+          onUploaded={(volume) => {
+            uploaded.current = volume;
+            void refetch();
+          }}
+        />
+      )}
 
       <DestructiveConfirmDialog
         open={!!deleteTarget}

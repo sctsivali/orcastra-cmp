@@ -88,18 +88,22 @@ export function TenantClusterStatusCards() {
                       <Server className="h-4 w-4" aria-hidden="true" />
                     </div>
                     <div className="min-w-0">
-                      <OverflowText
-                        className="font-medium"
-                        label={`cluster name for ${cluster.name}`}
-                        value={cluster.display_name || cluster.name}
-                      />
-                      {cluster.display_name && (
+                      <p>
                         <OverflowText
-                          className="text-xs text-muted-foreground"
-                          label={`cluster id for ${cluster.display_name}`}
-                          mono
-                          value={cluster.name}
+                          className="font-medium"
+                          label={`cluster name for ${cluster.name}`}
+                          value={cluster.display_name || cluster.name}
                         />
+                      </p>
+                      {cluster.display_name && (
+                        <p>
+                          <OverflowText
+                            className="text-xs text-muted-foreground"
+                            label={`cluster id for ${cluster.display_name}`}
+                            mono
+                            value={cluster.name}
+                          />
+                        </p>
                       )}
                     </div>
                   </div>

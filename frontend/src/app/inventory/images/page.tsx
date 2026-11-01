@@ -445,14 +445,18 @@ function ImagesContent() {
         }}
       />
 
-      <ImageUploadDialog
-        open={uploadOpen}
-        onOpenChange={closeUpload}
-        onUploaded={(image) => {
-          uploaded.current = image;
-          void refetch();
-        }}
-      />
+      {/* important: gated, not only its trigger. The dialog's picker reads /nodes/names, which
+          refuses a Tenant. */}
+      {canUpload && (
+        <ImageUploadDialog
+          open={uploadOpen}
+          onOpenChange={closeUpload}
+          onUploaded={(image) => {
+            uploaded.current = image;
+            void refetch();
+          }}
+        />
+      )}
 
       <ImageDeleteDialog
         target={deleteTarget}
