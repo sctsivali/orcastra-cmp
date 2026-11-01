@@ -11,10 +11,17 @@ needed. Moving a signed entry to another key fails the check, because the key is
 
 important: fails closed. With Redis required and not answering, a mint is refused and a redeem
 returns nothing; a per-process store would let a ticket minted on one worker fail on another,
-and silently degrading to it would hide the outage. The local store serves only a backend run
-without Redis, which is one process. Without SECRET_KEY nothing is minted.
+and silently degrading to it would hide the outage. Redis is required whenever REDIS_ENABLED is
+set or the backend runs more than one worker (main.py): a ticket is minted on whichever worker
+took the POST and redeemed on whichever took the upgrade, so with four workers a per-process
+store refused about three sockets in four. The local store serves only a single-process backend
+without Redis. Without SECRET_KEY nothing is minted.
+
+note: a Redis that was down when the worker started is tried again from a mint or a redeem, at
+most once every RECONNECT_SPACING_SECONDS, instead of refusing every socket until a restart.
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -33,6 +40,7 @@ BUDGET_WINDOW_SECONDS = 60
 _CONNECT_TIMEOUT = 2.0
 _SOCKET_TIMEOUT = 2.0
 _MAC_CONTEXT = b"orcastra:ws-ticket:v1"
+RECONNECT_SPACING_SECONDS = 5.0
 
 # KEYS[1] ticket key, KEYS[2] budget key. ARGV: signed claims, budget, window seconds, ticket ttl.
 _MINT = """
@@ -89,18 +97,48 @@ class WsTicketStore:
         self._ttl_seconds = ttl_seconds
         self._client: Any = None
         self._redis_expected = False
+        self._redis_url: Optional[str] = None
+        self._last_attempt = float("-inf")
+        self._reconnect_lock = asyncio.Lock()
         self._mac_key = mac_key
         self._lock = threading.Lock()
         self._local: Dict[str, Tuple[float, str]] = {}
         self._spent: Dict[str, Tuple[float, int]] = {}
 
     async def connect(self, redis_url: str, *, required: bool) -> None:
-        """Use Redis when it answers. Lifespan only: redis.asyncio binds to the running loop.
+        """Use Redis when it answers. From lifespan: redis.asyncio binds to the running loop.
 
-        `required` (REDIS_ENABLED) makes an unreachable Redis a refusal rather than a fallback.
+        `required` (REDIS_ENABLED, or more than one worker) makes an unreachable Redis a refusal
+        rather than a fallback, and a refusal that is retried later (see _shared_client).
         """
         if required:
             self._redis_expected = True
+            self._redis_url = redis_url
+        client = await self._open(redis_url)
+        if client is None:
+            if required:
+                logger.error("WebSocket ticket store could not reach Redis; sockets cannot open until it answers")
+            else:
+                logger.warning("WebSocket ticket store runs in this process only (Redis not reachable)")
+            return
+        self._client = client
+        self._redis_expected = True
+        self._redis_url = redis_url
+
+    def require_shared(self) -> None:
+        """Refuse every mint: a shared store is required and there is no Redis to use."""
+        self._redis_expected = True
+        self._redis_url = None
+
+    @property
+    def mode(self) -> str:
+        """The store in use: redis, local (one process, no Redis) or unavailable (required, not answering)."""
+        if self._client is not None:
+            return "redis"
+        return "unavailable" if self._redis_expected else "local"
+
+    async def _open(self, redis_url: str) -> Any:
+        self._last_attempt = time.monotonic()
         try:
             import redis.asyncio as aioredis
 
@@ -112,14 +150,25 @@ class WsTicketStore:
                 retry_on_timeout=False,
             )
             await client.ping()
-        except Exception as exc:  # noqa: BLE001 - refused when required, local otherwise
-            if required:
-                logger.error("WebSocket ticket store could not reach Redis; sockets cannot open: %s", exc)
-            else:
-                logger.warning("WebSocket ticket store runs in this process only (Redis not reachable): %s", exc)
-            return
-        self._client = client
-        self._redis_expected = True
+            return client
+        except Exception as exc:  # noqa: BLE001 - the caller decides between refusal and fallback
+            logger.warning("WebSocket ticket store: Redis did not answer (%s)", type(exc).__name__)
+            return None
+
+    async def _shared_client(self) -> Any:
+        """The Redis client, reconnecting one that was never reached at most once per spacing."""
+        if self._client is not None or not self._redis_url:
+            return self._client
+        if time.monotonic() - self._last_attempt < RECONNECT_SPACING_SECONDS:
+            return None
+        async with self._reconnect_lock:
+            # Another caller may have connected, or tried, while this one waited for the lock.
+            if self._client is None and time.monotonic() - self._last_attempt >= RECONNECT_SPACING_SECONDS:
+                client = await self._open(self._redis_url)
+                if client is not None:
+                    logger.info("WebSocket ticket store reached Redis; sockets can open again")
+                    self._client = client
+        return self._client
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -158,10 +207,11 @@ class WsTicketStore:
         key = f"{self._ticket_prefix}:{ticket_digest(ticket)}"
         signed = self._sign(key, claims_json)
         if self._redis_expected:
-            if self._client is None:
+            client = await self._shared_client()
+            if client is None:
                 raise TicketStoreUnavailable()
             try:
-                granted = await self._client.eval(
+                granted = await client.eval(
                     _MINT, 2, key, _budget_key(user_key, self._budget_prefix),
                     signed, self._budget, BUDGET_WINDOW_SECONDS, self._ttl_seconds,
                 )
@@ -189,10 +239,11 @@ class WsTicketStore:
             return None
         key = f"{self._ticket_prefix}:{ticket_digest(ticket)}"
         if self._redis_expected:
-            if self._client is None:
+            client = await self._shared_client()
+            if client is None:
                 return None
             try:
-                return self._verified(key, await self._client.getdel(key))
+                return self._verified(key, await client.getdel(key))
             except Exception as exc:  # noqa: BLE001 - an unreadable ticket opens nothing
                 logger.warning("WebSocket ticket redeem failed: %s", type(exc).__name__)
                 return None
@@ -201,6 +252,35 @@ class WsTicketStore:
         if entry is None or entry[0] <= time.monotonic():
             return None
         return self._verified(key, entry[1])
+
+
+async def start_ticket_stores(
+    stores: Tuple[WsTicketStore, ...], *, redis_url: str, redis_enabled: bool, workers: int
+) -> bool:
+    """Connect this worker's ticket stores (lifespan). Returns whether Redis is required.
+
+    important: required with REDIS_ENABLED and with more than one worker alike. A ticket is minted
+    on whichever worker took the POST and redeemed on whichever took the upgrade, so a per-process
+    store with REDIS_ENABLED unset (its default) refused about three sockets in four. Never binds
+    a ticket to a worker: the upgrade cannot be steered to the worker that minted it.
+    """
+    required = redis_enabled or workers > 1
+    for store in stores:
+        if redis_url:
+            await store.connect(redis_url, required=required)
+        elif required:
+            store.require_shared()
+    if required and not redis_url:
+        logger.error(
+            "WebSocket tickets need Redis with %d workers but REDIS_URL is empty; every terminal, "
+            "console and file download is refused (503) until it is set or WEB_CONCURRENCY=1",
+            workers,
+        )
+    logger.info(
+        "WebSocket ticket store: %s (workers=%d, Redis required=%s)",
+        stores[0].mode if stores else "none", workers, required,
+    )
+    return required
 
 
 _store: Optional[WsTicketStore] = None

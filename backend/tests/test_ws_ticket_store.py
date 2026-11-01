@@ -192,3 +192,127 @@ def test_without_a_signing_key_nothing_is_minted(monkeypatch):
     with pytest.raises(TicketStoreUnavailable):
         _run(store.mint("alice", "{}"))
     assert _run(store.redeem("anything")) is None
+
+
+# ── more than one worker, and a Redis that comes back ─────────────────────────────────────────
+
+
+class _Redis:
+    """redis.asyncio.Redis.from_url, answering as `up` says and counting what it was asked."""
+
+    def __init__(self) -> None:
+        self.up = False
+        self.opened = 0
+        self.fake = _FakeAsyncRedis()
+
+    def from_url(self, *_args, **_kwargs):
+        self.opened += 1
+        if self.up:
+            return self.fake
+
+        class _Down:
+            async def ping(self):
+                raise ConnectionError("no route")
+
+        return _Down()
+
+
+@pytest.fixture
+def redis_server(monkeypatch):
+    import redis.asyncio as aioredis
+
+    server = _Redis()
+    monkeypatch.setattr(aioredis.Redis, "from_url", staticmethod(server.from_url))
+    return server
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(ws_ticket_store.time, "monotonic", lambda: now[0])
+    return now
+
+
+@pytest.mark.parametrize(
+    "redis_enabled, workers, required",
+    [(False, 4, True), (True, 1, True), (False, 1, False)],
+)
+def test_more_than_one_worker_requires_redis_like_redis_enabled_does(redis_server, redis_enabled, workers, required):
+    """A ticket minted on one worker is redeemed on whichever took the upgrade."""
+    store = WsTicketStore(mac_key=KEY)
+
+    assert _run(ws_ticket_store.start_ticket_stores(
+        (store,), redis_url="redis://redis.invalid:6379/0", redis_enabled=redis_enabled, workers=workers,
+    )) is required
+
+    if required:
+        assert store.mode == "unavailable"
+        with pytest.raises(TicketStoreUnavailable):
+            _run(store.mint("alice", "{}"))
+    else:
+        assert store.mode == "local"
+        assert _run(store.redeem(_run(store.mint("alice", "{}")))) == "{}"
+
+
+def test_more_than_one_worker_without_a_redis_url_refuses_every_mint(caplog):
+    store = WsTicketStore(mac_key=KEY)
+
+    with caplog.at_level("ERROR"):
+        _run(ws_ticket_store.start_ticket_stores((store,), redis_url="", redis_enabled=False, workers=4))
+
+    assert store.mode == "unavailable"
+    assert any("REDIS_URL is empty" in record.getMessage() for record in caplog.records)
+    with pytest.raises(TicketStoreUnavailable):
+        _run(store.mint("alice", "{}"))
+    assert _run(store.redeem("anything")) is None
+
+
+def test_a_redis_that_was_down_at_startup_is_reached_later(redis_server, clock):
+    store = WsTicketStore(mac_key=KEY)
+    _run(store.connect("redis://redis.invalid:6379/0", required=True))
+    assert redis_server.opened == 1
+
+    redis_server.up = True
+    with pytest.raises(TicketStoreUnavailable):
+        _run(store.mint("alice", "{}"))
+    assert redis_server.opened == 1, "tried again inside the spacing"
+
+    clock[0] += ws_ticket_store.RECONNECT_SPACING_SECONDS
+    ticket = _run(store.mint("alice", '{"kind":"tasks"}'))
+
+    assert redis_server.opened == 2
+    assert store.mode == "redis"
+    assert _run(store.redeem(ticket)) == '{"kind":"tasks"}'
+
+
+def test_a_redis_still_down_is_asked_at_most_once_per_spacing(redis_server, clock):
+    store = WsTicketStore(mac_key=KEY)
+    _run(store.connect("redis://redis.invalid:6379/0", required=True))
+
+    for _ in range(3):
+        clock[0] += 1
+        for _ in range(10):
+            with pytest.raises(TicketStoreUnavailable):
+                _run(store.mint("alice", "{}"))
+            assert _run(store.redeem("anything")) is None
+    assert redis_server.opened == 1, "fifty refusals inside five seconds asked Redis again"
+
+    clock[0] += 2
+    with pytest.raises(TicketStoreUnavailable):
+        _run(store.mint("alice", "{}"))
+    assert redis_server.opened == 2
+
+
+def test_callers_racing_a_reconnect_share_one_attempt(redis_server, clock):
+    store = WsTicketStore(mac_key=KEY)
+    _run(store.connect("redis://redis.invalid:6379/0", required=True))
+    redis_server.up = True
+    clock[0] += ws_ticket_store.RECONNECT_SPACING_SECONDS
+
+    async def burst():
+        return await asyncio.gather(*(store.mint("alice", "{}") for _ in range(20)))
+
+    tickets = _run(burst())
+
+    assert len(set(tickets)) == 20
+    assert redis_server.opened == 2, "one reconnect for the whole burst"

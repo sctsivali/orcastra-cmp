@@ -7,7 +7,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-import os
 import time
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
@@ -17,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.core.config import configured_worker_count
 from app.core.request_context import get_request_context
 from app.core.request_security import (
     SecurityDecision,
@@ -130,11 +130,7 @@ def _per_worker_share(limit: int) -> int:
     """
     if limit <= 0:
         return limit
-    try:
-        workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
-    except ValueError:
-        workers = 1
-    return max(1, limit // max(1, workers))
+    return max(1, limit // configured_worker_count())
 
 
 _FRESH_FLAG = TypeAdapter(bool)

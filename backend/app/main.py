@@ -656,15 +656,20 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Could not start session tracker: {tracker_err}")
     
     # WebSocket tickets: their own block, so a failure above can never leave the store on its
-    # per-process fallback while four workers serve sockets. Redis is used whenever it answers;
-    # with REDIS_ENABLED an unreachable Redis refuses tickets instead of falling back.
+    # per-process fallback while four workers serve sockets. Redis is used whenever it answers,
+    # and is required with REDIS_ENABLED or more than one worker (start_ticket_stores); a required
+    # store that cannot reach it refuses mints with 503 and keeps trying.
     try:
+        from app.core.config import configured_worker_count
         from app.core.file_ticket import get_file_ticket_store
-        from app.core.ws_ticket_store import get_ws_ticket_store
+        from app.core.ws_ticket_store import get_ws_ticket_store, start_ticket_stores
 
-        if settings.redis_url:
-            await get_ws_ticket_store().connect(settings.redis_url, required=settings.redis_enabled)
-            await get_file_ticket_store().connect(settings.redis_url, required=settings.redis_enabled)
+        await start_ticket_stores(
+            (get_ws_ticket_store(), get_file_ticket_store()),
+            redis_url=settings.redis_url,
+            redis_enabled=settings.redis_enabled,
+            workers=configured_worker_count(),
+        )
     except Exception as ticket_err:
         logger.error("WebSocket ticket store did not start: %s", ticket_err)
 

@@ -3,6 +3,8 @@ Configuration settings for the Orcastra CMP backend.
 Loads environment variables and provides typed configuration.
 """
 
+import os
+
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import Optional
@@ -886,6 +888,18 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Cached settings instance."""
     return Settings()
+
+
+def configured_worker_count() -> int:
+    """The uvicorn worker count this process was started among (WEB_CONCURRENCY, default 1).
+
+    note: read from the environment, not Settings: uvicorn takes its --workers default from the
+    same variable (backend/Dockerfile), and this has to agree with what uvicorn did.
+    """
+    try:
+        return max(1, int(os.environ.get("WEB_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
 
 
 def release_feed_exemptions() -> tuple:
