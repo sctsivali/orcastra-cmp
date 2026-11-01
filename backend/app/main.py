@@ -29,6 +29,7 @@ from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.middleware import (
     AccessLogMiddleware,
+    InteractiveSocketLimitMiddleware,
     RequestIdMiddleware,
     RequestSecurityMiddleware,
     SecurityHeadersMiddleware,
@@ -962,6 +963,10 @@ Ensure your client certificates are properly configured.
     
     # Block scanner probes and enforce IP plus subnet-aware throttling before routing
     app.add_middleware(RequestSecurityMiddleware, settings=settings)
+
+    # The same, per client IP, for terminal and console socket upgrades, which the HTTP limiter
+    # never sees. Before routing, so an over-budget client never reaches a ticket lookup.
+    app.add_middleware(InteractiveSocketLimitMiddleware, settings=settings)
     
     # Add Access Log middleware (logs HTTP requests in structured JSON)
     app.add_middleware(

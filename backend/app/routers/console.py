@@ -1268,9 +1268,6 @@ async def console_websocket(
     frames carry the protocol; a serial console also takes JSON text frames for resize and ACKs.
     Re-authorized every minute while open.
     """
-    if console_type not in ("vga", "console"):
-        await ws_close.refuse(websocket, ws_close.POLICY, "unknown_console_type")
-        return
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
     _settings = _gs()
@@ -1282,6 +1279,11 @@ async def console_websocket(
         # note: every refusal below accepts first (core/ws_close.py). A close before accept is an
         # HTTP 403 to the browser, which reports 1006 with no reason and never recovers.
         await ws_close.refuse(websocket, *refusal_of(websocket))
+        return
+    # After the caller is known: an anonymous client learns nothing here it could not from 4401.
+    # A ticket names its console type, so a ticket for another type was already refused above.
+    if console_type not in ("vga", "console"):
+        await ws_close.refuse(websocket, ws_close.POLICY, "unknown_console_type")
         return
 
     # set org scope for WebSocket (context variable)

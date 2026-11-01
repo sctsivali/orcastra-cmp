@@ -112,6 +112,17 @@ class Settings(BaseSettings):
         alias="RATE_LIMIT_WINDOW_SECONDS",
         description="Sliding rate limit window size in seconds"
     )
+    ws_upgrade_rate_limit: int = Field(
+        default=300,
+        ge=0,
+        alias="WS_UPGRADE_RATE_LIMIT",
+        description=(
+            "Terminal and console WebSocket upgrades allowed per client IP per "
+            "RATE_LIMIT_WINDOW_SECONDS, deployment-wide (each worker enforces its share). Over it an "
+            "upgrade is refused with 429 before it is accepted. 0 disables it; RATE_LIMIT_ENABLED=false "
+            "disables it too"
+        ),
+    )
     security_probe_block_enabled: bool = Field(
         default=True,
         alias="SECURITY_PROBE_BLOCK_ENABLED",

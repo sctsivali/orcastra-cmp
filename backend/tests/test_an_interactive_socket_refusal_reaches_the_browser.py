@@ -8,9 +8,6 @@ so the last test here runs uvicorn on loopback and connects with a real client.
 """
 
 import asyncio
-import socket
-import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +18,7 @@ from app.core.config import get_settings
 from app.routers import console, terminal
 from app.services import break_glass_service
 from app.services.migration_fence import MigrationFenceConflict
+from tests._loopback_server import LoopbackServer
 
 
 class _Socket:
@@ -147,10 +145,16 @@ def test_a_fenced_instance_is_its_own_close(no_instance_io, handler):
     assert _open(handler, _Socket()) == [("accept", None), ("close", 4423, "migration_fenced")]
 
 
-def test_an_unknown_console_type_is_refused_before_anything_else(no_instance_io):
+def test_an_unknown_console_type_is_refused_once_the_caller_is_known(no_instance_io):
     events = _open(console.console_websocket, _Socket(), console_type="rdp")
 
     assert events == [("accept", None), ("close", 1008, "unknown_console_type")]
+
+
+def test_an_anonymous_caller_with_an_unknown_console_type_hears_only_the_sign_in_refusal(no_instance_io):
+    events = _open(console.console_websocket, _Socket(), user=None, console_type="rdp")
+
+    assert events == [("accept", None), ("close", 4401, "auth_required")]
 
 
 def test_a_spice_channel_is_refused_on_the_subprotocol_it_offered(no_instance_io):
@@ -224,33 +228,6 @@ def test_no_endpoint_closes_a_socket_it_has_not_accepted(module_name):
 # ── the real thing: uvicorn on loopback, a real client ───────────────────────────────────────
 
 
-class _Server:
-    def __init__(self, app: FastAPI) -> None:
-        import uvicorn
-
-        self._sock = socket.socket()
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.bind(("127.0.0.1", 0))
-        self.port = self._sock.getsockname()[1]
-        config = uvicorn.Config(app, lifespan="off", log_level="warning")
-        self._server = uvicorn.Server(config)
-        self._thread = threading.Thread(target=self._server.run, kwargs={"sockets": [self._sock]}, daemon=True)
-
-    def __enter__(self) -> "_Server":
-        self._thread.start()
-        deadline = time.monotonic() + 10
-        while not self._server.started:
-            if time.monotonic() > deadline:
-                raise RuntimeError("uvicorn did not start")
-            time.sleep(0.02)
-        return self
-
-    def __exit__(self, *_args) -> None:
-        self._server.should_exit = True
-        self._thread.join(timeout=10)
-        self._sock.close()
-
-
 def test_uvicorn_answers_a_close_before_accept_with_403_and_a_refused_terminal_with_4401(no_instance_io):
     from websockets.exceptions import ConnectionClosed, InvalidStatus
     from websockets.sync.client import connect
@@ -266,7 +243,7 @@ def test_uvicorn_answers_a_close_before_accept_with_403_and_a_refused_terminal_w
         auth_enabled=True, authentik_issuer="https://idp.invalid/", ws_query_token_enabled=False,
     )
 
-    with _Server(app) as server:
+    with LoopbackServer(app) as server:
         base = f"ws://127.0.0.1:{server.port}"
 
         with pytest.raises(InvalidStatus) as refused:

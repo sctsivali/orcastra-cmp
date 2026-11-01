@@ -7,14 +7,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import configured_worker_count
 from app.core.request_context import get_request_context
@@ -464,3 +466,92 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
                 "user_agent": request.headers.get("user-agent"),
             },
         )
+
+
+# A terminal socket, or a console socket (one per SPICE channel). The feeds are not counted here.
+_INTERACTIVE_SOCKET_PATH = re.compile(r"/(?:terminal/ws/[^/]+|console/[^/]+/ws)$")
+
+
+class InteractiveSocketLimitMiddleware:
+    """A per-client-IP budget for terminal and console WebSocket upgrades.
+
+    important: RequestSecurityMiddleware is HTTP only, so nothing bounded upgrades. A terminal or
+    console refusal now accepts and then closes (core/ws_close.py) so the page can read why, and
+    uvicorn holds such a socket until the client answers the close, up to its close timeout, inside
+    the worker's --limit-concurrency. One client could hold those slots with sockets that never
+    authenticate. This counts upgrades per client IP (resolved like the HTTP limiter, so through a
+    trusted proxy) before routing and before any ticket is looked up.
+
+    Over budget the upgrade is refused without accepting: HTTP 429 with Retry-After where the
+    server offers the denial-response extension (uvicorn does), a close before accept (HTTP 403)
+    otherwise. Either way nothing is held, and the page backs off as for any socket that never
+    opened. Legitimate use stays far below it: a console opens four sockets and a page reconnects
+    at most five times a minute. The figure is deployment-wide and enforced per worker as its share
+    (configured_worker_count), since upgrades are new connections spread across the workers.
+    """
+
+    def __init__(self, app: ASGIApp, settings, limiter: WindowedRateLimiter | None = None) -> None:
+        self.app = app
+        self.settings = settings
+        self.limiter = limiter or WindowedRateLimiter()
+        # One warning per client per window, not one per refused upgrade.
+        self._warned = WindowedRateLimiter()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "websocket" or not _INTERACTIVE_SOCKET_PATH.search(scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
+        hit = self._exceeded(scope)
+        if hit is None:
+            await self.app(scope, receive, send)
+            return
+        await self._refuse(scope, receive, send, hit)
+
+    def _exceeded(self, scope: Scope) -> Optional[RateLimitHit]:
+        configured = self.settings.ws_upgrade_rate_limit
+        if not self.settings.rate_limit_enabled or configured <= 0:
+            return None
+        client_ip = resolve_client_ip(
+            HTTPConnection(scope),
+            self.settings.trusted_proxy_cidrs,
+            self.settings.allow_private_forwarded_ips,
+        ).client_ip
+        key = f"ws:{client_ip}"
+        limit = _per_worker_share(configured)
+        window = self.settings.rate_limit_window_seconds
+        now = time.time()
+        if self.limiter.allow(key=key, limit=limit, window_seconds=window, now=now):
+            return None
+        retry_after = self.limiter.retry_after(key, window, now)
+        if self._warned.allow(key=key, limit=1, window_seconds=window, now=now):
+            logger.warning(
+                "Interactive socket upgrades over budget; refusing them until the window clears",
+                extra={
+                    "client_ip": client_ip,
+                    "path": scope.get("path", ""),
+                    "rate_limit_scope": "ws",
+                    "rate_limit_limit": limit,
+                    "retry_after": retry_after,
+                },
+            )
+        return RateLimitHit("ws", limit, retry_after)
+
+    async def _refuse(self, scope: Scope, receive: Receive, send: Send, hit: RateLimitHit) -> None:
+        message = await receive()
+        if message.get("type") != "websocket.connect":
+            return
+        if "websocket.http.response" in (scope.get("extensions") or {}):
+            body = f"Too many live connections. Try again in {hit.retry_after} seconds.".encode("utf-8")
+            await send({
+                "type": "websocket.http.response.start",
+                "status": 429,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"retry-after", str(hit.retry_after).encode("ascii")),
+                    (b"x-ratelimit-scope", b"ws"),
+                ],
+            })
+            await send({"type": "websocket.http.response.body", "body": body})
+            return
+        await send({"type": "websocket.close", "code": 1013, "reason": "rate_limited"})
