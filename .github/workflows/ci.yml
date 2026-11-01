@@ -326,6 +326,9 @@ jobs:
       - name: One spelling for ellipsis, plurals, placeholders and toast titles
         run: node scripts/checks/check-copy-standard.mjs .
 
+      - name: Page headers stack on a phone
+        run: node scripts/checks/check-page-header-stacks.mjs .
+
       # An em dash joined the two halves of the stop dialog's warning, and the same character
       # was in 83 other places across the console, the API layer and the README. tsc and
       # eslint do not read English, so nothing saw it. Advisory for now: it reports and exits

@@ -396,6 +396,7 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@echo "$(COLOR_GREEN)Checking dates and copy...$(COLOR_RESET)"
 	@node scripts/checks/check-date-format.mjs
 	@node scripts/checks/check-copy-standard.mjs
+	@node scripts/checks/check-page-header-stacks.mjs
 	@echo "$(COLOR_GREEN)Checking prose typography...$(COLOR_RESET)"
 	@node scripts/checks/check-prose-typography.mjs
 	@echo "$(COLOR_GREEN)Checking byte units...$(COLOR_RESET)"

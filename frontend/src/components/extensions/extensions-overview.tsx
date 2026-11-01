@@ -245,7 +245,7 @@ function ExtensionsOverviewContent() {
               Published add-ons you can install into an organization you run
             </p>
           </div>
-          <div className="flex items-end gap-2">
+          <div className="flex flex-wrap items-end gap-2">
             <div className="space-y-1.5">
               <label htmlFor="install-org" className="text-sm font-medium">
                 Install into
