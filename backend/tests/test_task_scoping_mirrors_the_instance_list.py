@@ -139,7 +139,8 @@ def _reference(row: Dict[str, Any]) -> bool:
     allowed = org_scope.get_current_allowed_clusters()
     if allowed is not None and row["cluster_id"] not in allowed:
         return False
-    bound_project = (row["resource_name"] or "default") if row["resource_type"] == "project" else row["project"]
+    named = row["resource_name"] or row["project"] or "default"
+    bound_project = named if row["resource_type"] == "project" else row["project"]
     if not org_scope.project_is_visible(row["cluster_id"], bound_project):
         return False
     if not tenant_acl_active():
@@ -151,7 +152,7 @@ def _reference(row: Dict[str, Any]) -> bool:
             row["cluster_id"], row["project"], row["resource_name"], "view"
         )
     if row["resource_type"] == "project":
-        return tenant_may_see_project(row["cluster_id"], row["resource_name"])
+        return tenant_may_see_project(row["cluster_id"], named)
     return False
 
 
@@ -184,7 +185,7 @@ def test_the_partner_bound_drops_the_other_organisations_projects(engine) -> Non
         row = rows[row_id]
         assert row["cluster_id"] in ("nuc1", "nuc2")
         if row["cluster_id"] == "nuc2":
-            judged = (row["resource_name"] or "default") if row["resource_type"] == "project" else row["project"]
+            judged = (row["resource_name"] or row["project"]) if row["resource_type"] == "project" else row["project"]
             assert judged in ("default", "cust-a"), row
     # nuc1 carries no bound, so every project passes there.
     assert any(rows[i]["cluster_id"] == "nuc1" and rows[i]["project"] == "cust-c" for i in ids)
@@ -221,6 +222,44 @@ def test_a_tenant_with_an_instance_rule_sees_that_instance_and_the_default_proje
     # The instance wildcard on nuc2 names db-01 in every project.
     assert ("nuc2", "cust-c", "instance", "db-01") in seen
     assert ("nuc2", "cust-c", "instance", "web-01") not in seen
+
+
+def test_a_project_row_with_no_resource_name_is_judged_by_its_project() -> None:
+    # LXD's project-created, -updated and -deleted events carry no `name`, so the lifecycle row
+    # holds the project in `project` alone. Read as `default`, it passed every tenant on the
+    # cluster and every Partner bound to `default`, and printed another customer's project name.
+    def row(row_id: str, cluster: str, project: str) -> Dict[str, Any]:
+        return {
+            "id": row_id, "seq": 1, "kind": "lifecycle", "cluster_id": cluster, "project": project,
+            "resource_type": "project", "resource_name": None, "operation_id": None,
+            "status": None, "actor_email": None, "created_at": None, "updated_at": None,
+        }
+
+    rows = [
+        row("tenant-own", "nuc1", "cust-a"),
+        row("tenant-foreign", "nuc1", "cust-c"),
+        row("tenant-default", "nuc1", "default"),
+        row("partner-own", "nuc2", "cust-a"),
+        row("partner-foreign", "nuc2", "cust-b"),
+        row("partner-default", "nuc2", "default"),
+    ]
+    engine = create_engine("sqlite://")
+    columns = ", ".join(f"{c} TEXT" if c != "seq" else "seq INTEGER" for c in COLUMNS)
+    with engine.begin() as conn:
+        conn.execute(text(f"CREATE TABLE task_journal ({columns})"))
+        conn.execute(
+            text(f"INSERT INTO task_journal ({', '.join(COLUMNS)}) VALUES ({', '.join(':' + c for c in COLUMNS)})"),
+            rows,
+        )
+
+    def seen(context: str, cluster: str) -> set:
+        ids = _under(context, lambda: _sql_ids(engine, TaskJournal, task_scope.task_conditions(TaskJournal)))
+        return {i for i in ids if i in {r["id"] for r in rows if r["cluster_id"] == cluster}}
+
+    for context, cluster, prefix in (("tenant_instance", "nuc1", "tenant"), ("partner_bound", "nuc2", "partner")):
+        assert seen(context, cluster) == {f"{prefix}-own", f"{prefix}-default"}
+        by_row = _under(context, lambda: {r["id"] for r in rows if r["cluster_id"] == cluster and task_scope.task_is_visible(r)})
+        assert by_row == {f"{prefix}-own", f"{prefix}-default"}
 
 
 @pytest.mark.parametrize("name", ["tenant_no_view", "tenant_empty", "partner_empty"])

@@ -48,8 +48,10 @@ def _owner_project(model: Any) -> Any:
 
 
 def _named_project(model: Any) -> Any:
-    # A project row with no name reads as the default project, as tenant_may_see_project does.
-    return func.coalesce(model.resource_name, "default")
+    # important: LXD's project-created, -updated and -deleted events carry no name, so those rows
+    # hold the project in `project` alone. Skipping it read them as `default`, the one project every
+    # tenant may see, which printed other customers' project names to anyone on the cluster.
+    return func.coalesce(model.resource_name, model.project, "default")
 
 
 def _bound_project(model: Any) -> Any:
@@ -172,7 +174,8 @@ def _row_in_scope(row: Mapping[str, Any]) -> bool:
     project = row.get("project") or "default"
     resource_type = row.get("resource_type")
     resource_name = row.get("resource_name")
-    bound_project = (resource_name or "default") if resource_type == "project" else project
+    named_project = resource_name or project
+    bound_project = named_project if resource_type == "project" else project
     if not project_is_visible(cluster_id, bound_project):
         return False
     if not tenant_acl_active():
@@ -182,7 +185,7 @@ def _row_in_scope(row: Mapping[str, Any]) -> bool:
             cluster_id, project, resource_name, "view"
         )
     if resource_type == "project":
-        return tenant_may_see_project(cluster_id, resource_name)
+        return tenant_may_see_project(cluster_id, named_project)
     return False
 
 
