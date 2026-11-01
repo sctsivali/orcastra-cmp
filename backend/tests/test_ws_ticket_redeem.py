@@ -90,7 +90,8 @@ def test_a_console_ticket_is_bound_to_its_console_type():
 
 
 def test_a_ticket_whose_session_ended_opens_nothing():
-    ticket = _ticket("tasks", user=_user(lifetime=-1))
+    # Past the 30 s clock-skew leeway (AUTH_JWT_LEEWAY_SECONDS); test_a_clock_a_little_ahead covers inside it.
+    ticket = _ticket("tasks", user=_user(lifetime=-60))
 
     assert _open("tasks", _socket({"ticket": ticket})) is None
 

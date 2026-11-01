@@ -73,7 +73,9 @@ async def _redeemed(kind: str, websocket: WebSocket, ticket: str) -> Optional[Au
         logger.warning("WebSocket refused: a %s ticket presented for another target", kind)
         _refuse_as(websocket, ws_close.AUTH, "ticket_invalid")
         return None
-    if claims.session_exp is not None and claims.session_exp <= time.time():
+    # The same clock skew the access token was checked with when the ticket was minted.
+    leeway = getattr(get_settings(), "auth_jwt_leeway_seconds", 0)
+    if claims.session_exp is not None and claims.session_exp + leeway <= time.time():
         logger.warning("WebSocket refused: the %s ticket's session has ended", kind)
         _refuse_as(websocket, ws_close.AUTH, "session_ended")
         return None

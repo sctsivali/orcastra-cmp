@@ -87,12 +87,16 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
                 detail="Authentication is enabled but not fully configured on this server",
             )
 
+        # important: no leeway made a host whose clock ran a few seconds ahead of Authentik's refuse
+        # a token the dashboard had just been handed ("Token has expired", or iat in the future),
+        # and a socket ticket minted with it came back 401. The skew is bounded in config (0..120).
         payload = jwt.decode(
             token,
             key=signing_key,
             algorithms=["RS256"],
             audience=audience,
             issuer=settings.authentik_issuer,
+            leeway=getattr(settings, "auth_jwt_leeway_seconds", 0),
             options={
                 "verify_exp": True,
                 "verify_iss": True,

@@ -621,6 +621,17 @@ class Settings(BaseSettings):
             "requests answer 503 until a fetch succeeds. Never shorter than AUTH_JWKS_CACHE_TTL."
         ),
     )
+    auth_jwt_leeway_seconds: int = Field(
+        default=30,
+        ge=0,
+        le=120,
+        alias="AUTH_JWT_LEEWAY_SECONDS",
+        description=(
+            "Clock skew, in seconds, allowed when checking an access token's exp and iat and a "
+            "WebSocket ticket's session end (default: 30). The dashboard refreshes 120 s before "
+            "expiry, so this only absorbs clocks that disagree; 0 checks to the second"
+        ),
+    )
     ws_query_token_enabled: bool = Field(
         default=False,
         alias="WS_QUERY_TOKEN_ENABLED",
