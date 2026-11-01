@@ -92,9 +92,15 @@ function SpiceConn(o)
         if (this.parent.state != "closing" && this.parent.state != "error" && this.parent.onerror !== undefined)
         {
             var e;
-            /* Orcastra: 4403 is the console's access revoked while it was open. */
-            if (code === 4403)
+            /* Orcastra: a code of 4000 or more is the server saying why, whatever state the channel
+               was in (4401 sign-in, 4403 access, 4404 cannot start, 4409 taken over, 4423 fenced,
+               4428 break-glass; backend/app/core/ws_close.py). The state messages below describe a
+               protocol failure, and a refusal after accept would otherwise read as one. 4403 while
+               open is the console's access revoked. */
+            if (code === 4403 && event_reason.indexOf("access_revoked") === 0)
                 e = new Error("Access to this instance was revoked.");
+            else if (code >= 4000)
+                e = new Error(event_reason || ("The server closed the console (" + code + ")."));
             else if (this.parent.state == "connecting")
                 e = new Error("Connection refused.");
             else if (this.parent.state == "start" || this.parent.state == "link")
@@ -109,6 +115,9 @@ function SpiceConn(o)
             e.code = code;
             e.reason = event_reason;
             e.channel = this.parent.channel_type();
+            /* Orcastra: whether the server accepted the socket; a refusal from a backend that
+               closed before accept arrives as 1006 on a socket that never opened. */
+            e.opened = this.parent.state != "connecting";
 
             this.parent.onerror(e);
             this.parent.log_err(e.toString());

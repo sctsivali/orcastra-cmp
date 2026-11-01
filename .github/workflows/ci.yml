@@ -347,6 +347,12 @@ jobs:
       - name: Auth refresh contract
         run: node scripts/checks/check-auth-refresh-contract.mjs .
 
+      # The terminal and console refuse after accept with a code and a reason token the page acts
+      # on; a close before accept reached the browser as a bare 1006. Holds the backend and
+      # frontend tables equal and runs the page's recovery decisions.
+      - name: Terminal and console close contract
+        run: node scripts/checks/check-ws-close-contract.mjs .
+
       - name: Access gate
         run: node scripts/checks/check-access-gate.mjs .
 

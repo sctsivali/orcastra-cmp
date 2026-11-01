@@ -229,6 +229,37 @@ export function onSessionRefreshNeeded(fn: () => Promise<void>) {
   _sessionRefreshFn = fn;
 }
 
+/** What a forced session refresh found (auth-provider.tsx reads it off the new session). */
+export type SessionRefreshVerdict = "refreshed" | "unchanged" | "revoked" | "unavailable";
+
+let _forceRefreshFn: (() => Promise<SessionRefreshVerdict>) | null = null;
+let _forceRefreshInFlight: Promise<SessionRefreshVerdict> | null = null;
+
+/** Register how to force one session refresh (called by auth-provider). */
+export function onForceSessionRefresh(fn: () => Promise<SessionRefreshVerdict>) {
+  _forceRefreshFn = fn;
+}
+
+/**
+ * Ask the session for a new access token now, once for every caller that asks together.
+ *
+ * For a socket whose ticket came back 401 although fetchAPI already refreshed: the session may
+ * still hold a token the backend refuses, or the IdP may have ended it. The server allows one
+ * forced refresh per session every 30 s (auth.ts), so a burst of refused tickets costs at most one
+ * round trip to the IdP. Never rejects.
+ */
+export function forceSessionRefresh(): Promise<SessionRefreshVerdict> {
+  if (!_forceRefreshFn) return Promise.resolve("unavailable");
+  if (!_forceRefreshInFlight) {
+    _forceRefreshInFlight = _forceRefreshFn()
+      .catch((): SessionRefreshVerdict => "unavailable")
+      .finally(() => {
+        _forceRefreshInFlight = null;
+      });
+  }
+  return _forceRefreshInFlight;
+}
+
 /** Fired when refreshing the session has failed to clear 401s. */
 export function onAuthFailure(fn: () => void) {
   _onAuthFailure = fn;

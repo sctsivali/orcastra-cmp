@@ -45,10 +45,29 @@ for (const file of walk(srcDir)) {
 }
 
 const wsUrl = read('frontend/src/lib/ws-url.ts');
+const wsClose = read('frontend/src/lib/ws-close.ts');
 if (/getAccessToken|token=/.test(wsUrl)) failures.push('frontend/src/lib/ws-url.ts: must not read or send the access token');
 if (!/mintWsTicket\(request\)/.test(wsUrl)) failures.push('frontend/src/lib/ws-url.ts: socket URLs must carry a freshly minted ticket');
-if (!/SESSION_ENDED: 4401/.test(wsUrl) || !/ACCESS_REVOKED: 4403/.test(wsUrl)) {
-  failures.push('frontend/src/lib/ws-url.ts: the session-ended and access-revoked close codes must be exported');
+// The close codes moved to lib/ws-close.ts (one table, compiled alone by check-ws-close-contract);
+// ws-url.ts re-exports it for the openers that already import it from there.
+if (!/SESSION_ENDED: 4401/.test(wsClose) || !/ACCESS_REVOKED: 4403/.test(wsClose)) {
+  failures.push('frontend/src/lib/ws-close.ts: the session-ended and access-revoked close codes must be exported');
+}
+if (!/export \{ WS_CLOSE \} from "@\/lib\/ws-close"/.test(wsUrl)) {
+  failures.push('frontend/src/lib/ws-url.ts: must re-export WS_CLOSE from lib/ws-close.ts');
+}
+
+// Every interactive opener (a shell, a serial console, a SPICE display) reads its closes and its
+// refused tickets through lib/socket-recovery.ts, which classifies them with classifyClose. A
+// hand-written code list here is how a 4401 once read as "disconnected" with nothing recovering.
+const recovery = read('frontend/src/lib/socket-recovery.ts');
+if (!/classifyClose\(/.test(recovery)) failures.push('frontend/src/lib/socket-recovery.ts: closes must go through classifyClose');
+for (const rel of ['frontend/src/lib/use-terminal-socket.ts', 'frontend/src/lib/spice/session.ts']) {
+  const text = read(rel);
+  if (!/new SocketRecovery\(/.test(text)) failures.push(`${rel}: an interactive socket must hold a SocketRecovery`);
+  if (!/recovery\s*\.onClose\(/.test(text)) failures.push(`${rel}: its closes must go through SocketRecovery.onClose`);
+  if (!/recovery\s*\.onMintError\(/.test(text)) failures.push(`${rel}: a refused ticket must go through SocketRecovery.onMintError`);
+  if (/FINAL_CODES|RETRY_DELAYS_MS|RECONNECT_DELAYS_MS/.test(text)) failures.push(`${rel}: keeps its own close-code list or backoff table`);
 }
 
 const spiceMain = read('frontend/public/spice-html5/main.js');
@@ -64,6 +83,12 @@ if (!/String\(e\.target\.url\)\.split\("\?"\)\[0\]/.test(spiceConn) || !/String\
   failures.push('frontend/public/spice-html5/spiceconn.js: logged and thrown URLs must drop their query');
 }
 if (!/code === 4403/.test(spiceConn)) failures.push('frontend/public/spice-html5/spiceconn.js: a 4403 close must say access was revoked');
+if (!/else if \(code >= 4000\)/.test(spiceConn) || spiceConn.indexOf('code >= 4000') > spiceConn.indexOf('this.parent.state == "connecting"')) {
+  failures.push('frontend/public/spice-html5/spiceconn.js: a server close code (4000 and up) must be read before the channel state');
+}
+if (!/e\.code = code;/.test(spiceConn) || !/e\.reason = event_reason;/.test(spiceConn) || !/e\.opened = /.test(spiceConn)) {
+  failures.push('frontend/public/spice-html5/spiceconn.js: a channel error must carry its close code, reason and whether it opened');
+}
 
 // note: the floor guards against an opener moving somewhere this scan cannot see. It was 7 while
 // four components each built their own terminal socket; one hook (lib/use-terminal-socket.ts)

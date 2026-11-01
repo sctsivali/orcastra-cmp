@@ -7,10 +7,12 @@
  * are JSON control (resize, ack, ping out; session, ready, error, closed, pong in).
  *
  * How a session ended decides what follows: 1000 (the shell exited) waits for the operator, Enter
- * starts a new session; 4403 / 4404 / 1008 are final; anything else (a dropped network, a backend
- * restart) reconnects with backoff, at once when the network or tab returns. After the instance
- * powered down (1012) or a live session dropped, "not running" (4404) means "not yet": it tries
- * every few seconds until the instance is back, so the serial console follows a reboot.
+ * starts a new session; 4404 is final. After the instance powered down (1012) or a live session
+ * dropped, "not running" (4404) means "not yet": it tries every few seconds until the instance is
+ * back, so the serial console follows a reboot. Everything else goes through lib/socket-recovery.ts:
+ * a refused ticket or a 4401 refreshes the session once (or signs in again), 4403 / 4428 / 4423 stop
+ * and say why, and a dropped network or a 1011 reconnects with backoff, at once when the network or
+ * tab returns.
  */
 
 "use client";
@@ -19,19 +21,23 @@ import { useCallback, useEffect, useRef } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { createXterm, terminalFontReady, type XtermBundle } from "@/lib/xterm-setup";
 import {
-  ACCESS_REVOKED_MESSAGE,
   INSTANCE_RETURN_POLL_MS,
   INSTANCE_RETURN_WINDOW_MS,
   STABLE_SESSION_MS,
   WAITING_FOR_INSTANCE,
   WS_CLOSE,
-  mintFailureMessage,
   ticketedSocketUrl,
   type WsTicketRequest,
 } from "@/lib/ws-url";
+import { SOCKET_MESSAGES, messageFor } from "@/lib/ws-close";
+import { SocketRecovery, type RecoveryStep } from "@/lib/socket-recovery";
 
 export type TerminalKind = "shell" | "serial";
 export type TerminalSessionStatus = "connecting" | "connected" | "reconnecting" | "ended" | "error";
+/** What the operator can do about an error: sign in again (the session ended). */
+export interface TerminalStatusHint {
+  signIn?: boolean;
+}
 
 export interface UseTerminalSessionOptions {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -41,7 +47,7 @@ export interface UseTerminalSessionOptions {
   project: string;
   enabled?: boolean;
   fontSize?: number;
-  onStatus?: (status: TerminalSessionStatus, detail?: string) => void;
+  onStatus?: (status: TerminalSessionStatus, detail?: string, hint?: TerminalStatusHint) => void;
   onSessionId?: (sessionId: string) => void;
   onReady?: () => void;
 }
@@ -60,15 +66,15 @@ export interface TerminalSessionHandle {
 }
 
 const encoder = new TextEncoder();
-const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000, 30000, 30000];
 // ACK parsed output in batches during a flood; the tail is always ACKed when output goes idle.
 const ACK_THRESHOLD = 256 * 1024;
 const PING_EVERY_MS = 25000;
 const PONG_DEADLINE_MS = 70000;
 const RESIZE_DEBOUNCE_MS = 100;
-const FINAL_CODES = new Set<number>([WS_CLOSE.ACCESS_REVOKED, WS_CLOSE.UNAVAILABLE, WS_CLOSE.POLICY_VIOLATION]);
 
 const DIM = "\x1b[2m";
+const YELLOW = "\x1b[33m";
+const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 
 function note(term: Terminal | undefined, text: string, color = DIM): void {
@@ -115,14 +121,21 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
   const wsRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<TerminalSessionStatus>("connecting");
   const finalRef = useRef(false);
-  const attemptsRef = useRef(0);
+  const recoveryRef = useRef<SocketRecovery | null>(null);
+  recoveryRef.current ??= new SocketRecovery();
+  // A session in this view reached "ready" at least once (so a sign-in that ended is not automatic).
+  const liveRef = useRef(false);
+  // A live session dropped and is being replaced: the next one is a new shell, and says so.
+  const replacingRef = useRef(false);
+  // Bumped by every connect and by an operator's reconnect, so a slow refresh cannot act on a newer one.
+  const generationRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedByUsRef = useRef(false);
   // When a live session dropped or its instance powered down; null while connected.
   const droppedAtRef = useRef<number | null>(null);
   const readyAtRef = useRef<number | null>(null);
-  // Why the server refused the session; the close follows at once and reports it.
-  const refusalRef = useRef<string | null>(null);
+  // Why the server refused the session (its error frame); the close follows at once and reports it.
+  const refusalRef = useRef<{ message: string; code?: number } | null>(null);
   const lastPongRef = useRef(Date.now());
   const pendingRef = useRef<Uint8Array[]>([]);
   const writingRef = useRef(false);
@@ -131,9 +144,9 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
   const callbacks = useRef(options);
   callbacks.current = options;
 
-  const setStatus = useCallback((status: TerminalSessionStatus, detail?: string) => {
+  const setStatus = useCallback((status: TerminalSessionStatus, detail?: string, hint?: TerminalStatusHint) => {
     statusRef.current = status;
-    callbacks.current.onStatus?.(status, detail);
+    callbacks.current.onStatus?.(status, detail, hint);
   }, []);
 
   const sendJson = useCallback((body: unknown) => {
@@ -172,19 +185,32 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
     });
   }, [sendJson]);
 
-  const scheduleRetry = useCallback((reason: string) => {
-    if (closedByUsRef.current) return;
-    if (attemptsRef.current >= RETRY_DELAYS_MS.length) {
-      finalRef.current = false;
-      setStatus("error", reason);
-      note(bundleRef.current?.term, `${reason}. Press Enter to try again.`, "\x1b[31m");
-      return;
+  // Carry out what the recovery decided, unless the view closed or reconnected meanwhile.
+  const apply = useCallback((step: RecoveryStep, generation: number) => {
+    if (closedByUsRef.current || generation !== generationRef.current) return;
+    const term = bundleRef.current?.term;
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+    switch (step.action) {
+      case "retry":
+        setStatus("reconnecting", step.message || undefined);
+        if (step.message) note(term, step.message, YELLOW);
+        retryTimerRef.current = setTimeout(() => connectRef.current(), step.delayMs);
+        return;
+      case "leaving":
+        finalRef.current = true;
+        setStatus("connecting", step.message);
+        note(term, step.message, YELLOW);
+        return;
+      case "stop":
+        // Enter tries again only after giving up on a network; a refusal would be refused again.
+        finalRef.current = !step.retry;
+        setStatus("error", step.message, step.signIn ? { signIn: true } : undefined);
+        note(term, step.message, RED);
+        return;
+      case "own":
+        return;
     }
-    const delay = RETRY_DELAYS_MS[attemptsRef.current] + Math.floor(Math.random() * 400);
-    attemptsRef.current += 1;
-    setStatus("reconnecting", reason);
-    note(bundleRef.current?.term, `${reason}. Reconnecting in ${Math.round(delay / 1000)} s…`, "\x1b[33m");
-    retryTimerRef.current = setTimeout(() => connectRef.current(), delay);
   }, [setStatus]);
 
   const connect = useCallback(async () => {
@@ -194,7 +220,9 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     retryTimerRef.current = null;
     finalRef.current = false;
-    if (attemptsRef.current === 0) setStatus("connecting");
+    const recovery = recoveryRef.current!;
+    const generation = ++generationRef.current;
+    if (recovery.used === 0 && statusRef.current !== "reconnecting") setStatus("connecting");
 
     const request: WsTicketRequest = kind === "serial"
       ? { kind: "console", host, project, instance: instanceName, console_type: "console" }
@@ -203,25 +231,20 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
     try {
       url = await ticketedSocketUrl(request);
     } catch (error) {
-      const status = (error as { status?: number })?.status;
-      const message = mintFailureMessage(error);
-      if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) {
-        finalRef.current = true;
-        setStatus("error", message);
-        note(bundleRef.current?.term, message, "\x1b[31m");
-        return;
-      }
-      scheduleRetry(message);
+      if (closedByUsRef.current || generation !== generationRef.current) return;
+      apply(await recovery.onMintError(error, { liveSocket: liveRef.current }), generation);
       return;
     }
-    if (closedByUsRef.current) return;
+    if (closedByUsRef.current || generation !== generationRef.current) return;
 
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
     lastPongRef.current = Date.now();
+    let opened = false;
 
     ws.onopen = () => {
+      opened = true;
       ackRef.current = 0;
       const term = bundleRef.current?.term;
       ws.send(JSON.stringify({ width: term?.cols ?? 120, height: term?.rows ?? 40, binary: true, flow: true }));
@@ -246,12 +269,16 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
         case "ready":
           readyAtRef.current = Date.now();
           droppedAtRef.current = null;
+          recoveryRef.current?.ready();
+          liveRef.current = true;
+          if (replacingRef.current) note(bundleRef.current?.term, SOCKET_MESSAGES.newShell, YELLOW);
+          replacingRef.current = false;
           setStatus("connected");
           callbacks.current.onReady?.();
           break;
         case "error":
           // note: kept for the close, so it prints once, and in full where a close reason may be cut.
-          refusalRef.current = String(msg.message);
+          refusalRef.current = { message: String(msg.message), code: typeof msg.code === "number" ? msg.code : undefined };
           break;
         case "pong":
           lastPongRef.current = Date.now();
@@ -261,15 +288,16 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
       }
     };
 
-    ws.onclose = (event) => {
+    ws.onclose = async (event) => {
       if (wsRef.current === ws) wsRef.current = null;
-      if (closedByUsRef.current) return;
+      if (closedByUsRef.current || generation !== generationRef.current) return;
       const term = bundleRef.current?.term;
-      const reason = refusalRef.current || event.reason || "";
+      const errorFrame = refusalRef.current;
+      const reason = errorFrame?.message || event.reason || "";
       refusalRef.current = null;
       const readyAt = readyAtRef.current;
       readyAtRef.current = null;
-      if (readyAt !== null && Date.now() - readyAt >= STABLE_SESSION_MS) attemptsRef.current = 0;
+      if (readyAt !== null && Date.now() - readyAt >= STABLE_SESSION_MS) recovery.stable();
       const wasLive = statusRef.current === "connected";
       if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) droppedAtRef.current ??= Date.now();
       const droppedAt = droppedAtRef.current;
@@ -279,33 +307,36 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
         Date.now() - droppedAt < INSTANCE_RETURN_WINDOW_MS
       ) {
         // Said once as the wait begins, not on every poll while the instance is down.
-        if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) note(term, `${reason || "The instance went away"}. Reconnecting when it starts again…`, "\x1b[33m");
-        attemptsRef.current = Math.max(attemptsRef.current, 1); // connect() keeps "reconnecting"
+        if (wasLive || event.code === WS_CLOSE.POWERED_DOWN) note(term, `${reason || "The instance went away"}. Reconnecting when it starts again…`, YELLOW);
         setStatus("reconnecting", WAITING_FOR_INSTANCE);
         retryTimerRef.current = setTimeout(() => connectRef.current(), INSTANCE_RETURN_POLL_MS);
         return;
       }
       if (event.code === WS_CLOSE.NORMAL) {
-        attemptsRef.current = 0;
+        recovery.restart();
         setStatus("ended", reason || "The session ended");
         note(term, `${reason || "The session ended"}. Press Enter to start a new one.`);
         return;
       }
-      if (FINAL_CODES.has(event.code)) {
+      if (wasLive) replacingRef.current = true;
+      const step = await recovery.onClose(event.code, reason, { opened, errorFrame, liveSocket: liveRef.current });
+      if (step.action === "own") {
+        // 4404 outside the return window, 4409, or a power-down: final, in the server's words.
         finalRef.current = true;
-        const message = event.code === WS_CLOSE.ACCESS_REVOKED ? ACCESS_REVOKED_MESSAGE : reason || "The session cannot start";
+        const message = messageFor(step.kind, reason);
         setStatus("error", message);
-        note(term, message, "\x1b[31m");
+        note(term, message, RED);
         return;
       }
-      scheduleRetry(reason || "The connection dropped");
+      apply(step, generation);
     };
-  }, [flush, host, instanceName, kind, project, scheduleRetry, setStatus]);
+  }, [apply, flush, host, instanceName, kind, project, setStatus]);
 
   connectRef.current = () => void connect();
 
   const reconnect = useCallback(() => {
-    attemptsRef.current = 0;
+    recoveryRef.current?.restart();
+    generationRef.current += 1;
     const ws = wsRef.current;
     if (ws && ws.readyState <= WebSocket.OPEN) {
       wsRef.current = null;
@@ -320,7 +351,7 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
     if (!enabled || !containerRef.current) return;
     if (bundleRef.current) return; // StrictMode double-invoke guard
     closedByUsRef.current = false;
-    attemptsRef.current = 0;
+    recoveryRef.current?.restart();
     let disposed = false;
     const cleanups: Array<() => void> = [];
 
@@ -380,8 +411,9 @@ export function useTerminalSession(options: UseTerminalSessionOptions): Terminal
       }, PING_EVERY_MS);
       const wake = () => {
         if (document.hidden) return;
-        if (statusRef.current === "reconnecting") {
-          attemptsRef.current = Math.min(attemptsRef.current, 1);
+        // A wait for the backoff, or a give-up after five tries, ends when the network or tab returns.
+        if (statusRef.current === "reconnecting" || (statusRef.current === "error" && !finalRef.current)) {
+          recoveryRef.current?.restart();
           void connect();
         } else {
           sendJson({ type: "ping" });

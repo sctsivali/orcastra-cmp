@@ -41,8 +41,10 @@ const ROLE_GROUPS = {
 };
 
 
-async function authenticate(context, role, { sessionRole = role } = {}) {
+async function authenticate(context, role, { sessionRole = role, accessExpiresIn = 60 * 60 } = {}) {
   // A refreshed synthetic session can lose privileges without changing its principal or bearer.
+  // accessExpiresIn below 60 s keeps the server from hydrating the session, as for a deep link
+  // opened in a new tab long after the last refresh: the page then reads /api/auth/session itself.
   const groups = ROLE_GROUPS[sessionRole];
   if (!ROLE_GROUPS[role] || !groups) throw new Error(`Unknown E2E role: ${sessionRole}`);
   const { encode } = await import("next-auth/jwt");
@@ -59,7 +61,7 @@ async function authenticate(context, role, { sessionRole = role } = {}) {
       email,
       accessToken: `e2e-${role}-access-token`,
       refreshToken: "unused-e2e-refresh-token",
-      expiresAt: now + 60 * 60,
+      expiresAt: now + accessExpiresIn,
       groups,
       roles: groups,
       iat: now,

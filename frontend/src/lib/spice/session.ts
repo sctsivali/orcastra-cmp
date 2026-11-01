@@ -4,16 +4,21 @@
  *
  * - "connected" means the guest is on screen (the first frame drawn), not that the main channel
  *   linked, which used to lift the overlay onto a blank canvas.
- * - How a session ends decides what happens next: 1000, 4409 (another viewer took the display
- *   over; reconnecting would take it back and start a loop) and 4403/4404 are final; a dropped connection (1006, 1011) reconnects with backoff, at once when
- *   the network or the tab comes back. After the instance powered down (1012, a stop or a
- *   restart), or a drop of a session that was on screen, "not running" means "not yet": it tries
- *   every few seconds until the instance is back, for up to three minutes.
+ * - How a session ends decides what happens next: 1000 and 4409 (another viewer took the display
+ *   over; reconnecting would take it back and start a loop) end it, and 4404 is final. After the
+ *   instance powered down (1012, a stop or a restart), or a drop of a session that was on screen,
+ *   "not running" means "not yet": it tries every few seconds until the instance is back, for up
+ *   to three minutes. Everything else goes through lib/socket-recovery.ts: a refused ticket or a
+ *   4401 refreshes the session once (or signs in again), 4403 / 4428 / 4423 stop and say why, and
+ *   a dropped connection (1006, 1011) reconnects with backoff, at once when the network or the tab
+ *   comes back.
  * - With the guest agent running, the guest's resolution follows the console's size, and the
  *   clipboard and file drops work both ways. Without it the console scales the picture instead.
  */
 
 import { INSTANCE_RETURN_POLL_MS, INSTANCE_RETURN_WINDOW_MS, STABLE_SESSION_MS, WAITING_FOR_INSTANCE, WS_CLOSE, spiceSocketUrls } from "@/lib/ws-url";
+import { messageFor } from "@/lib/ws-close";
+import { SocketRecovery, type RecoveryStep } from "@/lib/socket-recovery";
 import { loadSpice } from "./loader";
 import { KeyboardBridge, downCode, keyForCharacter, upCode, NAMED_KEYS } from "./keyboard";
 import { PointerBridge, type MouseMode } from "./pointer";
@@ -47,8 +52,13 @@ export interface FileTransferEvent {
   error: string | null;
 }
 
+/** What the operator can do about an error: sign in again (the session ended). */
+export interface SpiceStatusHint {
+  signIn?: boolean;
+}
+
 export interface SpiceSessionEvents {
-  onStatus?: (status: SpiceStatus, detail?: string) => void;
+  onStatus?: (status: SpiceStatus, detail?: string, hint?: SpiceStatusHint) => void;
   onSurface?: (width: number, height: number) => void;
   onStats?: (stats: SpiceStats) => void;
   onMouseMode?: (mode: MouseMode) => void;
@@ -64,7 +74,7 @@ export interface SpiceUrls {
   channels: string[];
 }
 
-type SpiceErrorLike = Error & { code?: number; reason?: string; channel?: string };
+type SpiceErrorLike = Error & { code?: number; reason?: string; channel?: string; opened?: boolean };
 
 // SPICE globals the session reads (loaded from public/spice-html5).
 type Globals = {
@@ -97,8 +107,6 @@ export interface SpiceConn extends ChannelLike {
   [hook: string]: unknown;
 }
 
-const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000];
-const FINAL_CODES = new Set([1000, 1008, 4403, 4404, 4409]);
 const RESIZE_DEBOUNCE_MS = 350;
 const TYPE_INTERVAL_MS = 8;
 
@@ -109,7 +117,6 @@ function globals(): Globals {
 function friendly(error: SpiceErrorLike): string {
   if (error.code === 1000) return "The console session ended. Another viewer may have opened this console.";
   if (error.code === WS_CLOSE.TAKEN_OVER) return "Another viewer opened this console. Reconnect to take it back.";
-  if (error.code === 4403) return "Access to this instance was revoked.";
   if (error.reason) return error.reason;
   const message = error.message || "The console connection failed";
   if (/protocol mismatch|refused/i.test(message)) return "The console could not connect. The VM may not be running.";
@@ -126,7 +133,9 @@ export class SpiceSession {
   private pointer: PointerBridge | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private generation = 0;
-  private attempts = 0;
+  private readonly recovery = new SocketRecovery();
+  /** A frame of this display was on screen at some point, so an ended sign-in waits for the operator. */
+  private everConnected = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -167,27 +176,28 @@ export class SpiceSession {
     this.teardown();
     // A retry keeps showing "reconnecting" (set when it was scheduled).
     const scriptsReady = Boolean((window as unknown as { SpiceMainConn?: unknown }).SpiceMainConn);
-    if (this.attempts === 0) this.setStatus(scriptsReady ? "connecting" : "loading");
+    const first = this.recovery.used === 0 && this.status !== "reconnecting";
+    if (first) this.setStatus(scriptsReady ? "connecting" : "loading");
     try {
       await loadSpice();
       if (generation !== this.generation) return;
-      if (this.attempts === 0 && !scriptsReady) this.setStatus("connecting");
+      if (first && !scriptsReady) this.setStatus("connecting");
       // One single-use ticket per channel, minted right before the connect.
       const urls = await spiceSocketUrls(this.target.instanceName, this.target.host, this.target.project);
       if (generation !== this.generation) return;
       this.open(urls, generation);
     } catch (error) {
       if (generation !== this.generation) return;
-      const status = (error as { status?: number })?.status;
-      // A refused ticket (403 forbidden, 409 fenced) will be refused again; a network failure may pass.
-      const final = status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
-      this.fail(error instanceof Error ? error.message : "The console could not connect", !final);
+      // A refused ticket (403 forbidden, 409 fenced) is final, a 401 refreshes the session once,
+      // and a network failure backs off.
+      const step = await this.recovery.onMintError(error, { liveSocket: this.everConnected });
+      if (generation === this.generation && !this.disposed) this.apply(step);
     }
   }
 
   /** The operator asked to reconnect: start over, counting from the first attempt. */
   reconnect(): void {
-    this.attempts = 0;
+    this.recovery.restart();
     void this.connect();
   }
 
@@ -232,7 +242,8 @@ export class SpiceSession {
         this.onError(error);
       },
       onsuccess: () => {
-        // The main channel linked; "connected" waits for the first frame.
+        // The main channel linked, so the server took the ticket; "connected" waits for the first frame.
+        if (generation === this.generation) this.recovery.ready();
       },
       onagent: () => {
         if (generation !== this.generation) return;
@@ -248,9 +259,8 @@ export class SpiceSession {
     sc.onfirstdraw = () => {
       if (generation !== this.generation) return;
       this.droppedAt = null;
-      this.stableTimer = setTimeout(() => {
-        this.attempts = 0;
-      }, STABLE_SESSION_MS);
+      this.everConnected = true;
+      this.stableTimer = setTimeout(() => this.recovery.stable(), STABLE_SESSION_MS);
       this.setStatus("connected");
       this.wake();
     };
@@ -298,13 +308,13 @@ export class SpiceSession {
     // Every channel reports the same ending; the first one tears the connection down.
     if (!this.sc) return;
     if (this.status === "connected" || error.code === WS_CLOSE.POWERED_DOWN) this.droppedAt ??= Date.now();
-    const final = error.code !== undefined && FINAL_CODES.has(error.code);
+    // An error event (the socket failed before a close frame) carries no code: a dropped connection.
+    const opened = error.opened ?? this.sc.state !== "connecting";
     const message = friendly(error);
     this.teardown();
     if (this.awaitsInstance(error.code)) {
       this.clearRetry();
       this.retryable = true;
-      this.attempts = Math.max(this.attempts, 1); // connect() keeps showing "reconnecting"
       this.setStatus("reconnecting", WAITING_FOR_INSTANCE);
       this.retryTimer = setTimeout(() => void this.connect(), INSTANCE_RETURN_POLL_MS);
       return;
@@ -313,7 +323,15 @@ export class SpiceSession {
       this.setStatus("ended", message);
       return;
     }
-    this.fail(message, !final);
+    const generation = this.generation;
+    void this.recovery
+      .onClose(error.code ?? 1006, error.reason ?? "", { opened, liveSocket: this.everConnected })
+      .then((step) => {
+        if (generation !== this.generation || this.disposed) return;
+        // 4404 outside the return window: final, in the server's words.
+        if (step.action === "own") this.apply({ action: "stop", message: error.reason ? messageFor(step.kind, error.reason) : message });
+        else this.apply(step);
+      });
   }
 
   /** The instance went away under a session that was on screen, recently enough to wait for it. */
@@ -322,17 +340,28 @@ export class SpiceSession {
     return this.droppedAt !== null && Date.now() - this.droppedAt < INSTANCE_RETURN_WINDOW_MS;
   }
 
-  private fail(message: string, retryable: boolean): void {
+  /** Carry out what the recovery decided. */
+  private apply(step: RecoveryStep): void {
     this.clearRetry();
-    this.retryable = retryable;
-    if (!retryable || this.attempts >= RECONNECT_DELAYS_MS.length) {
-      this.setStatus("error", message);
-      return;
+    switch (step.action) {
+      case "retry":
+        this.retryable = true;
+        this.setStatus("reconnecting", step.message || undefined);
+        this.retryTimer = setTimeout(() => void this.connect(), step.delayMs);
+        return;
+      case "leaving":
+        this.retryable = false;
+        this.setStatus("connecting", step.message);
+        return;
+      case "stop":
+        this.retryable = Boolean(step.retry);
+        this.setStatus("error", step.message, step.signIn ? { signIn: true } : undefined);
+        return;
+      case "own":
+        this.retryable = false;
+        this.setStatus("error", messageFor(step.kind));
+        return;
     }
-    const base = RECONNECT_DELAYS_MS[this.attempts];
-    this.attempts += 1;
-    this.setStatus("reconnecting", message);
-    this.retryTimer = setTimeout(() => void this.connect(), base + Math.floor(Math.random() * 400));
   }
 
   private clearRetry(): void {
@@ -342,7 +371,7 @@ export class SpiceSession {
 
   private onWake = (): void => {
     if (this.status === "reconnecting" || (this.status === "error" && this.retryable)) {
-      this.attempts = Math.min(this.attempts, 1);
+      this.recovery.restart();
       void this.connect();
     }
   };
@@ -351,9 +380,9 @@ export class SpiceSession {
     if (!document.hidden) this.onWake();
   };
 
-  private setStatus(status: SpiceStatus, detail?: string): void {
+  private setStatus(status: SpiceStatus, detail?: string, hint?: SpiceStatusHint): void {
     this.status = status;
-    this.events.onStatus?.(status, detail);
+    this.events.onStatus?.(status, detail, hint);
   }
 
   // ── the canvas and its input ─────────────────────────────────────────────────────────────

@@ -10,10 +10,11 @@
 
 import * as React from "react";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { AlertCircle, FileUp, Loader2, Monitor, MousePointer2, RefreshCw, WifiOff } from "lucide-react";
+import { AlertCircle, FileUp, Loader2, LogIn, Monitor, MousePointer2, RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { cn } from "@/lib/utils";
+import { reauthenticate } from "@/lib/reauth";
 import { sendCombo, type SpiceInputConnection } from "@/lib/spice/input";
 import type { KeyCombo } from "@/lib/spice/keys";
 import {
@@ -92,6 +93,8 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
   const sessionRef = useRef<SpiceSession | null>(null);
   const [status, setStatus] = useState<SpiceStatus>("loading");
   const [detail, setDetail] = useState<string>("");
+  // The session behind the page ended: the way forward is signing in, not reconnecting.
+  const [signIn, setSignIn] = useState(false);
   const [surface, setSurface] = useState<{ width: number; height: number } | null>(null);
   const [viewport, setViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [mouseMode, setMouseMode] = useState<MouseMode>("client");
@@ -107,9 +110,10 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
 
   useEffect(() => {
     const session = new SpiceSession(screenId, { instanceName, host, project }, {
-      onStatus: (next, why) => {
+      onStatus: (next, why, hint) => {
         setStatus(next);
         setDetail(why ?? "");
+        setSignIn(Boolean(hint?.signIn));
         callbacks.current.onStatus?.(next, why);
       },
       onSurface: (width, height) => setSurface({ width, height }),
@@ -313,15 +317,15 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         <div className={OVERLAY} role="status" aria-live="polite">
           <Loader2 className="h-7 w-7 animate-spin text-white/70 motion-reduce:animate-none" aria-hidden="true" />
           <p className="text-sm text-white/80">
-            {status === "loading" ? "Loading the console…" : `Connecting to ${instanceName}…`}
+            {status === "loading" ? "Loading the console…" : detail || `Connecting to ${instanceName}…`}
           </p>
         </div>
       )}
 
       {status === "reconnecting" && (
-        <div className="absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-2 rounded bg-black/85 px-3 py-1.5 text-xs text-white/90" role="status" aria-live="polite">
-          <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-          Reconnecting…
+        <div className="absolute left-1/2 top-3 z-10 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded bg-black/85 px-3 py-1.5 text-xs text-white/90" role="status" aria-live="polite">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          {detail || "Reconnecting…"}
           <button type="button" className="underline underline-offset-2 hover:text-white" onClick={reconnect}>
             Now
           </button>
@@ -339,10 +343,17 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
             <AlertCircle className="terminal-status h-8 w-8 text-status-offline" aria-hidden="true" />
           )}
           <p className="max-w-md text-sm text-white/80">{detail || (status === "ended" ? "The console session ended." : "The console connection failed.")}</p>
-          <Button variant="outline" size="sm" onClick={reconnect} className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white">
-            <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-            Reconnect
-          </Button>
+          {signIn && status === "error" ? (
+            <Button variant="outline" size="sm" onClick={() => reauthenticate({ auto: false })} className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white">
+              <LogIn className="mr-2 h-4 w-4" aria-hidden="true" />
+              Sign In Again
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={reconnect} className="border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white">
+              <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+              Reconnect
+            </Button>
+          )}
         </div>
       )}
     </div>

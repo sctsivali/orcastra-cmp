@@ -44,8 +44,9 @@ test("a shell that dies right after it opens backs off", async ({ page, context 
 
   await expect.poll(() => opened.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
 
-  // The delays are 1 s, then 2 s. A reset backoff leaves about 1 s between every pair.
-  expect(opened[2] - opened[1]).toBeGreaterThanOrEqual(1_900);
+  // The delays are 1 s, then 2 s, each within 20 % (lib/ws-close.ts backoffMs). A reset backoff
+  // leaves at most 1.2 s between every pair; the second wait is at least 1.6 s.
+  expect(opened[2] - opened[1]).toBeGreaterThanOrEqual(1_500);
 });
 
 test("a shell that ran for a while retries from the first delay", async ({ page, context }) => {

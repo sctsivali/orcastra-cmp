@@ -252,7 +252,11 @@ const wsTicketApi = compileCommonJs(
 );
 const wsUrls = compileCommonJs(
   "frontend/src/lib/ws-url.ts",
-  { "@/lib/ws-ticket-api": wsTicketApi, "@/types/api": { APIError: TestAPIError } },
+  {
+    "@/lib/ws-ticket-api": wsTicketApi,
+    "@/lib/ws-close": compileCommonJs("frontend/src/lib/ws-close.ts", {}),
+    "@/types/api": { APIError: TestAPIError },
+  },
   { fetch: fetchStub, window: { location: { hostname: "localhost", protocol: "http:" } } },
 );
 fetchImplementation = async ({ options }) => {

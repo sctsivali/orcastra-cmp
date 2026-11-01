@@ -18,6 +18,7 @@ import { SessionStatusBadge } from "@/components/terminal/session-status";
 import { ConsoleWorkspace } from "@/components/console/console-workspace";
 import type { ConsoleConnectionStatus, ConsoleTab, InstanceStatus } from "@/lib/console-store";
 import { getAccessToken } from "@/lib/api";
+import { isReauthenticating } from "@/lib/reauth";
 import { AgentActivityBadge } from "./components/agent-activity-badge";
 
 const TABS: ConsoleTab[] = ["graphics", "text", "serial", "iso", "files"];
@@ -65,6 +66,8 @@ function ConsolePage() {
   useEffect(() => {
     if (connection !== "connected") return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      // A sign-in this page started leaves on purpose and comes straight back here.
+      if (isReauthenticating()) return;
       event.preventDefault();
       event.returnValue = "";
     };

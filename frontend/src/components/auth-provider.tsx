@@ -11,6 +11,8 @@
  * - Proactive token refresh via SessionProvider refetchInterval (4 min)
  * - 401 handling: triggers session refresh instead of immediate redirect
  * - Gates children rendering until token is ready (prevents race conditions)
+ * - A session the IdP ended signs in again: on its own in a tab that never worked (a deep link
+ *   opened in a new tab), behind a Sign In Again banner in one that did
  */
 
 import { SessionProvider, useSession, signIn, __NEXTAUTH } from "next-auth/react";
@@ -18,13 +20,18 @@ import type { Session } from "next-auth";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { getActorQueryScope } from "@/hooks/use-query-scope";
 import {
+  getAccessToken,
   isAuthActorSynchronized,
   isAuthContextSynchronized,
   onAuthFailure,
   onAuthRecovered,
+  onForceSessionRefresh,
   onSessionRefreshNeeded,
   setAccessToken,
 } from "@/lib/api";
+import { REFRESH_FAILED, REFRESH_TOKEN_REVOKED } from "@/lib/auth-refresh";
+import { noteSessionWorked, reauthenticate } from "@/lib/reauth";
+import { SOCKET_MESSAGES } from "@/lib/ws-close";
 
 // Session refresh interval (seconds) - refresh token before it expires.
 // Authentik default access token lifetime is ~5 min, so refresh every 4 min.
@@ -48,6 +55,8 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     { token: string | null; actorScope: string | null } | undefined
   >(undefined);
   const [authError, setAuthError] = useState(false);
+  // "ended": the IdP refused the session's refresh token. "leaving": this tab is signing in again.
+  const [sessionEnd, setSessionEnd] = useState<"ended" | "leaving" | null>(null);
   const retryCountRef = useRef(0);
   const wasAuthenticatedRef = useRef(false);
   const signOutConfirmedRef = useRef(false);
@@ -76,6 +85,20 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
       }
     };
     onSessionRefreshNeeded(refreshFn);
+    // A socket whose ticket was refused asks for a fresh token and needs to know what it got.
+    // note: the new token is installed here, before the socket mints again, when it belongs to
+    // the same actor; another actor goes through the effect below, which remounts the page.
+    onForceSessionRefresh(async () => {
+      const before = getAccessToken();
+      const next = await updateSession({ forceRefresh: true }).catch(() => null);
+      if (!next) return "unavailable";
+      if (next.error === REFRESH_TOKEN_REVOKED) return "revoked";
+      if (next.error === REFRESH_FAILED || !next.accessToken) return "unavailable";
+      if (next.accessToken === before) return "unchanged";
+      const scope = getActorQueryScope(next);
+      if (isAuthActorSynchronized(scope)) setAccessToken(next.accessToken, scope);
+      return "refreshed";
+    });
   }, [updateSession]);
 
   // api.ts no longer redirects on repeated 401s - it asks for the banner instead,
@@ -90,8 +113,24 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     let cancelled = false;
 
     if (status === "authenticated" && session?.accessToken) {
+      // The IdP refused the refresh token: this session is over. A tab that never worked (a deep
+      // link in a new tab) has nothing to lose and signs in again at once, which is silent while
+      // the IdP session lives; reauthenticate holds a second automatic try within a minute back.
+      // A tab that was working keeps its page and its open sessions until the operator chooses.
+      if (session.error === REFRESH_TOKEN_REVOKED) {
+        const onAuthPage = window.location.pathname === "/auth" || window.location.pathname.startsWith("/auth/");
+        if (!wasAuthenticatedRef.current && !onAuthPage && reauthenticate({ auto: true })) {
+          setSessionEnd("leaving");
+          return;
+        }
+        console.warn("[Auth] the identity provider ended this session; offering to sign in again");
+        setSessionEnd("ended");
+        synchronizeAuth(session.accessToken, actorScope); // stale, so the page keeps its identity
+        return;
+      }
+
       // Check if token refresh failed - the IdP may be unreachable
-      if (session.error === "RefreshAccessTokenError") {
+      if (session.error === REFRESH_FAILED) {
         retryCountRef.current += 1;
 
         // Don't auto-redirect - it causes visible "random refresh" to the user.
@@ -112,6 +151,8 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
       // stayed pinned to the top of the viewport for the life of the tab after the
       // session had fully recovered.
       setAuthError(false);
+      setSessionEnd(null);
+      noteSessionWorked();
       synchronizeAuth(session.accessToken, actorScope);
     } else if (status === "unauthenticated") {
       // important: next-auth's fetchData() returns null on ANY failure, including a
@@ -169,6 +210,15 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
     void __NEXTAUTH._getSession({ event: "storage" });
   }, [hydrated, authenticatedContextReady]);
 
+  // A tab that never worked is on its way to the IdP; it renders nothing that would ask for data.
+  if (sessionEnd === "leaving") {
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-background px-6 text-center" role="status" aria-live="polite">
+        <p className="text-sm text-muted-foreground">{SOCKET_MESSAGES.signingInAgain}</p>
+      </div>
+    );
+  }
+
   // Returning null commits an unmount only on initial resolution, sign-out, or a direct
   // authenticated A -> B transition. The effect then installs B and triggers a clean remount;
   // silent token rotation for the same actor never crosses this gate.
@@ -178,7 +228,18 @@ function TokenSync({ children, hydrated }: { children: ReactNode; hydrated: bool
 
   return (
     <>
-      {authError && (
+      {sessionEnd === "ended" ? (
+        <div className="fixed top-0 inset-x-0 z-[100] bg-destructive/90 text-destructive-foreground px-4 py-2.5 text-sm flex items-center justify-center gap-3" role="alert">
+          <span>Your session ended. Sign in again to continue.</span>
+          <button
+            type="button"
+            onClick={() => reauthenticate({ auto: false })}
+            className="underline font-medium hover:opacity-80"
+          >
+            Sign In Again
+          </button>
+        </div>
+      ) : authError && (
         <div className="fixed top-0 inset-x-0 z-[100] bg-destructive/90 text-destructive-foreground px-4 py-2.5 text-sm flex items-center justify-center gap-3">
           <span>Your session could not be refreshed. Sign in again to continue.</span>
           <button

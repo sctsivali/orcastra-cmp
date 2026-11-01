@@ -20,6 +20,7 @@ import { OnScreenKeyboard } from "@/components/console/on-screen-keyboard";
 import { SearchBar, terminalSequence } from "@/components/console/console-workspace-parts";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
 import { consoleAPI } from "@/lib/console-api";
+import { isReauthenticating } from "@/lib/reauth";
 import type { ConsoleConnectionStatus, InstanceStatus } from "@/lib/console-store";
 import { DEFAULT_FONT_SIZE } from "@/lib/xterm-setup";
 
@@ -81,6 +82,8 @@ function TerminalPage() {
   useEffect(() => {
     if (connection !== "connected") return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      // A sign-in this page started leaves on purpose and comes straight back here.
+      if (isReauthenticating()) return;
       event.preventDefault();
       event.returnValue = "";
     };

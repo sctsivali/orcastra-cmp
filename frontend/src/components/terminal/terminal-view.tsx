@@ -7,8 +7,9 @@
 
 import * as React from "react";
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import { AlertCircle, Loader2, RotateCcw } from "lucide-react";
+import { AlertCircle, Loader2, LogIn, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { reauthenticate } from "@/lib/reauth";
 import { cn } from "@/lib/utils";
 import {
   useTerminalSession,
@@ -46,6 +47,8 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(fu
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<TerminalSessionStatus>("connecting");
   const [detail, setDetail] = useState("");
+  // The session behind the page ended: the way forward is signing in, not reconnecting.
+  const [signIn, setSignIn] = useState(false);
   const session = useTerminalSession({
     containerRef,
     kind,
@@ -53,9 +56,10 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(fu
     host,
     project,
     fontSize,
-    onStatus: (next, why) => {
+    onStatus: (next, why, hint) => {
       setStatus(next);
       setDetail(why ?? "");
+      setSignIn(Boolean(hint?.signIn));
       onStatus?.(next, why);
     },
     onSessionId,
@@ -77,28 +81,41 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(fu
         />
       </div>
       {status === "reconnecting" && (
-        <div className="absolute right-3 top-2 flex items-center gap-2 rounded bg-terminal-raised px-2.5 py-1 text-xs text-gray-200" role="status" aria-live="polite">
-          <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-          Reconnecting…
+        <div className="absolute right-3 top-2 flex max-w-[80%] items-center gap-2 rounded bg-terminal-raised px-2.5 py-1 text-xs text-gray-200" role="status" aria-live="polite">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          <span className="min-w-0 truncate" title={detail}>{detail || "Reconnecting…"}</span>
         </div>
       )}
       {ended && (
         <div className="absolute right-3 top-2 flex max-w-[80%] items-center gap-2 rounded bg-terminal-raised px-2.5 py-1 text-xs text-gray-200" role="status" aria-live="polite">
           {status === "error" && <AlertCircle className="terminal-status h-3.5 w-3.5 shrink-0 text-status-offline" aria-hidden="true" />}
           <span className="min-w-0 truncate" title={detail}>{detail || (status === "ended" ? "The session ended" : "The session failed")}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-6 shrink-0 gap-1 px-2 text-xs text-gray-100 hover:bg-white/10"
-            onClick={() => {
-              session.reconnect();
-              session.focus();
-            }}
-          >
-            <RotateCcw className="h-3 w-3" aria-hidden="true" />
-            {status === "ended" ? "New session" : "Retry"}
-          </Button>
+          {signIn ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 gap-1 px-2 text-xs text-gray-100 hover:bg-white/10"
+              onClick={() => reauthenticate({ auto: false })}
+            >
+              <LogIn className="h-3 w-3" aria-hidden="true" />
+              Sign In Again
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 gap-1 px-2 text-xs text-gray-100 hover:bg-white/10"
+              onClick={() => {
+                session.reconnect();
+                session.focus();
+              }}
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+              {status === "ended" ? "New session" : "Reconnect"}
+            </Button>
+          )}
         </div>
       )}
     </div>

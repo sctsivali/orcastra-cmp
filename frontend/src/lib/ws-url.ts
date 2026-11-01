@@ -10,29 +10,13 @@
  */
 
 import { mintWsTicket, type WsTicketRequest } from "@/lib/ws-ticket-api";
-import { APIError } from "@/types/api";
+import { SOCKET_MESSAGES } from "@/lib/ws-close";
 
 export type { WsTicketRequest } from "@/lib/ws-ticket-api";
 
-/** Close codes the backend sends beside the standard ones. */
-export const WS_CLOSE = {
-  /** Refused at connect: a spent, expired or foreign ticket, or no access. */
-  POLICY_VIOLATION: 1008,
-  /** The session the ticket was minted under ended. A feed mints a new one and reconnects. */
-  SESSION_ENDED: 4401,
-  /** A shell or console lost its access while open. It must not reconnect on its own. */
-  ACCESS_REVOKED: 4403,
-  /** The shell, console or display ended on the instance side (exit, power off, taken over). */
-  NORMAL: 1000,
-  /** The connection to the instance broke; reconnecting may work. */
-  UPSTREAM_FAILED: 1011,
-  /** The session cannot start (not running, not found, no agent); reconnecting will not help. */
-  UNAVAILABLE: 4404,
-  /** The instance powered down (stopped, or on its way through a restart). */
-  POWERED_DOWN: 1012,
-  /** Another viewer opened this display (QEMU serves one). Taking it back is the operator's call. */
-  TAKEN_OVER: 4409,
-} as const;
+// The close codes and what they mean live in lib/ws-close.ts, which the contract check compiles
+// on its own.
+export { WS_CLOSE } from "@/lib/ws-close";
 
 /**
  * A console that was on screen keeps trying for this long after its instance powered down or its
@@ -50,7 +34,7 @@ export const WAITING_FOR_INSTANCE = "The instance is not running. The console re
  */
 export const STABLE_SESSION_MS = 10_000;
 
-export const ACCESS_REVOKED_MESSAGE = "Access to this instance was revoked.";
+export const ACCESS_REVOKED_MESSAGE = SOCKET_MESSAGES.accessRevoked;
 
 /**
  * Derive WebSocket protocol + host from NEXT_PUBLIC_API_URL.
@@ -115,10 +99,4 @@ export async function spiceSocketUrls(
   const { ticket, tickets } = await mintWsTicket(request);
   const all = tickets && tickets.length > 0 ? tickets : [ticket];
   return { main: withTicket(request, all[0]), channels: all.slice(1).map((t) => withTicket(request, t)) };
-}
-
-/** What to tell the operator when a ticket could not be minted (the break-glass sentence included). */
-export function mintFailureMessage(error: unknown): string {
-  if (error instanceof APIError && error.message) return error.message;
-  return "Could not open a live connection. Try again.";
 }

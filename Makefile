@@ -372,6 +372,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-session-cookie-echo.mjs
 	@echo "$(COLOR_GREEN)Checking what a failed token refresh means...$(COLOR_RESET)"
 	@node scripts/checks/check-auth-refresh-contract.mjs
+	@echo "$(COLOR_GREEN)Checking the terminal and console close contract...$(COLOR_RESET)"
+	@node scripts/checks/check-ws-close-contract.mjs
 	@echo "$(COLOR_GREEN)Checking the access gate...$(COLOR_RESET)"
 	@node scripts/checks/check-access-gate.mjs
 	@echo "$(COLOR_GREEN)Checking the Vault notice...$(COLOR_RESET)"
