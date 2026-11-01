@@ -4,6 +4,7 @@ Authorization used to run once, at connect, so a terminal opened before a tenant
 revoked or an account was disabled stayed open for as long as the browser kept it. The guard
 re-checks the account (Authentik), the caller's scope and the socket's own access rule, closes
 with 4403 on a definite no, and never on an Authentik outage, which would cut every open shell.
+The close reason says which no it was, so the page can tell the operator.
 """
 
 import asyncio
@@ -68,13 +69,13 @@ def _guard(monkeypatch, identities, checks, *, rounds: float = 0.2):
 def test_a_disabled_account_is_closed_with_4403(monkeypatch):
     socket, _ = _guard(monkeypatch, [IdentityCheck(False, "active"), IdentityCheck(True, "user_inactive")], [])
 
-    assert socket.closed == [(ACCESS_REVOKED, "Access revoked")]
+    assert socket.closed == [(ACCESS_REVOKED, "access_revoked:account_ended")]
 
 
 def test_revoked_access_is_closed_with_4403(monkeypatch):
     socket, _ = _guard(monkeypatch, [], [None, HTTPException(status_code=403, detail="forbidden")])
 
-    assert socket.closed == [(ACCESS_REVOKED, "Access revoked")]
+    assert socket.closed == [(ACCESS_REVOKED, "access_revoked:access_ended")]
 
 
 def test_an_authentik_outage_never_closes(monkeypatch):
@@ -91,7 +92,7 @@ def test_five_failed_checks_in_a_row_close_and_a_success_resets_the_count(monkey
     assert socket.closed == [], "four, a success, four: never five in a row"
 
     socket, _ = _guard(monkeypatch, [], [broken] * 5)
-    assert socket.closed == [(1011, "Could not re-authorize this session")]
+    assert socket.closed == [(1011, "reauthorize_failed")]
 
 
 def test_without_a_user_there_is_nothing_to_guard():
@@ -182,7 +183,7 @@ def test_a_demoted_caller_is_closed_and_an_unchanged_one_kept(monkeypatch):
     demoted, _ = _guard(monkeypatch, [IdentityCheck(False, "active", frozenset({Role.TENANT}))], [])
     unchanged, _ = _guard(monkeypatch, [IdentityCheck(False, "active", frozenset({Role.PARTNER}))] * 10, [])
 
-    assert demoted.closed == [(ACCESS_REVOKED, "Access revoked")]
+    assert demoted.closed == [(ACCESS_REVOKED, "access_revoked:role_changed")]
     assert unchanged.closed == []
 
 
@@ -252,5 +253,27 @@ def test_the_role_check_reads_authentik_not_the_shared_cache(monkeypatch):
 
     asyncio.run(run())
 
-    assert socket.closed == [(ACCESS_REVOKED, "Access revoked")]
+    assert socket.closed == [(ACCESS_REVOKED, "access_revoked:role_changed")]
     assert calls == [], "scope is never resolved, so the frozen role is never cached, once roles differ"
+
+
+def test_a_file_transfer_still_hears_the_plain_reason(monkeypatch):
+    """reauthorize_until feeds StreamCut, which keeps its sentence; only sockets carry the token."""
+    from app.services.ws_session_guard import reauthorize_until
+
+    async def identity(user):
+        return IdentityCheck(True, "user_inactive")
+
+    async def scope(user, **_kwargs):
+        return None
+
+    monkeypatch.setattr(ws_session_guard, "check_identity", identity)
+    monkeypatch.setattr(ws_session_guard, "set_org_scope_for_ws", scope)
+    heard = []
+
+    async def refused(reason):
+        heard.append(reason)
+
+    asyncio.run(reauthorize_until(USER, lambda u: None, refused, label="t", interval=0.01))
+
+    assert heard == ["Access revoked"]

@@ -27,6 +27,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import WebSocket
 
+from app.core import ws_close
 from app.services.activity_logger import get_activity_logger
 from app.services.console_service import get_console_service
 from app.services.interactive_relay import (
@@ -118,8 +119,8 @@ class ConsoleProxy:
         except SessionSetupError as exc:
             logger.info("Console %s for %s did not start: %s", self.console_type, self._label, exc)
             await close_browser(self.browser_ws, CLOSE_UPSTREAM if exc.retryable else CLOSE_UNAVAILABLE, str(exc))
-        except MigrationFenceConflict as exc:
-            await close_browser(self.browser_ws, CLOSE_UNAVAILABLE, str(exc.detail))
+        except MigrationFenceConflict:
+            await close_browser(self.browser_ws, ws_close.FENCED, "migration_fenced")
         except Exception as exc:  # noqa: BLE001 - the browser is told; the log keeps the type
             logger.error("Console proxy for %s failed: %s: %s", self._label, type(exc).__name__, redact(exc))
             await close_browser(self.browser_ws, CLOSE_UPSTREAM, "The console connection failed")

@@ -148,9 +148,24 @@ async def test_a_session_that_cannot_start_says_why_and_whether_to_retry(lxd, re
     await proxy(browser).run()
 
     assert browser.closed == (code, "The instance is not running (status: Stopped)")
-    assert {"type": "error", "message": "The instance is not running (status: Stopped)", "retryable": retryable} in [
-        p for k, p in browser.sent if k == "json"
-    ]
+    assert {
+        "type": "error", "message": "The instance is not running (status: Stopped)", "code": code, "retryable": retryable,
+    } in [p for k, p in browser.sent if k == "json"]
+
+
+async def test_a_fenced_instance_closes_with_4423_and_keeps_the_sentence_in_the_frame(lxd):
+    """The page reads the code; the sentence rides in the frame, where 123 bytes do not cut it."""
+    from app.services.migration_fence import MigrationFenceConflict
+
+    lxd["state"]["refuse"] = MigrationFenceConflict("Migration Center is moving this instance")
+    browser = FakeBrowser()
+    browser.type_text(json.dumps({"width": 80, "height": 24, "binary": True}))
+    await proxy(browser).run()
+
+    assert browser.closed == (4423, "migration_fenced")
+    assert {
+        "type": "error", "message": "Migration Center is moving this instance", "code": 4423, "retryable": False,
+    } in [p for k, p in browser.sent if k == "json"]
 
 
 async def test_output_waits_for_acks_past_the_high_water_mark():

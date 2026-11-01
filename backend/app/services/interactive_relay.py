@@ -11,6 +11,10 @@ reconnected into a new one. Every ending now closes with a code that says which 
 - 4404: the session cannot start (not running, not found, not a VM); reconnecting will not help.
 - 4403: access ended mid-session (sent by ws_session_guard).
 - 4409: another viewer opened this display (QEMU serves one); taking it back is the operator's call.
+- 4423: Migration Center fenced the instance while the session was starting.
+
+Refusals for reasons of access (4401, 4403, 4428, 4423) carry a reason token instead of a sentence;
+core/ws_close.py lists them.
 """
 
 from __future__ import annotations

@@ -12,7 +12,8 @@ from app.services.terminal_proxy import TerminalProxy
 from app.services.activity_logger import get_activity_logger
 from app.core.dependencies import AuthenticatedUser
 from app.core.instance_access import verify_instance_access
-from app.core.ws_auth import ws_user
+from app.core import ws_close
+from app.core.ws_auth import refusal_of, ws_user
 from app.services.ws_session_guard import instance_session_check, reauthorize_while_open
 from app.core.org_scope import set_org_scope_for_ws
 from app.services.migration_fence import (
@@ -52,7 +53,8 @@ async def terminal_websocket(
     WebSocket endpoint for terminal connection.
     Acts as a proxy between browser and LXD instance exec.
     Opened with a ticket from POST /ws-tickets; re-authorized every minute while open and
-    closed with 4403 once access ends.
+    closed with 4403 once access ends. A refusal accepts and then closes with a code the page can
+    read (core/ws_close.py); a close before accept reaches the browser as a bare 1006.
     """
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
@@ -62,7 +64,7 @@ async def terminal_websocket(
     # unauthenticated `user`, so the guard switched itself off in exactly the situation it
     # existed to catch. ws_user now refuses a misconfigured server itself.
     if _settings.auth_enabled and user is None:
-        await websocket.close(code=1008, reason="Authentication required")
+        await ws_close.refuse(websocket, *refusal_of(websocket))
         return
 
     # set org scope for WebSocket (context variable)
@@ -72,7 +74,7 @@ async def terminal_websocket(
     # organisation boundary here rested entirely on the break-glass gate below and on a flag whose
     # default was off. verify_cluster_access appeared seventeen times in console.py and not
     # once here, which is why this file was blanket-exempt from the cluster-scope ratchet; that
-    # exemption is gone now, so the ratchet enforces this call. Closing rather than raising,
+    # exemption is gone now, so the ratchet enforces this call. Refusing rather than raising,
     # since HTTPException is meaningless once the socket is being negotiated.
     from fastapi import HTTPException as _HTTPExc
     try:
@@ -80,7 +82,7 @@ async def terminal_websocket(
         # grant: the one instance gate the re-authorization below repeats every minute.
         project = verify_instance_access(host, project, instance_name, "console")
     except _HTTPExc as exc:
-        await websocket.close(code=1008, reason="forbidden")
+        await ws_close.refuse(websocket, ws_close.FORBIDDEN, "forbidden")
         logger.warning(
             "Terminal WS blocked (%s): %s@%s user=%s",
             exc.detail, instance_name, host, getattr(user, "email", "?"),
@@ -101,7 +103,7 @@ async def terminal_websocket(
             try:
                 _grant = await enforce_sensitive_access(user, host, _bg_db)
             except _HTTPException:
-                await websocket.close(code=1008, reason="break_glass_required")
+                await ws_close.refuse(websocket, ws_close.BREAK_GLASS, "break_glass_required")
                 logger.warning(f"Terminal WS blocked (break_glass_required): {instance_name}@{host} user={user.email}")
                 return
             _bg_grant_id = _grant.id if _grant else None
@@ -114,7 +116,7 @@ async def terminal_websocket(
             instance_name=instance_name,
         )
     except MigrationFenceConflict:
-        await websocket.close(code=1008, reason="Instance fenced by Migration Center")
+        await ws_close.refuse(websocket, ws_close.FENCED, "migration_fenced")
         return
 
     await websocket.accept()

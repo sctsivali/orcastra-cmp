@@ -27,7 +27,8 @@ from pydantic import BaseModel, Field
 
 from app.core.cache import get_cache_manager
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.ws_auth import ws_user
+from app.core import ws_close
+from app.core.ws_auth import refusal_of, ws_user
 from app.services.ws_session_guard import instance_session_check, reauthorize_while_open
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
@@ -1268,7 +1269,7 @@ async def console_websocket(
     Re-authorized every minute while open.
     """
     if console_type not in ("vga", "console"):
-        await websocket.close(code=1008, reason="Unknown console type")
+        await ws_close.refuse(websocket, ws_close.POLICY, "unknown_console_type")
         return
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
@@ -1278,19 +1279,21 @@ async def console_websocket(
     # unauthenticated `user`, so the guard switched itself off in exactly the situation it
     # existed to catch. ws_user now refuses a misconfigured server itself.
     if _settings.auth_enabled and user is None:
-        await websocket.close(code=1008, reason="Authentication required")
+        # note: every refusal below accepts first (core/ws_close.py). A close before accept is an
+        # HTTP 403 to the browser, which reports 1006 with no reason and never recovers.
+        await ws_close.refuse(websocket, *refusal_of(websocket))
         return
 
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user, interactive=True)
 
     # important: the REST console path checks this and the WebSocket did not, so the same
-    # session opened over a socket skipped the organisation boundary entirely. Closing rather
+    # session opened over a socket skipped the organisation boundary entirely. Refusing rather
     # than raising, since HTTPException is meaningless once the socket is being negotiated.
     try:
         project = _verify_instance_access(host, project, instance_name, "console")
     except HTTPException as exc:
-        await websocket.close(code=1008, reason="forbidden")
+        await ws_close.refuse(websocket, ws_close.FORBIDDEN, "forbidden")
         logger.warning(
             "Console WS blocked (%s): %s@%s user=%s",
             exc.detail, instance_name, host, getattr(user, "email", "?"),
@@ -1311,7 +1314,7 @@ async def console_websocket(
             try:
                 _grant = await enforce_sensitive_access(user, host, _bg_db)
             except HTTPException:
-                await websocket.close(code=1008, reason="break_glass_required")
+                await ws_close.refuse(websocket, ws_close.BREAK_GLASS, "break_glass_required")
                 logger.warning(f"Console WS blocked (break_glass_required): {instance_name}@{host} user={user.email}")
                 return
             _bg_grant_id = _grant.id if _grant else None
@@ -1324,7 +1327,7 @@ async def console_websocket(
             instance_name=instance_name,
         )
     except MigrationFenceConflict:
-        await websocket.close(code=1008, reason="Instance fenced by Migration Center")
+        await ws_close.refuse(websocket, ws_close.FENCED, "migration_fenced")
         return
 
     # spice-html5 opens its sockets with the 'binary' subprotocol and fails one that does not

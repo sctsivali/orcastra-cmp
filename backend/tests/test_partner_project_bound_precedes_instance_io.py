@@ -111,7 +111,9 @@ class _Socket:
     "handler",
     [console.console_websocket, terminal.terminal_websocket],
 )
-def test_a_foreign_project_websocket_is_closed_before_accept(monkeypatch, handler):
+def test_a_foreign_project_websocket_is_refused_with_a_reason_the_page_can_read(monkeypatch, handler):
+    """Refused before any instance I/O, but accepted first: a close before accept is an HTTP 403
+    the browser reports as a bare 1006 (core/ws_close.py)."""
     async def keep_test_scope(_user, **_kwargs):
         return None
 
@@ -131,8 +133,8 @@ def test_a_foreign_project_websocket_is_closed_before_accept(monkeypatch, handle
         kwargs["console_type"] = "vga"
     asyncio.run(handler(**kwargs))
 
-    assert socket.accepted is False
-    assert socket.closed == (1008, "forbidden")
+    assert socket.accepted is True
+    assert socket.closed == (4403, "forbidden")
 
 
 class _NoRebuildIO:

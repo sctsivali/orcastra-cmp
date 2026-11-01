@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 from fastapi import WebSocket
 
+from app.core import ws_close
 from app.services.interactive_relay import (
     CLOSE_NORMAL,
     CLOSE_UNAVAILABLE,
@@ -107,7 +108,7 @@ class TerminalProxy:
             logger.info("Terminal for %s did not start: %s", self._label, exc)
             await self._refuse(str(exc), CLOSE_UPSTREAM if exc.retryable else CLOSE_UNAVAILABLE)
         except MigrationFenceConflict as exc:
-            await self._refuse(str(exc.detail), CLOSE_UNAVAILABLE)
+            await self._refuse(str(exc.detail), ws_close.FENCED, reason="migration_fenced")
         except Exception as exc:  # noqa: BLE001 - the browser is told; the log keeps the type
             logger.error("Terminal proxy for %s failed: %s: %s", self._label, type(exc).__name__, redact(exc))
             await self._refuse("The terminal connection failed", CLOSE_UPSTREAM)
@@ -162,12 +163,19 @@ class TerminalProxy:
             )
         return info
 
-    async def _refuse(self, message: str, code: int) -> None:
+    async def _refuse(self, message: str, code: int, *, reason: str = "") -> None:
+        """Say why in an error frame, then close with `code` and `reason` (the message when unset).
+
+        note: the frame carries the full sentence and the code, since a close reason is cut at 123
+        bytes. A code of core/ws_close.py closes with its token instead of the sentence.
+        """
         try:
-            await self.browser_ws.send_json({"type": "error", "message": message, "retryable": code == CLOSE_UPSTREAM})
+            await self.browser_ws.send_json({
+                "type": "error", "message": message, "code": code, "retryable": code == CLOSE_UPSTREAM,
+            })
         except Exception:  # noqa: BLE001 - already gone
             pass
-        await close_browser(self.browser_ws, code, message)
+        await close_browser(self.browser_ws, code, reason or message)
 
     # ── relay ────────────────────────────────────────────────────────────────────────────────
 

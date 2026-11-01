@@ -14,6 +14,9 @@ long as the browser kept it, whatever happened to the session behind it. Two rul
 
 note: an Authentik outage never closes a session (see ws_identity); five checks in a row that
 fail for any other reason close it with 1011, since a guard that cannot check is not guarding.
+
+The reasons are the tokens of core/ws_close.py: access_revoked:account_ended, :role_changed or
+:access_ended with 4403, reauthorize_failed with 1011, so the page can say which it was.
 """
 
 import asyncio
@@ -23,6 +26,7 @@ from typing import Awaitable, Callable, Optional
 
 from fastapi import HTTPException, WebSocket
 
+from app.core import ws_close
 from app.core.auth import AuthenticatedUser
 from app.core.org_scope import set_org_scope_for_ws
 from app.core.rbac import get_highest_role, roles_for_group_names
@@ -30,11 +34,17 @@ from app.services.ws_identity import check_identity
 
 logger = logging.getLogger(__name__)
 
-SESSION_ENDED = 4401
-ACCESS_REVOKED = 4403
+SESSION_ENDED = ws_close.AUTH
+ACCESS_REVOKED = ws_close.FORBIDDEN
 REAUTHORIZE_SECONDS = 60.0
 MAX_CONSECUTIVE_ERRORS = 5
 COULD_NOT_CHECK = "Could not re-authorize this session"
+ACCESS_REVOKED_REASON = "Access revoked"
+
+# Why access ended, as the detail of an access_revoked close.
+ACCOUNT_ENDED = "account_ended"
+ROLE_CHANGED = "role_changed"
+ACCESS_ENDED = "access_ended"
 
 AccessCheck = Callable[[AuthenticatedUser], Awaitable[None]]
 
@@ -71,13 +81,13 @@ async def reauthorize_while_open(
 ) -> None:
     """For an interactive socket: re-check the account, scope and access every `interval`."""
 
-    async def refused(reason: str) -> None:
+    async def refused(reason: str, detail: str) -> None:
         if reason == COULD_NOT_CHECK:
-            await _close(websocket, 1011, "Could not re-authorize this session")
+            await _close(websocket, ws_close.SERVER, "reauthorize_failed")
         else:
-            await _close(websocket, ACCESS_REVOKED, "Access revoked")
+            await _close(websocket, ACCESS_REVOKED, f"access_revoked:{detail}")
 
-    await reauthorize_until(user, check, refused, label=label, interval=interval)
+    await _reauthorize(user, check, refused, label=label, interval=interval)
 
 
 async def reauthorize_until(
@@ -93,6 +103,22 @@ async def reauthorize_until(
     A long transfer holds what a shell holds, so it keeps to the same rules: an expired token does
     not end it, an Authentik outage does not end it, and five failed checks in a row do.
     """
+
+    async def refused_without_detail(reason: str, _detail: str) -> None:
+        await refused(reason)
+
+    await _reauthorize(user, check, refused_without_detail, label=label, interval=interval)
+
+
+async def _reauthorize(
+    user: Optional[AuthenticatedUser],
+    check: AccessCheck,
+    refused: Callable[[str, str], Awaitable[None]],
+    *,
+    label: str,
+    interval: float,
+) -> None:
+    """The loop behind both: `refused(reason, detail)` once, the detail naming why access ended."""
     if user is None:
         return
     opened_as = get_highest_role(roles_for_group_names(list(user.groups)))
@@ -103,11 +129,11 @@ async def reauthorize_until(
             identity = await check_identity(user)
             if identity.ended:
                 logger.warning("Closing %s: the account %s (%s)", label, user.user_id, identity.reason)
-                await refused("Access revoked")
+                await refused(ACCESS_REVOKED_REASON, ACCOUNT_ENDED)
                 return
             if identity.roles is not None and get_highest_role(list(identity.roles)) != opened_as:
                 logger.warning("Closing %s: the role of %s changed since it opened", label, user.user_id)
-                await refused("Access revoked")
+                await refused(ACCESS_REVOKED_REASON, ROLE_CHANGED)
                 return
             # Only sessions that drive a guest use this loop: a paid term that ends while one is
             # open closes it like any other change (core/sale_term.py).
@@ -117,7 +143,7 @@ async def reauthorize_until(
         except HTTPException as exc:
             if exc.status_code in (401, 403, 404):
                 logger.warning("Closing %s: access ended for %s (%s)", label, user.user_id, exc.status_code)
-                await refused("Access revoked")
+                await refused(ACCESS_REVOKED_REASON, ACCESS_ENDED)
                 return
             errors += 1
         except asyncio.CancelledError:
@@ -126,7 +152,7 @@ async def reauthorize_until(
             errors += 1
             logger.warning("Could not re-authorize %s (%d in a row): %s", label, errors, str(exc)[:200])
         if errors >= MAX_CONSECUTIVE_ERRORS:
-            await refused(COULD_NOT_CHECK)
+            await refused(COULD_NOT_CHECK, "")
             return
 
 

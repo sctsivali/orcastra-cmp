@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import ws_close
 from app.core.auth import AuthenticatedUser
 from app.core.config import get_settings
 from app.core.org_scope import (
@@ -372,8 +373,10 @@ async def watch_grant_while_open(
                 continue
             if not still_valid:
                 logger.info("Break-glass grant %s no longer active; closing session", grant_id)
+                # 4428, not 1008: the page reads it as "break-glass ended" and does not reconnect
+                # into a refusal (core/ws_close.py).
                 try:
-                    await websocket.close(code=1008, reason="break_glass_expired")
+                    await websocket.close(code=ws_close.BREAK_GLASS, reason="break_glass_expired")
                 except Exception:  # noqa: BLE001 - already gone
                     pass
                 return
