@@ -194,7 +194,7 @@ try {
     assert.equal(first.action, 'retry');
     assert.equal(first.delayMs, 1000);
     assert.equal(first.message, 'The sign-in service did not answer. Retrying.');
-    assert.equal((await recovery.onMintError(apiError(401), cold)).delayMs, 0);
+    assert.equal((await recovery.onMintError(apiError(401), cold)).delayMs, 2000, 'the second try keeps the backoff');
     assert.equal(calls.refresh, 2);
   }
   {
@@ -228,10 +228,32 @@ try {
     assert.equal((await recovery.onClose(4401, 'ticket_invalid', { opened: true, liveSocket: false })).delayMs, 0);
     assert.equal((await recovery.onClose(4401, 'ticket_invalid', { opened: true, liveSocket: false })).signIn, true);
     assert.equal(calls.refresh, 1);
-    // A session the server took resets that, so a later 4401 may refresh again.
+    // A session that worked resets that, so a later 4401 may refresh again, now after a wait.
     recovery.ready();
-    await recovery.onClose(4401, 'session_ended', { opened: true, liveSocket: true });
+    const later = await recovery.onClose(4401, 'session_ended', { opened: true, liveSocket: true });
     assert.equal(calls.refresh, 2);
+    assert.equal(later.delayMs, 2000);
+  }
+  {
+    // A SPICE display whose main channel links and whose other channel is then refused 4401 (a
+    // ticket store failing over): each round works for a moment and is refused again. Only the
+    // first round is immediate; the rest back off and the fifth is the last.
+    const { recovery, calls } = harness({ verdicts: [] });
+    const delays = [];
+    let step;
+    for (let round = 0; round < 12; round++) {
+      recovery.ready();
+      step = await recovery.onClose(4401, 'ticket_invalid', { opened: true, liveSocket: false });
+      if (step.action !== 'retry') break;
+      delays.push(step.delayMs);
+    }
+    assert.deepEqual(delays, [0, 2000, 4000, 8000, 16000], 'immediate once, then the backoff');
+    assert.deepEqual(step, { action: 'stop', message: 'Could not reconnect. Select Reconnect to try again.', retry: true });
+    assert.equal(calls.refresh, 5, 'one session refresh per round, and none once it gave up');
+    // A display that stays up resets the count; one that keeps dropping never does.
+    recovery.stable();
+    recovery.ready();
+    assert.equal((await recovery.onClose(4401, 'ticket_invalid', { opened: true, liveSocket: false })).delayMs, 0);
   }
   {
     // An older backend's refusal (1006 before open) is tried as a sign-in once, then as the network.
@@ -239,7 +261,7 @@ try {
     assert.equal((await recovery.onClose(1006, '', { opened: false, liveSocket: false })).delayMs, 0);
     const second = await recovery.onClose(1006, '', { opened: false, liveSocket: false });
     assert.equal(second.action, 'retry');
-    assert.equal(second.delayMs, 1000);
+    assert.equal(second.delayMs, 2000, 'the sign-in try counted as the first attempt');
     assert.equal(calls.refresh, 1);
   }
   {
@@ -268,6 +290,13 @@ try {
       assert.deepEqual(await recovery.onClose(code, '', { opened: true, liveSocket: true }), { action: 'own', kind });
     }
   }
+  // The SPICE session calls ready() once the guest is on screen, never when only the main channel
+  // linked: the other channels present their own tickets and may still be refused.
+  const spice = read('frontend/src/lib/spice/session.ts');
+  const onsuccess = spice.slice(spice.indexOf('onsuccess: () =>'), spice.indexOf('onagent: () =>'));
+  const firstDraw = spice.slice(spice.indexOf('sc.onfirstdraw = () =>'), spice.indexOf('sc.onmousemode'));
+  assert.ok(onsuccess && !/recovery\.ready\(/.test(onsuccess), 'spice/session.ts: ready() on a linked main channel lets a refused channel loop');
+  assert.ok(/this\.recovery\.ready\(\)/.test(firstDraw), 'spice/session.ts: ready() belongs on the first frame');
 } finally {
   cleanup();
 }

@@ -242,8 +242,8 @@ export class SpiceSession {
         this.onError(error);
       },
       onsuccess: () => {
-        // The main channel linked, so the server took the ticket; "connected" waits for the first frame.
-        if (generation === this.generation) this.recovery.ready();
+        // The main channel linked; "connected" waits for the first frame. note: not yet proof the
+        // session works: the other channels present their own tickets and may still be refused.
       },
       onagent: () => {
         if (generation !== this.generation) return;
@@ -260,6 +260,7 @@ export class SpiceSession {
       if (generation !== this.generation) return;
       this.droppedAt = null;
       this.everConnected = true;
+      this.recovery.ready();
       this.stableTimer = setTimeout(() => this.recovery.stable(), STABLE_SESSION_MS);
       this.setStatus("connected");
       this.wake();

@@ -5,8 +5,9 @@
  * important: a page opened from a deep link in a new tab often holds a session the IdP has
  * already ended, and it used to show "disconnected" with nothing recovering. Now:
  * - a ticket refused with 401 (after fetchAPI's own refresh) or a 4401 close forces one session
- *   refresh: a new token mints again at once, an ended session signs in again (automatically when
- *   nothing was live, behind a button when something was), and an IdP that does not answer backs off;
+ *   refresh: a new token mints again (at once the first time, then with the backoff), an ended
+ *   session signs in again (automatically when nothing was live, behind a button when something
+ *   was), and an IdP that does not answer backs off;
  * - 4403, 4428 and 4423 stop and say why; reconnecting would be refused again;
  * - a dropped connection or a 1011 backs off 1, 2, 4, 8, 16 s and gives up after five tries.
  * The relay's own endings (1000, 1012, 4404, 4409) stay with the caller, which knows the instance.
@@ -56,7 +57,10 @@ export class SocketRecovery {
     this.authTried = false;
   }
 
-  /** The server accepted the session (ready, or the display linked), so its sign-in worked. */
+  /**
+   * The session is genuinely working (a shell's ready, a display's first frame), so its sign-in
+   * worked and a later 4401 may refresh again. Attempts still count until stable().
+   */
   ready(): void {
     this.authTried = false;
   }
@@ -82,6 +86,7 @@ export class SocketRecovery {
 
   private async refreshThenRetry(liveSocket: boolean): Promise<RecoveryStep> {
     if (this.authTried) return { action: "stop", message: SOCKET_MESSAGES.sessionEnded, signIn: true };
+    if (this.attempts >= MAX_RECONNECT_ATTEMPTS) return { action: "stop", message: SOCKET_MESSAGES.gaveUp, retry: true };
     this.authTried = true;
     const verdict = await this.deps.refresh();
     if (verdict === "revoked") {
@@ -95,7 +100,14 @@ export class SocketRecovery {
     }
     // "refreshed" carries a new token. "unchanged" means the session holds what it holds: one more
     // ticket settles whether the refusal was the ticket's (spent, expired) or the session's.
-    return { action: "retry", delayMs: 0, message: "" };
+    // important: counted like any reconnect, and only the first is immediate. A SPICE display whose
+    // main channel linked and whose other channel was refused 4401 (a ticket store failing over)
+    // otherwise went round refresh, four tickets and a new LXD operation with no wait at all.
+    if (this.attempts === 0) {
+      this.attempts = 1;
+      return { action: "retry", delayMs: 0, message: "" };
+    }
+    return this.backoff();
   }
 
   /** A ticket could not be minted. `liveSocket`: this view had a working session before. */
