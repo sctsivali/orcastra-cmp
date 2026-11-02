@@ -99,7 +99,7 @@ async def mint_ws_ticket(
     body: WsTicketRequest = Body(...),
     user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ) -> WsTicketResponse:
-    """Tickets for one socket (one per SPICE channel for a graphical console), 30 seconds each."""
+    """Tickets for one socket (one per graphical console channel), 30 seconds each."""
     response.headers["Cache-Control"] = "no-store"
     expires = getattr(user, "session_exp", None)
     if body.kind in FEED_KINDS and expires is not None and expires - time.time() < MIN_FEED_SESSION_SECONDS:

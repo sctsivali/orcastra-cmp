@@ -394,7 +394,6 @@ const LABEL_ACRONYMS: Record<string, string> = {
   pci: "PCI",
   usb: "USB",
   tpm: "TPM",
-  spice: "SPICE",
   vga: "VGA",
   os: "OS",
 };

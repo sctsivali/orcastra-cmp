@@ -334,7 +334,7 @@ export function ConsoleToolbar({
                             Match Guest Resolution to Window
                           </span>
                           <span className="text-xs text-muted-foreground">
-                            {agentConnected ? "Uses the guest agent; text stays sharp at any size" : "Needs the SPICE agent in the guest"}
+                            {agentConnected ? "Uses the guest agent; text stays sharp at any size" : "Needs the guest agent"}
                           </span>
                         </DropdownMenuCheckboxItem>
                       </>

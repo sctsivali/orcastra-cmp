@@ -30,6 +30,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn, formatBytes, formatNetworkRate, EMPTY_VALUE } from "@/lib/utils";
+import { GRAPHICS_SESSION_PROTOCOL, sessionProtocolLabel } from "@/lib/session-display";
 import { useSession } from "next-auth/react";
 import { useInstanceMetrics } from "@/hooks";
 import { OverflowText } from "@/components/ui/overflow-text";
@@ -265,7 +266,10 @@ export function ConsoleResourceBar({
     sessionStats?.user?.role || userRole || "unknown"
   );
   const displayEmail = sessionStats?.user?.email || userEmail || "";
-  const displayProtocol = protocol === "graphics" ? "SPICE (VGA)" : protocol === "files" ? "SFTP" : "WebSocket";
+  // note: the display session is named as the Sessions page lists it, so the bar and the table
+  // cannot drift apart again.
+  const displayProtocol =
+    protocol === "graphics" ? sessionProtocolLabel(GRAPHICS_SESSION_PROTOCOL) : protocol === "files" ? "SFTP" : "WebSocket";
 
   // Bandwidth from session stats
   const dlRate = sessionStats?.bandwidth?.download_rate_bps ?? 0;

@@ -29,6 +29,10 @@ const RULES = [
   [/(?:\b\d+(?:\.\d+)?|\}) (?:ms|s|min|sec|secs)\b(?=[\s.,;:)"'`<]|$)/, 'a single time is glued: 30s, 120ms'],
   [/ • /, 'the separator is a middle dot'],
   [/\be\.g\.[, ]/, 'write "for example" in product copy'],
+  // SPICE is the wire protocol under the VM display, not what an operator opens. Identifiers such as
+  // SpiceSession and the lowercase package and stored values (spice-vdagent, spice-graphics) do
+  // not match; lib/spice/ is the protocol client itself.
+  [/\b(?:SPICE|Spice)\b(?!-)/, 'say graphical console: SPICE is the wire protocol, not what the operator opens'],
   [/\bbg-(?:warning|destructive)\/\d+\b[^"]*\bborder\b|\bborder-(?:warning|destructive)\/\d+\b[^"]*\bbg-(?:warning|destructive)\/\d+\b/, 'use Alert, DialogSubmitError or PartialReadNotice instead of a hand-rolled box'],
 ];
 
@@ -64,6 +68,7 @@ for (const file of walk(src)) {
       if (!pattern.test(text)) continue;
       if (why.startsWith('use Alert') && (BOX_EXEMPT.has(rel) || rel.startsWith('components/ui/'))) continue;
       if (why.startsWith('use formatCount') && rel === 'lib/utils.ts') continue;
+      if (why.startsWith('say graphical console') && rel.startsWith('lib/spice/')) continue;
       offenders.push(`frontend/src/${rel}:${index + 1} ${why}`);
     }
   });

@@ -11,6 +11,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { formatBytes, formatDateTimeSeconds, formatLabel } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { sessionProtocolLabel } from "@/lib/session-display";
 import { NodeLink } from "@/components/ui/node-link";
 import { sessionConnectionStatusDisplay } from "./session-connection-status";
 
@@ -76,7 +77,7 @@ export function SessionDetailDialog({
       <div className="space-y-4">
         <DetailSection title="Connection">
           <DetailGrid cols={3}>
-            <DetailField label="Protocol" value={formatLabel(record.protocol ?? "")} />
+            <DetailField label="Protocol" value={sessionProtocolLabel(record.protocol)} />
             <DetailField
               label="Instance"
               value={

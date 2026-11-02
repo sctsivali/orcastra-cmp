@@ -67,6 +67,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { NodeLink } from "@/components/ui/node-link";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { GRAPHICS_SESSION_PROTOCOL, sessionProtocolLabel } from "@/lib/session-display";
 import {
   sessionConnectionStatusDisplay,
   type SessionConnectionStatus,
@@ -130,22 +131,6 @@ function formatDuration(seconds: number | null): string {
 const API_URL = "";
 
 // ============ Main Component ============
-
-// What kind of session this was.
-//
-// important: a lookup rather than `isGraphics ? "SPICE (VGA)" : "Terminal"`, which was written
-// when there were exactly two protocols and quietly labelled anything else as a human terminal
-// session. An agent driving a desktop through the MCP surface is neither, and reading it as a
-// terminal is worse than reading it as unknown: it attributes machine activity to a person.
-const PROTOCOL_LABELS: Record<string, string> = {
-  "spice-graphics": "SPICE (VGA)",
-  "websocket-terminal": "Terminal",
-  "mcp-desktop": "Agent (desktop)",
-};
-
-function protocolLabelFor(protocol: string | null | undefined): string {
-  return PROTOCOL_LABELS[protocol ?? ""] ?? formatLabel(protocol ?? "unknown");
-}
 
 export default function SessionsPage() {
   const [activeTab, setActiveTab] = useState("active");
@@ -215,9 +200,11 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
       field: "protocol",
       label: "Protocol",
       sort: (s) => s.protocol,
-      search: (s) => s.protocol,
+      // note: the menu, the search and the cell read one word. Searching the stored value matched
+      // a spelling the table no longer shows, and the menu printed a third one through formatLabel.
+      search: (s) => sessionProtocolLabel(s.protocol),
       facet: (s) => s.protocol,
-      facetSpec: { primary: true, format: formatLabel } },
+      facetSpec: { primary: true, format: sessionProtocolLabel } },
     { field: "duration", label: "Duration", sort: (s) => s.duration_seconds, filter: fromSort("number", { unit: "seconds" }) },
     { field: "bandwidth", label: "Bandwidth", sort: (s) => s.bandwidth.download_bytes + s.bandwidth.upload_bytes, filter: fromSort("number", { unit: "bytes" }) },
     { field: "rate", label: "Rate", sort: (s) => s.bandwidth.download_rate_bps + s.bandwidth.upload_rate_bps, filter: fromSort("number", { unit: "bps" }) },
@@ -619,9 +606,9 @@ const SESSION_HISTORY = defineTable<AuditLogEntry>()({
       field: "protocol",
       label: "Protocol",
       sort: (l) => l.protocol,
-      search: (l) => l.protocol,
+      search: (l) => sessionProtocolLabel(l.protocol),
       facet: (l) => l.protocol,
-      facetSpec: { primary: true, format: formatLabel } },
+      facetSpec: { primary: true, format: sessionProtocolLabel } },
     { field: "duration", label: "Duration", sort: (l) => l.duration_seconds ?? 0, filter: fromSort("number", { unit: "seconds" }) },
     { field: "transfer", label: "Transfer", sort: (l) => (l.download_bytes ?? 0) + (l.upload_bytes ?? 0), filter: fromSort("number", { unit: "bytes" }) },
     { field: "time", label: "Time", sort: (l) => (l.created_at ? new Date(l.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
@@ -985,8 +972,8 @@ function ActiveRow({ session, onSelect, scope }: {
   onSelect: (r: SessionRecord) => void;
   scope: SessionScope;
 }) {
-  const isGraphics = session.protocol === "spice-graphics";
-  const protocolLabel = protocolLabelFor(session.protocol);
+  const isGraphics = session.protocol === GRAPHICS_SESSION_PROTOCOL;
+  const protocolLabel = sessionProtocolLabel(session.protocol);
   const connectionStatus = sessionConnectionStatusDisplay(session.connection_status);
 
   return (
@@ -1075,8 +1062,8 @@ function HistoryRow({ log, onSelect, scope }: {
   onSelect: (r: SessionRecord) => void;
   scope: SessionScope;
 }) {
-  const isGraphics = log.protocol === "spice-graphics";
-  const protocolLabel = protocolLabelFor(log.protocol);
+  const isGraphics = log.protocol === GRAPHICS_SESSION_PROTOCOL;
+  const protocolLabel = sessionProtocolLabel(log.protocol);
 
   return (
     <TableRow className="hover:bg-muted/50">

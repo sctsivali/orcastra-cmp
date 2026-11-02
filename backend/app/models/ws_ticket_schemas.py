@@ -56,6 +56,6 @@ class WsTicketResponse(BaseModel):
     ticket: str = Field(..., description="Opens one socket: pass it as ?ticket= within expires_in seconds")
     tickets: Optional[List[str]] = Field(
         None,
-        description="A graphical console's SPICE channels each open their own socket; one ticket per channel",
+        description="A graphical console opens one socket per display channel; one ticket per channel",
     )
     expires_in: int = Field(..., description="Seconds the tickets stay redeemable")
