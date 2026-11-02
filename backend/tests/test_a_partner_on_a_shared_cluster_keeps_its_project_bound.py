@@ -195,6 +195,14 @@ def test_removed_org_binding_semantically_revokes_its_partner_project():
                 "cluster_id TEXT NOT NULL, project_name TEXT NOT NULL)"
             )
         )
+        # note: no rows. The bound also widens by policies assigned to the caller's own member rows.
+        connection.execute(
+            text(
+                "CREATE TABLE tenant_policy_assignments "
+                "(id INTEGER PRIMARY KEY, policy_id INTEGER NOT NULL, org_member_id INTEGER NOT NULL, "
+                "expires_at TIMESTAMP)"
+            )
+        )
         connection.execute(
             text("INSERT INTO organizations VALUES (:id, :owner, :active)"),
             [

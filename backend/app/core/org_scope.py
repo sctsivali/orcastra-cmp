@@ -1046,7 +1046,9 @@ async def get_visible_projects(
     from app.core.rbac import resolve_roles, get_highest_role, Role
     from app.models.db_models import (
         OrganizationCluster,
+        OrganizationMember,
         TenantAccessPolicy,
+        TenantPolicyAssignment,
         TenantPolicyRule,
     )
 
@@ -1079,40 +1081,54 @@ async def get_visible_projects(
     from app.services import cluster_parties
 
     org_ids = set(await cluster_parties.run_orgs(db, user.email))
+    # note: and the policies assigned to the caller's own member rows, as the release line does. A
+    # teammate added from the dashboard holds a member row, runs nothing, and is given its projects
+    # by assignment; the seller's other policies stay out.
+    now = datetime.now(timezone.utc)
+    assigned = (
+        select(TenantPolicyAssignment.policy_id)
+        .join(OrganizationMember, OrganizationMember.id == TenantPolicyAssignment.org_member_id)
+        .where(
+            OrganizationMember.user_email == user.email,
+            or_(TenantPolicyAssignment.expires_at.is_(None), TenantPolicyAssignment.expires_at > now),
+        )
+    )
     mapping: dict[str, set[str]] = {}
     for cluster_id in shared:
         allowed = {"default"}
-        if org_ids:
-            stmt = (
-                select(TenantPolicyRule.project_name)
-                .join(
-                    TenantAccessPolicy,
-                    TenantAccessPolicy.id == TenantPolicyRule.policy_id,
-                )
-                .join(
-                    OrganizationCluster,
-                    and_(
-                        OrganizationCluster.organization_id
-                        == TenantAccessPolicy.organization_id,
-                        OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+        stmt = (
+            select(TenantPolicyRule.project_name)
+            .join(
+                TenantAccessPolicy,
+                TenantAccessPolicy.id == TenantPolicyRule.policy_id,
+            )
+            .join(
+                OrganizationCluster,
+                and_(
+                    OrganizationCluster.organization_id
+                    == TenantAccessPolicy.organization_id,
+                    OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+                ),
+            )
+            .where(
+                and_(
+                    TenantPolicyRule.cluster_id == cluster_id,
+                    or_(
+                        TenantAccessPolicy.organization_id.in_(sorted(org_ids)),
+                        TenantPolicyRule.policy_id.in_(assigned),
                     ),
                 )
-                .where(
-                    and_(
-                        TenantPolicyRule.cluster_id == cluster_id,
-                        TenantAccessPolicy.organization_id.in_(org_ids),
-                    )
-                )
-                .distinct()
             )
-            named = set((await db.execute(stmt)).scalars().all())
-            # important: '*' does NOT lift the bound. project_name defaults to '*' on the
-            # model and on the create schema, so any organization that had ever written a
-            # single tenant policy for this cluster would have been unrestricted, which is the
-            # control switched off by default rather than an edge case. A wildcard also cannot
-            # answer the question being asked here, which is WHICH projects belong to this
-            # organization; on a cluster shared with another org it names theirs too.
-            allowed |= {n for n in named if n and n != "*"}
+            .distinct()
+        )
+        named = set((await db.execute(stmt)).scalars().all())
+        # important: '*' does NOT lift the bound. project_name defaults to '*' on the
+        # model and on the create schema, so any organization that had ever written a
+        # single tenant policy for this cluster would have been unrestricted, which is the
+        # control switched off by default rather than an edge case. A wildcard also cannot
+        # answer the question being asked here, which is WHICH projects belong to this
+        # organization; on a cluster shared with another org it names theirs too.
+        allowed |= {n for n in named if n and n != "*"}
         mapping[cluster_id] = allowed
 
     return mapping or None
