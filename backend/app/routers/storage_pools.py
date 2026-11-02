@@ -22,6 +22,7 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_tenant_acl
 from app.core.host_detail import pool_for_tier, pool_list_for_tier
 from app.core.task_scope import caller_tier
+from app.core.whole_cluster_access import verify_whole_cluster_access
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
 from app.core.cache import get_cache_manager, get_resource_list_generation
 from pydantic import BaseModel, Field
@@ -411,6 +412,9 @@ async def create_storage_pool(
 ):
     """Create a new storage pool."""
     verify_cluster_access(host)
+    # important: a storage pool belongs to no project and serves every project on the cluster,
+    # so a caller held to a bound changes one only where no other party holds the cluster.
+    await verify_whole_cluster_access(host, db, _rbac)
     try:
         async with serialize_cluster_configuration(db, host):
             try:
@@ -537,6 +541,9 @@ async def update_storage_pool(
 ):
     """Update a storage pool."""
     verify_cluster_access(host)
+    # important: a storage pool belongs to no project and serves every project on the cluster,
+    # so a caller held to a bound changes one only where no other party holds the cluster.
+    await verify_whole_cluster_access(host, db, _rbac)
     try:
         async with serialize_cluster_configuration(db, host):
             try:
@@ -588,6 +595,9 @@ async def delete_storage_pool(
 ):
     """Delete a storage pool."""
     verify_cluster_access(host)
+    # important: a storage pool belongs to no project and serves every project on the cluster,
+    # so a caller held to a bound changes one only where no other party holds the cluster.
+    await verify_whole_cluster_access(host, db, _rbac)
     try:
         async with serialize_cluster_configuration(db, host):
             try:

@@ -18,8 +18,11 @@ from app.services.lxd_service import (
     get_lxd_service,
     require_client,
 )
-from app.core.dependencies import check_read_only_mode, require_partner
+from app.core.database import get_db
+from app.core.dependencies import AuthenticatedUser, check_read_only_mode, get_current_user, require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.whole_cluster_access import clusters_held_elsewhere, verify_whole_cluster_access
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import get_cache_manager
 from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
@@ -143,12 +146,22 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeR
 async def list_identities(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """List all identities."""
     if host:
         verify_cluster_access(host)
+        await verify_whole_cluster_access(host, db, user)
     try:
-        nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
+        # important: another party's groups and identities carry its project URLs and client
+        # certificates, so a bounded caller reads them no more than it may change them.
+        held = set() if host else await clusters_held_elsewhere(
+            [*lxd_service.connection_manager.get_node_names(), *lxd_service.get_node_names()], db, user
+        )
+        nodes_to_query = [host] if host else [
+            node for node in lxd_service.connection_manager.get_node_names() if node not in held
+        ]
         
         # Fetch identities from all nodes in parallel
         loop = asyncio.get_event_loop()
@@ -164,7 +177,10 @@ async def list_identities(
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
         unreachable_nodes: List[str] = (
-            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+            [] if host else [
+                node for node in sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+                if node not in held
+            ]
         )
         fan = collect(nodes_to_query, results, noun="identities")
         unreachable_nodes.extend(fan.unreachable_nodes)
@@ -173,11 +189,14 @@ async def list_identities(
         return IdentityListResponse(
             total=len(all_identities),
             identities=all_identities,
-            nodes=lxd_service.connection_manager.get_node_names(),
+            nodes=[node for node in lxd_service.connection_manager.get_node_names() if node not in held],
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
+    except HTTPException:
+        # note: a refusal or a 503 keeps its own status, never a 500 naming it
+        raise
     except Exception as e:
         logger.error(f"Error listing identities: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -193,9 +212,12 @@ async def get_identity(
     identity_id: str,
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Get details for a specific identity."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         response = client.api["auth"]["identities"][safe_segment(identity_id)].get()
@@ -282,12 +304,22 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[
 async def list_groups(
     host: Optional[str] = Query(None, description="Filter by a specific cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """List all groups."""
     if host:
         verify_cluster_access(host)
+        await verify_whole_cluster_access(host, db, user)
     try:
-        nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
+        # important: another party's groups and identities carry its project URLs and client
+        # certificates, so a bounded caller reads them no more than it may change them.
+        held = set() if host else await clusters_held_elsewhere(
+            [*lxd_service.connection_manager.get_node_names(), *lxd_service.get_node_names()], db, user
+        )
+        nodes_to_query = [host] if host else [
+            node for node in lxd_service.connection_manager.get_node_names() if node not in held
+        ]
         
         # Fetch groups from all nodes in parallel
         loop = asyncio.get_event_loop()
@@ -303,7 +335,10 @@ async def list_groups(
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
         unreachable_nodes: List[str] = (
-            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+            [] if host else [
+                node for node in sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+                if node not in held
+            ]
         )
         fan = collect(nodes_to_query, results, noun="groups")
         unreachable_nodes.extend(fan.unreachable_nodes)
@@ -312,11 +347,14 @@ async def list_groups(
         return GroupListResponse(
             total=len(all_groups),
             groups=all_groups,
-            nodes=lxd_service.connection_manager.get_node_names(),
+            nodes=[node for node in lxd_service.connection_manager.get_node_names() if node not in held],
             unreachable_nodes=unreachable_nodes,
             partial_nodes=fan.partial_nodes,
             node_errors=complete_reasons(unreachable_nodes, fan.node_errors, partial=fan.partial_nodes),
         )
+    except HTTPException:
+        # note: a refusal or a 503 keeps its own status, never a 500 naming it
+        raise
     except Exception as e:
         logger.error(f"Error listing groups: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -332,9 +370,12 @@ async def get_group(
     group_name: str,
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Get details for a specific group."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
@@ -386,9 +427,12 @@ async def create_group(
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Create a new group."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
@@ -453,6 +497,8 @@ async def update_group(
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Update an existing group.
     
@@ -474,6 +520,7 @@ async def update_group(
     This endpoint handles this by applying project permissions first, then nested permissions.
     """
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     import asyncio
     
     try:
@@ -680,9 +727,12 @@ async def delete_group(
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Delete a group."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
@@ -714,9 +764,12 @@ async def add_identity_to_group(
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Add an identity to a group by updating the identity's groups list."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
@@ -781,9 +834,12 @@ async def remove_identity_from_group(
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Remove an identity from a group by updating the identity's groups list."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
@@ -855,9 +911,12 @@ async def delete_identity(
     host: str = Query(..., description="Target cluster"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Delete an identity from the LXD server."""
     verify_cluster_access(host)
+    await verify_whole_cluster_access(host, db, user)
     try:
         client = require_client(await client_for(lxd_service, host), host)
         

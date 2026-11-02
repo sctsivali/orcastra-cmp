@@ -38,6 +38,7 @@ from app.core.org_scope import (
 )
 from app.services.activity_logger import get_activity_logger
 from app.services import my_keys_registry
+from app.services.lxd_key_bounds import project_a_new_key_names
 from app.core.lxd_path import safe_segment
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -355,6 +356,10 @@ async def create_key(
     """Generate a new TLS identity key."""
     # A key is provisioned into a specific node's LXD trust store, so the node is the boundary.
     verify_cluster_access(request.node)
+    # important: the key is an LXD credential, so it is held to what it grants as well.
+    project = await project_a_new_key_names(
+        request.node, request.project, request.auth_level, db, _rbac
+    )
 
     vault_client = get_vault_keys_client()
 
@@ -457,7 +462,7 @@ async def create_key(
             logger.info("Creating admin permissions: server-level admin access")
         else:
             # Standard gets project-level access with operator entitlement
-            project_url = f"/1.0/projects/{request.project}"
+            project_url = f"/1.0/projects/{project}"
             permissions = [
                 {
                     "entity_type": "project",
@@ -465,8 +470,8 @@ async def create_key(
                     "entitlement": "operator"
                 }
             ]
-            description = f"Group for {request.name} with operator access to project {request.project}"
-            logger.info(f"Creating standard permissions for project: {request.project}, URL: {project_url}")
+            description = f"Group for {request.name} with operator access to project {project}"
+            logger.info(f"Creating standard permissions for project: {project}, URL: {project_url}")
         
         logger.info(f"Permissions to be created: {permissions}")
         
@@ -591,7 +596,7 @@ async def create_key(
             "id": key_id,
             "name": request.name,
             "node": request.node,
-            "project": request.project,
+            "project": project,
             "auth_level": request.auth_level,
             "created_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat(),
@@ -615,7 +620,7 @@ async def create_key(
             target_type="ssh_key",
             target_id=key_id,
             target_host=request.node,
-            target_project=request.project,
+            target_project=project,
             result="success",
             details={
                 "name": request.name,
@@ -635,7 +640,7 @@ async def create_key(
             id=key_id,
             name=request.name,
             node=request.node,
-            project=request.project,
+            project=project,
             auth_level=request.auth_level,
             created_at=created_at.isoformat(),
             expires_at=expires_at.isoformat(),
