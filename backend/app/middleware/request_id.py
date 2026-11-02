@@ -45,17 +45,13 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         request.state.client_request_id = client_request_id(request.headers.get(REQUEST_ID_HEADER))
         
-        # Extract user info from headers/session (if available)
-        user_id = self._extract_user_id(request)
-        user_role = self._extract_user_role(request)
-        user_groups = self._extract_user_groups(request)
-        
-        # Create request context (user_type is an alias for user_role)
+        # Authentication runs after this middleware. Seed no identity from an unverified token;
+        # auth and RBAC add the verified principal to this context after validation succeeds.
         context = RequestContext(
             request_id=request_id,
-            user_id=user_id,
-            user_role=user_role,
-            user_groups=user_groups,
+            user_id=None,
+            user_role=None,
+            user_groups=[],
             client_ip=self._get_client_ip(request),
             user_agent=request.headers.get("user-agent"),
             origin=request.headers.get("origin"),
@@ -100,72 +96,3 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         request.state.client_proxy_ip = resolution.direct_ip
         request.state.client_proxy_trusted = resolution.trusted_proxy
         return resolution.client_ip
-    
-    def _extract_user_id(self, request: Request) -> str | None:
-        """Extract user ID from request (from JWT claims or auth middleware)."""
-        # Check if already set by auth dependency (preferred path)
-        if hasattr(request.state, "user_id") and request.state.user_id:
-            return request.state.user_id
-        
-        # Fallback: lightweight JWT decode for early context (no verification)
-        claims = self._peek_jwt_claims(request)
-        if claims:
-            return claims.get("email") or claims.get("sub")
-        
-        return None
-    
-    def _extract_user_role(self, request: Request) -> str | None:
-        """Extract user role from request."""
-        if hasattr(request.state, "user_role") and request.state.user_role:
-            return request.state.user_role
-        # Fallback: resolve from JWT groups
-        return self._resolve_role_from_jwt(request)
-    
-    def _extract_user_groups(self, request: Request) -> list:
-        """Extract user groups from request."""
-        if hasattr(request.state, "user_groups") and request.state.user_groups:
-            return request.state.user_groups
-        # Fallback: extract from JWT claims
-        claims = self._peek_jwt_claims(request)
-        if claims:
-            return claims.get("groups", [])
-        return []
-    
-    def _peek_jwt_claims(self, request: Request) -> dict | None:
-        """Lightweight unverified JWT decode for early context extraction.
-        Actual verification happens in the auth dependency."""
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return None
-        try:
-            import jwt as pyjwt
-            token = auth_header[7:]
-            return pyjwt.decode(token, options={"verify_signature": False})
-        except Exception:
-            return None
-    
-    def _resolve_role_from_jwt(self, request: Request) -> str | None:
-        """Resolve the highest role from JWT groups (lightweight, no auth check).
-        Mirrors the RBAC AUTHENTIK_GROUP_MAP logic for early context."""
-        claims = self._peek_jwt_claims(request)
-        if not claims:
-            return None
-        groups = claims.get("groups", [])
-        if not groups:
-            return None
-        # lightweight role resolution matching AUTHENTIK_GROUP_MAP precedence
-        _GROUP_ROLE = {
-            "role_admin": "admin", "admin": "admin", "admins": "admin",
-            "authentik admins": "admin", "orcastra-admins": "admin",
-            "role_partner": "partner", "partner": "partner",
-            "orcastra-partners": "partner",
-            "role_tenant": "tenant", "tenant": "tenant",
-            "orcastra-tenants": "tenant",
-        }
-        _HIERARCHY = {"tenant": 0, "partner": 1, "admin": 2}
-        best = None
-        for g in groups:
-            role = _GROUP_ROLE.get(g.lower().strip())
-            if role and (best is None or _HIERARCHY.get(role, 0) > _HIERARCHY.get(best, 0)):
-                best = role
-        return best
