@@ -171,6 +171,7 @@ from app.models.db_models import Organization, OrganizationCluster, Organization
 from app.services import cluster_parties, owner_key_enrollment
 from app.services.api_key_grant_bound import (
     already_granted,
+    refuse_a_grant_past_the_project_bound,
     refuse_a_project_another_party_holds,
     rule_outside_the_key_grant,
 )
@@ -2569,41 +2570,12 @@ async def _refuse_a_grant_past_the_project_bound(
     """A Partner may not hold a key reaching more of a cluster than they can see there.
 
     important: asked when a key is minted, when its grant is edited, and when a Partner who did not
-    mint it rotates its secret. On a cluster another party also holds, a Partner could otherwise name
-    that party's project, or '*', and the key then acted on it through the raw proxy, /proxy and
-    provisioning. A cluster held only by the caller's side is unchanged, so the '*' grant an OrcaHub
-    connection carries still mints and rotates there. What a key already holds on a cluster (its
-    projects and its permission level) is carried over when given. Admin is not bound.
+    mint it rotates its secret (services.api_key_grant_bound.refuse_a_grant_past_the_project_bound,
+    which an add-on installation asks too).
     """
-    if get_current_allowed_clusters() is None:
-        return
-    held_elsewhere = await _clusters_held_by_another_party(
-        db, caller_email, {grant.cluster_id for grant in grants}
+    await refuse_a_grant_past_the_project_bound(
+        db, caller_email, grants, already_granted, held=_clusters_held_by_another_party
     )
-    kept = already_granted or {}
-
-    def carried_over(grant: ClusterPermission, project: str) -> bool:
-        projects, level = kept.get(grant.cluster_id, (set(), -1))
-        return project in projects and granted_level(grant.permissions) <= level
-
-    refused = sorted({
-        f"{grant.cluster_id}/{project}"
-        for grant in grants
-        if grant.cluster_id in held_elsewhere
-        for project in grant.projects
-        if not carried_over(grant, project)
-        and (project == "*" or not project_is_visible(grant.cluster_id, project))
-    })
-    if refused:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Not permitted to grant these projects: {refused}. Another organization also "
-                "holds that cluster, so a key may name only the projects you can see there. "
-                "A project the key already holds is kept at its current permission level. "
-                "An administrator can issue a wider key."
-            ),
-        )
 
 
 def _owner_metadata_reader(vault_client) -> Callable[[str], Awaitable[Tuple[Optional[Dict[str, Any]], Optional[str]]]]:

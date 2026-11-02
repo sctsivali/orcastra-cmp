@@ -160,3 +160,31 @@ def test_provisioning_and_the_sync_ask_who_names_the_project_before_writing() ->
     sync = inspect.getsource(integrations.sync_policies_from_external)
     assert sync.index("rule_outside_the_key_grant") < sync.index("refuse_a_project_another_party_holds")
     assert sync.index("refuse_a_project_another_party_holds") < sync.index("find org by external_id")
+
+
+# ── an add-on installation is a key too ────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("cluster,project", [(MIXED, "*"), (MIXED, "theirs")], ids=["wildcard", "another-partys-project"])
+async def test_an_add_on_install_is_held_to_the_same_bound(scope, cluster: str, project: str) -> None:
+    """A partner publishes an add-on asking for every project and installs it beside another party."""
+    from app.services.extension_scope import assert_install_scope_within_partner
+
+    db = await _world()
+    grant = {"cluster_id": cluster, "projects": [project], "permissions": ["read"]}
+    with pytest.raises(HTTPException) as caught:
+        await assert_install_scope_within_partner(
+            db, _user(SELLER), organization_id=1, grants=[grant],
+            manifest_scope={"permission": "admin", "projects": "all"}, capabilities=[],
+        )
+    assert caught.value.status_code == 403 and f"{cluster}/{project}" in caught.value.detail
+
+
+async def test_an_add_on_on_the_sellers_own_cluster_still_installs_with_a_wildcard(scope) -> None:
+    from app.services.extension_scope import assert_install_scope_within_partner
+
+    db = await _world()
+    await assert_install_scope_within_partner(
+        db, _user(SELLER), organization_id=1,
+        grants=[{"cluster_id": OWN, "projects": ["*"], "permissions": ["read"]}],
+        manifest_scope={"permission": "admin", "projects": "all"}, capabilities=[],
+    )

@@ -35,6 +35,7 @@ from app.core.org_scope import (
     resolve_cluster_orgs,
 )
 from app.models.extension_models import Extension, ExtensionInstallation
+from app.services.api_key_grant_bound import refuse_a_grant_past_the_project_bound
 from app.services.extension_credential_guard import orgs_the_user_runs
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ async def assert_install_scope_within_partner(
 ) -> None:
     """Refuse an installation that would reach further than the operator installing it.
 
-    Five checks in this order, cheapest and most decisive first, plus one condition on reaching
+    Six checks in this order, cheapest and most decisive first, plus one condition on reaching
     inside a guest.
     """
     requested_clusters = {getattr(g, "cluster_id", None) or g["cluster_id"] for g in grants}
@@ -135,6 +136,11 @@ async def assert_install_scope_within_partner(
                     "This add-on declared it needs named projects, so it cannot be installed "
                     "across all of them"
                 )
+
+    # 6. The partner's project bound, the same rule an ordinary API key is held to: on a cluster
+    #    another party also holds, no '*' and no project the partner cannot see there. A manifest
+    #    asking for "all" projects does not lift it.
+    await refuse_a_grant_past_the_project_bound(db, user.email, grants)
 
     await _assert_guest_access_is_consented(
         db, organization_id=organization_id, capabilities=capabilities, clusters=requested_clusters

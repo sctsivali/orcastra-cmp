@@ -10,23 +10,29 @@ rule they write widens the key creator's Partner bound and hands the listed emai
   purchase, still provisions.
 - A rule the policy sync writes must sit inside the key's own grant.
 
-The dashboard half, a grant past the caller's project bound, is
-routers/integrations._refuse_a_grant_past_the_project_bound.
+The dashboard half, a grant past the caller's project bound, is refuse_a_grant_past_the_project_bound,
+asked by API key minting, edits and rotation and by add-on installation and rescope.
 
 Forward-ported from the v1.0.0-RC4-hotfix line (7d0d79e3, 2d2a0961) through 17215e29, with the key's
 side read from the owner set (organization_owners) rather than the single api_key_id column.
 """
 
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_permissions import granted_level
+from app.core.org_scope import get_current_allowed_clusters, project_is_visible
 from app.services import cluster_parties
 
-__all__ = ["already_granted", "refuse_a_project_another_party_holds", "rule_outside_the_key_grant"]
+__all__ = [
+    "already_granted",
+    "refuse_a_grant_past_the_project_bound",
+    "refuse_a_project_another_party_holds",
+    "rule_outside_the_key_grant",
+]
 
 # cluster id -> (projects the key holds there, its permission level there)
 Granted = Dict[str, Tuple[Set[str], int]]
@@ -42,6 +48,58 @@ def already_granted(metadata: Mapping[str, Any]) -> Granted:
         for grant in (metadata.get("cluster_permissions") or [])
         if isinstance(grant, dict)
     }
+
+
+def _field(grant: Any, name: str) -> Any:
+    return grant.get(name) if isinstance(grant, Mapping) else getattr(grant, name)
+
+
+async def refuse_a_grant_past_the_project_bound(
+    db: AsyncSession,
+    caller_email: str,
+    grants: Iterable[Any],
+    already: Optional[Granted] = None,
+    *,
+    held: Callable[[AsyncSession, str, Set[str]], Awaitable[Set[str]]] = cluster_parties.clusters_held_by_another_party,
+) -> None:
+    """Raise 403 when a grant names '*' or a project the caller cannot see on a cluster another party holds.
+
+    important: asked after the cluster scope check and before any cluster is read. On a cluster
+    another party also holds, a grant naming that party's project, or '*', lets the key act on it
+    through the raw proxy, /proxy and provisioning. A cluster held only by the caller's side is
+    unchanged, so the '*' grant an OrcaHub connection carries still works there. What a key already
+    holds on a cluster (its projects and its permission level) is carried over when given. An
+    unbounded request (admin, no cluster scope) is not bound. A grant is an object or a mapping with
+    cluster_id, projects and permissions.
+    """
+    if get_current_allowed_clusters() is None:
+        return
+    grants = list(grants)
+    held_elsewhere = await held(db, caller_email, {_field(grant, "cluster_id") for grant in grants})
+    kept = already or {}
+
+    def carried_over(cluster_id: str, permissions: Any, project: str) -> bool:
+        projects, level = kept.get(cluster_id, (set(), -1))
+        return project in projects and granted_level(permissions) <= level
+
+    refused = sorted({
+        f"{_field(grant, 'cluster_id')}/{project}"
+        for grant in grants
+        if _field(grant, "cluster_id") in held_elsewhere
+        for project in (_field(grant, "projects") or [])
+        if not carried_over(_field(grant, "cluster_id"), _field(grant, "permissions"), project)
+        and (project == "*" or not project_is_visible(_field(grant, "cluster_id"), project))
+    })
+    if refused:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Not permitted to grant these projects: {refused}. Another organization also "
+                "holds that cluster, so a key may name only the projects you can see there. "
+                "A project the key already holds is kept at its current permission level. "
+                "An administrator can issue a wider key."
+            ),
+        )
 
 
 async def refuse_a_project_another_party_holds(
