@@ -119,7 +119,7 @@ test("a session that drops after ready reconnects at most five times", async ({ 
   await page.goto(TERMINAL_PATH, { waitUntil: "domcontentloaded" });
 
   await expect.poll(() => sockets.length, { timeout: 15_000 }).toBe(1);
-  await expect(page.getByText(/Connection lost\. Reconnecting in 1 s \(attempt 1 of 5\)\./).first()).toBeVisible();
+  await expect(page.getByText(/Connection lost\. Reconnecting in 1s \(attempt 1 of 5\)\./).first()).toBeVisible();
   // The waits add up to 31 s give or take 20 %; walk the clock until the page gives up.
   await expect
     .poll(async () => {

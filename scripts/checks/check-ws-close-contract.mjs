@@ -115,7 +115,7 @@ try {
     assert.ok(/\.$/.test(sentence), `"${sentence}" must end with a period`);
     assert.ok(!/[–—]/.test(sentence), `"${sentence}" must not carry a dash`);
   }
-  assert.equal(reconnectingMessage(4000, 3), 'Connection lost. Reconnecting in 4 s (attempt 3 of 5).');
+  assert.equal(reconnectingMessage(4000, 3), 'Connection lost. Reconnecting in 4s (attempt 3 of 5).');
 
   // The backoff: 1, 2, 4, 8, 16 s within 20 % either way, five attempts.
   assert.equal(MAX_RECONNECT_ATTEMPTS, 5);
@@ -206,7 +206,7 @@ try {
     assert.deepEqual(await recovery.onMintError(apiError(429, { retryAfter: 7, message: 'Too many' }), cold), { action: 'retry', delayMs: 7000, message: 'Too many' });
     const busy = await recovery.onMintError(apiError(503), cold);
     assert.equal(busy.action, 'retry');
-    assert.equal(busy.message, 'Connection lost. Reconnecting in 2 s (attempt 2 of 5).');
+    assert.equal(busy.message, 'Connection lost. Reconnecting in 2s (attempt 2 of 5).');
   }
   {
     // Final closes stop and say why; nothing reconnects into them.
@@ -272,7 +272,7 @@ try {
       const step = await recovery.onClose(1006, '', { opened: true, liveSocket: true });
       assert.equal(step.action, 'retry');
       delays.push(step.delayMs);
-      assert.equal(step.message, `Connection lost. Reconnecting in ${Math.round(step.delayMs / 1000)} s (attempt ${i + 1} of 5).`);
+      assert.equal(step.message, `Connection lost. Reconnecting in ${Math.round(step.delayMs / 1000)}s (attempt ${i + 1} of 5).`);
     }
     assert.deepEqual(delays, [1000, 2000, 4000, 8000, 16000]);
     assert.deepEqual(await recovery.onClose(1011, 'Lost the connection to the shell', { opened: true, liveSocket: true }),

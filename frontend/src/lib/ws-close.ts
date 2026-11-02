@@ -148,9 +148,9 @@ export function messageFor(kind: CloseKind, detail = ""): string {
   }
 }
 
-/** "Connection lost. Reconnecting in N s (attempt i of 5)." for the attempt about to wait `delayMs`. */
+/** "Connection lost. Reconnecting in Ns (attempt i of 5)." for the attempt about to wait `delayMs`. */
 export function reconnectingMessage(delayMs: number, attempt: number): string {
-  return `Connection lost. Reconnecting in ${Math.max(1, Math.round(delayMs / 1000))} s (attempt ${attempt} of ${MAX_RECONNECT_ATTEMPTS}).`;
+  return `Connection lost. Reconnecting in ${Math.max(1, Math.round(delayMs / 1000))}s (attempt ${attempt} of ${MAX_RECONNECT_ATTEMPTS}).`;
 }
 
 /** The wait before reconnect `attempt` (0-based): 1, 2, 4, 8, 16 s, each within 20% either way. */
