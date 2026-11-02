@@ -443,6 +443,10 @@ class LXDService:
         """List instances and identify clusters whose project inventory was incomplete."""
         return await self.instance_manager.list_all_vms_with_failures()
 
+    async def list_node_instances(self, node_name: str) -> List[VMInfo]:
+        """One cluster's instances across every project, without a fleet fan-out."""
+        return await self.instance_manager.list_node_instances(node_name)
+
     async def read_fleet_inventory(self) -> FleetInventory:
         """The monitoring sweep's fleet read: clusters out of time are named, not raised."""
         return await self.instance_manager.read_fleet_inventory()

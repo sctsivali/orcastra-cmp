@@ -1147,6 +1147,20 @@ class InstanceManager:
         }
         return FleetInventory(all_vms, connected_nodes, incomplete_nodes, timed_out)
     
+    async def list_node_instances(self, node_name: str) -> List[VMInfo]:
+        """One cluster's instances across every project, read in the bounded inventory pool.
+
+        important: for an answer about one cluster (its metrics). The fleet read raises for the
+        whole fleet when any cluster passes the wall, so a slow neighbour such as a remote
+        cluster timing out made every cluster's metrics answer 500 for a partner. An unreachable
+        cluster here reads as no instances; its connection state is reported separately.
+        """
+        try:
+            vms, connected, _complete = await self._fetch_inventory_node_bounded(node_name)
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            raise LXDConnectionError("Instance inventory is temporarily unavailable") from exc
+        return vms if connected else []
+
     def fetch_node_instances(
         self, node_name: str, node_endpoint: str = ""
     ) -> Tuple[List[VMInfo], bool]:

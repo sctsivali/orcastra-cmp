@@ -598,10 +598,12 @@ async def get_node_metrics(
     monitoring_generation = _resource_generation(cache, _MONITORING_CACHE_KIND)
 
     try:
-        # run node status + VM list in parallel to eliminate waterfall
+        # run node status + this cluster's instances in parallel to eliminate waterfall
+        # important: this cluster's instances only. The fleet read failed as a whole when any
+        # other cluster timed out, which answered 500 here for a cluster that was fine.
         node_statuses_task = lxd_service.check_nodes_status_async()
-        vms_task = lxd_service.list_all_vms()
-        node_statuses_list, (all_vms, _) = await asyncio.gather(node_statuses_task, vms_task)
+        vms_task = lxd_service.list_node_instances(node_name)
+        node_statuses_list, all_vms = await asyncio.gather(node_statuses_task, vms_task)
 
         node = next((n for n in node_statuses_list if n.name == node_name), None)
         if not node:

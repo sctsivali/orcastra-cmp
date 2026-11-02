@@ -164,7 +164,14 @@ class _NodeService:
         ]
 
     async def list_all_vms(self) -> tuple[list[Any], list[str]]:
-        return [], [CLUSTER]
+        raise AssertionError("one cluster's metrics read the whole fleet")
+
+    async def list_node_instances(self, node_name: str) -> list[Any]:
+        assert node_name == CLUSTER
+        return [
+            SimpleNamespace(host=CLUSTER, project="default", name="a", status=SimpleNamespace(value="Running")),
+            SimpleNamespace(host=CLUSTER, project="default", name="b", status=SimpleNamespace(value="Stopped")),
+        ]
 
 
 @pytest.mark.parametrize("advance", [False, True], ids=["stable", "invalidated"])
@@ -183,6 +190,7 @@ def test_node_metrics_only_cache_the_generation_they_read(monkeypatch, advance: 
     )
 
     assert result.node_name == CLUSTER
+    assert (result.instance_count, result.running_instances) == (2, 1)
     expected_key = _scoped(f"monitoring:node:{CLUSTER}")
     assert (expected_key in _api_keys(cache)) is (not advance)
 
