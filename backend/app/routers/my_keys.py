@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
+import asyncio
 import logging
 import io
 import json
@@ -38,7 +39,7 @@ from app.core.org_scope import (
 )
 from app.services.activity_logger import get_activity_logger
 from app.services import my_keys_registry
-from app.services.lxd_key_bounds import project_a_new_key_names
+from app.services.lxd_key_bounds import authorize_new_key, refuse_an_unisolated_project
 from app.core.lxd_path import safe_segment
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -357,9 +358,8 @@ async def create_key(
     # A key is provisioned into a specific node's LXD trust store, so the node is the boundary.
     verify_cluster_access(request.node)
     # important: the key is an LXD credential, so it is held to what it grants as well.
-    project = await project_a_new_key_names(
-        request.node, request.project, request.auth_level, db, _rbac
-    )
+    target = await authorize_new_key(request.node, request.project, request.auth_level, db, _rbac)
+    project = target.project
 
     vault_client = get_vault_keys_client()
 
@@ -386,6 +386,10 @@ async def create_key(
                 )
             )
         
+        if target.isolated_project_required:
+            # important: before the identity exists, so a refusal leaves nothing on the cluster
+            await asyncio.to_thread(refuse_an_unisolated_project, client, request.node, project)
+
         # Create TLS identity in LXD
         # LXD expects certificate in body field for TLS identity creation
         identity_data = {

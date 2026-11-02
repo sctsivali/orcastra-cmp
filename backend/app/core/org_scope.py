@@ -1067,7 +1067,12 @@ async def get_visible_projects(
         _resolved, mapping = await _resolve_tenant_grants(grants or [], shared, db)
         return mapping or None
 
-    org_ids = await _query_user_org_ids(user.email, db)
+    # important: the organizations the partner runs (created, or a partner row), not every
+    # membership. A member row in an organization the partner bought from would otherwise lift the
+    # bound to whatever that seller's policies name on its own cluster.
+    from app.services import cluster_parties
+
+    org_ids = set(await cluster_parties.run_orgs(db, user.email))
     mapping: dict[str, set[str]] = {}
     for cluster_id in shared:
         allowed = {"default"}

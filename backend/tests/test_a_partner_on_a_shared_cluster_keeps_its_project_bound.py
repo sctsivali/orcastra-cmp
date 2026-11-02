@@ -78,6 +78,21 @@ class FakeSession:
         raise AssertionError(f"unexpected query: {sql[:120]}")
 
 
+@pytest.fixture(autouse=True)
+def _the_partner_runs_its_organizations(monkeypatch):
+    """The bound widens by the organizations a partner runs (services.cluster_parties.run_orgs,
+    pinned on real rows elsewhere); here every organization the session names is one it runs."""
+    async def run_orgs(db, email):
+        if hasattr(db, "org_ids"):
+            return {org_id: frozenset() for org_id in db.org_ids}
+        # note: the raw-table SQLite test below has no role column; its partner created its org.
+        from app.core.org_scope import _query_user_org_ids
+
+        return {org_id: frozenset() for org_id in await _query_user_org_ids(email, db)}
+
+    monkeypatch.setattr("app.services.cluster_parties.run_orgs", run_orgs)
+
+
 class FakeUser:
     def __init__(self, email="p@example.test", groups=("role_partner",)):
         self.email = email

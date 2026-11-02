@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import pytest
+
+from app.services.lxd_key_bounds import KeyTarget
 from fastapi import HTTPException
 
 from app.core.auth import AuthenticatedUser
@@ -74,7 +76,12 @@ async def test_a_refused_create_is_recorded(monkeypatch, audits) -> None:
             def get_client(_node):
                 return None
 
+    async def _authorized(_node, project, _level, _db, _user):
+        return KeyTarget(project or "default")
+
     monkeypatch.setattr(my_keys, "verify_cluster_access", lambda _c: None)
+    # note: what a key may grant is its own test (test_my_keys_are_held_to_the_bound_and_their_owner)
+    monkeypatch.setattr(my_keys, "authorize_new_key", _authorized)
     request = my_keys.KeyCreateRequest(name="ops", node="nuc2", auth_level="standard")
     with pytest.raises(HTTPException):
         await my_keys.create_key(request, lxd_service=_Service(), _=None, _rbac=_user(), db=None)
