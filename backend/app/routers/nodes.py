@@ -40,7 +40,7 @@ from app.core.vault_client import get_vault_client
 from app.core import vault_status
 from app.core.registry_guard import require_known_registry, vault_unavailable_error
 from app.core.org_scope import apply_cluster_filter
-from app.services.lxd_certs.storage import RegistryRead
+from app.services.lxd_certs.storage import RegistryRead, stored_location_fields
 from app.core.cache import (
     CAPACITY_GENERATION_KIND,
     get_cache_manager,
@@ -441,7 +441,9 @@ async def update_node(
                             # Preserve, never invent: an absent type means not determined yet.
                             cluster_type=metadata.get("type"),
                             merchant_id=metadata.get("merchant_id", ""),
-                            location=metadata.get("location", {}),
+                            # note: a location no reader can use is not written back; a
+                            # complete one is re-saved with the keys it had.
+                            location=stored_location_fields(node_name, metadata),
                         )
                         logger.info(f"Updated display name for Vault cluster {node_name}")
                     else:

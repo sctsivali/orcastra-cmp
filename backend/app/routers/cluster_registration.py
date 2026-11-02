@@ -53,6 +53,8 @@ from app.services import cluster_generations
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd_certs import pending as pending_certs
 from app.services.lxd_certs import trust_cleanup
+from app.services.lxd_certs.storage import stored_location, stored_location_fields
+from app.core.error_sanitizer import GENERIC_SERVER_ERROR
 from app.services.lxd_certs import trust_cleanup_store as trust_store
 from app.services.region_catalog import get_region_catalog
 from app.core.database import get_db
@@ -726,7 +728,9 @@ async def check_cluster_authentication(
                     connected=True,
                     authenticated=False,
                     status=ClusterStatus.ERROR,
-                    message=f"Connected but failed to retrieve server info: {str(e)}"
+                    # note: the exception text names the host's address and Vault paths; it is
+                    # in the log line above.
+                    message="Connected, but the server information could not be read.",
                 )
         else:
             # A cluster that never answered is offline, not a trust problem. Reporting
@@ -749,17 +753,13 @@ async def check_cluster_authentication(
         # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
         # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
         raise
-    except LXDCertManagerError as e:
-        logger.error(f"Authentication check failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
     except Exception as e:
-        logger.error(f"Unexpected error during authentication check: {e}")
+        # Logged here in full; the caller gets the fixed answer every server fault gets
+        # (main.py adds the reference that ties the two together).
+        logger.exception("Authentication check failed for %s: %s", request.cluster_id, e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
+            detail=GENERIC_SERVER_ERROR,
         )
 
 
@@ -887,15 +887,12 @@ def _cluster_info_blocking(
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=None if connected else (error_msg or derived_message or None),
-            # important: `or None`. A cluster registered without a location stores {} for it,
-            # and an empty dict is not a valid GeoLocation - all nine fields are required - so
-            # building ClusterInfo from it raised nine validation errors. That surfaced as a
-            # 500 on GET /clusters/{id} and, on the list, as a row degraded to
-            # endpoint="unknown" by the handler's own fallback. The UI always sends a region,
-            # so only API callers hit it, which is why it went unseen.
-            location=info["metadata"].get("location") or None
+            # important: never the raw stored value. {}, null, part of a location, a string or a
+            # list all read as no location; built into ClusterInfo they degraded this row to
+            # endpoint "unknown" (stored_location says why).
+            location=stored_location(cluster_id, info["metadata"]),
         )
-        
+
     except LXDLocalStorageError:
         # important: above LXDCertManagerError and the generic handler. probe_connection
         # raises this when the backend's own disk could not hold the TLS material, so there
@@ -904,6 +901,8 @@ def _cluster_info_blocking(
         # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
         raise
     except Exception as e:
+        # note: the text stays in the log. It is Vault's, pydantic's or a driver's and can carry
+        # paths and stored values, and the row reaches every caller of the list.
         logger.warning(f"Failed to get info for cluster {cluster_id}: {e}")
         return ClusterInfo(
             cluster_id=cluster_id,
@@ -912,7 +911,7 @@ def _cluster_info_blocking(
             cluster_type=None,
             status=ClusterStatus.ERROR,
             has_certificate=False,
-            error_message=str(e)
+            error_message=_ROW_UNREADABLE,
         )
 
 
@@ -924,6 +923,7 @@ _CLUSTER_ROW_TIMEOUT_SECONDS = 30.0
 # this many rows in flight a row is refused at once rather than waiting out its wall.
 _CLUSTER_ROW_MAX_IN_FLIGHT = 64
 _ROW_UNFINISHED = "The status check did not finish in time. Refresh to try again."
+_ROW_UNREADABLE = "This cluster's record could not be read. The server log has the detail."
 
 
 async def _get_cluster_info_async(
@@ -1027,10 +1027,12 @@ async def list_clusters(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to list clusters: {e}")
+        # The detail is logged here; the caller gets the fixed answer every server fault gets
+        # (main.py adds the reference that ties the two together).
+        logger.exception("Failed to list clusters: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not list clusters: {str(e)}"
+            detail=GENERIC_SERVER_ERROR,
         )
 
 
@@ -1068,7 +1070,7 @@ async def get_facility_suggestions(
         for cluster_id in cluster_ids:
             try:
                 info = cert_manager.get_cluster_info(cluster_id)
-                location = info.get("metadata", {}).get("location", {})
+                location = stored_location_fields(cluster_id, info.get("metadata"))
                 name = location.get("facility_name")
                 provider = location.get("facility_provider")
                 
@@ -1156,13 +1158,9 @@ async def get_cluster(
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=error_msg if not connected else None,
-            # important: `or None`. A cluster registered without a location stores {} for it,
-            # and an empty dict is not a valid GeoLocation - all nine fields are required - so
-            # building ClusterInfo from it raised nine validation errors. That surfaced as a
-            # 500 on GET /clusters/{id} and, on the list, as a row degraded to
-            # endpoint="unknown" by the handler's own fallback. The UI always sends a region,
-            # so only API callers hit it, which is why it went unseen.
-            location=info["metadata"].get("location") or None
+            # important: never the raw stored value. Anything short of a complete location
+            # answered this read with 500 (stored_location says why).
+            location=stored_location(cluster_id, info["metadata"]),
         ), caller_tier())
         
     except LXDLocalStorageError:
@@ -1173,16 +1171,20 @@ async def get_cluster(
         # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
         raise
     except LXDCertManagerError as e:
+        # note: a 4xx passes main.py's handler untouched, and this text is Vault's.
         logger.error(f"Failed to get cluster {cluster_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Cluster not found: {str(e)}"
+            detail=f"Cluster '{cluster_id}' not found",
         )
     except Exception as e:
-        logger.error(f"Unexpected error getting cluster {cluster_id}: {e}")
+        # important: the text is pydantic's, Vault's or a driver's and carried stored values and
+        # Vault paths to the caller. It is logged here; the caller gets the fixed answer every
+        # server fault gets (main.py adds the reference that ties the two together).
+        logger.exception("Unexpected error getting cluster %s: %s", cluster_id, e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
+            detail=GENERIC_SERVER_ERROR,
         )
 
 

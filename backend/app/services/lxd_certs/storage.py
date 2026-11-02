@@ -3,11 +3,14 @@
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
+
+from pydantic import ValidationError
 
 from app.core import vault_status
 from app.core.url_safety import normalize_endpoint
 from app.core.vault_client import VaultClientError
+from app.models.schemas import GeoLocation
 
 from .types import LXDCertManagerError
 
@@ -19,6 +22,67 @@ _absent_cluster_ids: set = set()
 _absent_lock = threading.Lock()
 # Bounded: the ids come from stored grants and request paths, not only from the registry.
 _ABSENT_MEMO_LIMIT = 1024
+# (cluster id, problem) pairs already warned about, for the same reason: the list, regions and
+# integration reads run every few minutes and would repeat one broken record on each.
+_unreadable_locations: set = set()
+
+
+def stored_location(cluster_id: str, metadata: Any) -> Optional[GeoLocation]:
+    """The cluster's stored location, or None when there is none or it is not a complete one.
+
+    important: every reader of a stored location goes through this. Registration without a
+    location stores {} (save_cluster_metadata below), and an older or hand-edited record can hold
+    null, part of a location, a string or a list. Built straight into GeoLocation, those answered
+    GET /clusters/{id} with 500 and degraded the list row to endpoint "unknown"; read with `.get`,
+    a null crashed the facilities, integrations and regions reads. Anything short of all nine
+    required fields reads as no location. The warning names the cluster and the fields, never the
+    stored value: it is operator free text.
+    """
+    if not isinstance(metadata, Mapping) or "location" not in metadata:
+        return None
+    raw = metadata["location"]
+    if isinstance(raw, Mapping):
+        if not raw:
+            return None
+        try:
+            return GeoLocation.model_validate(dict(raw))
+        except ValidationError as exc:
+            missing = sorted({str(e["loc"][0]) for e in exc.errors() if e["type"] == "missing"})
+            invalid = sorted(
+                {str(e["loc"][0]) for e in exc.errors() if e["type"] != "missing" and e["loc"]}
+            )
+            problem = "; ".join(
+                part
+                for part in (
+                    f"missing {', '.join(missing)}" if missing else "",
+                    f"invalid {', '.join(invalid)}" if invalid else "",
+                )
+                if part
+            )
+    else:
+        problem = "null" if raw is None else f"a {type(raw).__name__}, not a location record"
+    _warn_unreadable_location(cluster_id, problem)
+    return None
+
+
+def stored_location_fields(cluster_id: str, metadata: Any) -> Dict[str, Any]:
+    """The stored location as plain keys for a reader that picks fields; {} when there is none."""
+    location = stored_location(cluster_id, metadata)
+    return location.model_dump(exclude_none=True) if location is not None else {}
+
+
+def _warn_unreadable_location(cluster_id: str, problem: str) -> None:
+    with _absent_lock:
+        first = (cluster_id, problem) not in _unreadable_locations
+        if first and len(_unreadable_locations) < _ABSENT_MEMO_LIMIT:
+            _unreadable_locations.add((cluster_id, problem))
+    if first:
+        logger.warning(
+            "Cluster %s has a stored location that cannot be read (%s); it is reported without "
+            "one until the location is saved again. Further reads of it are not logged.",
+            cluster_id,
+            problem,
+        )
 
 
 @dataclass

@@ -34,6 +34,7 @@ from app.services.integration_cluster_checks import (
 from app.services.lxd import health
 from app.services.lxd import registry as cluster_registry
 from app.services.lxd import status as lxd_status
+from app.services.lxd_certs.storage import stored_location_fields
 from app.models.schemas import AvailableCluster, AvailableClustersResponse
 from app.services.lxd.proxy import (
     ALLOWED_METHODS,
@@ -1218,7 +1219,7 @@ def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
     """
     cluster_info = cert_manager.get_cluster_info(cluster_id)
     metadata = cluster_info.get("metadata", {})
-    location_data = metadata.get("location", {})
+    location_data = stored_location_fields(cluster_id, metadata)
     public_location = _public_location_data(location_data)
     zone_name = location_data.get("region_name") or location_data.get("city") or None
     return [{
@@ -4586,7 +4587,7 @@ async def get_integration_regions(
             for cluster_id, cluster_info in infos.items():
                 try:
                     location_data = _public_location_data(
-                        cluster_info.get("metadata", {}).get("location", {})
+                        stored_location_fields(cluster_id, cluster_info.get("metadata"))
                     )
                     if not location_data.get("latitude") or not location_data.get("longitude"):
                         continue

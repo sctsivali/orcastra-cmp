@@ -37,9 +37,20 @@ class _Certificates:
         self.info_reads.append(cluster_id)
         if self.race:
             self.cache.generation = "after"
+        # A complete location, as registration and the location update store one: a record with
+        # only facility fields reads as no location (lxd_certs/storage.py stored_location).
         return {
             "metadata": {
                 "location": {
+                    "region_id": "id-3174",
+                    "region_name": "Jakarta Selatan",
+                    "country_code": "ID",
+                    "country_name": "Indonesia",
+                    "city": "Jakarta Selatan",
+                    "latitude": -6.26,
+                    "longitude": 106.81,
+                    "timezone": "Asia/Jakarta",
+                    "continent": "AS",
                     "facility_name": f"facility-{cluster_id}",
                     "facility_provider": f"provider-{cluster_id}",
                 }

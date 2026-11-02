@@ -50,6 +50,7 @@ from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, re
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.core.type_utils import resolve_cluster_type, resolve_clustered
 from app.services.lxd.project_scope import list_instance_records
+from app.services.lxd_certs.storage import stored_location_fields
 from app.core.lxd_path import safe_segment
 
 router = APIRouter(
@@ -239,8 +240,10 @@ async def build_regions_overview(
                     try:
                         cluster_info = cert_manager.get_cluster_info(cluster_id)
                         metadata = cluster_info.get("metadata", {})
-                        location_data = metadata.get("location", {})
-                
+                        # note: an unreadable stored location places the cluster under Unknown
+                        # instead of dropping it from the map (a string or list raised here).
+                        location_data = stored_location_fields(cluster_id, metadata)
+
                         if not location_data or not location_data.get("region_id"):
                             region_id = "unknown"
                             region_data = {
