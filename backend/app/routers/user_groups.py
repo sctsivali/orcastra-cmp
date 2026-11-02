@@ -20,6 +20,8 @@ from app.core.dependencies import AuthenticatedUser, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
 from app.services.authentik_sync import get_authentik_sync
+from app.services.cluster_parties import RUNNING_ROLES
+from app.services.organization_roster import synced_partner_orgs, synced_partner_refusal
 
 router = APIRouter(
     prefix="/user-groups",
@@ -173,7 +175,7 @@ async def assign_user_role(
                         select(OrganizationMember.organization_id)
                         .where(
                             OrganizationMember.user_email == user.email,
-                            OrganizationMember.role == "partner",
+                            OrganizationMember.role.in_(RUNNING_ROLES),
                         )
                     ),
                 ),
@@ -280,10 +282,13 @@ async def remove_user_from_all(
 
     from sqlalchemy import delete
 
+    kept: dict[int, str] = {}
     if highest == Role.ADMIN:
         # admin: remove from all orgs
-        await db.execute(
-            delete(OrganizationMember).where(OrganizationMember.user_email == user_email)
+        removed = await db.execute(
+            delete(OrganizationMember)
+            .where(OrganizationMember.user_email == user_email)
+            .returning(OrganizationMember.organization_id)
         )
     else:
         # partner: only remove from orgs they own/belong to
@@ -297,17 +302,33 @@ async def remove_user_from_all(
                         select(OrganizationMember.organization_id)
                         .where(
                             OrganizationMember.user_email == user.email,
-                            OrganizationMember.role == "partner",
+                            OrganizationMember.role.in_(RUNNING_ROLES),
                         )
                     ),
                 ),
             )
         )
-        await db.execute(
-            delete(OrganizationMember).where(
+        # important: OrcaHub owns the roster of an organization it synced and lets only a platform
+        # admin remove a partner there, so the next sync would quietly bring such a row back. Those
+        # rows are kept and named, and the rest of the caller's organizations are still cleared.
+        caller_orgs = set((await db.execute(partner_org_ids)).scalars().all())
+        kept = await synced_partner_orgs(db, user_email, sorted(caller_orgs))
+        removed = await db.execute(
+            delete(OrganizationMember)
+            .where(
                 OrganizationMember.user_email == user_email,
-                OrganizationMember.organization_id.in_(partner_org_ids),
+                OrganizationMember.organization_id.in_(sorted(caller_orgs - set(kept))),
             )
+            .returning(OrganizationMember.organization_id)
+        )
+    removed_rows = removed.all()
+    if kept and not removed_rows:
+        raise HTTPException(status_code=409, detail=synced_partner_refusal(user_email, list(kept.values())))
+    # note: the list shows a partner every org the user belongs to, a tenant row included, while a
+    # removal reaches only the orgs the caller runs. Say so rather than answer success for nothing.
+    if highest != Role.ADMIN and not removed_rows:
+        raise HTTPException(
+            status_code=404, detail=f"{user_email} is not a member of any organization you run"
         )
     await db.commit()
 
@@ -327,7 +348,12 @@ async def remove_user_from_all(
     except Exception as e:
         logger.warning(f"OrcaHub removal push failed (non-blocking): {e}")
 
-    return {"detail": f"User {user_email} removed from organizations"}
+    if kept:
+        return {
+            "detail": f"Removed from the other organizations. {synced_partner_refusal(user_email, list(kept.values()))}",
+            "kept": list(kept.values()),
+        }
+    return {"detail": f"User {user_email} removed from organizations", "kept": []}
 
 
 @router.get("/sync-status", response_model=AuthentikSyncStatus)

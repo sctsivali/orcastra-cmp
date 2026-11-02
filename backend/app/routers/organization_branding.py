@@ -27,6 +27,7 @@ from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.services.branding import provider_link, store
 from app.services.branding.resolve import resolve
 from app.services.branding.validation import BrandingInvalid
+from app.services.organization_roster import user_runs_org
 from app.services.organization_service import OrganizationService
 
 logger = logging.getLogger(__name__)
@@ -100,11 +101,21 @@ def _tenant_only(user: AuthenticatedUser) -> bool:
     return get_highest_role(resolve_roles(user)) == Role.TENANT
 
 
-async def _require_org_access(db: AsyncSession, org_id: int, user: AuthenticatedUser):
+async def _require_org_access(db: AsyncSession, org_id: int, user: AuthenticatedUser, *, runs: bool = False):
+    """The organization, when the caller may see it, or with `runs` when the caller runs it.
+
+    important: a write asks `runs` (services.organization_roster.user_runs_org: an admin, the creator
+    or a partner row). Seeing it is any member row, so a partner who only bought from another partner
+    could otherwise rewrite that partner's branding.
+    """
     svc = OrganizationService(db)
     org = await svc.get_organization(org_id)
     role = get_highest_role(resolve_roles(user)).value
-    if org is None or not await svc.user_has_access(org_id, user.email, role):
+    allowed = (
+        await user_runs_org(db, org_id, user.email, role) if runs
+        else await svc.user_has_access(org_id, user.email, role)
+    )
+    if org is None or not allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
     return org
 
@@ -190,7 +201,7 @@ async def update_org_branding(
 ):
     """Partner (an organization it may manage) or Admin. A write by a non-member is audited like any other."""
     response.headers["Cache-Control"] = _NO_STORE
-    org = await _require_org_access(db, org_id, user)
+    org = await _require_org_access(db, org_id, user, runs=True)
     # important: an Admin passes user_has_access for every organization, which is the break-glass
     # posture this deployment wants. It is also how a customer's branding got rewritten by an
     # operator who never chose that organization. Break-glass is allowed here and is not allowed
@@ -219,7 +230,7 @@ async def reset_org_branding(
     _: None = Depends(check_read_only_mode),
 ):
     """Remove the organization's own branding, so it shows its provider's or the deployment default again."""
-    org = await _require_org_access(db, org_id, user)
+    org = await _require_org_access(db, org_id, user, runs=True)
     await store.reset_org_branding(db, org.id)
 
 

@@ -159,7 +159,12 @@ async def test_the_bind_route_refuses_it(monkeypatch) -> None:
     async def owned(_user, _db):
         return {"sold"}
 
+    async def runs(*_args):
+        return True
+
     monkeypatch.setattr(organizations, "OrganizationService", _Svc)
+    # note: the founder runs the organization it binds into; this pins the purchase refusal after that.
+    monkeypatch.setattr(organizations, "user_runs_org", runs)
     monkeypatch.setattr(organizations, "get_owned_clusters_ignoring_admin", owned)
     founder = AuthenticatedUser(user_id="f", email=FOUNDER, groups=["role_partner"])
     with pytest.raises(HTTPException) as refused:

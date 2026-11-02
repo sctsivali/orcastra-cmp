@@ -33,7 +33,7 @@ def binding(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
     """The organization check, the cluster write lock, the purchase check and the binding, recorded."""
     written: List[Dict[str, Any]] = []
 
-    async def _has_access(self: Any, org_id: int, email: str, role: str) -> bool:
+    async def _runs(_db: Any, org_id: int, email: str, role: str) -> bool:
         return True
 
     @asynccontextmanager
@@ -47,7 +47,7 @@ def binding(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
     async def _not_bought(*_a: Any, **_k: Any) -> bool:
         return False
 
-    monkeypatch.setattr(OrganizationService, "user_has_access", _has_access)
+    monkeypatch.setattr(organizations, "user_runs_org", _runs)
     monkeypatch.setattr(OrganizationService, "bind_cluster", _bind)
     monkeypatch.setattr(organizations, "_guard_cluster_write", _lock)
     monkeypatch.setattr(organizations, "reaches_only_by_purchase", _not_bought)

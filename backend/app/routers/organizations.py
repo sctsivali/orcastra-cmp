@@ -28,6 +28,7 @@ from app.core.org_scope import get_owned_clusters_ignoring_admin, verify_cluster
 from app.core.sale_term import reaches_only_by_purchase
 from app.core.whole_cluster_access import SHARED_CLUSTER_DETAIL, the_party_holds_it_whole
 from app.services.organization_service import OrganizationService
+from app.services.organization_roster import refuse_a_synced_partner, user_runs_org
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
     audit_shared_cluster,
@@ -270,7 +271,7 @@ async def update_organization(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
+    if not await user_runs_org(db, org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
     org = await svc.update_organization(org_id, name=body.name, description=body.description)
@@ -360,7 +361,8 @@ async def add_member(
     role = _get_user_role(user)
 
     async with _guard_organization_write(db, org_id):
-        if not await svc.user_has_access(org_id, user.email, role):
+        # important: whoever runs the organization, not whoever can see it (a tenant row can).
+        if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
         try:
@@ -389,8 +391,10 @@ async def update_member(
     role = _get_user_role(user)
 
     async with _guard_organization_write(db, org_id):
-        if not await svc.user_has_access(org_id, user.email, role):
+        if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+        if role != "admin":
+            await refuse_a_synced_partner(db, member_email, org_id)
 
         member = await svc.update_member_role(org_id, member_email, "member")
         if not member:
@@ -410,8 +414,10 @@ async def remove_member(
     role = _get_user_role(user)
 
     async with _guard_organization_write(db, org_id):
-        if not await svc.user_has_access(org_id, user.email, role):
+        if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+        if role != "admin":
+            await refuse_a_synced_partner(db, member_email, org_id)
 
         if not await svc.remove_member(org_id, member_email):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
@@ -461,7 +467,7 @@ async def bind_cluster(
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
-    if not await svc.user_has_access(org_id, user.email, role):
+    if not await user_runs_org(db, org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
     # important: `user_has_access` checks the ORGANISATION, which is the caller's own. Nothing
@@ -502,7 +508,7 @@ async def bind_cluster(
     registrant = user.email if whole else None
 
     async with _guard_cluster_write(db, body.cluster_id):
-        if not await svc.user_has_access(org_id, user.email, role):
+        if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
         try:
             binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=registrant)
@@ -526,7 +532,9 @@ async def unbind_cluster(
     role = _get_user_role(user)
 
     async with _guard_cluster_write(db, cluster_id):
-        if not await svc.user_has_access(org_id, user.email, role):
+        # important: whoever runs the organization. Seeing it is any member row, so a partner who
+        # only bought from another partner could otherwise unbind that partner's clusters.
+        if not await user_runs_org(db, org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
         if not await svc.unbind_cluster(org_id, cluster_id):
