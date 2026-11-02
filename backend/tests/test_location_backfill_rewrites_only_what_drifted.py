@@ -188,3 +188,13 @@ def test_an_unreadable_registry_stops_the_run_instead_of_judging_an_empty_fleet(
     manager.read_registry = lambda use_cache=True: SimpleNamespace(source=None, cluster_ids=[])
     with pytest.raises(RuntimeError):
         backfill.plan(manager)
+
+
+def test_a_stored_location_that_is_not_an_object_is_unreadable_not_fatal():
+    """A string or list under location ended the whole plan; it is now one unreadable cluster."""
+    fleet = _fleet()
+    fleet["a-string"] = {"display_name": "a-string", "zone": "", "location": "Jakarta"}
+    fleet["a-list"] = {"display_name": "a-list", "zone": "", "location": ["id-3174"]}
+    plan = backfill.plan(_CertManager(fleet))
+    assert sorted(cid for cid, _ in plan.unreadable) == ["a-list", "a-string"]
+    assert [c.cluster_id for c in plan.changes] == ["custom-zone", "drifted"]

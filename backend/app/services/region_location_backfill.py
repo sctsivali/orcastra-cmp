@@ -82,6 +82,11 @@ def plan(cert_manager: Any, catalog: Optional[RegionCatalog] = None) -> Backfill
             result.unreadable.append((cluster_id, str(exc)))
             continue
         location = metadata.get("location") or {}
+        if not isinstance(location, dict):
+            # important: a stored string or list is not a location this pass can repair, and a .get()
+            # on it ended the whole plan outside the per-cluster try above.
+            result.unreadable.append((cluster_id, "the stored location is not an object"))
+            continue
         region_id = location.get("region_id")
         if not region_id:
             result.no_location.append(cluster_id)
