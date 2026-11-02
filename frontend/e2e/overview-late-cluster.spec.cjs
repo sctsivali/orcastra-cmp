@@ -76,7 +76,7 @@ for (const role of ["admin", "partner"]) {
     const banner = page.locator('[data-slot="unreachable-banner"]');
     await expect(banner).toHaveCount(1);
     await expect(banner.getByRole("status")).toHaveText(
-      "Could not fully read 1 cluster. Some of its projects and instances are not shown, so this list may be incomplete.",
+      "Could not fully read 1 cluster. Some of its instances are not shown, so this list may be incomplete.",
     );
     await banner.getByRole("button", { name: "Show Details" }).click();
     await expect(banner).toContainText(LATE);

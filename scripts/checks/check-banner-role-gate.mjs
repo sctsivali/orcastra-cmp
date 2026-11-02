@@ -213,7 +213,7 @@ if (roles.join(',') !== 'ADMIN,PARTNER,TENANT') {
 
 // --- 4. no call site invents a second channel -------------------------------------------------
 
-const ALLOWED_PROPS = new Set(['nodes', 'partialNodes', 'noun', 'reasons', 'className', 'key']);
+const ALLOWED_PROPS = new Set(['nodes', 'partialNodes', 'noun', 'partialNoun', 'reasons', 'className', 'key']);
 // The one noun that is not a literal: a specification category's title, from a fixed list.
 const NOUN_EXPRESSIONS = new Set(['`${category?.title ?? "instance"} specifications`']);
 

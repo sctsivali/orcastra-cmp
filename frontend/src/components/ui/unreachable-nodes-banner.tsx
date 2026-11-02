@@ -41,6 +41,11 @@ interface UnreachableNodesBannerProps {
   /** What is missing, lowercase plural, ex; "networks", "storage pools". */
   noun: string;
   /**
+   * What a partly read cluster is missing, when that is less than `noun`. The Overview reads
+   * projects and instances, and a cluster whose projects answered lost only its instances.
+   */
+  partialNoun?: string;
+  /**
    * Why each node did not answer, keyed by its name in `nodes` or `partialNodes`, shown under
    * Show Details. A name with no reason still lists: a payload cached by an older build carries
    * none.
@@ -52,7 +57,7 @@ interface UnreachableNodesBannerProps {
   className?: string;
 }
 
-type DetailProps = Pick<UnreachableNodesBannerProps, "noun" | "reasons" | "className"> & {
+type DetailProps = Pick<UnreachableNodesBannerProps, "noun" | "partialNoun" | "reasons" | "className"> & {
   unreachable: string[];
   partial: string[];
   open: boolean;
@@ -73,7 +78,12 @@ const REASON_KIND = /^(?:unreachable|forbidden|error|partial):\s*/;
  * important: the leading "Could not reach N cluster(s)" clause is matched by regex in four specs,
  * so it stays byte-identical whenever an unreachable cluster exists. Only what follows it moves.
  */
-function sentenceFor(unreachable: number, partial: number, noun: string): { lead: string; tail: string } {
+function sentenceFor(
+  unreachable: number,
+  partial: number,
+  noun: string,
+  partialNoun: string = noun,
+): { lead: string; tail: string } {
   const incomplete = "so this list may be incomplete.";
   if (unreachable > 0 && partial > 0) {
     return {
@@ -89,7 +99,7 @@ function sentenceFor(unreachable: number, partial: number, noun: string): { lead
   }
   return {
     lead: `Could not fully read ${plural(partial, "cluster")}.`,
-    tail: `Some of ${partial === 1 ? "its" : "their"} ${noun} are not shown, ${incomplete}`,
+    tail: `Some of ${partial === 1 ? "its" : "their"} ${partialNoun} are not shown, ${incomplete}`,
   };
 }
 
@@ -154,12 +164,13 @@ function UnreachableNodesDetail({
   unreachable,
   partial,
   noun,
+  partialNoun,
   reasons,
   className,
   open,
   onOpenChange,
 }: DetailProps) {
-  const { lead, tail } = sentenceFor(unreachable.length, partial.length, noun);
+  const { lead, tail } = sentenceFor(unreachable.length, partial.length, noun, partialNoun);
   const partly = new Set(partial);
   const sorted = [...unreachable, ...partial].sort((a, b) => a.localeCompare(b));
   const scrolls = sorted.length > SCROLL_AFTER;
@@ -235,6 +246,7 @@ export function UnreachableNodesBanner({
   nodes,
   partialNodes,
   noun,
+  partialNoun,
   reasons,
   className,
 }: UnreachableNodesBannerProps) {
@@ -273,6 +285,7 @@ export function UnreachableNodesBanner({
       unreachable={unreachable}
       partial={partial}
       noun={noun}
+      partialNoun={partialNoun}
       reasons={reasons}
       className={className}
       open={open}

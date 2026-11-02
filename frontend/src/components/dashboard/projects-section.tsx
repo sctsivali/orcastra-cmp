@@ -392,6 +392,7 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
           a count is loading, not missing. */}
       <UnreachableNodesBanner
         noun="projects and instances"
+        partialNoun="instances"
         nodes={unreachableNodes}
         partialNodes={instancesPending ? undefined : unreadInstanceHosts}
         reasons={reachReasons}
