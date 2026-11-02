@@ -2,7 +2,6 @@
 
 import { Plus, Trash2 } from "lucide-react";
 
-import { DeviceIcon } from "@/components/detail/device-icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,8 +41,7 @@ export function ProfileDevicesEditor({ drafts, onChange, errors, disabled }: Pro
           const err = errors[draft.id];
           return (
             <div key={draft.id} className="space-y-3 rounded-lg border p-3">
-              <div className="grid grid-cols-[auto_1fr_1fr_auto] gap-2 items-start">
-                <DeviceIcon type={draft.type} className="mt-7" />
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-start">
                 <div className="space-y-1">
                   <Label htmlFor={`dev-${draft.id}-name`} className="text-xs text-muted-foreground">
                     Device Name
