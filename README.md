@@ -36,64 +36,64 @@ browser terminals and graphical consoles, and keeps access, audit and logging in
 ## Features
 
 A cluster here is one registered LXD or Incus endpoint, either a standalone server or a
-clustered set of machines; each machine of a clustered one is a cluster member.
+clustered set of machines. Each machine of a clustered one is a cluster member.
 
 ### Virtualization Management
 - LXD, Incus and MicroCloud clusters, standalone or clustered
-- Instance lifecycle for containers and VMs: create, start, stop, restart, delete, rebuild
-  (reinstall the root disk, keep identity, config and volumes) and resize with a preflight check
-- Snapshots per instance and on a fleet Snapshots page; restore can take a safety snapshot
+- Containers and VMs are created, started, stopped, restarted, deleted, rebuilt (the root disk is
+  reinstalled while identity, config and volumes stay) and resized after a preflight check
+- Snapshots per instance and on a fleet Snapshots page. A restore can take a safety snapshot
   first, and on ZFS the restore is planned before anything is written. Recurring snapshot
   schedules are opt-in (`SNAPSHOT_SCHEDULES_ENABLED`)
-- Migration Center: copy or move instances between projects, members and clusters, or relocate
+- Migration Center copies or moves instances between projects, members and clusters, or relocates
   a whole project with its profiles. A moved source is kept and fenced for 24 hours by default,
   with Finalize and Roll back
-- Images and ISOs: import, upload, and attach or eject an ISO from the console
+- Images and ISOs can be imported or uploaded, and an ISO attached or ejected from the console
 - Projects, profiles, storage pools and volumes, bridge and OVN networks, network ACLs and IPAM
 
 ### Interactive Console & Terminal
-- Browser terminal over WebSocket (xterm.js) and SPICE graphical console
+- Browser terminal over WebSocket (xterm.js) and a graphical console for VMs
 - Sessions page with active and past sessions, bandwidth, and kill all
 - Drag-and-drop file upload to instances, live resource overlay while a console runs
-- Break-glass: an Admin gets a time-limited grant (60 minutes by default, 240 at most) to a
+- Break-glass gives an Admin a time-limited grant (60 minutes by default, 240 at most) to a
   tenant's console or terminal, listed with its own audit trail
 - Per-organization consent before an agent may drive a guest desktop
 
 ### Security & Access Control
-- OAuth2/OIDC sign-in through Authentik; the backend validates JWTs against the IdP's JWKS and
+- OAuth2/OIDC sign-in through Authentik. The backend validates JWTs against the IdP's JWKS and
   keeps the last good keys through a short IdP outage (`AUTH_JWKS_MAX_STALE`)
 - Three-tier RBAC (Admin, Partner, Tenant) from Authentik groups. The baseline `role_tenant` group
-  is preserved during Partner promotion and organization offboarding; organization membership
+  is preserved during Partner promotion and organization offboarding, and organization membership
   still governs resource access. Admin removal explicitly revokes roles and reports a failed
-  Authentik write; role API calls verify the Authentik TLS certificate
+  Authentik write. Role API calls verify the Authentik TLS certificate
 - An account with no role, or with no cluster access, sees an access notice instead of an empty
   console
 - Fine-grained per-resource permissions and tenant access policies (cluster, project, instance)
-- WebSockets open with single-use tickets; tokens in WebSocket URLs are refused
+- WebSockets open with single-use tickets, and tokens in WebSocket URLs are refused
 - A sealed or unreachable Vault is reported on every page instead of reading as "no clusters"
 - `READ_ONLY_MODE` for maintenance windows and demos, rate limiting, encrypted Redis cache,
   HMAC-SHA256 API keys
 - Profile in the user menu opens the account settings of the deployment's own Authentik
 
 ### Multi-Cluster & Region Management
-- Vault-backed cluster registry: the dashboard issues each cluster's client certificate from Vault
+- Vault-backed cluster registry. The dashboard issues each cluster's client certificate from Vault
   PKI at registration and prints the `lxc` or `incus` trust command to run
 - Certificate renewal and regeneration started by an operator, with a pending state until the
-  cluster trusts the new certificate; fingerprints shown the way LXD shows them, and trust
-  entries of replaced certificates removed once the new one is proven
-- Cluster health with a circuit breaker: an unreachable cluster answers quickly as unreachable
+  cluster trusts the new certificate. Fingerprints are shown the way LXD shows them, and trust
+  entries of replaced certificates are removed once the new one is proven
+- Cluster health with a circuit breaker, so an unreachable cluster answers quickly as unreachable
   instead of stalling every list
 - Kernel CVE advisories per cluster member (Partner and above), as a chip on cluster cards and a
   Kernel CVEs tab under Warnings
 - Regions map from a bundled offline basemap (no outbound request), with region, zone,
-  facility and hardware details; a cluster abroad shades its whole country
+  facility and hardware details. A cluster abroad shades its whole country
 
 ### Monitoring & Observability
-- Real-time CPU, memory, disk and network metrics over WebSocket; chart history in Redis with
+- Real-time CPU, memory, disk and network metrics over WebSocket, with chart history in Redis and
   PostgreSQL snapshots
 - Task dock on every console page with live tasks, the queue and the cluster log, plus an
   Operations page for LXD operations
-- Warnings page: LXD warnings, expiring certificates, offline clusters and kernel CVE findings
+- Warnings page with LXD warnings, expiring certificates, offline clusters and kernel CVE findings
 - Activity audit log with action, result and user
 
 ### Logging & Compliance
@@ -104,17 +104,17 @@ clustered set of machines; each machine of a clustered one is a cluster member.
 ### Personalization & Branding
 - Per-user theme (light, dark, system) synced to the database
 - Accent colour, sidebar style and logo (light and dark), with undo and redo
-- Organization branding: app name, tagline, footer
+- Organization branding for the app name, tagline and footer
 
 ### Integration & External APIs
-- API keys with capabilities, project scope, per-key rate limits and in-place secret rotation;
-  grants are bound to the cluster registration and each key's use is recorded
+- API keys with capabilities, project scope, per-key rate limits and in-place secret rotation.
+  Grants are bound to the cluster registration and each key's use is recorded
 - MCP server at `/api/v1/mcp` for AI agents, authenticated with API keys, with tool tiers,
   a method allow-list, per-key rate limits and an audit record per call
-- Add-ons: a registry, install with consent to capabilities and scope, signed webhooks with a
-  delivery log, credential rotation, and a curated add-on API document
-- OrcaHub integration: organization sync, tenant provisioning and lifecycle webhooks, with each
-  synced organization owned by API keys an admin can transfer
+- Add-ons come from a registry and install with consent to capabilities and scope, with signed
+  webhooks and a delivery log, credential rotation, and a curated add-on API document
+- OrcaHub integration covers organization sync, tenant provisioning and lifecycle webhooks, with
+  each synced organization owned by API keys an admin can transfer
   ([partner SSO through OrcaHub](https://docs.orcastra.io/en/latest/operations/orcahub-federation-sso/))
 - Raw HTTP proxy to LXD for third-party tools
 
@@ -216,7 +216,7 @@ The rest is in [MAKEFILE_QUICK_REF.md](MAKEFILE_QUICK_REF.md).
 
 ## Configuration
 
-Copy `.env.example` to `.env`; each variable is documented in place. Production values and the
+Copy `.env.example` to `.env`. Each variable is documented in place. Production values and the
 order to set them in are in the
 [dashboard deployment guide](https://docs.orcastra.io/en/latest/deployment/vm4-dashboard/), and
 the optional Regions map tile provider in
@@ -224,10 +224,10 @@ the optional Regions map tile provider in
 
 ## Key Resources
 
-- License: GNU GPL v3 ([LICENSE](LICENSE))
-- Contribution workflow and versioning: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Community standards: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- Security disclosure: [SECURITY.md](SECURITY.md)
-- Support channels: [SUPPORT.md](SUPPORT.md)
-- Product and deployment docs: https://docs.orcastra.io
-- Community forum: https://discourse.orca.id
+- Licensed under the GNU GPL v3, see [LICENSE](LICENSE)
+- Contribution workflow and versioning in [CONTRIBUTING.md](CONTRIBUTING.md)
+- Community standards in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- Security disclosure in [SECURITY.md](SECURITY.md)
+- Support channels in [SUPPORT.md](SUPPORT.md)
+- Product and deployment docs at [docs.orcastra.io](https://docs.orcastra.io)
+- Community forum at [discourse.orca.id](https://discourse.orca.id)
