@@ -48,7 +48,7 @@ def _run(allowed: Optional[set], acl: Optional[dict], groups: list[str]) -> Opti
     async def fake_org_names(_user, _db):
         return []
 
-    async def fake_visible_projects(_user, _db, tenant_grants=None):
+    async def fake_visible_projects(_user, _db, tenant_grants=None, reachable=None):
         return None
 
     real = (

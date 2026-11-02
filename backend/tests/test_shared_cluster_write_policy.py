@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from app.services import instance_security_policy as isp
 from fastapi import HTTPException
 
 from app.core import org_scope
@@ -69,8 +71,21 @@ class _Bindings:
         return _Rows(self.rows)
 
 
+@pytest.fixture
+def held_elsewhere(monkeypatch: pytest.MonkeyPatch) -> set:
+    """Which clusters another party holds, as services.cluster_parties would answer (pinned on real
+    rows in test_whole_cluster_state_needs_the_whole_cluster)."""
+    held: set = set()
+
+    async def _held(_db, _email, cluster_ids):
+        return set(cluster_ids) & held
+
+    monkeypatch.setattr(isp.cluster_parties, "clusters_held_by_another_party", _held)
+    return held
+
+
 @pytest.mark.asyncio
-async def test_current_bindings_choose_exclusive_shared_and_ambiguous_policy() -> None:
+async def test_current_bindings_choose_exclusive_shared_and_ambiguous_policy(held_elsewhere) -> None:
     partner = _user("partner", "partner-bindings")
 
     exclusive = await resolve_cluster_write_policy(partner, HOST, _Bindings([(7, None)]))
@@ -86,6 +101,14 @@ async def test_current_bindings_choose_exclusive_shared_and_ambiguous_policy() -
     assert shared.requires_safe_allowlist
     assert unbound.ownership == ClusterOwnership.AMBIGUOUS
     assert missing.ownership == ClusterOwnership.AMBIGUOUS
+
+
+@pytest.mark.asyncio
+async def test_one_binding_another_party_holds_is_shared_not_exclusive(held_elsewhere) -> None:
+    """A partner reaches a cluster another party holds alone through a member row it bought."""
+    held_elsewhere.add(HOST)
+    policy = await resolve_cluster_write_policy(_user("partner", "partner-bindings"), HOST, _Bindings([(7, None)]))
+    assert policy.ownership == ClusterOwnership.SHARED and policy.requires_safe_allowlist
 
 
 @pytest.mark.asyncio

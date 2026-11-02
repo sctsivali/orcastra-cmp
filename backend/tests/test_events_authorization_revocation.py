@@ -189,7 +189,7 @@ def _install_scope_sequence(monkeypatch, *, role: str, outcome: str) -> dict[str
             {HOST: {PROJECT}},
         )
 
-    async def _visible_projects(_user, _db):
+    async def _visible_projects(_user, _db, **_kwargs):
         if state["reads"] == 1:
             return {HOST: {PROJECT}}
         if outcome == "cluster-revoked":

@@ -1018,6 +1018,7 @@ async def get_visible_projects(
     user: AuthenticatedUser,
     db: AsyncSession,
     tenant_grants: Optional[list[TenantPolicyGrant]] = None,
+    reachable: Optional[set[str]] = None,
 ) -> Optional[dict[str, set[str]]]:
     """Which LXD projects this user may see, on clusters that carry more than one org.
 
@@ -1029,6 +1030,12 @@ async def get_visible_projects(
     Tenant also needs a project bound: their ACL can contain ``project_name='*'``, which must
     mean the policy organization's projects rather than every project another organization
     happens to run on the same cluster.
+
+    important: for a Partner, `reachable` (the request's cluster scope) adds every cluster another
+    party holds (services.cluster_parties), even where only one organization is bound. A partner
+    reaches such a cluster through a member row in an organization it bought from, and counting
+    bindings alone left it unbounded there. This only tightens: a cluster counted shared stays
+    bounded even when the partner's own party holds it whole.
     """
     from app.core.rbac import resolve_roles, get_highest_role, Role
     from app.models.db_models import (
@@ -1042,6 +1049,10 @@ async def get_visible_projects(
         return None
 
     shared = await _clusters_with_several_orgs(db)
+    if highest != Role.TENANT and reachable:
+        from app.services import cluster_parties
+
+        shared = shared | await cluster_parties.clusters_held_by_another_party(db, user.email, reachable)
     if not shared:
         return None
 
@@ -1357,7 +1368,7 @@ async def org_scope_dependency(
     if tenant_grants is None:
         # A Partner is scoped by cluster alone, so a cluster shared with another organization
         # needs a project bound as well. Admin remains unrestricted.
-        tenant_visible_projects = await get_visible_projects(user, db)
+        tenant_visible_projects = await get_visible_projects(user, db, reachable=allowed)
     _visible_projects_var.set(tenant_visible_projects)
     _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
 
@@ -1412,7 +1423,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"], *, interacti
         )
 
         if tenant_grants is None:
-            tenant_visible_projects = await get_visible_projects(user, db)
+            tenant_visible_projects = await get_visible_projects(user, db, reachable=allowed)
         _visible_projects_var.set(tenant_visible_projects)
         _read_only_clusters_var.set(await _partner_read_only(user, db, allowed))
 

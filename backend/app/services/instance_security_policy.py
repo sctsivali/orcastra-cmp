@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUser
 from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.models.db_models import OrganizationCluster
+from app.services import cluster_parties
 
 
 class ClusterOwnership(str, Enum):
@@ -96,7 +97,7 @@ async def resolve_cluster_write_policy(
     """Resolve the current ownership shape directly from organization bindings.
 
     Admin deliberately short-circuits without a database read. For Partner, anything other
-    than exactly one bound organization is restricted. An unbound registrant row is valid for
+    than exactly one bound organization on the partner's own side is restricted. An unbound registrant row is valid for
     cluster visibility, but it is not enough evidence to grant host-level capabilities.
     """
 
@@ -120,6 +121,11 @@ async def resolve_cluster_write_policy(
     if has_unbound_row or not bound_organizations:
         ownership = ClusterOwnership.AMBIGUOUS
     elif len(bound_organizations) > 1:
+        ownership = ClusterOwnership.SHARED
+    elif cluster_id in await cluster_parties.clusters_held_by_another_party(db, user.email, {cluster_id}):
+        # important: one binding is not one owner. A partner reaches a cluster another party holds
+        # alone through a member row in an organization it bought from, and EXCLUSIVE would hand it
+        # host-level config (privileged containers, raw.lxc, host disks) on the seller's host.
         ownership = ClusterOwnership.SHARED
     else:
         ownership = ClusterOwnership.EXCLUSIVE
