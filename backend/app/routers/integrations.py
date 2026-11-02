@@ -168,6 +168,11 @@ from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember
 from app.services import cluster_parties, owner_key_enrollment
+from app.services.api_key_grant_bound import (
+    already_granted,
+    refuse_a_project_another_party_holds,
+    rule_outside_the_key_grant,
+)
 from app.services.organization_owners import (
     ADD_ACTION,
     MAX_OWNER_KEYS,
@@ -2323,6 +2328,9 @@ async def create_api_key(
 
     refuse_grants_on_purchased_clusters(p.cluster_id for p in request.cluster_permissions)
     await _refuse_new_grants_to_unregistered_clusters(p.cluster_id for p in request.cluster_permissions)
+    # important: a project the caller cannot see, or '*', only where no other party holds the
+    # cluster. After the scope guard and before any cluster is read.
+    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, request.cluster_permissions)
 
     # After the scope guard on purpose: this reaches the clusters, so it must never run for a
     # cluster the caller was just told they may not touch.
@@ -2559,12 +2567,12 @@ async def _refuse_a_grant_past_the_project_bound(
 ) -> None:
     """A Partner may not hold a key reaching more of a cluster than they can see there.
 
-    important: on this line only a secret rotation asks it, of a caller who did not mint the key.
-    On a cluster another party also holds, a non-minting Partner who manages a key could otherwise
-    take the secret of one that names that party's project, or '*'. A cluster held only by the
-    caller's side is unchanged, so the '*' grant an OrcaHub connection carries still rotates there.
-    What a key already holds on a cluster (its projects and its permission level) is carried over
-    when given. Admin is not bound.
+    important: asked when a key is minted, when its grant is edited, and when a Partner who did not
+    mint it rotates its secret. On a cluster another party also holds, a Partner could otherwise name
+    that party's project, or '*', and the key then acted on it through the raw proxy, /proxy and
+    provisioning. A cluster held only by the caller's side is unchanged, so the '*' grant an OrcaHub
+    connection carries still mints and rotates there. What a key already holds on a cluster (its
+    projects and its permission level) is carried over when given. Admin is not bound.
     """
     if get_current_allowed_clusters() is None:
         return
@@ -2886,7 +2894,8 @@ async def update_api_key_permissions(
 ):
     """Update API key cluster permissions."""
     # important: before the cluster reads below. An add-on installation owns its grant.
-    refuse_grant_edit(await _authorize_api_key(key_id, _rbac, db))
+    current = await _authorize_api_key(key_id, _rbac, db)
+    refuse_grant_edit(current)
 
     # important: creation validates the requested clusters against the caller's own set
     # (see create_api_key), and this path did not, so a partner could create a key scoped to
@@ -2901,6 +2910,9 @@ async def update_api_key_permissions(
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
     refuse_grants_on_purchased_clusters(p.cluster_id for p in permissions)
+    # note: what the key already holds on a cluster is carried over at its level or lower, so an
+    # edit cannot widen a key past the bound but never breaks a running one.
+    await _refuse_a_grant_past_the_project_bound(db, _rbac.email, permissions, already_granted(current))
 
     # The cluster reads stay outside the key's lock: nothing in them depends on what the key holds.
     await _assert_granted_projects_exist(lxd_service, permissions)
@@ -7140,6 +7152,23 @@ async def sync_policies_from_external(
                     f"Policy '{sync_policy.name}': rule names an unregistered cluster '{unregistered[0]}'"
                 )
                 continue
+            # important: this endpoint writes the same tenant rules provisioning does, so each rule is
+            # held to the key's own grant and to projects no other party's policies name. The policy
+            # is skipped whole, before its rules are replaced.
+            outside = [
+                reason for rule in sync_policy.rules
+                if (reason := rule_outside_the_key_grant(api_key, rule.cluster_id, rule.project_name))
+            ]
+            if outside:
+                errors.append(f"Policy '{sync_policy.name}': {outside[0]}")
+                continue
+            try:
+                for rule in sync_policy.rules:
+                    if rule.project_name != "*":
+                        await refuse_a_project_another_party_holds(db, api_key, rule.cluster_id, rule.project_name)
+            except HTTPException as refused:
+                errors.append(f"Policy '{sync_policy.name}': {refused.detail}")
+                continue
 
             # find org by external_id
             # important: `source` is filtered here as every sibling lookup in this file does.
@@ -7396,7 +7425,13 @@ class ProvisionTenantAccessRequest(BaseModel):
     """Request from OrcaHub to auto-create tenant access for a provisioned project."""
     organization_external_id: str = Field(..., description="OrcaHub organization UUID")
     cluster_id: str = Field(..., description="Cluster ID where the project was created")
-    project_name: str = Field(..., description="LXD project name")
+    # important: a provisioned grant names the one project that was bought. '*' would reach every
+    # project on the cluster, and OrcaHub never sends it (its sanity check's project pattern).
+    project_name: str = Field(
+        ..., min_length=1, max_length=63,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$",
+        description="LXD project name",
+    )
     instance_name: str = Field(default="*", description="Instance name or * for all in project")
     user_emails: List[str] = Field(default_factory=list, description="Tenant user emails to grant access")
     permissions: List[str] = Field(
@@ -7596,6 +7631,11 @@ async def provision_tenant_access(
     result = await db.execute(stmt)
     org = result.scalar_one_or_none()
 
+    if org:
+        # important: '*' in the grant covers every project, another organization's included. The
+        # rule written below widens the key creator's Partner bound and hands the listed emails the
+        # project, so it is refused before the first member, cluster or policy row.
+        await refuse_a_project_another_party_holds(db, api_key, body.cluster_id, body.project_name)
     if not org:
         if not body.organization_name or not body.organization_slug:
             raise HTTPException(
@@ -7643,6 +7683,9 @@ async def provision_tenant_access(
                     "organization. Provision with the installation's current credential."
                 ),
             })
+        # important: after the ownership refusals above, so a key that does not own the organization
+        # still hears that, and before the organization row is written (see the found branch).
+        await refuse_a_project_another_party_holds(db, api_key, body.cluster_id, body.project_name)
 
         org = Organization(
             name=body.organization_name,

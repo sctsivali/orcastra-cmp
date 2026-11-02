@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
+from app.routers import integrations
 from app.routers.integrations import provision_tenant_access, revoke_tenant_access
 from app.services.lxd import registry as cluster_registry
 
@@ -129,11 +130,19 @@ class _RegistryKnowsNuc2(unittest.TestCase):
         async def _registered():
             return frozenset({"nuc2"})
 
+        async def _nobody_else_names_it(*_a, **_k) -> None:
+            return None
+
         self._registry = cluster_registry.registered_cluster_ids
         cluster_registry.registered_cluster_ids = _registered
+        # note: the sessions below answer by call count, so the project gate's own query would
+        # shift them. Which party names a project is pinned in test_a_key_grant_stays_inside_the_bound.
+        self._project_gate = integrations.refuse_a_project_another_party_holds
+        integrations.refuse_a_project_another_party_holds = _nobody_else_names_it
 
     def tearDown(self) -> None:
         cluster_registry.registered_cluster_ids = self._registry
+        integrations.refuse_a_project_another_party_holds = self._project_gate
 
 
 class DuplicateOrgSlugTests(_RegistryKnowsNuc2):

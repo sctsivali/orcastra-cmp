@@ -14,6 +14,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 
 import pytest
+
+from app.core.auth import AuthenticatedUser
 from fastapi import HTTPException
 
 from app.core.vault_client import VaultClientError
@@ -368,7 +370,9 @@ async def test_a_grant_edit_reads_what_the_key_holds_under_its_lock_and_lets_go_
 
     request = [integrations.ClusterPermissionRequest(cluster_id="nuc2", permissions=["write"], projects=["*"])]
     await integrations.update_api_key_permissions(
-        "oak_x", request, _=None, _rbac=object(), lxd_service=object(), db=object()
+        "oak_x", request, _=None,
+        _rbac=AuthenticatedUser(user_id="role_partner:p@example.test", email="p@example.test", groups=["role_partner"]),
+        lxd_service=object(), db=object(),
     )
 
     assert events == [
