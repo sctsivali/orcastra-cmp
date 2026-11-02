@@ -251,8 +251,12 @@ function GroupsContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="groups" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="groups" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="groups"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

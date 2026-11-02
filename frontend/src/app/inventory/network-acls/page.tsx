@@ -236,8 +236,12 @@ function NetworkACLsContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="network ACLs" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="network ACLs" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="network ACLs"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

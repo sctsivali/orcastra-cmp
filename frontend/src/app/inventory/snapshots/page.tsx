@@ -397,8 +397,12 @@ function SnapshotsContent() {
 
       {takeSnapshotDialog}
 
-      <UnreachableNodesBanner noun="snapshots" nodes={unreachableNodes} reasons={data?.node_errors} />
-      <UnreachableNodesBanner noun="snapshots" nodes={partialNodes} reasons={data?.node_errors} partial />
+      <UnreachableNodesBanner
+        noun="snapshots"
+        nodes={unreachableNodes}
+        partialNodes={partialNodes}
+        reasons={data?.node_errors}
+      />
 
       {/* Schedules first: they are the cause of some of the rows below, and stacking rather than
           tabbing keeps that comparison on one screen. */}

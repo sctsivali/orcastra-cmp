@@ -424,8 +424,12 @@ function WarningsContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="warnings" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="warnings" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="warnings"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       {/* Summary counts: neutral, toned on the icon only while a count is above zero */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">

@@ -291,12 +291,18 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
     return out;
   }, [projectsData]);
   // A cluster whose projects answered while its instance list did not (one past the inventory
-  // wall): its cards are on the grid with an unknown count, so name it. A cluster missing from
-  // both is already in the projects banner above, and naming it twice says nothing new.
+  // wall): its cards are on the grid with an unknown count, so it is read in part. A cluster
+  // missing from both is already counted as unreachable, and counting it twice says nothing new.
   const unreadInstanceHosts = React.useMemo(() => {
     const projectsMissing = new Set(unreachableNodes);
     return (instancesUnread ?? []).filter((host) => !projectsMissing.has(host));
   }, [instancesUnread, unreachableNodes]);
+  // note: the instance list's reasons under the projects', so an unreachable host keeps the
+  // reason its projects read gave. The two sets are disjoint above, so nothing else is shadowed.
+  const reachReasons = React.useMemo(
+    () => ({ ...(instancesUnreadReasons ?? {}), ...unreachableReasons }),
+    [instancesUnreadReasons, unreachableReasons],
+  );
   const unreadHostSet = React.useMemo(() => new Set(instancesUnread ?? []), [instancesUnread]);
   // Every host answered and every one of them failed: the fleet is not empty, it is unreadable.
   const allNodesUnreachable =
@@ -380,19 +386,16 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
       {/* A host that did not answer is not a host with no projects. The payload has carried
           `reachable` and a per-host `error` all along; this section was the one place that
           dropped both and drew an empty grid instead. Same component the other fan-out lists
-          use, so the wording and the role gate on the reason text stay in one place. */}
+          use, so the wording and the role gate on the reason text stay in one place.
+          One banner for both reads: two of them said "5" and "1" and never that it was 6
+          clusters. The instance-only hosts join once the instance list has answered: until then
+          a count is loading, not missing. */}
       <UnreachableNodesBanner
-        noun="projects"
+        noun="projects and instances"
         nodes={unreachableNodes}
-        reasons={unreachableReasons}
+        partialNodes={instancesPending ? undefined : unreadInstanceHosts}
+        reasons={reachReasons}
       />
-      {!instancesPending && (
-        <UnreachableNodesBanner
-          noun="instances"
-          nodes={unreadInstanceHosts}
-          reasons={instancesUnreadReasons}
-        />
-      )}
 
       {/* important: two-up starts at lg and three-up at xl, not md and lg. Measured live, the
           old thresholds gave a 224px card at both 768 and 1024, which leaves the header's title

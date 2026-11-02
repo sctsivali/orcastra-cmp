@@ -92,7 +92,7 @@ test("a reason cannot be rendered as markup", async ({ page, context }) => {
 });
 
 for (const [role, sentence] of [
-  ["admin", "Could not fully read 1 cluster. Some of their networks are not shown, so this list may be incomplete."],
+  ["admin", "Could not fully read 1 cluster. Some of its networks are not shown, so this list may be incomplete."],
   ["tenant", "Some networks could not be loaded right now, so this list may be incomplete."],
 ]) {
   test(`${role}: a cluster that lost rows from the network list is not silent`, async ({ page, context }) => {
@@ -106,6 +106,32 @@ for (const [role, sentence] of [
     await expect(page.locator('[data-slot="unreachable-banner"]').getByRole("status")).toHaveText(sentence);
   });
 }
+
+// One card per list. The two reads used to stack as two banners, "2" in one and "1" in the other,
+// and neither said the list was short by three clusters.
+test("admin: an unreachable and a partly read cluster share one banner", async ({ page, context }) => {
+  await authenticate(context, "admin");
+  await installInventoryHardeningFixtures(page, "admin");
+  await page.route(/\/api\/v1\/networks(\?|$)/, (route) => route.fulfill({ json: {
+    total: 0, networks: [], nodes: ["cluster-a"], unreachable_nodes: ["cluster-c", "cluster-b"], partial_nodes: ["cluster-a"],
+    node_errors: {
+      "cluster-a": "partial: the network list did not finish",
+      "cluster-b": "unreachable: no connection to the cluster",
+    },
+  } }));
+  await page.goto("/inventory/networks");
+  const banner = page.locator('[data-slot="unreachable-banner"]');
+  await expect(banner).toHaveCount(1);
+  await expect(banner.getByRole("status")).toHaveText(
+    "Could not reach 2 clusters and could not fully read 1. Some networks are not shown, so this list may be incomplete.",
+  );
+  await banner.getByRole("button", { name: "Show Details" }).click();
+  const rows = banner.getByRole("listitem");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toHaveText("cluster-aPartly read · the network list did not finish");
+  await expect(rows.nth(1)).toHaveText("cluster-bno connection to the cluster");
+  await expect(rows.nth(2)).toHaveText("cluster-c");
+});
 
 test("a tenant gets the sentence and nothing to open", async ({ page, context }) => {
   const banner = await open(page, context, "tenant", () => list("tenant", ["secret-cluster"]));

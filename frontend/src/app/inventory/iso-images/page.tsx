@@ -326,8 +326,12 @@ function IsoImagesContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="ISO images" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="ISO images" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="ISO images"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

@@ -71,10 +71,16 @@ for (const role of ["admin", "partner"]) {
     control.release();
 
     await expect(page.getByText("Loading Total Instances", { exact: true })).toHaveCount(0);
-    const banner = page.locator('[data-slot="unreachable-banner"]').filter({ hasText: "Their instances are not shown" });
-    await expect(banner).toContainText("Could not reach 1 cluster.");
+    // Its projects answered and its instances did not, so the Overview's one banner counts it as
+    // read in part rather than unreachable.
+    const banner = page.locator('[data-slot="unreachable-banner"]');
+    await expect(banner).toHaveCount(1);
+    await expect(banner.getByRole("status")).toHaveText(
+      "Could not fully read 1 cluster. Some of its projects and instances are not shown, so this list may be incomplete.",
+    );
     await banner.getByRole("button", { name: "Show Details" }).click();
     await expect(banner).toContainText(LATE);
+    await expect(banner).toContainText("Partly read");
     await expect(banner).toContainText(SHOWN_REASON);
     // The late cluster's project has an unknown count, never 0, and cannot be deleted from here.
     await expect(projectCard(page, "web").getByLabel(/^Instance count not read/)).toBeVisible();
@@ -95,7 +101,7 @@ test("admin: the Instances page gives the late cluster's reason", async ({ page,
   const { state, control } = await installLateCluster(page, "admin", { instanceListPage: true });
   control.release();
   await page.goto("/inventory/instances");
-  const banner = page.locator('[data-slot="unreachable-banner"]').filter({ hasText: "Their instances are not shown" });
+  const banner = page.locator('[data-slot="unreachable-banner"]').filter({ hasText: "Its instances are not shown" });
   await expect(banner).toContainText("Could not reach 1 cluster.");
   await banner.getByRole("button", { name: "Show Details" }).click();
   await expect(banner).toContainText(SHOWN_REASON);
@@ -107,7 +113,7 @@ test("tenant: the Overview says instances are missing without the reason", async
   const { state, control } = await installLateCluster(page, "tenant");
   control.release();
   await page.goto("/inventory");
-  await expect(page.getByText("Some instances could not be loaded right now, so this list may be incomplete.")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Some projects and instances could not be loaded right now, so this list may be incomplete.")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(/did not answer within/)).toHaveCount(0);
   await expectCleanInventoryHarness(state);
 });

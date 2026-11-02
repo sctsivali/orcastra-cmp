@@ -236,8 +236,12 @@ function StoragePoolsContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="storage pools" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="storage pools" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="storage pools"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       {capacityFailed && (
         <PartialReadNotice>

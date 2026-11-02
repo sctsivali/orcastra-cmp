@@ -226,8 +226,12 @@ function StorageVolumesContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="storage volumes" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="storage volumes" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="storage volumes"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

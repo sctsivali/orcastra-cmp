@@ -157,8 +157,12 @@ export default function ServerPage() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="server details" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="server details" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="server details"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       {isError ? (
         // a request that failed is not a fleet with nothing: say which, so "No cluster

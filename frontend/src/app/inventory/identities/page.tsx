@@ -168,8 +168,12 @@ function IdentitiesContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="identities" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="identities" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="identities"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

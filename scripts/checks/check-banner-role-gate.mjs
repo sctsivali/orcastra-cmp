@@ -153,7 +153,9 @@ const noticeBody = executable.slice(
   executable.indexOf('function UnreachableNodesDetail'),
 );
 const noticeHoles = [...noticeBody.matchAll(/\$\{([^}]*)\}/g)].map((m) => m[1].trim());
-if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|reasons)\b/.test(noticeBody)) {
+// note: partialNodes, partial and unreachable too. The banner takes two name lists since the
+// partially read clusters joined the unreachable ones in one card, and either is a channel.
+if (noticeHoles.join(',') !== 'noun' || /\b(?:nodes|partialNodes|partial|unreachable|reasons)\b/.test(noticeBody)) {
   offenders.push('UnreachableNodesNotice prints something other than its noun');
 }
 
@@ -211,7 +213,7 @@ if (roles.join(',') !== 'ADMIN,PARTNER,TENANT') {
 
 // --- 4. no call site invents a second channel -------------------------------------------------
 
-const ALLOWED_PROPS = new Set(['nodes', 'noun', 'reasons', 'partial', 'className', 'key']);
+const ALLOWED_PROPS = new Set(['nodes', 'partialNodes', 'noun', 'reasons', 'className', 'key']);
 // The one noun that is not a literal: a specification category's title, from a fixed list.
 const NOUN_EXPRESSIONS = new Set(['`${category?.title ?? "instance"} specifications`']);
 

@@ -62,10 +62,10 @@ for (const router of reporting) {
     if (!source.includes('<UnreachableNodesBanner')) {
       offenders.push(`${page} drops the unreachable_nodes that ${router} reports`);
     }
-    // A cluster that answered and lost rows is a shorter list with no outage to explain it, so it
-    // needs its own banner. The leading space keeps `nodes={reach.partial}` from counting as one.
+    // A cluster that answered and lost rows is a shorter list with no outage to explain it, so the
+    // banner has to be handed those clusters too, in the same card as the unreachable ones.
     const losesRows = readFileSync(join(routersDir, router), 'utf8').includes('partial_nodes');
-    if (losesRows && !openingTags(source, 'UnreachableNodesBanner').some((t) => /\spartial\b/.test(t.text))) {
+    if (losesRows && !openingTags(source, 'UnreachableNodesBanner').some((t) => /\spartialNodes=/.test(t.text))) {
       offenders.push(`${page} drops the partial_nodes that ${router} reports`);
     }
   }
@@ -79,17 +79,50 @@ function* walk(dir) {
   }
 }
 
-// Show Details is the whole diagnosis: a banner with no reasons lists bare names under it. Each
-// banner on its own, because most pages hold two, and one that kept `reasons` hid the other.
+// Comments go, offsets kept, so a line number still points at the source and a comment that
+// names the tag is not counted as a render.
+const stripComments = (source) =>
+  source
+    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:"'`])\/\/.*$/gm, (comment, lead) => lead + ' '.repeat(comment.length - lead.length));
+
+// Where each top-level declaration starts. A component in these files is one, so the stretch
+// from one start to the next is one component's body.
+const DECLARATION = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function\b|const\s+[A-Za-z_$][\w$]*\s*=)/gm;
+
+// Show Details is the whole diagnosis: a banner with no reasons lists bare names under it.
+//
+// One banner per list, too. Pages used to stack one banner for the unreachable clusters and one
+// for the partly read ones, and the Overview one for projects and one for instances, so an
+// operator read "5" and "1" in two cards and was never told it was 6 clusters. The banner takes
+// partialNodes now; a second tag in the same component is that stack coming back.
 let banners = 0;
 for (const file of walk(join(root, 'frontend', 'src'))) {
   if (file.endsWith('unreachable-nodes-banner.tsx')) continue;
-  const source = readFileSync(file, 'utf8');
-  for (const tag of openingTags(source, 'UnreachableNodesBanner')) {
+  const source = stripComments(readFileSync(file, 'utf8'));
+  const tags = openingTags(source, 'UnreachableNodesBanner');
+  const lineAt = (index) => source.slice(0, index).split('\n').length;
+  for (const tag of tags) {
     banners += 1;
     if (!/\breasons=/.test(tag.text)) {
-      const line = source.slice(0, tag.index).split('\n').length;
-      offenders.push(`${relative(root, file)}:${line} renders the banner without reasons`);
+      offenders.push(`${relative(root, file)}:${lineAt(tag.index)} renders the banner without reasons`);
+    }
+  }
+  if (tags.length < 2) continue;
+  const starts = [...source.matchAll(DECLARATION)].map((m) => m.index);
+  const owner = (index) => starts.filter((start) => start <= index).pop() ?? 0;
+  const perComponent = new Map();
+  for (const tag of tags) {
+    const key = owner(tag.index);
+    perComponent.set(key, [...(perComponent.get(key) ?? []), tag]);
+  }
+  for (const group of perComponent.values()) {
+    if (group.length > 1) {
+      offenders.push(
+        `${relative(root, file)}:${group.map((tag) => lineAt(tag.index)).join(',')} renders ` +
+          `${group.length} banners in one component. Hand the partly read clusters to the one ` +
+          'banner as partialNodes.',
+      );
     }
   }
 }
@@ -106,8 +139,9 @@ for (const router of ROUTER_TO_PAGES.keys()) {
 if (reporting.length < 11) {
   offenders.push(`only ${reporting.length} routers report unreachable_nodes; expected at least 11`);
 }
-if (banners < 30) {
-  offenders.push(`only ${banners} banners found; expected at least 30`);
+// One per list: twelve inventory pages, the Overview, and the single-banner surfaces.
+if (banners < 20) {
+  offenders.push(`only ${banners} banners found; expected at least 20`);
 }
 
 if (offenders.length) {

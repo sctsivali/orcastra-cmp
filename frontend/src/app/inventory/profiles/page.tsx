@@ -269,8 +269,12 @@ function ProfilesContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="profiles" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="profiles" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="profiles"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

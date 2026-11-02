@@ -250,8 +250,12 @@ function NetworksContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="networks" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="networks" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="networks"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

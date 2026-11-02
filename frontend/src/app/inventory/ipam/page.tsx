@@ -174,8 +174,12 @@ function IPAMContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="IP allocations" nodes={reach.unreachable} reasons={reach.reasons} />
-      <UnreachableNodesBanner noun="IP allocations" nodes={reach.partial} reasons={reach.reasons} partial />
+      <UnreachableNodesBanner
+        noun="IP allocations"
+        nodes={reach.unreachable}
+        partialNodes={reach.partial}
+        reasons={reach.reasons}
+      />
 
       <Card>
         <CardHeader className="space-y-4">

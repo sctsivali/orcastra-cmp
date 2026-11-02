@@ -32,27 +32,29 @@ export function reachabilityOf(payload: unknown): Reachability {
 interface UnreachableNodesBannerProps {
   /** Nodes the backend could not reach while building this list. */
   nodes: string[] | undefined;
+  /**
+   * Nodes that answered but lost some rows (a pool that refused, a project that could not be
+   * read). They share the one banner with `nodes`: two stacked cards for one list read as two
+   * problems, and neither said how many clusters were short in all.
+   */
+  partialNodes?: string[] | undefined;
   /** What is missing, lowercase plural, ex; "networks", "storage pools". */
   noun: string;
   /**
-   * Why each node did not answer, keyed by its name in `nodes`, shown under Show Details. A name
-   * with no reason still lists: a payload cached by an older build carries none.
+   * Why each node did not answer, keyed by its name in `nodes` or `partialNodes`, shown under
+   * Show Details. A name with no reason still lists: a payload cached by an older build carries
+   * none.
    *
    * important: a reason can carry LXD's own error text. It travels on the same role gate as the
    * names and never reaches a role without cluster:read.
    */
   reasons?: Record<string, string>;
-  /**
-   * The nodes answered but lost some rows (a pool that refused, a project that could not be
-   * read). The lead clause changes so a regex on "Could not reach" cannot mistake a partial
-   * read for an outage, and the tail says "some of", because most rows are there.
-   */
-  partial?: boolean;
   className?: string;
 }
 
-type DetailProps = Omit<UnreachableNodesBannerProps, "nodes"> & {
-  nodes: string[];
+type DetailProps = Pick<UnreachableNodesBannerProps, "noun" | "reasons" | "className"> & {
+  unreachable: string[];
+  partial: string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
@@ -63,6 +65,33 @@ const SCROLL_AFTER = 8;
 
 // The API prefixes a reason with its kind. Under "Could not reach" the prefix says nothing twice.
 const REASON_KIND = /^(?:unreachable|forbidden|error|partial):\s*/;
+
+/**
+ * The sentence for both shapes at once. A partial read says "could not fully read", so a regex on
+ * "Could not reach" cannot mistake it for an outage, and "some", because most of its rows are there.
+ *
+ * important: the leading "Could not reach N cluster(s)" clause is matched by regex in four specs,
+ * so it stays byte-identical whenever an unreachable cluster exists. Only what follows it moves.
+ */
+function sentenceFor(unreachable: number, partial: number, noun: string): { lead: string; tail: string } {
+  const incomplete = "so this list may be incomplete.";
+  if (unreachable > 0 && partial > 0) {
+    return {
+      lead: `Could not reach ${plural(unreachable, "cluster")} and could not fully read ${partial}.`,
+      tail: `Some ${noun} are not shown, ${incomplete}`,
+    };
+  }
+  if (unreachable > 0) {
+    return {
+      lead: `Could not reach ${plural(unreachable, "cluster")}.`,
+      tail: `${unreachable === 1 ? "Its" : "Their"} ${noun} are not shown, ${incomplete}`,
+    };
+  }
+  return {
+    lead: `Could not fully read ${plural(partial, "cluster")}.`,
+    tail: `Some of ${partial === 1 ? "its" : "their"} ${noun} are not shown, ${incomplete}`,
+  };
+}
 
 /**
  * The caution shell, written once for both shapes.
@@ -122,21 +151,17 @@ function UnreachableNodesNotice({ noun, className }: { noun: string; className?:
 
 /** What Admin and Partner see: one sentence, and the clusters behind Show Details. */
 function UnreachableNodesDetail({
-  nodes,
+  unreachable,
+  partial,
   noun,
   reasons,
-  partial = false,
   className,
   open,
   onOpenChange,
 }: DetailProps) {
-  // important: the leading "Could not reach N cluster(s)" clause is matched by regex in four
-  // specs, so it stays byte-identical. Only what follows it moves.
-  const lead = partial ? "Could not fully read" : "Could not reach";
-  const tail = partial
-    ? `Some of their ${noun} are not shown, so this list may be incomplete.`
-    : `Their ${noun} are not shown, so this list may be incomplete.`;
-  const sorted = [...nodes].sort((a, b) => a.localeCompare(b));
+  const { lead, tail } = sentenceFor(unreachable.length, partial.length, noun);
+  const partly = new Set(partial);
+  const sorted = [...unreachable, ...partial].sort((a, b) => a.localeCompare(b));
   const scrolls = sorted.length > SCROLL_AFTER;
 
   return (
@@ -144,10 +169,7 @@ function UnreachableNodesDetail({
       className={className}
       sentence={
         <>
-          <span className="font-medium">
-            {lead} {plural(nodes.length, "cluster")}.
-          </span>{" "}
-          {tail}
+          <span className="font-medium">{lead}</span> {tail}
         </>
       }
     >
@@ -163,19 +185,22 @@ function UnreachableNodesDetail({
         </CollapsibleTrigger>
         <CollapsibleContent>
           <ul
-            aria-label={`Clusters behind this notice, ${nodes.length} in total`}
+            aria-label={`Clusters behind this notice, ${sorted.length} in total`}
             // A list that scrolls takes focus, or the rows past the fold are mouse-only.
             tabIndex={scrolls ? 0 : undefined}
             className={cn("space-y-0.5 pt-1", scrolls && "max-h-60 overflow-y-auto")}
           >
             {sorted.map((node, i) => {
               const reason = reasons?.[node]?.replace(REASON_KIND, "");
+              // A cluster that answered is marked, so the list can be checked against the
+              // sentence: the unmarked rows are the ones that could not be reached at all.
+              const detail = partly.has(node) ? (reason ? `Partly read · ${reason}` : "Partly read") : reason;
               return (
                 // note: index in the key. Callers pass node names, which are unique, but a
                 // duplicate string here must not silently drop a row from a warning banner.
                 <li key={`${node}-${i}`} className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-medium">{node}</span>
-                  {reason ? <span className="min-w-0 break-words">{reason}</span> : null}
+                  {detail ? <span className="min-w-0 break-words">{detail}</span> : null}
                 </li>
               );
             })}
@@ -208,9 +233,9 @@ function UnreachableNodesDetail({
  */
 export function UnreachableNodesBanner({
   nodes,
+  partialNodes,
   noun,
   reasons,
-  partial = false,
   className,
 }: UnreachableNodesBannerProps) {
   // important: the hook runs before every early return, so the emptiness check cannot move above it.
@@ -219,7 +244,12 @@ export function UnreachableNodesBanner({
   // refetch and comes back must not close what the operator opened.
   const [open, setOpen] = useState(false);
 
-  if (!nodes?.length) return null;
+  const unreachable = nodes ?? [];
+  // A cluster that could not be reached cannot also have been read in part. The fan-out keeps the
+  // two apart already; this keeps the list naming each cluster once if a caller ever does not.
+  const reached = new Set(unreachable);
+  const partial = (partialNodes ?? []).filter((node) => !reached.has(node));
+  if (unreachable.length === 0 && partial.length === 0) return null;
 
   // important: nothing, rather than the wrong copy, while the first session read is outstanding.
   // usePermissions reports isLoading only when there is no session to read roles from, which is
@@ -240,10 +270,10 @@ export function UnreachableNodesBanner({
 
   return (
     <UnreachableNodesDetail
-      nodes={nodes}
+      unreachable={unreachable}
+      partial={partial}
       noun={noun}
       reasons={reasons}
-      partial={partial}
       className={className}
       open={open}
       onOpenChange={setOpen}
