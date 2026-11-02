@@ -474,6 +474,27 @@ export function upsertExactInstance(
   return true;
 }
 
+/**
+ * Read one instance on its own cluster and patch it into the lists that hold it.
+ *
+ * important: for a create's verdict. The fleet read answers only when its slowest cluster does
+ * (up to the 30 s inventory wall), so a new row that waited for it sat behind "Created,
+ * refreshing inventory" whenever any other cluster was slow. A failed read changes nothing; the
+ * fleet reconcile that follows still runs.
+ */
+export async function upsertInstanceFromItsCluster(
+  queryClient: QueryClient,
+  identity: InstanceIdentity,
+): Promise<boolean> {
+  const readStartedAt = readClock();
+  try {
+    const vm = await api.instances.get(identity.name, identity.host, identity.project);
+    return upsertExactInstance(queryClient, identity, vm, readStartedAt);
+  } catch {
+    return false;
+  }
+}
+
 /** Remove only the exact identity. A project-less event is deliberately not accepted here. */
 export function removeExactInstance(
   queryClient: QueryClient,
@@ -510,12 +531,23 @@ export async function reconcileInstanceFleet(
   // a moment after navigating to it) reverts to empty and idle: when this reconcile then gave up
   // to a newer writer, the page sat on its full-page loader until something else fetched.
   const cancelled = new Map<string, QueryKey>();
-  const cancelLists = async () => {
+  const cancelLists = async (keepFirstAnswers: boolean) => {
+    const cancelling: QueryKey[] = [];
     for (const query of queryClient.getQueryCache().findAll({
       queryKey: ["instances", actorScope],
       fetchStatus: "fetching",
-    })) cancelled.set(query.queryHash, query.queryKey);
-    await queryClient.cancelQueries({ queryKey: ["instances", actorScope] });
+    })) {
+      // important: a list with nothing on screen keeps its first read. Cancelling it left the
+      // page on its loader until this fleet read answered, which is the slowest cluster's answer
+      // (up to the 30 s inventory wall). It can only land before publication: the second pass
+      // below cancels whatever is still in flight.
+      if (keepFirstAnswers && query.state.data === undefined) continue;
+      cancelled.set(query.queryHash, query.queryKey);
+      cancelling.push(query.queryKey);
+    }
+    await Promise.all(
+      cancelling.map((queryKey) => queryClient.cancelQueries({ queryKey, exact: true })),
+    );
   };
   const askAgain = (except?: QueryKey) => {
     const skip = except ? queryClient.getQueryCache().find({ queryKey: except, exact: true })?.queryHash : undefined;
@@ -524,7 +556,7 @@ export async function reconcileInstanceFleet(
   // The fleet read runs outside React Query. Cancel canonical reads before it starts and again
   // before publication so a query that began on either side of the network request cannot commit
   // an older snapshot after this authoritative reconciliation.
-  await cancelLists();
+  await cancelLists(true);
   const startedAt = readClock();
   let data: VMListResponse;
   try {
@@ -547,7 +579,7 @@ export async function reconcileInstanceFleet(
     askAgain();
     return data;
   }
-  await cancelLists();
+  await cancelLists(false);
   if (
     options.signal?.aborted ||
     !isCurrentFleetWriteEpoch(queryClient, actorScope, epoch)

@@ -5,7 +5,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import { toast } from "@/hooks/use-toast";
 import { api, isAuthActorSynchronized } from "@/lib/api";
-import { reconcileInstanceFleet } from "@/lib/instance-reconciliation";
+import { reconcileInstanceFleet, upsertInstanceFromItsCluster } from "@/lib/instance-reconciliation";
 import { matchesCreateOperation } from "@/lib/instance-operation-identity";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import {
@@ -106,9 +106,19 @@ export function usePendingCreateJobs(
             // Reconcile every terminal verdict. Tag assignments and statistics materialize in the
             // same terminal transaction as the durable job, while a partial or failed create may
             // still have left an instance behind. Invalidate the complete declared impact first,
-            // then make the authoritative fleet snapshot the last instance-list write.
+            // then make the authoritative fleet snapshot the last instance-list write. The new row
+            // comes first from its own cluster, so a slow neighbour does not hold it back.
             void (async () => {
               if (!isAuthActorSynchronized(scopeKey)) return;
+              if (job.status !== "failure") {
+                await upsertInstanceFromItsCluster(queryClient, {
+                  actorScope: scopeKey,
+                  host: entry.host,
+                  project: entry.project || "default",
+                  name: entry.name,
+                });
+                if (!isAuthActorSynchronized(scopeKey)) return;
+              }
               await reconcileMutationImpact(queryClient, "instance.create");
               if (!isAuthActorSynchronized(scopeKey)) return;
               await reconcileInstanceFleet(queryClient, scopeKey, { fresh: true });

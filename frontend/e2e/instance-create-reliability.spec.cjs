@@ -420,6 +420,12 @@ test("a create-success then start-failure keeps the partial job beside the real 
       verified_readback: { status: "Stopped" },
     }));
   });
+  // The verdict reads the instance on its own cluster before the fleet catches up.
+  const exactReads = [];
+  await page.route((url) => url.pathname === "/api/v1/instances/start-failed-vm", async (route) => {
+    exactReads.push(new URL(route.request().url()).search);
+    await json(route, created);
+  });
 
   await page.goto("/inventory/instances");
   await expect(page.locator(
@@ -444,6 +450,7 @@ test("a create-success then start-failure keeps the partial job beside the real 
     '[data-row-key="cluster-a/tenant-a/start-failed-vm"][data-row-focus="true"]',
   )).toBeVisible();
   await expect(partialJobRow.getByText("Partially created", { exact: true })).toBeVisible();
+  expect(exactReads).toEqual(["?host=cluster-a&project=tenant-a"]);
   await expect.poll(() => api.instanceSockets.some((socket) => socket.closedAt !== null)).toBe(true);
   await expectCleanHarness(api);
 });
@@ -515,5 +522,83 @@ test("reloading the current state of a halted create follows its job again", asy
   await page.getByRole("button", { name: "Reload current state" }).click();
   await expect(page.getByText("Status unavailable")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reload current state" })).toHaveCount(0);
+  await expectCleanHarness(api);
+});
+
+// A cluster timing out at the 30 s inventory wall holds every fleet read for that long. The rows
+// below stand for it: a fleet read made after the verdict answers only after the test has looked.
+const SLOW_FLEET_MS = 40_000;
+
+function slowFleetPendingEntry(name, jobId) {
+  return {
+    id: `cluster-a/tenant-a/${name}`,
+    name,
+    host: "cluster-a",
+    project: "tenant-a",
+    type: "virtual-machine",
+    jobId,
+    createdAt: Date.now(),
+  };
+}
+
+test("a created instance is listed from its own cluster while the fleet read is slow", async ({ page }) => {
+  await authenticate(page.context(), "admin");
+  const existing = fullInstance("Running");
+  const created = { ...fullInstance("Running"), name: "slow-fleet-vm" };
+  const api = await installApiFixtures(page, "admin", { snapshotInstancePage: true });
+  const entry = slowFleetPendingEntry("slow-fleet-vm", "slow-fleet-job");
+  await seedPendingJob(page, "admin", entry);
+  let succeeded = false;
+  const exactReads = [];
+  await page.route("**/api/v1/instances/operations/slow-fleet-job", async (route) => {
+    await json(route, createJob(entry, succeeded ? "success" : "running"));
+  });
+  await page.route((url) => url.pathname === "/api/v1/instances", async (route) => {
+    const afterVerdict = succeeded;
+    if (afterVerdict) await new Promise((resolve) => setTimeout(resolve, SLOW_FLEET_MS));
+    await json(route, instanceInventory(afterVerdict ? [existing, created] : [existing])).catch(() => {});
+  });
+  await page.route((url) => url.pathname === "/api/v1/instances/slow-fleet-vm", async (route) => {
+    exactReads.push(new URL(route.request().url()).search);
+    await json(route, created);
+  });
+
+  await page.goto("/inventory/instances");
+  const pendingRow = page.locator('tr[data-state="pending"]').filter({
+    has: page.getByText("slow-fleet-vm", { exact: true }),
+  });
+  await expect(page.locator('[data-row-key="cluster-a/tenant-a/tenant-owned-vm"]')).toBeVisible();
+  await expect(pendingRow).toHaveCount(1);
+  succeeded = true;
+  await expect(page.locator('[data-row-key="cluster-a/tenant-a/slow-fleet-vm"]')).toBeVisible({ timeout: 10_000 });
+  await expect(pendingRow).toHaveCount(0);
+  expect(exactReads.length).toBeGreaterThan(0);
+  expect(new URLSearchParams(exactReads[0]).get("host")).toBe("cluster-a");
+  expect(new URLSearchParams(exactReads[0]).get("project")).toBe("tenant-a");
+  await expectCleanHarness(api);
+});
+
+test("a slow fresh fleet read does not cancel the list's first answer", async ({ page }) => {
+  await authenticate(page.context(), "admin");
+  const api = await installApiFixtures(page, "admin", { snapshotInstancePage: true });
+  // A create still running subscribes its cluster's event stream before the list has answered,
+  // and that subscription asks the fleet for a fresh read.
+  const entry = slowFleetPendingEntry("still-creating-vm", "still-creating-job");
+  await seedPendingJob(page, "admin", entry);
+  await page.route("**/api/v1/instances/operations/still-creating-job", async (route) => {
+    await json(route, createJob(entry, "running"));
+  });
+  const reads = [];
+  await page.route((url) => url.pathname === "/api/v1/instances", async (route) => {
+    const fresh = new URL(route.request().url()).searchParams.get("fresh") === "true";
+    reads.push(fresh ? "fresh" : "cached");
+    // A cached answer still takes a moment, long enough for the stream to open beside it.
+    await new Promise((resolve) => setTimeout(resolve, fresh ? SLOW_FLEET_MS : 1_500));
+    await json(route, instanceInventory([fullInstance("Running")])).catch(() => {});
+  });
+
+  await page.goto("/inventory/instances");
+  await expect(page.locator('[data-row-key="cluster-a/tenant-a/tenant-owned-vm"]')).toBeVisible({ timeout: 10_000 });
+  expect(reads).toContain("cached");
   await expectCleanHarness(api);
 });

@@ -176,7 +176,8 @@ let listImplementation = async () => {
 const reconciliationPath = "frontend/src/lib/instance-reconciliation.ts";
 const reconciliationSource = read(reconciliationPath);
 requireText(reconciliationPath, reconciliationSource, [
-  'await queryClient.cancelQueries({ queryKey: ["instances", actorScope] })',
+  "cancelling.map((queryKey) => queryClient.cancelQueries({ queryKey, exact: true }))",
+  "if (keepFirstAnswers && query.state.data === undefined) continue;",
 ]);
 const reconciliationOutput = ts.transpileModule(reconciliationSource, {
   compilerOptions: {
@@ -486,10 +487,46 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   unsubscribe();
 }
 
-// A fleet reconcile cancels list reads before and after its own read. When it then publishes
-// nothing (aborted, failed, or a newer writer moved first), the reads it cancelled must be asked
-// again: a list that had no data yet reverted to empty and idle, and the Instances page sat on
-// its full-page loader until something else fetched.
+// A fleet reconcile cancels list reads before and after its own read. It leaves a list with no data
+// yet alone on the first pass: cancelling that read left the Instances page on its full-page loader
+// until the fleet read answered, which is the slowest cluster's answer (up to the 30 s wall).
+{
+  const firstClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
+  const { QueryObserver } = requireFromFrontend("@tanstack/react-query");
+  const pageKey = ["instances", actorA, "*", "*"];
+  let releaseFirst;
+  const observer = new QueryObserver(firstClient, {
+    queryKey: pageKey,
+    queryFn: () => new Promise((resolveRead) => { releaseFirst = resolveRead; }),
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
+  assert.equal(firstClient.getQueryData(pageKey), undefined, "no data yet: the page's first read");
+  let releaseFleet;
+  listImplementation = () => new Promise((resolveRead) => { releaseFleet = resolveRead; });
+  const reconciling = reconcileInstanceFleet(firstClient, actorA, { fresh: true });
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
+  releaseFirst(response([row("cluster-a", "p1", "first-answer", "Running")]));
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
+  assert.deepEqual(
+    firstClient.getQueryData(pageKey)?.vms.map((vm) => vm.name),
+    ["first-answer"],
+    "a slow fleet reconcile must not cancel the page's first read",
+  );
+  releaseFleet(response([row("cluster-a", "p1", "fleet-answer", "Running")]));
+  await reconciling;
+  assert.deepEqual(
+    firstClient.getQueryData(pageKey).vms.map((vm) => vm.name),
+    ["fleet-answer"],
+    "the fleet read still publishes after the first read landed",
+  );
+  unsubscribe();
+}
+
+// When the reconcile publishes nothing (aborted, failed, or a newer writer moved first), the reads
+// it did cancel must be asked again, or the list keeps whatever the cancel reverted it to.
 {
   const idleClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
@@ -501,14 +538,17 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
     queryKey: pageKey,
     queryFn: () => {
       reads += 1;
-      if (reads === 1) return new Promise(() => undefined); // the first read never answers
+      if (reads === 1) return Promise.resolve(response([row("cluster-a", "p1", "first", "Running")]));
+      if (reads === 2) return new Promise(() => undefined); // the refetch never answers
       return Promise.resolve(response([row("cluster-a", "p1", "asked-again", "Running")]));
     },
   });
   const unsubscribe = observer.subscribe(() => undefined);
   await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
   assert.equal(reads, 1);
-  assert.equal(idleClient.getQueryData(pageKey), undefined, "no data yet: the page's first read");
+  void observer.refetch();
+  await new Promise((resolveTurn) => setTimeout(resolveTurn, 10));
+  assert.equal(reads, 2, "a refetch is in flight over data the page already shows");
   const abandon = new AbortController();
   listImplementation = async () => {
     abandon.abort();
@@ -516,11 +556,11 @@ for (const key of [deleteFleetKey, deleteVmKey]) {
   };
   await reconcileInstanceFleet(idleClient, actorA, { fresh: true, signal: abandon.signal });
   await new Promise((resolveTurn) => setTimeout(resolveTurn, CANCELLED_READ_RETRY_MS + 100));
-  assert.equal(reads, 2, "a list read the reconcile cancelled and did not replace must be asked again");
+  assert.equal(reads, 3, "a list read the reconcile cancelled and did not replace must be asked again");
   assert.deepEqual(
     idleClient.getQueryData(pageKey).vms.map((vm) => vm.name),
     ["asked-again"],
-    "the page must not stay without data after an abandoned fleet reconcile",
+    "the list must not keep the reverted read after an abandoned fleet reconcile",
   );
   unsubscribe();
 }
