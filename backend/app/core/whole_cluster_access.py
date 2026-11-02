@@ -31,6 +31,7 @@ __all__ = [
     "clusters_held_elsewhere",
     "refuse_unless_the_party_holds_it_whole",
     "the_party_holds_it_whole",
+    "verify_default_project_write",
     "verify_whole_cluster_access",
     "whole_clusters",
 ]
@@ -57,6 +58,19 @@ async def verify_whole_cluster_access(cluster_id: str, db: AsyncSession, user: O
     if _unrestricted(user):
         return
     await _refuse_where_another_party_holds(cluster_id, db, user)
+
+
+async def verify_default_project_write(
+    cluster_id: str, owner: Optional[str], db: AsyncSession, user: Optional[AuthenticatedUser]
+) -> None:
+    """Raise 403 when a network write lands in the default project of a cluster another party holds.
+
+    important: a project bound always leaves `default` visible, and the default project holds what
+    every project on the cluster leans on: bridge networks (only `default` can hold them), the OVN
+    uplinks, and the ACLs those networks use. Changing one is a change to the whole cluster.
+    """
+    if (owner or "default") == "default":
+        await verify_whole_cluster_access(cluster_id, db, user)
 
 
 async def refuse_unless_the_party_holds_it_whole(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> None:

@@ -36,6 +36,9 @@ from app.core.org_scope import (
     visible_projects_for,
 )
 from app.core.rbac import Role, get_highest_role, resolve_roles
+from app.core.database import get_db
+from app.core.whole_cluster_access import verify_whole_cluster_access
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.vault_client import get_vault_client
 from app.core import vault_status
 from app.core.registry_guard import require_known_registry, vault_unavailable_error
@@ -372,9 +375,12 @@ async def update_node(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update Cluster metadata such as its display name."""
     verify_cluster_access(node_name)
+    # important: the display name is the cluster's, shown to every holder and to admins.
+    await verify_whole_cluster_access(node_name, db, _rbac)
     from fastapi import HTTPException
     from app.core.node_metadata import get_node_metadata_store
     

@@ -20,6 +20,7 @@ from app.services.lxd_service import (
 from app.services.lxd.utils import jsonable_lxd, wait_for_lxd_operation, write_timeout
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.whole_cluster_access import verify_default_project_write
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -737,6 +738,7 @@ async def create_network(
                 )
                 if not project_is_visible(host, owner):
                     raise HTTPException(status_code=403, detail="Access denied to this project")
+                await verify_default_project_write(host, owner, db, _rbac)
                 for fenced_project in sorted({requested_project, owner}):
                     try:
                         await assert_project_not_migration_fenced(
@@ -930,6 +932,7 @@ async def update_network(
                 )
                 if not project_is_visible(host, owner):
                     raise HTTPException(status_code=403, detail="Access denied to this network")
+                await verify_default_project_write(host, owner, db, _rbac)
                 for fenced_project in sorted({requested_project, owner}):
                     await assert_project_not_migration_fenced(
                         cluster_id=host,
@@ -1000,6 +1003,7 @@ async def delete_network(
             owner = resolve_owner(client, "networks", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this network")
+            await verify_default_project_write(host, owner, db, _rbac)
             try:
                 await assert_cluster_not_migration_fenced(cluster_id=host, db=db)
                 for fenced_project in sorted({requested_project, owner}):

@@ -18,7 +18,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from app.core.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -279,10 +280,15 @@ async def get_tag_service_dep(
 
 
 def get_user_id(
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    user: Optional[AuthenticatedUser] = Depends(get_current_user),
 ) -> Optional[str]:
-    """Extract user ID from headers."""
-    return x_user_id
+    """The verified caller's email, which keys created_by, assigned_by and tag visibility.
+
+    important: not a request header. This read X-User-ID, which any caller can set, so a request
+    could stamp another user as a tag's author and read or overwrite their visibility settings.
+    No client sent the header.
+    """
+    return getattr(user, "email", None)
 
 
 # ============================================

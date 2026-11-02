@@ -22,6 +22,9 @@ from app.services.lxd_service import (
     require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
+from app.core.database import get_db
+from app.core.whole_cluster_access import verify_whole_cluster_access
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -299,11 +302,24 @@ async def delete_warning(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a warning."""
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
+        # important: judged by the warning's own project before it is dismissed. The list hides
+        # another project's warnings, and a server-scope one (no project) belongs to the whole
+        # cluster, so a UUID alone must not dismiss either on a cluster another party holds.
+        stored = client.api.warnings[safe_segment(warning_uuid)].get(timeout=(5, 30))
+        warning = (stored.json() or {}).get("metadata") or {} if stored.status_code == 200 else {}
+        if not warning:
+            raise HTTPException(status_code=404, detail="Warning not found")
+        if warning.get("project"):
+            if not project_is_visible(host, warning["project"]):
+                raise HTTPException(status_code=404, detail="Warning not found")
+        else:
+            await verify_whole_cluster_access(host, db, _rbac)
         response = client.api.warnings[safe_segment(warning_uuid)].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:

@@ -41,7 +41,7 @@ from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_
 from app.core.host_detail import cluster_for_tier, cluster_list_for_tier
 from app.core.task_scope import caller_tier
 from app.core.url_safety import normalize_endpoint
-from app.core.whole_cluster_access import refuse_unless_the_party_holds_it_whole
+from app.core.whole_cluster_access import refuse_unless_the_party_holds_it_whole, verify_whole_cluster_access
 from app.core.type_utils import (
     detect_cluster_type_from_metadata,
     detect_clustered_from_metadata,
@@ -207,6 +207,26 @@ async def _guard_registration_binding(
         )
     ).all()
     if not rows:
+        # important: no binding is not no cluster. An id still in the Vault registry whose last
+        # binding was removed is an orphan, and registering it again would rewrite its endpoint and
+        # certificate for whoever still uses it, so only an admin may claim one.
+        if get_highest_role(resolve_roles(user)) != Role.ADMIN:
+            from app.services.lxd import registry as cluster_registry
+
+            registered = await cluster_registry.registered_cluster_ids(fresh=True)
+            if registered is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="The cluster registry could not be read, so nothing was registered; retry shortly",
+                )
+            if cluster_id in registered:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"Cluster {cluster_id} is registered without an owning organization. "
+                        "An administrator can register it again."
+                    ),
+                )
         return org_ids
     owns_existing_identity = _owns_a_binding(rows, org_ids, user.email)
     if (
@@ -1214,6 +1234,10 @@ async def delete_cluster(
 ):
     """Delete a cluster registration."""
     verify_cluster_access(cluster_id)
+    # important: deleting a registration ends it for every organization that holds the cluster,
+    # strips every key grant and removes the dashboard's trust. Reaching the cluster through a
+    # purchase or a member row is not holding it (core/whole_cluster_access).
+    await verify_whole_cluster_access(cluster_id, db, _rbac)
     try:
         await assert_cluster_not_migration_fenced(cluster_id=cluster_id, db=db)
     except MigrationFenceConflict as exc:
@@ -1515,6 +1539,9 @@ async def regenerate_certificate(
     """Regenerate certificate for a cluster."""
     # verify caller may access this cluster (org-scope), matching get/delete/update
     verify_cluster_access(cluster_id)
+    # important: the certificate acts for every project on the cluster, and a new one replaces the
+    # owner's pending renewal, so this is held to the whole cluster like /certificates/renew.
+    await verify_whole_cluster_access(cluster_id, db, _rbac)
     try:
         await assert_cluster_not_migration_fenced(cluster_id=cluster_id)
     except MigrationFenceConflict as exc:
@@ -1626,9 +1653,12 @@ async def update_cluster_location(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update the location of an existing cluster."""
     verify_cluster_access(cluster_id)
+    # important: the location is the cluster's, shown to every holder and to admins.
+    await verify_whole_cluster_access(cluster_id, db, _rbac)
     logger.info(f"Updating location for cluster {cluster_id}")
     
     try:

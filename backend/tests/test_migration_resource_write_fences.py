@@ -282,7 +282,7 @@ async def test_acl_delete_checks_the_effective_inherited_owner_inside_the_lock(
         project="tenant-a",
         lxd_service=object(),
         _=None,
-        _rbac=object(),
+        _rbac=None,
         db=db,
     )
 

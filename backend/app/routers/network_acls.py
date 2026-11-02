@@ -21,6 +21,7 @@ from app.services.lxd_service import (
     require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.whole_cluster_access import verify_default_project_write
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -384,6 +385,7 @@ async def create_network_acl(
             owner = resolve_owner(client, "network-acls", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this network ACL")
+            await verify_default_project_write(host, owner, db, _rbac)
             for fenced_project in sorted({requested_project, owner}):
                 try:
                     await assert_project_not_migration_fenced(
@@ -496,6 +498,7 @@ async def update_network_acl(
             owner = resolve_owner(client, "network-acls", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this network ACL")
+            await verify_default_project_write(host, owner, db, _rbac)
             for fenced_project in sorted({requested_project, owner}):
                 try:
                     await assert_project_not_migration_fenced(
@@ -582,6 +585,7 @@ async def delete_network_acl(
             owner = resolve_owner(client, "network-acls", project)
             if not project_is_visible(host, owner):
                 raise HTTPException(status_code=403, detail="Access denied to this network ACL")
+            await verify_default_project_write(host, owner, db, _rbac)
             for fenced_project in sorted({requested_project, owner}):
                 try:
                     await assert_project_not_migration_fenced(

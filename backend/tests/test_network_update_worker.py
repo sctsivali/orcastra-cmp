@@ -126,7 +126,7 @@ def update_fixture(monkeypatch, *, owner="default", network_type="bridge"):
 async def update(service, *, config=None, description="updated"):
     return await networks.update_network(
         "qa-network", host="qa-own", project="tenant-a", config=config, description=description,
-        lxd_service=service, db=None,
+        lxd_service=service, db=None, _rbac=None,
     )
 
 
