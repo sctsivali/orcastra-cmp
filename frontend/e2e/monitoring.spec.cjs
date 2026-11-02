@@ -485,7 +485,7 @@ test("clusters and pools read by display name, and pool members only when there 
 
   const pools = page.locator('[data-slot="storage-pools"]');
   await expect(pools.getByText("fast-pool", { exact: true })).toBeVisible();
-  await expect(pools.locator('[data-slot="badge"]', { hasText: /^zfs$/ })).toBeVisible();
+  await expect(pools.locator('[data-slot="badge"]', { hasText: /^ZFS$/ })).toBeVisible();
   await expect(pools.getByText("Core Cluster", { exact: true })).toHaveCount(2);
   // A standalone host lists itself as its one member: nothing to add beside its own name.
   await expect(pools).not.toContainText(/\(cluster-a|1 members/);

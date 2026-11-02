@@ -270,7 +270,7 @@ test("a missing durable job stops polling and keeps recovery actions visible", a
   const readsAfterHalt = reads;
   await page.waitForTimeout(3_000);
   expect(reads).toBe(readsAfterHalt);
-  await expect(dialog.getByRole("button", { name: "Reload actual state" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Reload current state" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Close" }).filter({
     hasNot: page.locator("svg"),
   })).toBeVisible();
@@ -343,7 +343,7 @@ test("a mismatched specification poll halts before projecting its terminal resul
   const readsAfterConflict = operationReads;
   await page.waitForTimeout(3_000);
   expect(operationReads).toBe(readsAfterConflict);
-  await expect(dialog.getByRole("button", { name: "Reload actual state" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Reload current state" })).toBeVisible();
   await expectCleanHarness(api);
 });
 
@@ -411,7 +411,7 @@ test("an unknown specification result stays terminal and requires actual-state r
   await dialog.getByRole("button", { name: "Review and apply" }).click();
   await expect(dialog.getByText("Outcome needs verification")).toBeVisible();
   await expect(dialog.getByText("The daemon timed out before readback could prove the result.")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Reload actual state" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Reload current state" })).toBeVisible();
   await page.waitForTimeout(1_000);
   expect(writes).toBe(1);
   await expectCleanHarness(api);

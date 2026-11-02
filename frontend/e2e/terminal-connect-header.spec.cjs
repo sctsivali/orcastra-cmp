@@ -60,7 +60,14 @@ function bufferLines(page) {
     if (!host) return [];
     const { buffer } = host.__xterm;
     const lines = [];
-    for (let i = 0; i < buffer.active.length; i += 1) lines.push(buffer.active.getLine(i).translateToString(true));
+    // note: a row the window wrapped belongs to the line before it, or a phone reads the session id
+    // as two lines.
+    for (let i = 0; i < buffer.active.length; i += 1) {
+      const row = buffer.active.getLine(i);
+      const text = row.translateToString(true);
+      if (row.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
+      else lines.push(text);
+    }
     return lines;
   });
 }

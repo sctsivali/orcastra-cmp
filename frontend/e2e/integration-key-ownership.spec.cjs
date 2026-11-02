@@ -227,7 +227,7 @@ test("an admin sees what each key owns and moves a frozen organization", async (
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
-  await expect(page.getByText("Owner Key Transferred", { exact: true })).toBeVisible();
+  await expect(page.getByText("Owner key transferred", { exact: true })).toBeVisible();
   expect(state.puts).toEqual([{ orgId: 1, body: { api_key_id: "oak_hub_new", reason: "The old connection key was revoked" } }]);
   await expect(panel.getByText("organization has an owner key that no longer works", { exact: false })).toHaveCount(0);
   await expectCleanSettingsHarness(settings);
@@ -290,7 +290,7 @@ test("withdrawing tenant.provision from an owner key says what stops and goes th
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
-  await expect(page.getByText("Capabilities Updated", { exact: true })).toBeVisible();
+  await expect(page.getByText("Capabilities updated", { exact: true })).toBeVisible();
   await expect(dialog).toHaveCount(0);
   expect(state.capabilityPuts).toEqual([
     { keyId: "oak_hub_new", body: { capabilities: ["inventory.read", "org.sync"], force: false } },
@@ -358,17 +358,17 @@ test("an admin manages an organization's owner keys", async ({ page }, testInfo)
   await expectNoHorizontalOverflow(page);
   await capture(page, testInfo, "admin-owner-keys-dialog");
   await add.click();
-  await expect(page.getByText("Owner Key Added", { exact: true })).toBeVisible();
+  await expect(page.getByText("Owner key added", { exact: true })).toBeVisible();
   expect(state.ownerChanges).toEqual([
     { method: "POST", what: "owner-keys", body: { api_key_id: "oak_expiring", reason: "A second connection to this control plane" } },
   ]);
 
   await expect(dialog.getByRole("button", { name: "Make Primary" })).toBeVisible();
   await dialog.getByRole("button", { name: "Make Primary" }).click();
-  await expect(page.getByText("Primary Owner Key Changed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Primary owner key changed", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Remove" })).toHaveCount(2);
   await dialog.getByRole("button", { name: "Remove" }).first().click();
-  await expect(page.getByText("Owner Key Removed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Owner key removed", { exact: true })).toBeVisible();
   expect(state.ownerChanges.map((c) => [c.method, c.what, c.body.api_key_id])).toEqual([
     ["POST", "owner-keys", "oak_expiring"], ["PUT", "primary-key", "oak_expiring"], ["DELETE", "owner-keys", "oak_hub_new"],
   ]);

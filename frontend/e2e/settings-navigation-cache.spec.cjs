@@ -189,7 +189,7 @@ test("duplicate Admin clear clicks dispatch one pending request", async ({ page 
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
-  await expect(page.getByRole("button", { name: "Clearing Shared Cache...", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Clearing Shared Cache…", exact: true })).toBeDisabled();
   await expect.poll(() => api.sharedClears).toBe(1);
   release();
   await expect(page.getByText("Shared backend cache cleared.", { exact: true })).toBeVisible();
