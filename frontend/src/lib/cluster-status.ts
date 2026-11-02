@@ -34,8 +34,6 @@ export interface ClusterStatusMeta {
   /** Display label. Title case, hand-written, safe to render anywhere. */
   label: string;
   icon: LucideIcon;
-  /** Background utility from the --status-* tokens, for the status strip on a cluster card. */
-  dotClassName: string;
   /** Foreground utility for an inline icon. */
   iconClassName: string;
   /** Sort weight. Lower sorts first, so reachable clusters lead a picker. */
@@ -69,7 +67,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
     status: ClusterStatus.ONLINE,
     label: "Online",
     icon: CheckCircle2,
-    dotClassName: "bg-status-online",
     iconClassName: "text-status-online",
     tone: "positive",
     reachable: true,
@@ -80,7 +77,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
     // permission denial. The cluster answered; the trust handshake is what is unfinished.
     label: "Pending Trust",
     icon: ShieldAlert,
-    dotClassName: "bg-status-pending",
     iconClassName: "text-status-pending",
     tone: "caution",
     reachable: false,
@@ -89,7 +85,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
     status: ClusterStatus.PENDING,
     label: "Pending",
     icon: Clock,
-    dotClassName: "bg-status-unknown",
     iconClassName: "text-status-unknown",
     tone: "neutral",
     reachable: false,
@@ -101,7 +96,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
     // that line and it is worth keeping. A host that is down and a fault in us are different
     // problems, and the icon is the only thing separating them once both go red.
     icon: XCircle,
-    dotClassName: "bg-status-offline",
     iconClassName: "text-status-offline",
     tone: "negative",
     reachable: false,
@@ -110,7 +104,6 @@ const ENTRIES: Record<ClusterStatus, Entry> = {
     status: ClusterStatus.ERROR,
     label: "Error",
     icon: AlertTriangle,
-    dotClassName: "bg-status-offline",
     iconClassName: "text-status-offline",
     tone: "negative",
     reachable: false,
@@ -121,7 +114,6 @@ const UNKNOWN: Entry = {
   status: ClusterStatus.PENDING,
   label: "Unknown",
   icon: HelpCircle,
-  dotClassName: "bg-status-unknown",
   iconClassName: "text-status-unknown",
   tone: "neutral",
   reachable: false,

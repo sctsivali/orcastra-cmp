@@ -40,6 +40,8 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { cn, formatBytes, formatVcpuCount, plural } from "@/lib/utils";
 import { capacityReading } from "@/lib/capacity-reading";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { Progress } from "@/components/ui/progress";
+import { UsageBar } from "@/components/ui/usage-bar";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
@@ -47,12 +49,11 @@ import { inventoryLinks } from "@/lib/inventory-links";
 
 interface NodeStatusCardProps {
   node: NodeStatus;
-  index: number;
   onViewDetails: (node: NodeStatus) => void;
   onTagsUpdate?: () => void;
 }
 
-export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatusCardProps) {
+export function NodeStatusCard({ node, onViewDetails, onTagsUpdate }: NodeStatusCardProps) {
   const { navigate } = useNavigationProgress();
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
@@ -135,27 +136,25 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
     }
   };
 
-  const getUsagePercentage = (used: number, total: number) => {
-    const reading = capacityReading({ used, total });
-    return reading ? `${reading.percent.toFixed(1)}% used` : "Usage unavailable";
-  };
-
   const cpu = cpuAllocation(node.resources ?? { cpu_total: 0, cpu_used: 0 });
+  const cpuFigure = `${formatVcpuCount(cpu.allocated)} / ${plural(cpu.threads, "hardware thread")}`;
+  const memoryFigure = node.resources
+    ? `${formatBytes(node.resources.memory_used)} / ${formatBytes(node.resources.memory_total)}`
+    : "";
+  // capacityReading's percent is usagePercent: clamped for the bar, and null rather than 0 when
+  // the counters are missing, so an unread host draws no bar instead of an empty one.
+  const memory = node.resources
+    ? capacityReading({ used: node.resources.memory_used, total: node.resources.memory_total })
+    : null;
   // Clustering, not the distribution name, is what the Cloud glyph is saying here.
   const NodeIcon = node.clustered ? Cloud : Server;
   const statusMeta = clusterStatusMeta(node);
   const StatusIcon = statusMeta.icon;
 
   return (
-    <Card
-      data-slot="cluster-card"
-      className="animate-fade-in overflow-hidden transition-all duration-300 hover:shadow-md"
-      style={{ animationDelay: `${index * 100}ms` }}
-    >
-      {/* note: a gradient strip used to sit here, coloured by connection state. It was
-          decoration on a status surface, and the badge below already says the same thing in
-          a form a screen reader can read. */}
-      <div className={cn("h-1 w-full", statusMeta.dotClassName)} />
+    // note: no entrance stagger and no hover lift. A status surface does not animate for
+    // decoration, and the card itself is not a control: its buttons are.
+    <Card data-slot="cluster-card" className="overflow-hidden">
       <CardContent className="p-3 md:p-4">
         {/* important: flex-wrap with a basis-48 title block, not flex-col sm:flex-row. The grid
             is three-up at xl, a 309px card at 1280 with the sidebar open (the same measurement
@@ -260,9 +259,21 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                 <span className="font-medium">vCPU Allocation</span>
               </div>
               <div className="text-xs">
-                <div className="font-semibold text-foreground">
-                  {formatVcpuCount(cpu.allocated)} / {plural(cpu.threads, "hardware thread")}
-                </div>
+                <div className="font-semibold text-foreground">{cpuFigure}</div>
+                {/* The monitoring card's meter: the clamped share of threads in the allocation
+                    tone, so an over-commit reads as a ratio rather than as a red bar.
+                    important: role="meter", not Radix's progressbar. This is a level, not a task
+                    in progress, and "no progressbar on the page" is how the house loader is
+                    told apart from a settled Overview. */}
+                {cpu.threads > 0 && (
+                  <Progress
+                    role="meter"
+                    value={cpu.percentClamped}
+                    aria-label="vCPU allocation"
+                    getValueLabel={() => `${cpuFigure}, ${cpuAllocationText(cpu)}`}
+                    className={cn("my-1 h-2", cpu.meterClassName)}
+                  />
+                )}
                 <div className={cpu.textClassName}>{cpuAllocationText(cpu)}</div>
               </div>
             </div>
@@ -274,11 +285,17 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                 <span className="font-medium">Memory</span>
               </div>
               <div className="text-xs">
-                <div className="font-semibold text-foreground">
-                  {formatBytes(node.resources.memory_used)} / {formatBytes(node.resources.memory_total)}
-                </div>
+                <div className="font-semibold text-foreground">{memoryFigure}</div>
+                {memory && (
+                  <UsageBar
+                    percent={memory.percent}
+                    label="Memory"
+                    valueText={`${memoryFigure} (${memory.percent.toFixed(1)}%)`}
+                    className="my-1 h-2"
+                  />
+                )}
                 <div className="text-muted-foreground">
-                  {getUsagePercentage(node.resources.memory_used, node.resources.memory_total)}
+                  {memory ? `${memory.percent.toFixed(1)}% used` : "Usage unavailable"}
                 </div>
               </div>
             </div>

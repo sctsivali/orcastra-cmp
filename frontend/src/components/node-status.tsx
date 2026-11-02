@@ -56,7 +56,6 @@ function LoadingSkeleton() {
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
         {[...Array(3)].map((_, i) => (
           <Card key={i} className="overflow-hidden">
-            <Skeleton className="h-1 w-full" />
             <CardContent className="p-3 md:p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -75,10 +74,12 @@ function LoadingSkeleton() {
                 <Skeleton className="h-4 w-44" />
               </div>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {[...Array(3)].map((_, j) => (
+                {/* vCPU and Memory carry a meter between the figure and its caption; GPU is text. */}
+                {[true, true, false].map((meter, j) => (
                   <div key={j} className="flex flex-col gap-1">
                     <Skeleton className="h-3.5 w-10" />
                     <Skeleton className="h-4 w-24" />
+                    {meter && <Skeleton className="h-2 w-full rounded-full" />}
                     <Skeleton className="h-4 w-20" />
                   </div>
                 ))}
@@ -275,13 +276,10 @@ function NodeStatusCardsContent({ onRefresh }: NodeStatusCardsProps) {
           // Same breakpoints as the Projects grid beside it, for the reason recorded there: a
           // two-up card at md is 224px wide and cannot hold its own header.
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-            {/* note: the index is the position on the page, not in the list, so the card stagger
-                restarts each page instead of delaying page four by several seconds. */}
-            {pagedNodes.map((node, index) => (
+            {pagedNodes.map((node) => (
               <NodeStatusCard
                 key={node.name}
                 node={node}
-                index={index}
                 onViewDetails={handleViewDetails}
                 onTagsUpdate={refetch}
               />
