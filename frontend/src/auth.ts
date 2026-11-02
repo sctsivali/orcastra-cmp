@@ -378,14 +378,6 @@ export const authConfig: NextAuthConfig = {
       const adminOrPartnerPaths = [
         "/inventory/identities",
         "/inventory/groups",
-        // note: these five pages already render nothing for a tenant (useRequireRole) and their
-        // routers answer 403 (require_partner). The redirect keeps the page shell from loading
-        // at all, as the release line does.
-        "/inventory/clustering/members",
-        "/inventory/operations",
-        "/inventory/server",
-        "/inventory/warnings",
-        "/my-keys",
         // Installing an add-on hands a third party a credential into an organization, so the
         // gate is a real redirect here rather than a component that renders null.
         "/extensions",

@@ -105,7 +105,7 @@ from app.core.api_key_expiry import (
     tally_keys,
     utc_isoformat,
 )
-from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, granted_level, refuse_a_paused_grant
+from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission, refuse_a_paused_grant
 from app.core.api_key_capabilities import (
     policy_keys_in_config,
     policy_keys_in_raw_body,
@@ -156,7 +156,6 @@ from app.core.org_scope import (
     get_current_allowed_clusters,
     get_scope_cache_key,
     org_scope_dependency,
-    project_is_visible,
     reconcile_personal_clusters,
     refuse_grants_on_purchased_clusters,
 )
