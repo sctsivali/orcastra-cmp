@@ -140,3 +140,31 @@ async def test_a_project_ones_own_policies_name_needs_lxd_to_isolate_it(scope) -
 async def test_the_sellers_own_cluster_after_a_sale_needs_no_isolation_proof(scope) -> None:
     db = await _world(TenantAccessPolicy, TenantPolicyRule)
     assert not (await lxd_key_bounds.authorize_new_key(OWN, "default", "standard", db, _user(ME))).isolated_project_required
+
+
+async def test_no_direct_key_on_a_cluster_reached_only_by_purchase(scope, minting) -> None:
+    """LXD knows nothing of a paid term, so a key minted during it would outlive it."""
+    db = await _world(TenantAccessPolicy, TenantPolicyRule)
+    token = org_scope._purchase_only_clusters_var.set(frozenset({OWN}))
+    try:
+        for level, project in (("standard", "default"), ("admin", "default")):
+            with pytest.raises(HTTPException) as caught:
+                await my_keys.create_key(_mint(OWN, project, level), minting["lxd"], None, _user(ME), db)
+            assert caught.value.status_code == 403 and "purchase" in caught.value.detail
+    finally:
+        org_scope._purchase_only_clusters_var.reset(token)
+    assert minting["certificates"] == [] and minting["clients"] == []
+
+
+@pytest.mark.parametrize("override", [
+    {"restricted.containers.lowlevel": "allow"}, {"restricted.containers.privilege": "allow"},
+    {"restricted.devices.disk": "allow"}, {"restricted.devices.disk.paths": "/"},
+    {"restricted.idmap.uid": "0-65535"}, {"restricted.devices.unix-char": "allow"},
+], ids=lambda o: next(iter(o)))
+def test_a_restricted_project_with_a_host_reaching_override_is_not_isolated(override: Dict[str, str]) -> None:
+    isolated = {"restricted": "true", "features.images": "true", "features.networks": "true",
+                "features.profiles": "true", "features.storage.volumes": "true"}
+    client = SimpleNamespace(projects=SimpleNamespace(get=lambda _n: SimpleNamespace(config={**isolated, **override})))
+    with pytest.raises(HTTPException) as caught:
+        lxd_key_bounds.refuse_an_unisolated_project(client, MIXED, "own-web")
+    assert caught.value.status_code == 403 and next(iter(override)) in caught.value.detail

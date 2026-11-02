@@ -17,7 +17,7 @@ project before the identity is created.
 """
 
 from dataclasses import dataclass
-from typing import Any, Set
+from typing import Any, Dict, List, Set
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, select
@@ -25,12 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser
 from app.core.lxd_path import safe_segment
-from app.core.org_scope import verify_project_access
+from app.core.org_scope import refuse_grants_on_purchased_clusters, verify_project_access
 from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.core.whole_cluster_access import verify_whole_cluster_access
 from app.services import cluster_parties
 
-__all__ = ["KeyTarget", "authorize_new_key", "refuse_an_unisolated_project"]
+__all__ = ["KeyTarget", "authorize_new_key", "refuse_an_unisolated_project", "unsafe_restrictions"]
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,9 @@ async def authorize_new_key(
     whole cluster (core.whole_cluster_access), a standard key needs its project inside the bound,
     and on a cluster another party holds also a project of the caller's own (module docstring).
     """
+    # important: a key can be valid for years and LXD knows nothing of a paid term, so a cluster the
+    # caller reaches only through a purchase gets no direct key at all, as it gets no API key grant.
+    refuse_grants_on_purchased_clusters([node])
     if auth_level == "admin":
         await verify_whole_cluster_access(node, db, user)
         return KeyTarget((project or "default").strip() or "default")
@@ -85,6 +88,40 @@ async def authorize_new_key(
     return KeyTarget(project, isolated_project_required=True)
 
 
+# important: with `restricted=true` LXD blocks each of these unless the project overrides it, and an
+# override to anything outside the safe set hands an operator key the host (raw.lxc, privileged
+# containers, host disks and devices, host id maps). A key talks to LXD directly, so the dashboard's
+# own payload checks never see what it sends; the project has to forbid it.
+_SAFE_RESTRICTIONS = {
+    "restricted.containers.lowlevel": {"block"},
+    "restricted.containers.privilege": {"unprivileged", "isolated"},
+    "restricted.containers.interception": {"block"},
+    "restricted.containers.nesting": {"block"},
+    "restricted.virtual-machines.lowlevel": {"block"},
+    "restricted.devices.disk": {"managed", "block"},
+    "restricted.devices.nic": {"managed", "block"},
+    "restricted.devices.gpu": {"block"},
+    "restricted.devices.infiniband": {"block"},
+    "restricted.devices.pci": {"block"},
+    "restricted.devices.proxy": {"block"},
+    "restricted.devices.unix-block": {"block"},
+    "restricted.devices.unix-char": {"block"},
+    "restricted.devices.unix-hotplug": {"block"},
+    "restricted.devices.usb": {"block"},
+}
+_MUST_STAY_UNSET = ("restricted.devices.disk.paths", "restricted.idmap.uid", "restricted.idmap.gid")
+
+
+def unsafe_restrictions(config: Dict[str, Any]) -> List[str]:
+    """The `restricted.*` overrides of a project that would let a direct key reach the host."""
+    unsafe = [
+        key for key, safe in _SAFE_RESTRICTIONS.items()
+        if key in config and str(config[key]).strip().lower() not in safe
+    ]
+    unsafe += [key for key in _MUST_STAY_UNSET if str(config.get(key) or "").strip()]
+    return sorted(unsafe)
+
+
 def refuse_an_unisolated_project(client: Any, node: str, project: str) -> None:
     """Raise 403 unless LXD isolates `project` the way a shared cluster requires (blocking read)."""
     from app.services.instance_security_policy import shared_project_findings
@@ -97,6 +134,7 @@ def refuse_an_unisolated_project(client: Any, node: str, project: str) -> None:
             detail=f"Could not confirm that project {project} on {node} is isolated, so no key was issued.",
         ) from exc
     missing = [finding.field for finding in shared_project_findings(config)]
+    missing += [f"config.{key}" for key in unsafe_restrictions(config)]
     if missing:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

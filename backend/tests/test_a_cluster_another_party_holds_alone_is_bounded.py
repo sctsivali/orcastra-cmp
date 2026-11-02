@@ -40,3 +40,11 @@ async def test_the_holder_itself_is_not_bounded_on_its_own_cluster() -> None:
 async def test_the_write_policy_asks_the_party_too(email: str, ownership: ClusterOwnership) -> None:
     db = await _world()
     assert (await resolve_cluster_write_policy(_partner(email), SOLO, db)).ownership == ownership
+
+
+async def test_a_project_a_partner_creates_is_recorded_only_under_an_organization_it_runs() -> None:
+    """A member row reaches 'solo', but its project's rule must not go into the seller's own policy."""
+    db = await _world(TenantAccessPolicy, TenantPolicyRule)
+    assert await org_scope.org_to_hold_project_grant(SELLER, SOLO, db) is None
+    assert await org_scope.org_to_hold_project_grant(OTHER, SOLO, db) == 4
+    assert await org_scope.org_to_hold_project_grant(SELLER, OWN, db) in (1, 2)

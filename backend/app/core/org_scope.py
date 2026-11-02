@@ -830,10 +830,16 @@ async def org_to_hold_project_grant(
     none of them is: a rule for a cluster under an organization not bound to it is exactly the
     stale shape the policy repair removes, so there is no fallback to an unbound org.
     """
+    from app.services import cluster_parties
+
     ordered = await _ordered_org_ids_for_email(user_email, db)
     bound = {org_id for org_id, _slug in await resolve_cluster_orgs(host, db)}
+    # important: only an organization the user runs (created, or a partner row). A member row in an
+    # organization the partner bought from would put the project's rule into that seller's own
+    # dashboard policy, which only its runners may write.
+    runs = set(await cluster_parties.run_orgs(db, user_email))
     for org_id in ordered:
-        if org_id in bound:
+        if org_id in bound and org_id in runs:
             return org_id
     return None
 

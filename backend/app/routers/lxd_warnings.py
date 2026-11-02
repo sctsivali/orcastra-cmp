@@ -311,7 +311,12 @@ async def delete_warning(
         # important: judged by the warning's own project before it is dismissed. The list hides
         # another project's warnings, and a server-scope one (no project) belongs to the whole
         # cluster, so a UUID alone must not dismiss either on a cluster another party holds.
-        stored = client.api.warnings[safe_segment(warning_uuid)].get(timeout=(5, 30))
+        try:
+            stored = client.api.warnings[safe_segment(warning_uuid)].get(timeout=(5, 30))
+        except Exception as exc:  # noqa: BLE001 - pylxd raises on a 404 rather than returning it
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                raise HTTPException(status_code=404, detail="Warning not found") from exc
+            raise
         warning = (stored.json() or {}).get("metadata") or {} if stored.status_code == 200 else {}
         if not warning:
             raise HTTPException(status_code=404, detail="Warning not found")
