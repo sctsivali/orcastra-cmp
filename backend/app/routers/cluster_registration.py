@@ -41,6 +41,7 @@ from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_
 from app.core.host_detail import cluster_for_tier, cluster_list_for_tier
 from app.core.task_scope import caller_tier
 from app.core.url_safety import normalize_endpoint
+from app.core.whole_cluster_access import refuse_unless_the_party_holds_it_whole
 from app.core.type_utils import (
     detect_cluster_type_from_metadata,
     detect_clustered_from_metadata,
@@ -214,6 +215,10 @@ async def _guard_registration_binding(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This cluster is already owned by another organization.",
         )
+    # important: a registration rewrites the cluster's endpoint and certificate for every holder, and
+    # owns_existing_identity counts any membership. A tenant row never owns a cluster, so registering
+    # one that exists needs the whole cluster through the caller's party (core/whole_cluster_access).
+    await refuse_unless_the_party_holds_it_whole(cluster_id, db, user)
     if prospective_org is not None and any(row[0] == prospective_org for row in rows):
         return org_ids
     if prospective_org is None and any(row[0] is None for row in rows):

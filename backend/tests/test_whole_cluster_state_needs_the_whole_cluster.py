@@ -21,7 +21,7 @@ from app.core.whole_cluster_access import SHARED_CLUSTER_DETAIL
 from app.models.db_models import Organization, OrganizationCluster, OrganizationMember, OrganizationOwnerKey
 from app.routers import permissions, storage_pools
 from app.services.lxd.fanout import NodeRead
-from tests._sqlite_session import sqlite_session
+from tests._sqlite_session import sqlite_session, with_json_tables
 
 SELLER = "seller@example.test"
 OTHER = "other-partner@example.test"
@@ -35,9 +35,11 @@ def _user(email: str, group: str = "role_partner") -> AuthenticatedUser:
     return AuthenticatedUser(user_id=f"{group}:{email}", email=email, groups=[group])
 
 
-async def _world():
+async def _world(*json_tables: Any):
     """A sale on the seller's own cluster, and another partner beside the seller on 'mixed'."""
-    db = sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey)
+    db = with_json_tables(
+        sqlite_session(Organization, OrganizationMember, OrganizationCluster, OrganizationOwnerKey), *json_tables
+    )
     db.add_all([
         Organization(id=1, name="home", slug="home", created_by="system", is_active=True, source="orcahub", api_key_id=KEY),
         Organization(id=2, name="buyer", slug="buyer", created_by=SELLER, is_active=True, source="orcahub", api_key_id=KEY),

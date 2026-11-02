@@ -29,6 +29,8 @@ from app.services import cluster_parties
 __all__ = [
     "SHARED_CLUSTER_DETAIL",
     "clusters_held_elsewhere",
+    "refuse_unless_the_party_holds_it_whole",
+    "the_party_holds_it_whole",
     "verify_whole_cluster_access",
     "whole_clusters",
 ]
@@ -50,14 +52,36 @@ def _unrestricted(user: Optional[AuthenticatedUser]) -> bool:
 
 
 async def verify_whole_cluster_access(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> None:
-    """Raise 403 unless this request may read or change state that belongs to the whole cluster.
-
-    Also the check for a write that decides who holds the cluster (binding it into an organization,
-    registering it again): a tenant row reaches a cluster but never owns it.
-    """
+    """Raise 403 unless this request may read or change state that belongs to the whole cluster."""
     verify_cluster_access(cluster_id)
     if _unrestricted(user):
         return
+    await _refuse_where_another_party_holds(cluster_id, db, user)
+
+
+async def refuse_unless_the_party_holds_it_whole(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> None:
+    """Raise 403 unless no holder outside this user's party holds the cluster, whatever the request scope.
+
+    important: for a write that decides who holds the cluster (binding it into an organization,
+    registering it again). A tenant row reaches a cluster but never owns it, so the party is asked
+    even where the request scope would let the caller through.
+    """
+    if _unrestricted(user):
+        return
+    await _refuse_where_another_party_holds(cluster_id, db, user)
+
+
+async def the_party_holds_it_whole(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> bool:
+    """Whether no holder outside this user's party holds the cluster, asked of every role, an admin's too."""
+    return not await _another_party_holds(cluster_id, db, user)
+
+
+async def _refuse_where_another_party_holds(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> None:
+    if await _another_party_holds(cluster_id, db, user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SHARED_CLUSTER_DETAIL)
+
+
+async def _another_party_holds(cluster_id: str, db: AsyncSession, user: Optional[AuthenticatedUser]) -> bool:
     try:
         held = await cluster_parties.clusters_held_by_another_party(db, getattr(user, "email", ""), {cluster_id})
     except SQLAlchemyError as exc:
@@ -68,8 +92,7 @@ async def verify_whole_cluster_access(cluster_id: str, db: AsyncSession, user: O
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not confirm who holds {cluster_id}, retry shortly",
         ) from exc
-    if cluster_id in held:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SHARED_CLUSTER_DETAIL)
+    return cluster_id in held
 
 
 async def clusters_held_elsewhere(nodes: Iterable[str], db: AsyncSession, user: Optional[AuthenticatedUser]) -> Set[str]:

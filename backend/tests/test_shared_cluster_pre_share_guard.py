@@ -69,6 +69,16 @@ class _Session:
         self.deleted.append(value)
 
 
+@pytest.fixture(autouse=True)
+def _registration_holds_the_whole_cluster(monkeypatch):
+    """These pin the share audit. Registering a cluster that exists needs the whole cluster first,
+    pinned on real rows in test_binding_or_registering_a_cluster_needs_it_whole.py."""
+    async def held_whole(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(cluster_registration, "refuse_unless_the_party_holds_it_whole", held_whole)
+
+
 def _report(*, safe: bool, complete: bool) -> guard.SharedClusterAuditReport:
     findings = ()
     if not safe:

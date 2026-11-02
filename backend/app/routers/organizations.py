@@ -26,6 +26,7 @@ from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.core import org_scope
 from app.core.org_scope import get_owned_clusters_ignoring_admin, verify_cluster_access
 from app.core.sale_term import reaches_only_by_purchase
+from app.core.whole_cluster_access import SHARED_CLUSTER_DETAIL, the_party_holds_it_whole
 from app.services.organization_service import OrganizationService
 from app.services.shared_cluster_audit import (
     SharedClusterGuardError,
@@ -472,8 +473,8 @@ async def bind_cluster(
     # Same rule the API-key doors already apply: you may only grant what you already hold.
     # Personally registered clusters count as owned, so the org-less partner bootstrap that
     # reconcile_personal_clusters exists for still works.
+    owned = await get_owned_clusters_ignoring_admin(user, db)
     if role != "admin":
-        owned = await get_owned_clusters_ignoring_admin(user, db)
         if body.cluster_id not in owned:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -490,12 +491,21 @@ async def bind_cluster(
                     "another organization."
                 ),
             )
+    # important: owned counts any membership, and a tenant row reaches a cluster but never owns it.
+    # A binding needs the whole cluster through the caller's party (core/whole_cluster_access), and
+    # registered_by is itself an ownership claim (org_scope._query_owned_clusters), so only such an
+    # owner is stamped. An admin binding a cluster it does not own writes no registrant, so
+    # break-glass still treats that cluster as foreign to the admin.
+    whole = body.cluster_id in owned and await the_party_holds_it_whole(body.cluster_id, db, user)
+    if role != "admin" and not whole:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SHARED_CLUSTER_DETAIL)
+    registrant = user.email if whole else None
 
     async with _guard_cluster_write(db, body.cluster_id):
         if not await svc.user_has_access(org_id, user.email, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
         try:
-            binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=user.email)
+            binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=registrant)
         except SharedClusterGuardError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.as_detail()) from exc
         except ValueError as e:

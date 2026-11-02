@@ -25,7 +25,7 @@ async def test_each_row_names_the_active_pending_and_superseded_certificates():
     await store.record_superseded(db, cluster_id=manager.cluster_id, fingerprint=old, reason="renew", grace_seconds=600)
     await store.record_superseded(db, cluster_id="foreign", fingerprint="b" * 64, reason="renew", grace_seconds=600)
 
-    response = await router.list_certificates(cert_manager=manager, db=db)
+    response = await router.list_certificates(cert_manager=manager, db=db, user=None)
 
     [row] = response.certificates
     assert row.fingerprint == lxd_fingerprint(manager.current[0])
@@ -44,14 +44,14 @@ async def test_a_cluster_waiting_for_trust_has_no_row_and_an_unreadable_one_is_u
     db = SessionMaker().db
     manager = _ScopedManager()
     manager.vault.data[manager.path("certs")]["client.crt"] = ""
-    assert (await router.list_certificates(cert_manager=manager, db=db)).certificates == []
+    assert (await router.list_certificates(cert_manager=manager, db=db, user=None)).certificates == []
 
     manager = _ScopedManager()
     del manager.vault.data[manager.path("certs")]
-    [row] = (await router.list_certificates(cert_manager=manager, db=db)).certificates
+    [row] = (await router.list_certificates(cert_manager=manager, db=db, user=None)).certificates
     assert row.status == CertificateStatus.UNKNOWN
 
     manager = _ScopedManager()
     manager.vault.data[manager.path("certs")]["client.crt"] = "not a pem"
-    [row] = (await router.list_certificates(cert_manager=manager, db=db)).certificates
+    [row] = (await router.list_certificates(cert_manager=manager, db=db, user=None)).certificates
     assert row.status == CertificateStatus.UNKNOWN and row.fingerprint is None

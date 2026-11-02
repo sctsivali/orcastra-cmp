@@ -19,7 +19,9 @@ from app.core.blocking import run_blocking
 from app.core.config import get_settings
 from app.core.database import async_session_maker, get_db
 from app.core.dependencies import check_read_only_mode, require_partner
+from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.whole_cluster_access import verify_whole_cluster_access, whole_clusters
 from app.core.request_context import get_current_user_id
 from app.core.vault_client import VaultClientError, get_vault_client
 from app.models.cert_trust_schemas import (
@@ -135,9 +137,14 @@ async def _with_superseded(
 async def list_certificates(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
-        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
+        # important: a cluster certificate acts for every project on its cluster, so a non-admin
+        # keeps only the clusters no other party holds (core/whole_cluster_access)
+        cluster_ids = await whole_clusters(
+            await asyncio.to_thread(cert_manager.list_clusters, use_cache=False), db, user
+        )
         certificates = await _with_superseded(db, await _read_rows(cert_manager, cluster_ids))
     except Exception as e:
         logger.error(f"Failed to list certificates: {e}")
@@ -163,8 +170,12 @@ async def get_certificate(
     cluster_id: str,
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     verify_cluster_access(cluster_id)
+    # important: a cluster's client certificate and its renewal act for every project on the
+    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    await verify_whole_cluster_access(cluster_id, db, user)
     rows = await _read_rows(cert_manager, [cluster_id])
     if not rows or rows[0][0].status == CertificateStatus.UNKNOWN and not rows[0][0].fingerprint:
         raise HTTPException(
@@ -183,8 +194,13 @@ async def get_certificate(
 async def get_pending_certificate(
     cluster_id: str,
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     verify_cluster_access(cluster_id)
+    # important: a cluster's client certificate and its renewal act for every project on the
+    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    await verify_whole_cluster_access(cluster_id, db, user)
     try:
         return await pending_certs.pending_view(cert_manager, cluster_id)
     except rotation.CertificateNotFound:
@@ -211,9 +227,13 @@ async def initiate_renewal(
     request: CertificateRenewalRequest,
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(check_read_only_mode)
+    _: None = Depends(check_read_only_mode),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     verify_cluster_access(request.cluster_id)
+    # important: a cluster's client certificate and its renewal act for every project on the
+    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    await verify_whole_cluster_access(request.cluster_id, db, user)
     try:
         return await rotation.renew(db, cert_manager, request)
     except store.CertificateOperationBusy:
@@ -246,9 +266,13 @@ async def verify_renewal(
     request: CertificateVerifyRequest,
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(check_read_only_mode)
+    _: None = Depends(check_read_only_mode),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     verify_cluster_access(request.cluster_id)
+    # important: a cluster's client certificate and its renewal act for every project on the
+    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    await verify_whole_cluster_access(request.cluster_id, db, user)
     try:
         return await rotation.verify(db, cert_manager, request.cluster_id, request.pending_cert_id)
     except store.CertificateOperationBusy:
@@ -282,9 +306,13 @@ async def cancel_renewal(
     cluster_id: str,
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(check_read_only_mode)
+    _: None = Depends(check_read_only_mode),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     verify_cluster_access(cluster_id)
+    # important: a cluster's client certificate and its renewal act for every project on the
+    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    await verify_whole_cluster_access(cluster_id, db, user)
     try:
         cancelled = await rotation.cancel(db, cert_manager, cluster_id)
     except store.CertificateOperationBusy:
@@ -315,8 +343,12 @@ async def remove_superseded_trust(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(check_read_only_mode),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     verify_cluster_access(cluster_id)
+    # important: a cluster's client certificate and its renewal act for every project on the
+    # cluster, so this needs the whole cluster (core/whole_cluster_access)
+    await verify_whole_cluster_access(cluster_id, db, user)
     try:
         report = await trust_cleanup.sweep_cluster(
             async_session_maker, cluster_id, force=True, trigger="remove_now",
@@ -348,12 +380,17 @@ async def remove_superseded_trust(
     description="Get certificate and cluster connectivity warnings for all clusters."
 )
 async def get_system_warnings(
-    cert_manager: LXDCertificateManager = Depends(get_cert_manager)
+    cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Get all certificate and node warnings."""
     try:
         settings = get_settings()
-        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
+        # important: the same whole-cluster rule as the list (core/whole_cluster_access)
+        cluster_ids = await whole_clusters(
+            await asyncio.to_thread(cert_manager.list_clusters, use_cache=False), db, user
+        )
 
         certificate_warnings = []
         node_warnings = []
@@ -454,11 +491,16 @@ async def get_system_warnings(
 )
 async def cleanup_pending_certificates(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
-    _: None = Depends(check_read_only_mode)
+    _: None = Depends(check_read_only_mode),
+    db: AsyncSession = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Cleanup stale pending certificates."""
     try:
-        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
+        # important: only the clusters this caller holds whole (core/whole_cluster_access)
+        cluster_ids = await whole_clusters(
+            await asyncio.to_thread(cert_manager.list_clusters, use_cache=False), db, user
+        )
         now = datetime.now(timezone.utc)
         cleaned = 0
 
