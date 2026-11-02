@@ -367,8 +367,9 @@ class OrganizationOwnerKey(Base):
 class OrganizationMember(Base):
     """
     Membership link between a user (by email) and an organization.
-    The role column is kept for DB compatibility but is not used for access control.
-    All authorization is based on system-level roles (admin/partner/tenant) from the IdP.
+    The IdP role sets the global Admin/Partner/Tenant tier. The member role also identifies
+    Partners who may manage their organization's access policies; ordinary members may read
+    their organization but may not grant another tenant access.
     """
     __tablename__ = "organization_members"
 

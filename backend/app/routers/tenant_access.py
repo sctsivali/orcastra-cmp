@@ -23,7 +23,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -256,23 +256,28 @@ async def _verify_org_access(
     if highest == Role.ADMIN:
         return org
 
-    # partner/tenant: must be creator or member
-    is_creator = org.created_by == user.email
-    member_stmt = select(OrganizationMember).where(
+    # A global Partner role alone does not grant authority over another organization's ACL.
+    email = (user.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=403, detail="Access denied to this organization")
+    is_creator = bool(email) and (org.created_by or "").strip().lower() == email
+    member_stmt = select(OrganizationMember.role).where(
         and_(
             OrganizationMember.organization_id == org_id,
-            OrganizationMember.user_email == user.email,
+            func.lower(func.trim(OrganizationMember.user_email)) == email,
         )
     )
     result = await db.execute(member_stmt)
-    is_member = result.scalar_one_or_none() is not None
+    member_roles = result.scalars().all()
 
-    if not is_creator and not is_member:
+    if not is_creator and not member_roles:
         raise HTTPException(status_code=403, detail="Access denied to this organization")
 
-    # write operations require Partner+
-    if require_write and highest == Role.TENANT:
-        raise HTTPException(status_code=403, detail="Tenant users cannot manage access policies")
+    if require_write:
+        if highest == Role.TENANT:
+            raise HTTPException(status_code=403, detail="Tenant users cannot manage access policies")
+        if not is_creator and not any((role or "").casefold() == "partner" for role in member_roles):
+            raise HTTPException(status_code=403, detail="Only organization Partners can manage access policies")
 
     return org
 
@@ -963,7 +968,14 @@ async def delete_assignment(
     if not policy:
         raise HTTPException(status_code=404, detail="Associated policy not found")
 
-    await _verify_org_access(user, policy.organization_id, db, require_write=True)
+    member = await db.get(OrganizationMember, assignment.org_member_id)
+    is_self = (
+        member is not None
+        and member.organization_id == policy.organization_id
+        and bool((user.email or "").strip())
+        and (member.user_email or "").strip().casefold() == (user.email or "").strip().casefold()
+    )
+    await _verify_org_access(user, policy.organization_id, db, require_write=not is_self)
 
     async with _guard_rules_mutation([], db, policy_id=policy.id):
         await db.delete(assignment)
