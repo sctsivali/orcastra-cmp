@@ -50,6 +50,10 @@ import { CreateKeyDialog } from "./components/create-key-dialog";
 import { KeyActivityDialog } from "./components/key-activity-dialog";
 import { DeleteKeyDialog, KeyStats } from "./components/key-stats-and-delete";
 
+
+// important: byte-identical to SHARED_CLUSTER_DETAIL in backend/app/core/whole_cluster_access.py.
+const SHARED_CLUSTER_REFUSAL = "Not permitted on a cluster shared with another organization";
+
 /** A key with when it last changed something on its cluster (GET /my-keys/last-used). */
 type KeyRow = KeyInfo & { last_used_at: string | null };
 
@@ -221,7 +225,11 @@ function MyKeysContent() {
     onError: (error: any) => {
       toast({
         title: "Could not generate key",
-        description: error.message || "Try again.",
+        // The API answers this refusal for an Admin key on a cluster another organization also
+        // holds (backend core/whole_cluster_access). On its own it does not say what to do next.
+        description: error?.message === SHARED_CLUSTER_REFUSAL
+          ? "Another organization also holds this cluster, and an Admin key would reach its projects too. Generate a Standard key for one of your projects, or ask an Administrator."
+          : error.message || "Try again.",
         variant: "destructive" });
     } });
 
@@ -503,6 +511,7 @@ function MyKeysContent() {
 
 // The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
 // imports. Suspense is required because useTableFilters reads useSearchParams.
+
 export default function MyKeysPage() {
   return (
     <Suspense fallback={<LoadingLottiePage />}>
