@@ -8,7 +8,7 @@ judges every row again after the load.
 
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
-from sqlalchemy import case, func, literal_column, select
+from sqlalchemy import case, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -59,9 +59,31 @@ async def list_tasks(
     return list(rows), total
 
 
+def _not_housekeeping() -> Any:
+    """Every row except LXD's own background work, for the dock's two counts.
+
+    LXD runs tasks nobody asked for ("Updating images", "Cleaning up expired backups"), and the
+    follower records them as an LXD task operation with a system actor. A sick daemon holds them
+    open for weeks: on dev they were 91 of 101 open rows, so the dock read "Tasks 101" over ten
+    real actions. They are still listed by the Tasks and Queue tabs; only the counts skip them.
+
+    important: spelled as an OR of the ways a row is NOT housekeeping, not NOT(a AND b AND c).
+    operation_class is nullable, and NOT(TRUE AND NULL AND TRUE) is NULL, which would drop an
+    LXD frame that carried no class from the count.
+    """
+    return or_(
+        TaskJournal.kind != "lxd_operation",
+        TaskJournal.actor_kind != "system",
+        TaskJournal.operation_class.is_(None),
+        TaskJournal.operation_class != "task",
+    )
+
+
 async def count_running(db: AsyncSession, conditions: Sequence[Any]) -> int:
     return await _count(
-        db, TaskJournal.__table__, [*conditions, TaskJournal.status.in_(OPEN_STATUSES)]
+        db,
+        TaskJournal.__table__,
+        [*conditions, TaskJournal.status.in_(OPEN_STATUSES), _not_housekeeping()],
     )
 
 
@@ -73,7 +95,12 @@ async def count_failed_recent(
     return await _count(
         db,
         TaskJournal.__table__,
-        [*conditions, TaskJournal.status == "failure", TaskJournal.finished_at >= cutoff],
+        [
+            *conditions,
+            TaskJournal.status == "failure",
+            TaskJournal.finished_at >= cutoff,
+            _not_housekeeping(),
+        ],
     )
 
 

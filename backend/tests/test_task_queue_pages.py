@@ -5,6 +5,7 @@ PostgreSQL-specific time arithmetic is replaced only in this in-memory test adap
 """
 
 import sqlite3
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -36,16 +37,23 @@ class MemoryDB:
         sql = str(statement.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
         self.statements.append(sql)
         sql = sql.replace("now() + interval '1 hours'", "datetime('now', '+1 hour')")
+        sql = sql.replace("now() - interval '15 minutes'", "datetime('now', '-15 minutes')")
         cursor = self.connection.execute(sql)
         rows = [dict(row) for row in cursor.fetchall()]
         scalar = next(iter(rows[0].values())) if rows else None
         return FakeResult(rows=rows, scalar=scalar)
 
-    def task(self, seq, *, cluster="cluster-a", project="tenant-a", name="mine", status="pending"):
+    def task(
+        self, seq, *, cluster="cluster-a", project="tenant-a", name="mine", status="pending",
+        kind="dashboard_action", operation_class=None, actor_kind="user", finished_at=None,
+    ):
         self.connection.execute(
-            "INSERT INTO task_journal (id,seq,cluster_id,project,resource_type,resource_name,status,created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (f"task-{seq}", seq, cluster, project, "instance", name, status, "2026-09-30T00:00:00Z"),
+            "INSERT INTO task_journal (id,seq,kind,cluster_id,project,resource_type,resource_name,"
+            "operation_class,status,actor_kind,finished_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"task-{seq}", seq, kind, cluster, project, "instance", name, operation_class, status,
+                actor_kind, finished_at, "2026-09-30T00:00:00Z",
+            ),
         )
 
     def schedule(self, number, *, cluster="cluster-a", project="tenant-a", name="mine"):
@@ -163,3 +171,61 @@ def test_wildcard_snapshot_grant_stays_inside_shared_cluster_project_bound(scope
     statement = select(SnapshotSchedule.id).where(*schedule_conditions(SnapshotSchedule))
     sql = str(statement.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
     assert [row["id"] for row in db.connection.execute(sql)] == [1]
+
+
+# LXD's own background work, as the events follower records it: an LXD task operation that no
+# outside requestor started. On dev, 91 of 101 open rows were these ("Updating images",
+# "Cleaning up expired backups"), held open for weeks by a sick daemon, and the dock read
+# "Tasks 101".
+HOUSEKEEPING = {"kind": "lxd_operation", "operation_class": "task", "actor_kind": "system"}
+
+
+def _just_now() -> str:
+    # SQLite's datetime('now') shape, so the window comparison is a like-for-like string compare.
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def test_the_dock_counts_leave_out_lxd_housekeeping_and_the_queue_keeps_it(scoped_memory):
+    db = scoped_memory
+    set_scope("admin")
+    for seq in (1, 2, 3):
+        db.task(seq, status="running", **HOUSEKEEPING)
+    # Everything else open is somebody's action and counts, whoever started it.
+    db.task(4, status="running", kind="lxd_operation", operation_class="task", actor_kind="user")
+    db.task(5, kind="lxd_operation", operation_class="task", actor_kind="external")
+    db.task(6, status="running", kind="lxd_operation", operation_class="websocket", actor_kind="system")
+    # A frame with no class is not housekeeping: NOT (a AND NULL) is NULL, which would drop it.
+    db.task(7, status="running", kind="lxd_operation", operation_class=None, actor_kind="system")
+    db.task(8, kind="dashboard_action", actor_kind="system")
+    scope = task_conditions(TaskJournal)
+
+    assert await reads.count_running(db, scope) == 5
+    page, total = await reads.queue_rows(db, scope, 100, 0)
+    assert total == 8
+    assert sorted(row["seq"] for row in page) == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+async def test_a_failed_housekeeping_task_is_not_a_recent_failure(scoped_memory):
+    db = scoped_memory
+    set_scope("admin")
+    db.task(1, status="failure", finished_at=_just_now(), **HOUSEKEEPING)
+    db.task(
+        2, status="failure", finished_at=_just_now(),
+        kind="lxd_operation", operation_class="task", actor_kind="user",
+    )
+    db.task(3, status="failure", finished_at="2020-01-01 00:00:00", kind="dashboard_action")
+
+    assert await reads.count_failed_recent(db, task_conditions(TaskJournal)) == 1
+
+
+@pytest.mark.parametrize("role,expected", [("admin", 3), ("partner", 2), ("tenant", 1)])
+async def test_the_dock_count_keeps_the_role_scope_it_had(scoped_memory, role, expected):
+    db = scoped_memory
+    set_scope(role)
+    db.task(1, status="running")
+    db.task(2, name="neighbour")
+    db.task(3, cluster="cluster-b")
+    db.task(4, status="running", **HOUSEKEEPING)
+    db.task(5, cluster="cluster-b", **HOUSEKEEPING)
+
+    assert await reads.count_running(db, task_conditions(TaskJournal)) == expected

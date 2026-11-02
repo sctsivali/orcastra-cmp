@@ -71,8 +71,12 @@ class TaskRecord(BaseModel):
 class TaskListResponse(BaseModel):
     tasks: List[TaskRecord]
     total: int = Field(..., description="Rows matching the filters inside the caller's scope")
-    running: int = Field(..., description="Open rows in the caller's scope, filters ignored")
-    failed_recent: int = Field(..., description="Failures finished in the last 15 minutes, in scope")
+    running: int = Field(
+        ..., description="Open rows in the caller's scope, filters ignored, LXD's own background tasks left out"
+    )
+    failed_recent: int = Field(
+        ..., description="Failures finished in the last 15 minutes, in scope, LXD's own background tasks left out"
+    )
     limit: int
     offset: int
     has_more: bool

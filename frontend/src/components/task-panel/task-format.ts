@@ -87,6 +87,18 @@ export function isWebsocketClass(task: Pick<TaskRecord, "operation_class">): boo
   return task.operation_class === "websocket";
 }
 
+/**
+ * LXD's own background work ("Updating images", "Cleaning up expired backups"): listed by the
+ * tabs, never counted on the dock. Mirrors `_not_housekeeping` in
+ * backend/app/services/task_journal/reads.py, so a live frame moves the counts the way the next
+ * summary read will.
+ */
+export function isLxdHousekeeping(
+  task: Pick<TaskRecord, "kind" | "operation_class" | "actor_kind">,
+): boolean {
+  return task.kind === "lxd_operation" && task.operation_class === "task" && task.actor_kind === "system";
+}
+
 /** When the task started, falling back to when the journal first saw it. */
 export function startedMs(task: Pick<TaskRecord, "started_at" | "created_at">): number | null {
   return toMillis(task.started_at) ?? toMillis(task.created_at);

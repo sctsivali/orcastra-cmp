@@ -223,8 +223,10 @@ function TaskPanelInner() {
   const running = summary.data?.running ?? 0;
   const failedRecent = summary.data?.failed_recent ?? 0;
   const disconnected = summary.data?.disconnected_clusters ?? [];
-  // The queue holds every open row in the caller's scope, which is the summary's `running`
-  // count, so the badge is live on the collapsed strip without reading the queue itself.
+  // The queue holds every open row in the caller's scope, and its badge is the summary's
+  // `running` count, so it is live on the collapsed strip without reading the queue itself.
+  // note: the count leaves LXD's own background tasks out while the tab still lists them: on a
+  // sick daemon they sat open for weeks and buried the ten real actions under ninety-one.
   const queued = summary.data ? summary.data.running : null;
   const apiDown = summary.isError;
 

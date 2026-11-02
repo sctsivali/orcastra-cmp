@@ -24,6 +24,7 @@ import { tasksAPI } from "@/lib/tasks-api";
 import { DYNAMIC_DATA_CONFIG, POLL_MS, jitter } from "@/lib/query-config";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { APIError } from "@/types/api";
+import { isLxdHousekeeping } from "../task-format";
 import type {
   CancelResponse,
   ClusterLogEntry,
@@ -57,6 +58,11 @@ const INVALIDATE_DEBOUNCE_MS = 1000;
 
 const isOpen = (status: TaskRecord["status"]): boolean =>
   status === "pending" || status === "running";
+
+// note: the dock's counts leave LXD's own background work out, so a live frame must too. A row
+// whose actor is attached later (system to user) starts counting on that frame, as the server's
+// next summary will.
+const countsOpen = (task: TaskRecord): boolean => isOpen(task.status) && !isLxdHousekeeping(task);
 
 export interface ActorMutationGuard {
   readonly scopeKey: string | null;
@@ -454,8 +460,9 @@ export function upsertTaskInCaches(
   const summaryKey = taskKeys.summary(scopeKey);
   const summary = queryClient.getQueryData<TaskListResponse>(summaryKey);
   if (summary && previous !== null) {
-    const delta = (isOpen(task.status) ? 1 : 0) - (isOpen(previous.status) ? 1 : 0);
-    const failed = task.status === "failure" && previous.status !== "failure" ? 1 : 0;
+    const delta = (countsOpen(task) ? 1 : 0) - (countsOpen(previous) ? 1 : 0);
+    const failed =
+      task.status === "failure" && previous.status !== "failure" && !isLxdHousekeeping(task) ? 1 : 0;
     if (delta !== 0 || failed !== 0) {
       queryClient.setQueryData<TaskListResponse>(summaryKey, {
         ...summary,
