@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY
@@ -91,9 +92,21 @@ def _job(request, **changes):
         "operation_ids": [],
         "result": None,
         "locked_by": "worker-1",
+        "created_at": datetime.now(timezone.utc),
     }
     values.update(changes)
     return SimpleNamespace(**values)
+
+
+def _lxd_time(moment):
+    """The RFC 3339 form LXD reports, nine fractional digits and a Z."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z"
+
+
+def _past_the_create_budget():
+    return datetime.now(timezone.utc) - timedelta(
+        seconds=instance_module._CREATE_WALL_TIMEOUT_SECONDS + 60
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -874,29 +887,61 @@ async def test_recovery_success_requires_terminal_success_then_exact_readback(mo
     assert terminal[0][1]["result"]["instance_status"] == "Stopped"
 
 
-@pytest.mark.asyncio
-async def test_recovery_expired_operation_with_readback_is_partial_without_restart(
-    monkeypatch,
-):
-    request = _request(start_on_create=True)
-    row = _job(request, status="unknown", phase="verifying", operation_id="op-expired")
-    stopped = SimpleNamespace(name=request.name, status="Stopped")
-    manager = InstanceManager.__new__(InstanceManager)
-    terminal = []
-    start_calls = []
-    manager._submit_start_operation = lambda *_args: start_calls.append(True)
-    expired_response = SimpleNamespace(
+def _not_found_response():
+    return SimpleNamespace(
         status_code=404,
-        json=lambda: {"error": "operation not found"},
-        content=b"operation not found",
+        json=lambda: {"error": "not found"},
+        content=b"not found",
     )
 
-    def wait_for_expired_operation(_operation_id):
-        raise instance_module.NotFound(expired_response)
 
-    client = SimpleNamespace(
-        operations=SimpleNamespace(wait_for_operation=wait_for_expired_operation)
+class _ReadbackOnlyCluster:
+    """A cluster that has dropped the job's operation records and answers only readback.
+
+    Any create or start submission fails the test: settling from readback must never write.
+    """
+
+    def __init__(self, instance=None, *, readback_error=None):
+        def wait_for_expired_operation(_operation_id):
+            raise instance_module.NotFound(_not_found_response())
+
+        def get(_name):
+            if readback_error is not None:
+                raise readback_error
+            if instance is None:
+                raise instance_module.NotFound(_not_found_response())
+            return instance
+
+        self.waited = []
+        self.operations = SimpleNamespace(
+            wait_for_operation=lambda operation_id: (
+                self.waited.append(operation_id),
+                wait_for_expired_operation(operation_id),
+            )
+        )
+        self.instances = SimpleNamespace(get=get)
+        self.api = SimpleNamespace(
+            instances=SimpleNamespace(
+                post=lambda **_kwargs: pytest.fail("recovery submitted the create again")
+            )
+        )
+
+
+def _settle_harness(monkeypatch, manager, row):
+    """Record the verdicts a reconcile writes, with the database and the daemon writes fenced."""
+    terminal = []
+    unknown = []
+    manager._submit_start_operation = lambda *_args: pytest.fail(
+        "recovery submitted start"
     )
+
+    async def finish(_row, status, **kwargs):
+        terminal.append((status, kwargs))
+        return True
+
+    async def mark_unknown(_row, **kwargs):
+        unknown.append(kwargs)
+        return True
 
     monkeypatch.setattr(
         instance_module,
@@ -909,25 +954,349 @@ async def test_recovery_expired_operation_with_readback_is_partial_without_resta
         lambda *_args, **_kwargs: asyncio.sleep(0, result=True),
     )
     monkeypatch.setattr(instance_module, "run_blocking", _direct_blocking)
-    monkeypatch.setattr(
-        manager,
-        "_read_created_instance",
-        lambda *_args: asyncio.sleep(0, result=(stopped, True, None)),
-    )
-
-    async def finish(_row, status, **kwargs):
-        terminal.append((status, kwargs))
-        return True
-
     monkeypatch.setattr(instance_module, "_finish_create_job", finish)
+    monkeypatch.setattr(instance_module, "_mark_create_unknown", mark_unknown)
+    return terminal, unknown
+
+
+@pytest.mark.asyncio
+async def test_expired_create_record_with_a_new_running_instance_settles_success(
+    monkeypatch,
+):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-expired")
+    running = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=4)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    cluster = _ReadbackOnlyCluster(running)
 
     await manager._reconcile_durable_create(
-        client, row.job_id, worker_id=row.locked_by, recovery=True
+        cluster, row.job_id, worker_id=row.locked_by, recovery=True
     )
 
-    assert start_calls == []
-    assert terminal[0][0] == "partial"
-    assert "expired" in terminal[0][1]["error"]
+    assert cluster.waited == ["op-expired"]
+    assert unknown == []
+    status, verdict = terminal[0]
+    assert status == "success"
+    assert verdict["result"]["verified_by"] == "readback"
+    assert verdict["result"]["instance_status"] == "Running"
+    assert verdict["operation_id"] == "op-expired"
+    assert verdict["announce_created"] is True
+    assert verdict["invalidate_cache"] is True
+    assert not verdict.get("error")
+
+
+@pytest.mark.asyncio
+async def test_expired_create_record_with_an_instance_older_than_the_job_is_partial(
+    monkeypatch,
+):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-expired")
+    someone_elses = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(row.created_at - timedelta(days=3)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, _unknown = _settle_harness(monkeypatch, manager, row)
+
+    await manager._reconcile_durable_create(
+        _ReadbackOnlyCluster(someone_elses),
+        row.job_id,
+        worker_id=row.locked_by,
+        recovery=True,
+    )
+
+    status, verdict = terminal[0]
+    assert status == "partial"
+    assert "before this request" in verdict["error"]
+    assert "did not create or start it" in verdict["error"]
+    # Someone else's instance: its tags and the created event are not this job's to announce.
+    assert not verdict.get("announce_created")
+
+
+@pytest.mark.asyncio
+async def test_a_creation_time_inside_the_clock_skew_margin_still_counts_as_new(monkeypatch):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-expired")
+    margin = instance_module._CREATE_READBACK_CLOCK_SKEW_SECONDS
+    running = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(row.created_at - timedelta(seconds=margin - 5)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, _unknown = _settle_harness(monkeypatch, manager, row)
+
+    await manager._reconcile_durable_create(
+        _ReadbackOnlyCluster(running), row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    assert terminal[0][0] == "success"
+
+
+@pytest.mark.asyncio
+async def test_recovery_expired_operation_with_stopped_readback_when_start_was_requested_is_partial(
+    monkeypatch,
+):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="verifying", operation_id="op-expired")
+    stopped = SimpleNamespace(
+        name=request.name,
+        status="Stopped",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=4)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+
+    await manager._reconcile_durable_create(
+        _ReadbackOnlyCluster(stopped), row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    assert unknown == []
+    status, verdict = terminal[0]
+    assert status == "partial"
+    assert verdict["result"]["verified_by"] == "readback"
+    assert verdict["result"]["instance_status"] == "Stopped"
+    assert "Stopped" in verdict["error"]
+    assert "Orcastra did not start it" in verdict["error"]
+    assert verdict["announce_created"] is True
+
+
+@pytest.mark.asyncio
+async def test_expired_create_record_with_stopped_readback_when_start_was_not_requested_is_success(
+    monkeypatch,
+):
+    request = _request(start_on_create=False)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-expired")
+    stopped = SimpleNamespace(
+        name=request.name,
+        status="Stopped",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=4)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, _unknown = _settle_harness(monkeypatch, manager, row)
+
+    await manager._reconcile_durable_create(
+        _ReadbackOnlyCluster(stopped), row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    status, verdict = terminal[0]
+    assert status == "success"
+    assert verdict["result"]["verified_by"] == "readback"
+    assert verdict["result"]["instance_status"] == "Stopped"
+
+
+@pytest.mark.asyncio
+async def test_expired_create_record_with_no_instance_is_failure(monkeypatch):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-expired")
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+
+    await manager._reconcile_durable_create(
+        _ReadbackOnlyCluster(None), row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    assert unknown == []
+    status, verdict = terminal[0]
+    assert status == "failure"
+    assert request.name in verdict["error"]
+    assert not verdict.get("announce_created")
+
+
+@pytest.mark.asyncio
+async def test_expired_create_record_with_an_unanswered_readback_stays_unknown(monkeypatch):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-expired")
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    silent = _ReadbackOnlyCluster(
+        readback_error=requests_exc.ConnectionError("cluster did not answer")
+    )
+
+    await manager._reconcile_durable_create(
+        silent, row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    assert terminal == []
+    assert unknown[0]["operation_id"] == "op-expired"
+    assert unknown[0]["result"]["ambiguous_action"] == "create"
+
+
+@pytest.mark.asyncio
+async def test_a_create_without_an_operation_id_stays_unknown_inside_its_time_budget(
+    monkeypatch,
+):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id=None)
+    running = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=4)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    cluster = _ReadbackOnlyCluster(running)
+
+    await manager._reconcile_durable_create(
+        cluster, row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    # The daemon may still be applying the create: no verdict before the wall budget passes.
+    assert cluster.waited == []
+    assert terminal == []
+    assert unknown[0]["result"]["ambiguous_action"] == "create"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "found,expected",
+    [
+        ("Running", "success"),
+        ("Stopped", "partial"),
+        (None, "failure"),
+        ("no answer", "unknown"),
+    ],
+)
+async def test_a_create_without_an_operation_id_settles_from_readback_after_its_time_budget(
+    monkeypatch,
+    found,
+    expected,
+):
+    request = _request(start_on_create=True)
+    row = _job(
+        request,
+        status="unknown",
+        phase="unknown",
+        operation_id=None,
+        created_at=_past_the_create_budget(),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    if found == "no answer":
+        cluster = _ReadbackOnlyCluster(
+            readback_error=requests_exc.Timeout("cluster did not answer")
+        )
+    elif found is None:
+        cluster = _ReadbackOnlyCluster(None)
+    else:
+        cluster = _ReadbackOnlyCluster(
+            SimpleNamespace(
+                name=request.name,
+                status=found,
+                created_at=_lxd_time(row.created_at + timedelta(seconds=30)),
+            )
+        )
+
+    await manager._reconcile_durable_create(
+        cluster, row.job_id, worker_id=row.locked_by, recovery=True
+    )
+
+    if expected == "unknown":
+        assert terminal == []
+        assert unknown[0]["result"]["ambiguous_action"] == "create"
+        return
+    assert unknown == []
+    assert terminal[0][0] == expected
+    assert terminal[0][1]["operation_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_expired_start_record_with_a_new_running_instance_settles_success(monkeypatch):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="starting", operation_id="start-op")
+    running = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=4)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    cluster = _ReadbackOnlyCluster(running)
+
+    await manager._verify_durable_start(
+        cluster,
+        row,
+        create_operation_id="create-op",
+        start_operation_id="start-op",
+    )
+
+    assert cluster.waited == ["start-op"]
+    assert unknown == []
+    status, verdict = terminal[0]
+    assert status == "success"
+    assert verdict["operation_id"] == "start-op"
+    assert verdict["result"]["verified_by"] == "readback"
+    assert verdict["result"]["create_operation_id"] == "create-op"
+    assert "ambiguous_action" not in verdict["result"]
+
+
+@pytest.mark.asyncio
+async def test_expired_start_record_with_stopped_readback_is_partial_and_never_restarts(
+    monkeypatch,
+):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="starting", operation_id="start-op")
+    stopped = SimpleNamespace(
+        name=request.name,
+        status="Stopped",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=4)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, _unknown = _settle_harness(monkeypatch, manager, row)
+
+    await manager._verify_durable_start(
+        _ReadbackOnlyCluster(stopped),
+        row,
+        create_operation_id="create-op",
+        start_operation_id="start-op",
+    )
+
+    status, verdict = terminal[0]
+    assert status == "partial"
+    assert "Stopped" in verdict["error"]
+    assert "did not start it again" in verdict["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_start_without_an_operation_id_settles_from_readback_after_the_create_budget(
+    monkeypatch,
+):
+    request = _request(start_on_create=True)
+    row = _job(
+        request,
+        status="unknown",
+        phase="starting",
+        operation_id="create-op",
+        created_at=_past_the_create_budget(),
+    )
+    running = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(row.created_at + timedelta(seconds=30)),
+    )
+    manager = InstanceManager.__new__(InstanceManager)
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    cluster = _ReadbackOnlyCluster(running)
+
+    await manager._verify_durable_start(
+        cluster,
+        row,
+        create_operation_id="create-op",
+        start_operation_id=None,
+    )
+
+    assert cluster.waited == []
+    assert unknown == []
+    status, verdict = terminal[0]
+    assert status == "success"
+    assert verdict["result"]["verified_by"] == "readback"
+    assert verdict["operation_id"] == "create-op"
 
 
 @pytest.mark.asyncio
@@ -1207,8 +1576,11 @@ async def test_start_success_requires_terminal_success_then_running_readback(mon
 
 
 @pytest.mark.asyncio
-async def test_running_readback_without_start_operation_id_stays_unknown(monkeypatch):
+async def test_running_readback_without_start_operation_id_stays_unknown_inside_the_create_budget(
+    monkeypatch,
+):
     request = _request(start_on_create=True)
+    # Created a moment ago: the daemon may still be applying the start it never correlated.
     row = _job(request, status="unknown", phase="starting", operation_id="create-op")
     running = SimpleNamespace(name=request.name, status="Running")
     manager = InstanceManager.__new__(InstanceManager)
@@ -1813,6 +2185,143 @@ async def test_recovery_reads_exact_project_and_never_submits_create(monkeypatch
 
     assert client.post_calls == 0
     assert reconciled == [(row.job_id, {"worker_id": ANY, "recovery": True})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "registry,expected",
+    [
+        (frozenset({"cluster-b"}), "failure"),
+        (frozenset({"cluster-a", "cluster-b"}), "unknown"),
+        (None, "unknown"),
+    ],
+    ids=["deregistered", "registered-but-unreachable", "registry-unreadable"],
+)
+async def test_recovery_ends_a_job_whose_cluster_is_no_longer_registered(
+    monkeypatch,
+    registry,
+    expected,
+):
+    request = _request(start_on_create=True)
+    row = _job(request, status="unknown", phase="unknown", operation_id="op-1")
+    manager = InstanceManager.__new__(InstanceManager)
+    manager.connection_manager = SimpleNamespace(get_project_client=lambda *_args: None)
+    manager._get_client_with_reconnect = lambda _host: None
+    terminal, unknown = _settle_harness(monkeypatch, manager, row)
+    registry_reads = []
+
+    async def registered_cluster_ids(fresh=False):
+        registry_reads.append(fresh)
+        return registry
+
+    monkeypatch.setattr(
+        instance_module,
+        "_claim_create_job",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=True),
+    )
+    monkeypatch.setattr(
+        instance_module.cluster_registry,
+        "registered_cluster_ids",
+        registered_cluster_ids,
+    )
+
+    await manager._recover_create_job(row.job_id)
+
+    # A terminal verdict reads the registry as it is now, not the cached LIST.
+    assert registry_reads == [True]
+    if expected == "failure":
+        assert unknown == []
+        assert terminal[0][0] == "failure"
+        assert "no longer registered" in terminal[0][1]["error"]
+        assert not terminal[0][1].get("announce_created")
+    else:
+        assert terminal == []
+        assert unknown and unknown[0]["operation_id"] == "op-1"
+
+
+@pytest.mark.asyncio
+async def test_the_recovery_sweep_stops_picking_a_create_job_once_readback_settles_it(
+    monkeypatch,
+):
+    from app.models.db_models import InstanceOperationJob
+
+    from tests._sqlite_session import sqlite_session, with_json_tables
+
+    db = with_json_tables(sqlite_session(), InstanceOperationJob, InstanceOperationAuditOutbox)
+    request = _request(start_on_create=True)
+    created = datetime.now(timezone.utc) - timedelta(minutes=40)
+    db.add(
+        InstanceOperationJob(
+            id=1,
+            job_id="job-settle",
+            kind="create",
+            cluster_id=request.host,
+            project=request.project,
+            instance_name=request.name,
+            instance_type=request.instance_type,
+            requester="user-123",
+            idempotency_key="request-settle",
+            payload_hash="a" * 64,
+            requested={"start_on_create": True, "tags": []},
+            phase="unknown",
+            status="unknown",
+            operation_id="op-expired",
+            operation_ids=["op-expired"],
+            created_at=created,
+            updated_at=created,
+        )
+    )
+    await db.commit()
+
+    @asynccontextmanager
+    async def session_maker():
+        yield db
+
+    running = SimpleNamespace(
+        name=request.name,
+        status="Running",
+        created_at=_lxd_time(created + timedelta(seconds=6)),
+    )
+    cluster = _ReadbackOnlyCluster(running)
+    manager = InstanceManager.__new__(InstanceManager)
+    manager._bg_tasks = set()
+    manager.connection_manager = SimpleNamespace(get_project_client=lambda *_args: cluster)
+    manager._submit_start_operation = lambda *_args: pytest.fail("recovery submitted start")
+    scheduled = []
+
+    async def record_recovery(job_id):
+        scheduled.append(job_id)
+
+    monkeypatch.setattr(instance_module, "async_session_maker", session_maker)
+    monkeypatch.setattr(instance_module, "run_blocking", _direct_blocking)
+    monkeypatch.setattr(
+        instance_module,
+        "get_cache_manager",
+        lambda: SimpleNamespace(
+            invalidate_instance_cache=lambda: None,
+            invalidate_tag_cache=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(
+        instance_module,
+        "_emit_instance_created",
+        lambda *_args: asyncio.sleep(0),
+    )
+    monkeypatch.setattr(manager, "_recover_create_job", record_recovery)
+
+    assert await manager._schedule_create_recovery_pass() == 1
+    await asyncio.sleep(0)
+    assert scheduled == ["job-settle"]
+
+    await InstanceManager._recover_create_job(manager, "job-settle")
+
+    settled = (
+        db.sync.query(InstanceOperationJob).filter_by(job_id="job-settle").one()
+    )
+    assert settled.status == "success", settled.error
+    assert settled.result["verified_by"] == "readback"
+    assert settled.locked_by is None
+    assert await manager._schedule_create_recovery_pass() == 0
 
 
 def test_startup_wires_create_recovery_and_recovery_has_no_create_call():

@@ -118,7 +118,7 @@ def sqlite_session(*models: Type[Any]) -> AsyncSessionFacade:
 
 def with_json_tables(db: "AsyncSessionFacade", *models: Type[Any]) -> "AsyncSessionFacade":
     """Add tables whose Postgres JSONB columns SQLite cannot render, with those columns as JSON."""
-    from sqlalchemy import JSON, MetaData
+    from sqlalchemy import JSON, BigInteger, Integer, MetaData
     from sqlalchemy.dialects.postgresql import JSONB
 
     copy = MetaData()
@@ -131,6 +131,11 @@ def with_json_tables(db: "AsyncSessionFacade", *models: Type[Any]) -> "AsyncSess
         for column in table.columns:
             if isinstance(column.type, JSONB):
                 column.type = JSON()
+                # note: a JSONB default is a Postgres cast ('{}'::jsonb) SQLite cannot parse.
+                column.server_default = None
+            elif column.primary_key and isinstance(column.type, BigInteger):
+                # note: SQLite assigns a row id only to an INTEGER PRIMARY KEY, never a BIGINT one.
+                column.type = Integer()
         # A foreign key needs its target in the same metadata; existing tables are skipped below.
         pending.extend(fk.column.table for fk in source.foreign_keys)
     copy.create_all(db.sync.get_bind(), checkfirst=True)

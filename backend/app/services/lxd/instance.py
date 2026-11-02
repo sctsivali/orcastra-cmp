@@ -33,7 +33,9 @@ from app.services.migration_fence import (
     assert_instance_not_migration_fenced,
     assert_project_not_migration_fenced,
 )
+from app.services.task_journal.vocabulary import parse_lxd_time
 from . import health
+from . import registry as cluster_registry
 from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
     LXDConnectionError,
@@ -176,6 +178,11 @@ _CREATE_READBACK_TIMEOUT_SECONDS = 35.0
 _CREATE_LEASE_SECONDS = 5 * 60
 _CREATE_HEARTBEAT_SECONDS = 30
 _CREATE_RECOVERY_GRACE_SECONDS = 30
+# A job settled from readback compares the instance's created_at, stamped by the cluster member's
+# clock, with the job's, stamped by the database's. The create refuses a name that already exists
+# before it submits, so a real "older than this job" is someone else's instance and is usually
+# days old; the margin only absorbs drift between the two clocks.
+_CREATE_READBACK_CLOCK_SKEW_SECONDS = 60
 _CREATE_ACTIVE_STATUSES = ("pending", "running", "unknown")
 _CREATE_TERMINAL_STATUSES = ("success", "failure", "partial")
 _CREATE_TAG_CATEGORY_PREFIXES = (
@@ -235,6 +242,35 @@ def _preserve_create_ambiguity(
     if isinstance(result, dict) and result.get("ambiguous_action") in {"create", "start"}:
         return dict(result)
     return {"ambiguous_action": fallback}
+
+
+def _as_utc(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _create_budget_spent(row: InstanceOperationJob) -> bool:
+    """True once the longest create wait a worker would hold has passed since the job began.
+
+    Before that, a create or start with no correlated operation id may still be applying on the
+    daemon, and a verdict read from the instance would race it.
+    """
+    elapsed = datetime.now(timezone.utc) - _as_utc(row.created_at)
+    return elapsed >= timedelta(seconds=_CREATE_WALL_TIMEOUT_SECONDS)
+
+
+async def _cluster_deregistered(cluster_id: str) -> bool:
+    """True only when the registry was read and no longer holds the cluster."""
+    try:
+        # fresh: a terminal verdict reads the registry as it is now, not the cached LIST.
+        registered = await cluster_registry.registered_cluster_ids(fresh=True)
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry proves nothing
+        logger.warning(
+            "Could not read the cluster registry for create recovery on %s: %s",
+            cluster_id,
+            _create_error(exc),
+        )
+        return False
+    return registered is not None and cluster_id not in registered
 
 
 def _requested_create_tags(row: InstanceOperationJob) -> list[str]:
@@ -2341,6 +2377,112 @@ class InstanceManager:
         except Exception as exc:  # noqa: BLE001 - unknown must be reconciled, never guessed
             return None, False, _create_error(exc)
 
+    async def _settle_create_from_readback(
+        self,
+        row: InstanceOperationJob,
+        readback: tuple[Optional[Any], bool, Optional[str]],
+        *,
+        operation_id: Optional[str],
+        why: str,
+        context: Dict[str, Any],
+    ) -> None:
+        """Judge a create whose operation verdict is gone by the instance the cluster holds now.
+
+        important: the one place a create is judged without an operation verdict. LXD drops an
+        operation record soon after it ends, so recovery after a worker restart usually finds
+        none; that used to end a healthy instance as partial, or leave a job without an
+        operation id unknown for ever, holding the target's active-job index so no new job
+        could start. This only reads: it never submits create or start, and an unanswered
+        readback stays unknown for the next sweep. ``context`` is the job's ambiguity marker;
+        the terminal result keeps its correlation ids.
+        """
+        instance, read_complete, read_error = readback
+        if not read_complete:
+            await _mark_create_unknown(
+                row,
+                operation_id=operation_id,
+                error=(
+                    f"{why} The cluster did not answer the instance readback "
+                    f"({read_error or 'no answer'}). Recovery will read it again and will "
+                    "not submit create or start."
+                ),
+                result=dict(context),
+            )
+            return
+
+        terminal = {key: value for key, value in context.items() if key != "ambiguous_action"}
+        terminal["verified_by"] = "readback"
+        if instance is None:
+            await _finish_create_job(
+                row,
+                "failure",
+                operation_id=operation_id,
+                result=terminal,
+                error=(
+                    f"{why} The cluster holds no instance named '{row.instance_name}' in "
+                    f"project '{row.project}'."
+                ),
+                invalidate_cache=True,
+            )
+            return
+
+        result = {**terminal, **self._create_result(row, instance)}
+        status = self._create_instance_status(instance)
+        start_requested = bool((row.requested or {}).get("start_on_create"))
+        expected = "Running" if start_requested else "Stopped"
+        start_submitted = context.get("ambiguous_action") == "start"
+        created_at = parse_lxd_time(getattr(instance, "created_at", None))
+        earliest = _as_utc(row.created_at) - timedelta(
+            seconds=_CREATE_READBACK_CLOCK_SKEW_SECONDS
+        )
+        if created_at is None or created_at < earliest:
+            # Not provably this job's instance, so its tags and the created event stay unsent.
+            found = (
+                f"was created at {created_at.isoformat()}, before this request"
+                if created_at is not None
+                else "has no creation time, so it cannot be told apart from an older one"
+            )
+            await _finish_create_job(
+                row,
+                "partial",
+                operation_id=operation_id,
+                result=result,
+                error=(
+                    f"{why} An instance named '{row.instance_name}' exists and is {status}, "
+                    f"but it {found}. Orcastra did not create or start it."
+                ),
+                invalidate_cache=True,
+            )
+            return
+
+        if status.lower() == expected.lower():
+            await _finish_create_job(
+                row,
+                "success",
+                operation_id=operation_id,
+                result=result,
+                invalidate_cache=True,
+                announce_created=True,
+            )
+            return
+
+        await _finish_create_job(
+            row,
+            "partial",
+            operation_id=operation_id,
+            result=result,
+            error=(
+                f"{why} The instance exists and is {status}, not {expected}. "
+                + (
+                    "Orcastra did not start it again."
+                    if start_submitted
+                    else "Orcastra did not start it."
+                )
+            ),
+            invalidate_cache=True,
+            announce_created=True,
+        )
+
     async def _wait_for_create_operation(
         self,
         client: Any,
@@ -2363,9 +2505,9 @@ class InstanceManager:
             )
             return "success", None
         except NotFound as exc:
-            # Incus eventually expires operation records. Exact resource readback proves that
-            # something exists at the requested identity, but cannot reconstruct the missing
-            # terminal verdict, so reconciliation must never promote it to success or auto-start.
+            # LXD and Incus drop an operation record soon after it ends. The verdict is gone, so
+            # the caller settles from the instance itself (_settle_create_from_readback) and
+            # never submits create or start again.
             return "expired", _create_error(exc)
         except LXDAPIException as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -2404,6 +2546,18 @@ class InstanceManager:
         }
         if not start_operation_id:
             instance, read_complete, read_error = await self._read_created_instance(client, row)
+            if _create_budget_spent(row):
+                await self._settle_create_from_readback(
+                    row,
+                    (instance, read_complete, read_error),
+                    operation_id=create_operation_id,
+                    why=(
+                        "No auto-start operation id was recorded, and the create's time "
+                        "budget has passed."
+                    ),
+                    context=state,
+                )
+                return
             if read_complete and instance is not None:
                 state.update(self._create_result(row, instance))
             await _mark_create_unknown(
@@ -2426,6 +2580,15 @@ class InstanceManager:
             client, row, start_operation_id
         )
         verified, read_complete, read_error = await self._read_created_instance(client, row)
+        if verdict == "expired":
+            await self._settle_create_from_readback(
+                row,
+                (verified, read_complete, read_error),
+                operation_id=start_operation_id,
+                why="The auto-start operation record expired before its verdict was read.",
+                context=state,
+            )
+            return
         if not read_complete:
             await _mark_create_unknown(
                 row,
@@ -2438,7 +2601,7 @@ class InstanceManager:
             )
             return
         if verified is None:
-            if verdict in {"unknown", "expired"}:
+            if verdict == "unknown":
                 await _mark_create_unknown(
                     row,
                     operation_id=start_operation_id,
@@ -2483,20 +2646,6 @@ class InstanceManager:
                 error=(
                     "The instance exists, but the submitted auto-start operation reported "
                     f"failure: {start_error or 'unknown daemon error'}"
-                ),
-                invalidate_cache=True,
-                announce_created=True,
-            )
-            return
-        if verdict == "expired":
-            await _finish_create_job(
-                row,
-                "partial",
-                operation_id=start_operation_id,
-                result=terminal_state,
-                error=(
-                    "The instance exists, but the auto-start operation record expired before "
-                    "its terminal verdict could be verified. Orcastra did not submit start again."
                 ),
                 invalidate_cache=True,
                 announce_created=True,
@@ -2560,23 +2709,9 @@ class InstanceManager:
             )
             return
 
-        if operation_verdict == "expired":
-            await _finish_create_job(
-                row,
-                "partial",
-                operation_id=operation_id,
-                result=result,
-                error=(
-                    "The create operation record expired before its terminal verdict could be "
-                    "verified, but exact readback found an instance. Orcastra did not submit "
-                    "create or auto-start again."
-                ),
-                invalidate_cache=True,
-                announce_created=True,
-            )
-            return
-
-        if operation_verdict == "unknown":
+        # note: an expired record is settled by the caller (_settle_create_from_readback). Any
+        # verdict short of success stays unknown here, because the path below may submit start.
+        if operation_verdict != "success":
             await _mark_create_unknown(
                 row,
                 operation_id=operation_id,
@@ -2760,6 +2895,16 @@ class InstanceManager:
             verdict, operation_error = "unknown", "The create operation id is unavailable."
 
         instance, read_complete, read_error = await self._read_created_instance(client, row)
+        if verdict == "expired":
+            await self._settle_create_from_readback(
+                row,
+                (instance, read_complete, read_error),
+                operation_id=operation_id,
+                why="The create operation record expired before its verdict was read.",
+                context={"ambiguous_action": "create"},
+            )
+            return
+
         if not read_complete:
             await _mark_create_unknown(
                 row,
@@ -2791,6 +2936,18 @@ class InstanceManager:
                     invalidate_cache=True,
                 )
                 return
+
+        if not operation_id and _create_budget_spent(row):
+            await self._settle_create_from_readback(
+                row,
+                (instance, read_complete, read_error),
+                operation_id=None,
+                why="No create operation id was recorded, and its time budget has passed.",
+                context={"ambiguous_action": "create"},
+            )
+            return
+
+        if instance is None:
             await _mark_create_unknown(
                 row,
                 operation_id=operation_id,
@@ -2803,9 +2960,9 @@ class InstanceManager:
             return
 
         if not operation_id:
-            # The daemon may still be applying an accepted create whose operation id was absent
-            # or could not be persisted. Readback is useful evidence, but is not a terminal
-            # verdict and cannot safely authorize success, failure, or auto-start.
+            # Inside the create's time budget the daemon may still be applying an accepted create
+            # whose operation id was absent or could not be persisted. Readback is evidence, not
+            # yet a verdict, and never authorizes auto-start.
             await _mark_create_unknown(
                 row,
                 operation_id=None,
@@ -2886,7 +3043,20 @@ class InstanceManager:
                     concurrency_key=row.cluster_id,
                     max_in_flight_per_key=_CREATE_MAX_IN_FLIGHT_PER_CLUSTER,
                 )
-            if client is None:
+            if client is None and await _cluster_deregistered(row.cluster_id):
+                # important: deregistration drops the connection details, so every later sweep
+                # would fail to connect again and the job would hold its target for ever.
+                await _finish_create_job(
+                    row,
+                    "failure",
+                    operation_id=row.operation_id,
+                    error=(
+                        f"Cluster '{row.cluster_id}' is no longer registered, so this create "
+                        "cannot be verified. Orcastra did not submit create or start again."
+                    ),
+                    invalidate_cache=True,
+                )
+            elif client is None:
                 await _mark_create_unknown(
                     row,
                     operation_id=row.operation_id,
