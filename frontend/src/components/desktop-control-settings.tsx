@@ -19,7 +19,7 @@
  */
 
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
@@ -33,6 +33,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -42,11 +52,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 import { ShieldAlert } from "lucide-react";
-import type {
-  DesktopControlPolicy,
-  Organization,
-} from "@/types/api";
+import type { DesktopControlPolicy } from "@/types/api";
 
 type Draft = {
   enabled: boolean;
@@ -61,6 +69,22 @@ const EMPTY: Draft = {
   allow_clipboard: false,
   allow_guest_access: false,
 };
+
+const toDraft = (policy: DesktopControlPolicy): Draft => ({
+  enabled: policy.enabled,
+  allow_input: policy.allow_input,
+  allow_clipboard: policy.allow_clipboard,
+  allow_guest_access: policy.allow_guest_access,
+});
+
+const sameDraft = (a: Draft, b: Draft) =>
+  (Object.keys(a) as (keyof Draft)[]).every((key) => a[key] === b[key]);
+
+/**
+ * Under the `organizations` family, so the `organization.preferences` reconcile that follows a
+ * save (and every other organization write) reads it again.
+ */
+const consentKey = (orgId: number | null) => ["organizations", orgId, "desktop-control"] as const;
 
 /** Each switch, with the sentence an operator needs to decide it.
  *
@@ -106,109 +130,79 @@ const CONTROLS: {
 
 export function DesktopControlSettings() {
   const queryClient = useQueryClient();
-  const [organizations, setOrganizations] = React.useState<Organization[]>([]);
-  const [orgId, setOrgId] = React.useState<number | null>(null);
-  const [draft, setDraft] = React.useState<Draft>(EMPTY);
-  const [saved, setSaved] = React.useState<Draft>(EMPTY);
-  const [loading, setLoading] = React.useState(true);
-  const [loadingPolicy, setLoadingPolicy] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const orgsQuery = useQuery({
+    queryKey: ["organizations"],
+    queryFn: () => api.organizations.list(),
+  });
+  const organizations = React.useMemo(() => orgsQuery.data ?? [], [orgsQuery.data]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const orgs = await api.organizations.list();
-        if (cancelled) return;
-        setOrganizations(orgs);
-        setOrgId(orgs.length > 0 ? orgs[0].id : null);
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not load organizations");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // The chosen organization, falling back to the first one, and to it again if the chosen one
+  // leaves the list. Derived on read rather than set from an effect.
+  const [chosenOrgId, setChosenOrgId] = React.useState<number | null>(null);
+  const orgId = organizations.some((org) => org.id === chosenOrgId)
+    ? chosenOrgId
+    : organizations[0]?.id ?? null;
+  const orgName = organizations.find((org) => org.id === orgId)?.name ?? "this organization";
 
-  React.useEffect(() => {
-    if (orgId === null) return;
-    let cancelled = false;
-    setLoadingPolicy(true);
-    setError(null);
-    (async () => {
-      try {
-        const policy: DesktopControlPolicy = await api.organizations.desktopControl.get(orgId);
-        if (cancelled) return;
-        const next: Draft = {
-          enabled: policy.enabled,
-          allow_input: policy.allow_input,
-          allow_clipboard: policy.allow_clipboard,
-          allow_guest_access: policy.allow_guest_access,
-        };
-        setDraft(next);
-        setSaved(next);
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not read this consent");
-        }
-      } finally {
-        if (!cancelled) setLoadingPolicy(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId]);
+  const policyQuery = useQuery({
+    queryKey: consentKey(orgId),
+    queryFn: () => api.organizations.desktopControl.get(orgId as number),
+    enabled: orgId !== null,
+  });
+  const saved = policyQuery.data ? toDraft(policyQuery.data) : null;
+
+  // important: unsaved edits belong to one organization and are never overwritten by a re-read.
+  // A refetch from any organization write elsewhere used to be able to land on top of them, and
+  // switching organizations used to carry the previous one's switches over, even into an
+  // organization whose read had failed, where Save would then have written them.
+  const [edits, setEdits] = React.useState<{ orgId: number; draft: Draft } | null>(null);
+  const draft = edits && edits.orgId === orgId ? edits.draft : saved ?? EMPTY;
+  const dirty = saved !== null && edits !== null && edits.orgId === orgId && !sameDraft(edits.draft, saved);
+  const [pendingOrgId, setPendingOrgId] = React.useState<number | null>(null);
 
   // Turning capture off withdraws the other three, because that is what the server stores. A form
   // that kept them ticked would be showing a state the deployment does not have.
   const update = (key: keyof Draft, value: boolean) => {
-    setDraft((current) => {
-      if (key === "enabled" && !value) return { ...EMPTY };
-      return { ...current, [key]: value };
-    });
+    if (orgId === null) return;
+    const next = key === "enabled" && !value ? { ...EMPTY } : { ...draft, [key]: value };
+    setEdits({ orgId, draft: next });
   };
 
-  const dirty = (Object.keys(draft) as (keyof Draft)[]).some((k) => draft[k] !== saved[k]);
+  const switchOrg = (next: number) => {
+    if (next === orgId) return;
+    if (dirty) {
+      setPendingOrgId(next);
+      return;
+    }
+    setEdits(null);
+    setChosenOrgId(next);
+  };
 
-  const save = async () => {
-    if (orgId === null) return;
-    setSaving(true);
-    try {
-      const policy = await api.organizations.desktopControl.set(orgId, draft);
-      const next: Draft = {
-        enabled: policy.enabled,
-        allow_input: policy.allow_input,
-        allow_clipboard: policy.allow_clipboard,
-        allow_guest_access: policy.allow_guest_access,
-      };
-      setDraft(next);
-      setSaved(next);
+  const saveMutation = useMutation({
+    mutationFn: ({ id, values }: { id: number; values: Draft }) =>
+      api.organizations.desktopControl.set(id, values),
+    onSuccess: (policy, { id }) => {
+      queryClient.setQueryData(consentKey(id), policy);
+      setEdits((current) => (current?.orgId === id ? null : current));
       void reconcileMutationImpact(queryClient, "organization.preferences").catch(
         () => undefined,
       );
       toast({
         title: "Consent updated",
-        description: next.enabled
+        description: policy.enabled
           ? "An agent may now work with this organization's desktops."
           : "An agent can no longer reach this organization's desktops.",
       });
-    } catch (err) {
+    },
+    onError: (err: Error) => {
       toast({
         title: "Could not update consent",
-        description: err instanceof Error ? err.message : "The consent could not be saved.",
+        description: err.message || "The consent could not be saved.",
         variant: "destructive",
       });
-    } finally {
-      setSaving(false);
-    }
-  };
+    },
+  });
+  const saving = saveMutation.isPending;
 
   return (
     <Card>
@@ -221,17 +215,23 @@ export function DesktopControlSettings() {
               clusters. Off unless you turn it on.
             </CardDescription>
           </div>
-          {saved.enabled ? (
-            <Badge variant="secondary">Allowed</Badge>
-          ) : (
-            <Badge variant="outline">Not allowed</Badge>
-          )}
+          {/* The stored answer, and nothing until it has been read: "Not allowed" over a read
+              still in flight claimed a state nobody had seen. */}
+          {saved ? (
+            saved.enabled ? (
+              <Badge variant="secondary">Allowed</Badge>
+            ) : (
+              <Badge variant="outline">Not allowed</Badge>
+            )
+          ) : null}
         </div>
       </CardHeader>
 
       <CardContent className="space-y-5">
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading organizations…</p>
+        {orgsQuery.isLoading ? (
+          <p className="text-sm text-muted-foreground" role="status">Loading organizations…</p>
+        ) : orgsQuery.error && !orgsQuery.data ? (
+          <ReadErrorState noun="organizations" error={orgsQuery.error} onRetry={() => void orgsQuery.refetch()} />
         ) : organizations.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             You are not a member of an organization, so there is no consent to give here.
@@ -242,7 +242,8 @@ export function DesktopControlSettings() {
               <Label htmlFor="desktop-control-org">Organization</Label>
               <Select
                 value={orgId === null ? undefined : String(orgId)}
-                onValueChange={(value) => setOrgId(Number(value))}
+                onValueChange={(value) => switchOrg(Number(value))}
+                disabled={saving}
               >
                 <SelectTrigger id="desktop-control-org" className="w-full sm:w-80">
                   <SelectValue placeholder="Choose an organization" />
@@ -257,52 +258,65 @@ export function DesktopControlSettings() {
               </Select>
             </div>
 
-            {error ? (
-              <p className="text-sm text-destructive" role="alert">
-                {error}
-              </p>
-            ) : null}
-
-            <div className="space-y-4">
-              {CONTROLS.map((control) => {
-                const gated = control.key !== "enabled" && !draft.enabled;
-                return (
-                  <div
-                    key={control.key}
-                    className="flex items-start justify-between gap-4 rounded-lg border p-3"
-                  >
-                    <div className="space-y-1">
-                      <Label
-                        htmlFor={`desktop-control-${control.key}`}
-                        className="flex items-center gap-2"
-                      >
-                        {control.prompt}
-                        {control.elevated ? (
-                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                            <ShieldAlert className="h-3 w-3" />
-                            Elevated
-                          </span>
-                        ) : null}
-                      </Label>
-                      <p className="text-sm text-muted-foreground">{control.description}</p>
+            {policyQuery.error && !policyQuery.data ? (
+              <ReadErrorState
+                noun="desktop control consent"
+                error={policyQuery.error}
+                onRetry={() => void policyQuery.refetch()}
+              />
+            ) : (
+              <div className="space-y-4" aria-busy={policyQuery.isLoading}>
+                {CONTROLS.map((control) => {
+                  const gated = control.key !== "enabled" && !draft.enabled;
+                  const id = `desktop-control-${control.key}`;
+                  return (
+                    <div
+                      key={control.key}
+                      className="flex items-start justify-between gap-4 rounded-lg border p-3"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Label htmlFor={id}>{control.prompt}</Label>
+                          {control.elevated ? (
+                            <span id={`${id}-elevated`} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                              <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                              Elevated
+                            </span>
+                          ) : null}
+                        </div>
+                        <p id={`${id}-description`} className="text-sm text-muted-foreground">
+                          {control.description}
+                        </p>
+                      </div>
+                      <Switch
+                        id={id}
+                        checked={draft[control.key]}
+                        disabled={gated || saved === null || saving}
+                        onCheckedChange={(value) => update(control.key, value)}
+                        aria-describedby={
+                          control.elevated ? `${id}-elevated ${id}-description` : `${id}-description`
+                        }
+                      />
                     </div>
-                    <Switch
-                      id={`desktop-control-${control.key}`}
-                      checked={draft[control.key]}
-                      disabled={gated || loadingPolicy || saving}
-                      onCheckedChange={(value) => update(control.key, value)}
-                    />
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
 
-            <div className="flex items-center gap-3">
-              <Button onClick={save} disabled={!dirty || saving || loadingPolicy}>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                onClick={() => orgId !== null && saveMutation.mutate({ id: orgId, values: draft })}
+                disabled={!dirty || saving}
+              >
                 {saving ? "Saving…" : "Save consent"}
               </Button>
               {dirty ? (
-                <span className="text-sm text-muted-foreground">Not saved yet</span>
+                <>
+                  <Button variant="outline" onClick={() => setEdits(null)} disabled={saving}>
+                    Discard changes
+                  </Button>
+                  <span className="text-sm text-muted-foreground" role="status">Not saved yet</span>
+                </>
               ) : null}
             </div>
 
@@ -313,6 +327,29 @@ export function DesktopControlSettings() {
           </>
         )}
       </CardContent>
+
+      <AlertDialog open={pendingOrgId !== null} onOpenChange={(open) => !open && setPendingOrgId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard Unsaved Consent?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The changes to {orgName} have not been saved. Switching organizations discards them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setEdits(null);
+                setChosenOrgId(pendingOrgId);
+                setPendingOrgId(null);
+              }}
+            >
+              Discard and switch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
