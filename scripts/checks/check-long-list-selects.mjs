@@ -46,7 +46,7 @@ const DEFERRED = new Map([
     'bounded organisation list with a disabled __none__ sentinel row',
   ],
   ['components/org-personalization-settings.tsx', 'bounded organisation list with a "via app" sublabel'],
-  ['components/user-groups-settings.tsx', 'bounded organisation list with a __none__ sentinel row'],
+  ['components/user-groups/assigned-users-panel.tsx', 'bounded organisation list with a __none__ sentinel row'],
   ['components/desktop-control-settings.tsx', 'bounded organisation list the operator administers'],
   ['components/extensions/extensions-overview.tsx', 'bounded organisation list the operator administers'],
   ['components/vm-create-form.tsx', 'exported, mounted by no route'],

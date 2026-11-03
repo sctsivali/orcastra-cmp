@@ -63,6 +63,7 @@ import {
   UserGroupEntry,
   UserGroupAssignRequest,
   UserGroupAssignResponse,
+  UserGroupRemoveResponse,
   AuthentikSyncStatus,
   PolicyListResponse,
   AccessPolicy,
@@ -2957,7 +2958,7 @@ export const api = {
         body: JSON.stringify(data),
       }),
     remove: (email: string) =>
-      fetchAPI<{ message: string }>(
+      fetchAPI<UserGroupRemoveResponse>(
         `/user-groups/${encodeURIComponent(email)}`,
         { method: "DELETE" }
       ),

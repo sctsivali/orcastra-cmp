@@ -2829,23 +2829,39 @@ export interface OrganizationCluster {
 
 // ── User Groups types ──
 
+export type UserGroupRole = "admin" | "partner" | "tenant";
+
+export interface UserGroupOrganization {
+  id: number;
+  name: string;
+  slug: string;
+  /** This person's role in this organization; `role` on the entry is the highest of them. */
+  role: UserGroupRole;
+}
+
 export interface UserGroupEntry {
   user_email: string;
-  role: string;
-  organizations: { id: string; name: string; slug: string }[];
+  role: UserGroupRole;
+  organizations: UserGroupOrganization[];
 }
 
 export interface UserGroupAssignRequest {
   user_email: string;
-  role: string;
-  organization_id?: string;
+  role: UserGroupRole;
+  organization_id?: number;
 }
 
 export interface UserGroupAssignResponse {
-  message: string;
   user_email: string;
-  role: string;
+  role: UserGroupRole;
+  organization_id: number | null;
   authentik_synced: boolean;
+}
+
+/** `kept` names the OrcaHub-synced organizations whose partner row only an admin may remove. */
+export interface UserGroupRemoveResponse {
+  detail: string;
+  kept: string[];
 }
 
 export interface AuthentikSyncStatus {

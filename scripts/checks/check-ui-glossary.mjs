@@ -79,8 +79,8 @@ const requiredContracts = [
   ["app/technologies/components/hardware-aggregate.tsx", 'label: "Memory per Cluster"', "technology averages use clusters"],
   ["app/inventory/warnings/components/warning-detail-dialog.tsx", 'label="Cluster Member"', "LXD machine location uses Cluster Member"],
   ["components/node-connection-summary.tsx", "Cluster ID:", "registered endpoint metadata uses Cluster ID"],
-  ["components/user-groups-settings.tsx", 'label: "Organizations"', "Organization remains a distinct authorization concept"],
-  ["components/user-groups-settings.tsx", '<SelectItem value="tenant">Tenant</SelectItem>', "Tenant remains a distinct authorization role"],
+  ["components/user-groups/assigned-users-panel.tsx", 'label: "Organizations"', "Organization remains a distinct authorization concept"],
+  ["components/user-groups/assigned-users-panel.tsx", '<SelectItem value="tenant">Tenant</SelectItem>', "Tenant remains a distinct authorization role"],
 ];
 
 const backendRequiredContracts = [
