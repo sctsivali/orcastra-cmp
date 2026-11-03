@@ -68,6 +68,7 @@ class SystemSettings(BaseModel):
     task_journal_enabled: bool
     instance_files_enabled: bool = False
     instance_files_max_transfer_bytes: int = 0
+    guest_credentials_enabled: bool = False
     # Migration rollout is staged. Each mutation class has its own gate, and the instance
     # stages are on by default. The recovery flags tell the console which retention actions,
     # automatic cleanup, and running-source behaviour to describe.
@@ -131,6 +132,7 @@ async def get_system_settings():
         task_journal_enabled=settings.task_journal_enabled,
         instance_files_enabled=getattr(settings, "instance_files_enabled", False),
         instance_files_max_transfer_bytes=getattr(settings, "instance_files_max_transfer_bytes", 0),
+        guest_credentials_enabled=getattr(settings, "guest_credentials_enabled", False),
         migration_center_enabled=getattr(settings, "migration_center_enabled", False),
         migration_durable_copy_enabled=getattr(
             settings, "migration_durable_copy_enabled", False

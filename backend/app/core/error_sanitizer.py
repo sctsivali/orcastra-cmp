@@ -101,6 +101,14 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
         "guest_io_error": "The guest could not complete this operation.",
         "read_only_fs": "This filesystem is read only.",
         "cluster_refused": "The cluster refused this service's certificate.",
+        # services/guest_credentials/errors.py: the credentials panel names the step that failed.
+        "guest_command_failed": "The guest could not complete this change.",
+        "user_create_failed": "The guest could not create this account.",
+        "user_sudo_failed": "The guest could not change this account's sudo group.",
+        "password_set_failed": "The guest could not set this password.",
+        "password_expire_failed": "The guest could not require a password change at next login.",
+        "password_lock_failed": "The guest could not lock this password.",
+        "key_write_failed": "The guest could not write this account's authorized_keys.",
     },
     503: {
         "authority_unavailable": "Current access could not be verified. Retry shortly.",
@@ -130,6 +138,11 @@ _STRUCTURED_5XX: Dict[int, Dict[str, str]] = {
     },
     504: {
         "guest_timeout": "The guest did not answer in time. It may be busy or still starting.",
+        # Sent, not confirmed: the panel tells this apart from a refusal so nobody assumes the old
+        # password still works.
+        "credential_outcome_unknown": (
+            "The change was sent but the guest did not confirm it. Check the account before relying on it."
+        ),
     },
     507: {
         "no_space": "The guest does not have enough free space.",

@@ -265,6 +265,7 @@ NOT_A_KEY = {
     ("app.services.migrations.plan_contracts", "_preflight_payload"): "a migration plan's capability snapshot",
     ("app.services.migrations.plan_contracts", "approval_report_hash"): "a migration plan's capability snapshot",
     ("app.services.migrations.planning", "_preflight"): "a migration plan's capability snapshot",
+    ("app.services.guest_credentials.flows", "overview"): "what a guest's tools allow the credentials panel to do",
 }
 
 

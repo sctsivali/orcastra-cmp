@@ -191,6 +191,8 @@ LOG_SUPPRESSED_ACTIONS = frozenset(
         "auth.token.refresh",
         # Stdout keeps it. The log keeps what changed, and a person opening a folder changed nothing.
         "file.browse",
+        # Same reasoning: looking at a guest's accounts changes nothing.
+        "guest.account.view",
     }
 )
 

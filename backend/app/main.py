@@ -1152,7 +1152,11 @@ Ensure your client certificates are properly configured.
     app.include_router(instance_files_router, prefix=settings.api_prefix)
     app.include_router(instance_file_transfer_router, prefix=settings.api_prefix)
     app.include_router(instance_file_ticket_router, prefix=settings.api_prefix)
-    
+
+    # Guest credentials (passwords, users and SSH keys inside a running instance)
+    from app.routers.guest_credentials import router as guest_credentials_router
+    app.include_router(guest_credentials_router, prefix=settings.api_prefix)
+
     # Terminal Router (WebSocket terminal access)
     app.include_router(terminal_router, prefix=settings.api_prefix)
 

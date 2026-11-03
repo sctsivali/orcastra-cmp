@@ -249,6 +249,17 @@ ACTION_CATEGORIES = {
     "file.chmod": EventCategory.ADMIN,
     "file.chown": EventCategory.ADMIN,
     "file.delete": EventCategory.ADMIN,
+    # The credentials panel (services/guest_credentials): a guest's accounts, passwords and SSH
+    # keys. `guest.account.view` is recorded once per person and instance per quarter hour;
+    # `.granted` is the same under a break-glass grant, every time.
+    "guest.account.view": EventCategory.ADMIN,
+    "guest.account.view.granted": EventCategory.ADMIN,
+    "guest.account.create": EventCategory.ADMIN,
+    "guest.account.sudo": EventCategory.ADMIN,
+    "guest.password.set": EventCategory.ADMIN,
+    "guest.password.lock": EventCategory.ADMIN,
+    "guest.authorized_key.add": EventCategory.ADMIN,
+    "guest.authorized_key.remove": EventCategory.ADMIN,
     "instance.rebuild": EventCategory.LXD_INFRA,
     "instance.autostart": EventCategory.LXD_INFRA,
     "instance.nic.address": EventCategory.NETWORK,
@@ -315,6 +326,14 @@ HIGH_SEVERITY_ACTIONS = {
     "file.browse.granted",
     "file.download",
     "file.delete",
+    # Each lets someone in, or keeps someone out, of a guest.
+    "guest.account.view.granted",
+    "guest.account.create",
+    "guest.account.sudo",
+    "guest.password.set",
+    "guest.password.lock",
+    "guest.authorized_key.add",
+    "guest.authorized_key.remove",
     "integration.instance.exec",
     "integration.instance.config.policy_key_write",
     "integration.instance.files",

@@ -658,6 +658,7 @@
   "settings": {
     "api_version": "",
     "debug": false,
+    "guest_credentials_enabled": true,
     "instance_files_enabled": true,
     "instance_files_max_transfer_bytes": 20000000000,
     "migration_auto_cleanup_enabled": true,

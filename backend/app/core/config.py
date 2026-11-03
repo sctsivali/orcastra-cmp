@@ -232,6 +232,13 @@ class Settings(BaseSettings):
         alias="INSTANCE_FILES_ENABLED",
         description="Offer the file explorer. Off, its routes answer 503 feature_disabled.",
     )
+    # The credentials panel (passwords, users, SSH keys inside a guest). Off, its routes answer
+    # 503 feature_disabled and the console hides the tab.
+    guest_credentials_enabled: bool = Field(
+        default=True,
+        alias="GUEST_CREDENTIALS_ENABLED",
+        description="Offer the guest credentials panel. Off, its routes answer 503 feature_disabled.",
+    )
     instance_files_max_transfer_bytes: int = Field(
         default=20_000_000_000,
         alias="INSTANCE_FILES_MAX_TRANSFER_BYTES",

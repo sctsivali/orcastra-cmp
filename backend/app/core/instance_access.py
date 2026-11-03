@@ -35,3 +35,17 @@ def verify_file_access(host: str, project: Optional[str], instance_name: str) ->
     verify_tenant_permission(host, scoped_project, instance_name, "view")
     verify_tenant_permission(host, scoped_project, instance_name, "file_transfer")
     return scoped_project
+
+
+def verify_guest_access(host: str, project: Optional[str], instance_name: str) -> str:
+    """The project the caller may manage `instance_name`'s logins in; raises 403 when it may not.
+
+    important: `console` is checked whatever `tenant_perm_enforcement_enabled` says, for the reason
+    `verify_file_access` gives. The console is already a root shell, but the credentials panel
+    makes a lasting change (root's password, a sudo account) one click away, and a viewer must not
+    gain it because an operator relaxed a rollout flag.
+    """
+    scoped_project = verify_project_access(host, project)
+    verify_tenant_permission(host, scoped_project, instance_name, "view")
+    verify_tenant_permission(host, scoped_project, instance_name, "console")
+    return scoped_project
