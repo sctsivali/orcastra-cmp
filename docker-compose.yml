@@ -228,8 +228,6 @@ services:
 
     networks:
       - orcastra-dashboard
-    extra_hosts:
-      - "auth.orca.id:103.28.148.247"
     depends_on:
       backend:
         condition: service_healthy
