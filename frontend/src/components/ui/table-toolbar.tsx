@@ -24,6 +24,29 @@ export interface TableToolbarProps<F extends string> {
    * is no count to state. "0 sessions" above a loader claimed an empty list that nobody had read.
    */
   countUnknown?: boolean;
+  /**
+   * The page size of the pager under this list. When every row that matches fits one page, the
+   * pager is absent by convention, so the sentence says so: "Showing all 20 users" rather than
+   * a bare "20 users" an operator reads as the first page of more.
+   */
+  pageSize?: number;
+}
+
+/** The counter sentence: total, filtered, and whether one page holds them all. */
+export function countSentence({
+  noun, totalCount, filteredCount, filtered, pageSize,
+}: {
+  noun: string;
+  totalCount: number;
+  filteredCount: number;
+  filtered: boolean;
+  pageSize?: number;
+}): string {
+  const total = plural(totalCount, singular(noun), noun);
+  const onePage = pageSize !== undefined && filteredCount > 0 && filteredCount <= pageSize;
+  // "Showing all 1 user" says nothing a bare "1 user" does not.
+  if (!filtered) return onePage && totalCount > 1 ? `Showing all ${total}` : total;
+  return onePage ? `Showing ${filteredCount} of ${total}` : `${filteredCount} of ${total}`;
 }
 
 /**
@@ -40,6 +63,7 @@ export function TableToolbar<F extends string>({
   actions,
   className,
   countUnknown = false,
+  pageSize,
 }: TableToolbarProps<F>) {
   const {
     searchInput,
@@ -163,9 +187,7 @@ export function TableToolbar<F extends string>({
       >
         {countUnknown
           ? null
-          : activeFilterCount === 0
-            ? plural(totalCount, singular(noun), noun)
-            : `${filteredCount} of ${plural(totalCount, singular(noun), noun)}`}
+          : countSentence({ noun, totalCount, filteredCount, filtered: activeFilterCount > 0, pageSize })}
       </p>
     </div>
   );
