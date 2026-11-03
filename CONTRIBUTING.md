@@ -97,8 +97,9 @@ The project follows [Semantic Versioning](https://semver.org/):
 - RC (x.x.x-RCn): release candidate for testing before a stable release
 
 The version is set by `APP_VERSION` in `.env` and by `version` in `frontend/package.json`.
-`make version-sync` propagates it to the other files, but its script (`scripts/sync_version.py`)
-is not committed, so in a fresh clone set both by hand. The release badge in `README.md` is
+`make version-sync` propagates it to the other files, but that target and its script
+(`scripts/sync_version.py`) live on the operator VM, not in the repository, so in a fresh clone set
+both by hand. The release badge in `README.md` is
 updated by hand when a release is published.
 
 ## Security Reports

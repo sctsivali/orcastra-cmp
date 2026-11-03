@@ -175,7 +175,13 @@ stage_guards() {
 
 stage_backend() {
   step "backend lint" backend ruff check app/
-  step "qa artifact contracts" . make lint-qa-artifacts test-qa-artifacts
+  # The isolated-lab contracts live with the lab tooling on the operator VM, outside the
+  # repository; local.mk defines their targets there. Hosted CI never runs them.
+  if make -n lint-qa-artifacts > /dev/null 2>&1; then
+    step "qa artifact contracts" . make lint-qa-artifacts test-qa-artifacts
+  else
+    note "SKIP  qa artifact contracts (no local.mk with the lab targets in this checkout)"
+  fi
   journal_db
   step "backend tests" . make test-backend PYTEST="python -m pytest -q -rs"
   if [ -n "${JOURNAL_TEST_DATABASE_URL:-}" ] && grep -q "JOURNAL_TEST_DATABASE_URL is not set" "$STEP_LOG"; then

@@ -1,7 +1,7 @@
 # Makefile for Orcastra CMP
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: ci-local export-openapi release release-preflight release-build release-tag release-push release-verify release-manifest setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend test-qa-artifacts lint-qa-artifacts install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: ci-local setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version env-check pull update quick-start quick-restart quick-rebuild
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
@@ -255,14 +255,6 @@ test-backend: ## Run backend tests (host, in a scrubbed environment)
 	@echo "$(COLOR_GREEN)Running backend tests...$(COLOR_RESET)"
 	@cd backend && $(ENV_SCRUB) $(PYTEST)
 
-QA_PYTHON ?= python3
-
-test-qa-artifacts: ## Run offline isolated-lab contracts without provisioning
-	@$(ENV_SCRUB) $(QA_PYTHON) -B -m unittest discover -s scripts/qa-hardening -p '*test*.py' -v
-
-lint-qa-artifacts: ## Lint isolated-lab helpers and their offline contracts
-	@$(ENV_SCRUB) ruff check --no-cache scripts/qa-hardening
-
 # The deployed image, which is what this target is meant to exercise. Falls back to the
 # APP_VERSION tag when nothing is running.
 BACKEND_IMAGE = $(shell docker inspect --format '{{.Config.Image}}' $(CONTAINER_PREFIX)-backend 2>/dev/null || echo $(CONTAINER_PREFIX)-backend:$(APP_VERSION))
@@ -432,12 +424,6 @@ lint-backend: ## Lint backend code
 # note: the local eslint binary, not `next lint`. The latter is deprecated in Next 15 and passes
 # eslintrc-era options that a newer ESLint rejects, so it fails for reasons unrelated to the
 # code. Scope and rationale: frontend/.eslintrc.README.md.
-# Scrubbed for the reason documented above test-backend: make hands .env values through with
-# their quotes intact, and this target builds the app, so an unscrubbed API_PREFIX aborts it.
-export-openapi: ## Regenerate the committed add-on API document in orcastra-docs
-	@echo "$(COLOR_GREEN)Exporting the add-on API document...$(COLOR_RESET)"
-	@$(ENV_SCRUB) .venv/bin/python scripts/export-public-openapi.py ../orcastra-docs/docs/extensions/orcastra-extensions-v1.yaml
-
 lint-frontend: ## Lint frontend code
 	@echo "$(COLOR_GREEN)Linting frontend code...$(COLOR_RESET)"
 	@cd frontend && ./node_modules/.bin/eslint src --ext .ts,.tsx
@@ -488,26 +474,6 @@ restore-redis: ## Restore Redis data (specify BACKUP_FILE=path/to/dump.rdb)
 version: ## Show application version
 	@echo "$(COLOR_BOLD)Application Version:$(COLOR_RESET) $(APP_VERSION)"
 
-version-sync: ## Sync version from .env to all project files (package.json, etc)
-	@echo "$(COLOR_BOLD)Syncing version across all files...$(COLOR_RESET)"
-	@python3 scripts/sync_version.py
-	@echo "$(COLOR_GREEN)✓ Version sync complete$(COLOR_RESET)"
-
-version-check: ## Check version consistency across all files
-	@echo "$(COLOR_BOLD)Checking version consistency...$(COLOR_RESET)"
-	@python3 scripts/sync_version.py --check
-
-version-set: ## Set new version (usage: make version-set VERSION=1.2.3)
-	@if [ -z "$(VERSION)" ]; then \
-		echo "$(COLOR_YELLOW)Error: VERSION not specified$(COLOR_RESET)"; \
-		echo "Usage: make version-set VERSION=1.2.3"; \
-		exit 1; \
-	fi
-	@echo "$(COLOR_BOLD)Setting version to $(VERSION)...$(COLOR_RESET)"
-	@sed -i 's/^APP_VERSION=.*/APP_VERSION=$(VERSION)/' .env
-	@echo "$(COLOR_GREEN)✓ Updated .env with version $(VERSION)$(COLOR_RESET)"
-	@$(MAKE) version-sync
-
 env-check: ## Check if .env file exists
 	@if [ ! -f .env ]; then \
 		echo "$(COLOR_YELLOW)Warning: .env file not found!$(COLOR_RESET)"; \
@@ -526,17 +492,6 @@ pull: ## Pull latest images
 
 update: pull up-build ## Update and restart all services
 
-##@ Vault PKI Commands
-
-vault-status: ## Check Vault PKI certificate status
-	@./scripts/vault_pki_manager.sh status
-
-vault-renew: ## Renew Vault Intermediate CA certificate (interactive)
-	@./scripts/vault_pki_manager.sh renew
-
-vault-help: ## Show Vault PKI Manager help
-	@./scripts/vault_pki_manager.sh help
-
 ##@ Quick Commands
 
 quick-start: env-check build up ## Quick start: build and run all services
@@ -553,229 +508,11 @@ quick-restart: down up ## Quick restart all services
 
 quick-rebuild: down build-nc up ## Quick rebuild without cache and restart
 
-##@ Release
-
-RELEASE_SRC_BACKEND  = $(CONTAINER_PREFIX)-backend:$(APP_VERSION)
-RELEASE_SRC_FRONTEND = $(CONTAINER_PREFIX)-frontend:$(APP_VERSION)
-RELEASE_DST_BACKEND  = $(REGISTRY_REPO):backend-$(APP_VERSION)
-RELEASE_DST_FRONTEND = $(REGISTRY_REPO):frontend-$(APP_VERSION)
-
-# important: overwriting a tag that is already published is what made 1.0.0-RC4 name two
-# different commits, a backend from one day beside a frontend from eight days earlier.
-# It stays possible, but only when asked for by name.
-RELEASE_ALLOW_OVERWRITE ?= 0
-
-# Reads a provenance label straight off the registry manifest. No pull, so it is cheap
-# enough to run on every release and safe against a tag this machine never built.
-# note: exits non-zero when the tag does not exist, which is also how the overwrite guard
-# tests for existence.
-IMAGETOOLS_REV = docker buildx imagetools inspect --format '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}'
-IMAGETOOLS_AT  = docker buildx imagetools inspect --format '{{ index .Image.Config.Labels "org.opencontainers.image.created" }}'
-
-release: ## Build, tag, push and verify a release of $(APP_VERSION)
-	@$(MAKE) release-preflight
-	@$(MAKE) release-build BUILD_COMMIT=$(BUILD_COMMIT) BUILD_DATE=$(BUILD_DATE)
-	@$(MAKE) release-tag BUILD_COMMIT=$(BUILD_COMMIT)
-	@$(MAKE) release-push
-	@$(MAKE) release-verify EXPECT_COMMIT=$(BUILD_COMMIT)
-	@echo ""
-	@echo "$(COLOR_BOLD)Released $(APP_VERSION) from $(BUILD_COMMIT)$(COLOR_RESET)"
-	@echo "  $(RELEASE_DST_BACKEND)"
-	@echo "  $(RELEASE_DST_FRONTEND)"
-	@echo ""
-	@echo "$(COLOR_BOLD)On the deployment VM:$(COLOR_RESET)"
-	@echo "  set APP_VERSION=$(APP_VERSION) in .env, then"
-	@echo "  docker compose -f docker-compose.prod.yml pull"
-	@echo "  docker compose -f docker-compose.prod.yml up -d"
-
-release-preflight: ## Check tree, version and registry before building a release
-	@if [ -z "$(APP_VERSION)" ] || [ "$(APP_VERSION)" = "unknown" ] || [ "$(APP_VERSION)" = "latest" ]; then \
-		echo "$(COLOR_YELLOW)APP_VERSION is '$(APP_VERSION)'.$(COLOR_RESET)"; \
-		echo "  Set it first: make version-set VERSION=1.0.0-RC5"; \
-		exit 1; \
-	fi
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		echo "$(COLOR_YELLOW)Working tree is not clean. A release has to name a commit that exists.$(COLOR_RESET)"; \
-		git status --short; \
-		exit 1; \
-	fi
-	@case "$(BUILD_COMMIT)" in \
-		*-dirty) echo "$(COLOR_YELLOW)BUILD_COMMIT is $(BUILD_COMMIT); refusing to publish a commit nobody can check out.$(COLOR_RESET)"; exit 1 ;; \
-		"") echo "$(COLOR_YELLOW)BUILD_COMMIT is empty; git rev-parse failed. Refusing to publish an unidentifiable image.$(COLOR_RESET)"; exit 1 ;; \
-	esac
-	@python3 scripts/sync_version.py --check >/dev/null 2>&1 || { \
-		echo "$(COLOR_YELLOW)Version drift between .env and frontend/package.json.$(COLOR_RESET)"; \
-		echo "  The frontend image bakes package.json, so this would ship a lie. Run: make version-sync"; \
-		exit 1; \
-	}
-	@for ref in $(RELEASE_DST_BACKEND) $(RELEASE_DST_FRONTEND); do \
-		if $(IMAGETOOLS_REV) $$ref >/dev/null 2>&1; then \
-			if [ "$(RELEASE_ALLOW_OVERWRITE)" != "1" ]; then \
-				echo "$(COLOR_YELLOW)REFUSING: $$ref is already published.$(COLOR_RESET)"; \
-				echo "  published:   $$($(IMAGETOOLS_AT) $$ref 2>/dev/null)"; \
-				echo "  from commit: $$($(IMAGETOOLS_REV) $$ref 2>/dev/null)"; \
-				echo "  Everyone who already pulled this tag would keep a different image under"; \
-				echo "  the same name, and nothing would tell them."; \
-				echo "  Bump APP_VERSION, or re-run with RELEASE_ALLOW_OVERWRITE=1."; \
-				exit 1; \
-			fi; \
-			echo "$(COLOR_YELLOW)WARNING: overwriting published tag $$ref$(COLOR_RESET)"; \
-			echo "  was: $$($(IMAGETOOLS_REV) $$ref 2>/dev/null) at $$($(IMAGETOOLS_AT) $$ref 2>/dev/null)"; \
-			echo "  now: $(BUILD_COMMIT)"; \
-		fi; \
-	done
-	@echo "$(COLOR_GREEN)✓ Preflight passed: $(APP_VERSION) at $(BUILD_COMMIT)$(COLOR_RESET)"
-
-# note: BUILD_COMMIT and BUILD_DATE are passed down explicitly so both images carry the SAME
-# stamp. Left alone, each recursive make recomputes BUILD_DATE and the two halves of one
-# release disagree about when it was cut.
-# The two builds are separate steps because the frontend fails intermittently on the shared
-# orcastra-builder with "DeadlineExceeded ... exporting to oci image format". Retry the
-# frontend alone; do not reconfigure the builder, other work on this host shares it.
-release-build: ## Build both images with one pinned provenance stamp
-	@echo "$(COLOR_GREEN)Building $(APP_VERSION) at $(BUILD_COMMIT) ($(BUILD_DATE))...$(COLOR_RESET)"
-	@$(MAKE) build-backend BUILD_COMMIT=$(BUILD_COMMIT) BUILD_DATE=$(BUILD_DATE)
-	@$(MAKE) build-frontend BUILD_COMMIT=$(BUILD_COMMIT) BUILD_DATE=$(BUILD_DATE)
-
-release-tag: ## Tag the local release images for $(REGISTRY_REPO)
-	@for img in $(RELEASE_SRC_BACKEND) $(RELEASE_SRC_FRONTEND); do \
-		docker image inspect $$img >/dev/null 2>&1 || { \
-			echo "$(COLOR_YELLOW)Missing local image $$img. Run: make release-build$(COLOR_RESET)"; exit 1; }; \
-		got=$$(docker image inspect $$img --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'); \
-		if [ "$$got" != "$(BUILD_COMMIT)" ]; then \
-			echo "$(COLOR_YELLOW)$$img carries revision '$$got', expected '$(BUILD_COMMIT)'.$(COLOR_RESET)"; \
-			echo "  That is a stale image from an earlier build. Run: make release-build"; \
-			exit 1; \
-		fi; \
-	done
-	@docker tag $(RELEASE_SRC_BACKEND) $(RELEASE_DST_BACKEND)
-	@docker tag $(RELEASE_SRC_FRONTEND) $(RELEASE_DST_FRONTEND)
-	@echo "$(COLOR_GREEN)✓ Tagged $(RELEASE_DST_BACKEND)$(COLOR_RESET)"
-	@echo "$(COLOR_GREEN)✓ Tagged $(RELEASE_DST_FRONTEND)$(COLOR_RESET)"
-
-release-push: ## Push both release tags
-	@echo "$(COLOR_GREEN)Pushing $(RELEASE_DST_BACKEND)...$(COLOR_RESET)"
-	@docker push $(RELEASE_DST_BACKEND)
-	@echo "$(COLOR_GREEN)Pushing $(RELEASE_DST_FRONTEND)...$(COLOR_RESET)"
-	@docker push $(RELEASE_DST_FRONTEND)
-
-# important: this reads what is ON THE REGISTRY after the push, not what is on this disk
-# before it. A pre-push check passes while a half-finished push leaves the old manifest live,
-# which is how 1.0.0-RC4 carried a backend from 2026-08-26 beside a frontend from 2026-08-18
-# under one name for eight days.
-#
-#   make release-verify                                   verify $(APP_VERSION) against HEAD
-#   make release-verify VERSION=1.0.0-RC3                 verify a past release, pair agreement only
-#   make release-verify VERSION=1.0.0-RC3 EXPECT_COMMIT=<sha>
-release-verify: ## Verify a published tag pair (VERSION=x.y.z EXPECT_COMMIT=sha)
-	@set -u; \
-	V="$(or $(VERSION),$(APP_VERSION))"; \
-	B="$(REGISTRY_REPO):backend-$$V"; \
-	F="$(REGISTRY_REPO):frontend-$$V"; \
-	echo "$(COLOR_BOLD)Verifying published $$V$(COLOR_RESET)"; \
-	for ref in $$B $$F; do \
-		docker buildx imagetools inspect $$ref >/dev/null 2>&1 || { \
-			echo "$(COLOR_YELLOW)FAIL: $$ref is not published$(COLOR_RESET)"; exit 1; }; \
-	done; \
-	BREV=$$($(IMAGETOOLS_REV) $$B 2>/dev/null || true); \
-	FREV=$$($(IMAGETOOLS_REV) $$F 2>/dev/null || true); \
-	if [ -z "$$BREV" ] || [ -z "$$FREV" ]; then \
-		echo "$(COLOR_YELLOW)UNVERIFIABLE: $$V is published but carries no revision label.$(COLOR_RESET)"; \
-		echo "  backend  label: $${BREV:-(none)}"; \
-		echo "  frontend label: $${FREV:-(none)}"; \
-		echo "  Images built before provenance stamping cannot say which commit they came from."; \
-		echo "  Nothing is wrong with the tag; it simply cannot be checked."; \
-		exit 1; \
-	fi; \
-	echo "  backend  $$BREV  ($$($(IMAGETOOLS_AT) $$B 2>/dev/null))"; \
-	echo "  frontend $$FREV  ($$($(IMAGETOOLS_AT) $$F 2>/dev/null))"; \
-	if [ "$$BREV" != "$$FREV" ]; then \
-		echo "$(COLOR_YELLOW)FAIL: backend and frontend of $$V were built from different commits.$(COLOR_RESET)"; \
-		exit 1; \
-	fi; \
-	EXPECT="$(or $(EXPECT_COMMIT),$(if $(VERSION),,$(BUILD_COMMIT)))"; \
-	if [ -n "$$EXPECT" ]; then \
-		if [ "$$BREV" != "$$EXPECT" ]; then \
-			echo "$(COLOR_YELLOW)FAIL: published revision $$BREV does not match expected $$EXPECT$(COLOR_RESET)"; \
-			exit 1; \
-		fi; \
-		echo "  matches the expected commit"; \
-	else \
-		echo "  no expected commit given, checked pair agreement only"; \
-	fi; \
-	echo "$(COLOR_GREEN)✓ $$V is one commit: $$BREV$(COLOR_RESET)"
-
-# The release list running dashboards read (orcastra-docs docs/releases/manifest.json, see
-# backend/app/services/release_check/). Verifies the published pair, adds the release as latest with
-# the digests Docker Hub serves, validates, prints the change and stops: publishing it is a push to
-# the public docs repository, which is done by hand after a review.
-#   make release-manifest VERSION=1.0.0-RC5 [SECURITY=1] [DOCS_DIR=../orcastra-docs]
-release-manifest: ## Add a published release to the orcastra-docs release list (VERSION=x.y.z)
-	@set -eu; \
-	V="$(or $(VERSION),$(APP_VERSION))"; \
-	D="$(or $(DOCS_DIR),../orcastra-docs)"; \
-	$(MAKE) --no-print-directory release-verify VERSION=$$V; \
-	python3 "$$D/scripts/releases/manifest.py" add "$$V" $(if $(SECURITY),--security,); \
-	python3 "$$D/scripts/releases/manifest.py" check-images --write; \
-	python3 "$$D/scripts/releases/manifest.py" validate; \
-	git -C "$$D" --no-pager diff -- docs/releases/manifest.json; \
-	echo "Next: add a section for $$V to $$D/docs/operations/releases.md, review, commit and push orcastra-docs."
-
-##@ Deployment
-
-deploy-package: ## Create deployment package (tar.gz) for on-prem installation
-	@echo "$(COLOR_GREEN)Creating deployment package...$(COLOR_RESET)"
-	@for f in config/fluent-bit/fluent-bit.conf config/fluent-bit/parsers.conf; do \
-		[ -f "$$f" ] || { \
-			echo "$(COLOR_YELLOW)Missing $$f$(COLOR_RESET)"; \
-			echo "  config/ is gitignored, so a fresh clone does not carry it. Copy it from a"; \
-			echo "  running deployment before packaging."; \
-			exit 1; \
-		}; \
-	done
-	@DEPLOY_DIR=orcastra-dashboard-$(APP_VERSION) && \
-	rm -rf /tmp/$$DEPLOY_DIR && \
-	mkdir -p /tmp/$$DEPLOY_DIR/config/fluent-bit && \
-	mkdir -p /tmp/$$DEPLOY_DIR/config/opensearch-dashboards && \
-	mkdir -p /tmp/$$DEPLOY_DIR/scripts && \
-	cp docker-compose.prod.yml /tmp/$$DEPLOY_DIR/ && \
-	cp .env.example /tmp/$$DEPLOY_DIR/ && \
-	cp config/fluent-bit/fluent-bit.conf /tmp/$$DEPLOY_DIR/config/fluent-bit/ && \
-	cp config/fluent-bit/parsers.conf /tmp/$$DEPLOY_DIR/config/fluent-bit/ && \
-	cp config/opensearch-dashboards/access-logs-dashboard-v3.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
-	cp config/opensearch-dashboards/audit-logs-dashboard-v3.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
-	cp config/opensearch-dashboards/logs-overview-dashboard.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
-	cp scripts/setup_opensearch_dashboards.sh /tmp/$$DEPLOY_DIR/scripts/ && \
-	chmod +x /tmp/$$DEPLOY_DIR/scripts/*.sh && \
-	printf '%s\n' \
-		"Orcastra CMP $(APP_VERSION)" \
-		"" \
-		"Images this package expects:" \
-		"  $(REGISTRY_REPO):backend-$(APP_VERSION)" \
-		"  $(REGISTRY_REPO):frontend-$(APP_VERSION)" \
-		"" \
-		"Before upgrading an existing deployment, run the operator tooling your team keeps" \
-		"on the deployment VM. It is deliberately not shipped here: see the upgrade runbook." \
-		"" \
-		"The install and upgrade guides are not bundled on purpose. A copy frozen at package" \
-		"time is how the published deployment guide came to embed a compose file four releases" \
-		"out of date. Read them at docs.orcastra.io instead." \
-		> /tmp/$$DEPLOY_DIR/README.txt && \
-	cd /tmp && tar -czf $$DEPLOY_DIR.tar.gz $$DEPLOY_DIR/ && \
-	mv -f /tmp/$$DEPLOY_DIR.tar.gz $(CURDIR)/$$DEPLOY_DIR.tar.gz && \
-	rm -rf /tmp/$$DEPLOY_DIR && \
-	echo "$(COLOR_GREEN)✓ Deployment package created: $$DEPLOY_DIR.tar.gz$(COLOR_RESET)" && \
-	echo "" && \
-	echo "$(COLOR_BOLD)Package contents:$(COLOR_RESET)" && \
-	echo "  docker-compose.prod.yml        production compose file" && \
-	echo "  .env.example                   annotated configuration template" && \
-	echo "  config/fluent-bit/             log pipeline config" && \
-	echo "  config/opensearch-dashboards/  dashboard templates" && \
-	echo "  scripts/                       OpenSearch dashboard setup" && \
-	echo "  README.txt                     pinned image tags and where the guides live" && \
-	echo "" && \
-	echo "$(COLOR_YELLOW)Transfer to deployment VM:$(COLOR_RESET)" && \
-	echo "  scp $$DEPLOY_DIR.tar.gz user@<VM_IP>:/opt/orcastra-dashboard/"
-
 # Default target
 .DEFAULT_GOAL := help
+
+# Operator-only targets (releases, version sync, the isolated QA lab, Vault PKI, the add-on API
+# export) drive tooling kept on the operator VM rather than in this repository, so they live in a
+# local.mk beside this file. A clone without it gets only the targets that work from the
+# repository alone.
+-include local.mk

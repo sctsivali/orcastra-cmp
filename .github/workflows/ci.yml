@@ -5,8 +5,10 @@
 # build. Every external API is fixture-backed; these jobs never receive deployment credentials.
 #
 # What is deliberately NOT here, because it needs the dev VM and cannot work on a hosted runner:
-# make test-backend-docker (inspects a running container) and the credentialed Playwright harness
-# in /root/qa-orcastra, which drives real Authentik SSO against a private address.
+# make test-backend-docker (inspects a running container), the credentialed Playwright harness
+# in /root/qa-orcastra, which drives real Authentik SSO against a private address, and the
+# isolated-lab contracts, which live with the lab tooling on that VM rather than in this repository
+# (make ci-local runs them there).
 #
 # note: hosted minutes on a private repository are metered. Running on every push to main and dev
 # billed about 56 runner-minutes per push, four of them browser jobs, and that exhausted the plan.
@@ -71,9 +73,6 @@ jobs:
       - name: Lint
         working-directory: backend
         run: ruff check app/
-
-      - name: Isolated QA artifact contracts
-        run: make lint-qa-artifacts test-qa-artifacts
 
       # Journal contracts intentionally use asyncpg against a database migrated to the exact
       # application head. The database name contains "test", which is required by the fixture's

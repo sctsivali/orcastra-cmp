@@ -51,8 +51,6 @@ htmlcov/
 
 # Certificates (keep structure but not actual certs)
 certs/
-# Logging host: deploy/logging/.gitignore keeps everything but the public CA out
-!deploy/logging/certs/
 certs/node1/*.crt
 certs/node1/*.key
 certs/node2/*.crt
@@ -75,17 +73,24 @@ Manual Deployment/
 tasks/
 # Local operator scripts stay out of the repo, but scripts/checks holds the structural guards
 # that make test-frontend and CI run, so that directory is tracked.
+# note: the operator tooling (scripts/orcastra-ops.sh) and the isolated-lab tooling
+# (scripts/qa-hardening/) are deliberately NOT tracked. They are kept on the operator VM, the lab
+# tooling in its own local repository, so the published runbooks document procedures rather than
+# telling readers to fetch a script. The OpenSearch dashboard templates and their import script
+# are published by orcastra-docs (docs/assets/opensearch-dashboards/), their source of truth.
 scripts/*
 !scripts/checks/
-!scripts/qa-hardening/
 # The region catalogue generator: rebuilding and verifying the catalogue needs it in the repo.
 !scripts/regions/
 # The local CI runner behind make ci-local: the gate before a direct push.
 !scripts/ci-local.sh
-# note: the operator tooling (scripts/orcastra-ops.sh) is deliberately NOT tracked. It is
-# handed to an operator as text and kept on the deployment VM, so the published runbook
-# documents the procedure rather than telling readers to fetch a script.
-!scripts/setup_opensearch_dashboards.sh
+
+# Deployment tooling for hosts outside this product (the central logging host) lives in its own
+# local repository on the operator VM, never in this one.
+/deploy/
+
+# Make targets that drive operator-only tooling (local.mk, loaded by the Makefile when present)
+local.mk
 
 # Artefacts orcastra-ops.sh writes when run inside a clone
 backups/

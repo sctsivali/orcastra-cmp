@@ -1,7 +1,0 @@
-# Never committed: generated keys, credentials, runtime env
-certs/*
-!certs/root-ca.pem
-secrets/
-compose/.env
-*.bak.*
-__pycache__/

@@ -9,7 +9,7 @@ make version                 # Show app version and build info
 make status                  # Show service status
 make health                  # Check health of all services
 
-# Version Management
+# Version Management (operator VM only: these come from its local.mk)
 make version-check           # Check version consistency
 make version-sync            # Sync version from .env to all files
 make version-set VERSION=x.x.x  # Set new version and sync
@@ -50,7 +50,7 @@ make quick-rebuild           # Full rebuild and restart
 ## One-Liners for Common Tasks
 
 ```bash
-# Update version untuk release
+# Update version untuk release (operator VM only)
 make version-set VERSION=1.0.0 && make quick-rebuild
 
 # Check if everything is running
@@ -79,6 +79,8 @@ make down-v && make prune && make quick-start
 ```
 
 ## Vault PKI Commands
+
+These targets exist only on the operator VM (its local.mk), like the `scripts/vault_pki_manager.sh` they call.
 
 ```bash
 # Check PKI certificate status (Root CA & Intermediate CA expiry)
