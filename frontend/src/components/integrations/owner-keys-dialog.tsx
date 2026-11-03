@@ -105,6 +105,8 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
   if (!organization) return null;
   const hasReason = reason.trim().length > 0;
   const busy = mutation.isPending;
+  // note: the change in flight, so only its own button spins; Add used to spin for a Remove too.
+  const pending = busy ? mutation.variables : undefined;
 
   const run = async (change: OwnerChange) => {
     if (submitInFlightRef.current || !hasReason) return;
@@ -150,8 +152,14 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
                       variant="outline"
                       disabled={!hasReason || busy}
                       onClick={() => void run({ kind: "primary", apiKeyId: owner.api_key_id })}
+                      aria-describedby={hasReason ? undefined : "owner-keys-reason-hint"}
                     >
-                      Make Primary
+                      {pending?.kind === "primary" && pending.apiKeyId === owner.api_key_id && (
+                        <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+                      )}
+                      {/* note: the key in the name, after the visible words, so a repeated
+                          "Make Primary" says which key and the name still starts with what is shown */}
+                      Make Primary<span className="sr-only">: {owner.name || owner.api_key_id}</span>
                     </Button>
                   )}
                   {owners.length > 1 && (
@@ -161,8 +169,12 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
                       variant="outline"
                       disabled={!hasReason || busy}
                       onClick={() => void run({ kind: "remove", apiKeyId: owner.api_key_id })}
+                      aria-describedby={hasReason ? undefined : "owner-keys-reason-hint"}
                     >
-                      Remove
+                      {pending?.kind === "remove" && pending.apiKeyId === owner.api_key_id && (
+                        <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />
+                      )}
+                      Remove<span className="sr-only">: {owner.name || owner.api_key_id}</span>
                     </Button>
                   )}
                 </li>
@@ -203,7 +215,11 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
                 rows={2}
                 placeholder="Why the owner keys change, kept in the audit record"
                 required
+                aria-describedby="owner-keys-reason-hint"
               />
+              <p id="owner-keys-reason-hint" className="text-xs text-muted-foreground">
+                Every change here needs a reason first.
+              </p>
             </div>
           </div>
         </DialogBody>
@@ -216,7 +232,7 @@ export function OwnerKeysDialog({ organization, keys, onOpenChange }: OwnerKeysD
             disabled={!target || !hasReason || busy}
             onClick={() => void run({ kind: "add", apiKeyId: target })}
           >
-            {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />}
+            {pending?.kind === "add" && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />}
             Add Owner Key
           </Button>
         </DialogFooter>

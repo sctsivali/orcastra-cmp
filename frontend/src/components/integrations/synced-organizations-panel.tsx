@@ -2,15 +2,15 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRightLeft, Building2, KeyRound, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, Building2, KeyRound } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 import { RowActions, type RowAction } from "@/components/ui/row-actions";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -35,7 +35,8 @@ import { retryUnlessUnavailable } from "@/lib/read-error";
 import type { IntegrationOrganization } from "@/types/api";
 import { plural } from "@/lib/utils";
 
-const COLUMN_COUNT = 5;
+/** Organization, Slug, Owner Key, Owner State, and Actions for an administrator. */
+const columnCount = (withActions: boolean) => (withActions ? 5 : 4);
 
 function ownerLabel(org: IntegrationOrganization): string {
   return org.owner_key_name || org.api_key_id || "(no owner key)";
@@ -99,6 +100,8 @@ function SyncedOrganizationsContent() {
     queryKey: ["integrations", "organizations"],
     queryFn: () => api.integrations.listOrganizations(),
     staleTime: 30000,
+    // Each owner key is read live from Vault on this route, so a 503 does not clear in a retry.
+    retry: retryUnlessUnavailable,
   });
   // The transfer dialog picks from the key list. Shared with the key cards above, so this is one
   // read for the whole tab, and partners never open the dialog.
@@ -127,37 +130,36 @@ function SyncedOrganizationsContent() {
   const currentPage = Math.min(page, totalPages);
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
+  // Both dialogs pick from the key list. Offered only once it has been read, so an empty picker
+  // never stands in for a list that is still loading or could not be read.
+  const keysUnavailable = keysQuery.isLoading
+    ? "Reading the key list"
+    : keysQuery.error && !keysQuery.data
+      ? "The key list could not be read; refresh to try again"
+      : undefined;
   const actionsFor = (org: IntegrationOrganization): RowAction[] => [
     {
       id: "owner-keys",
       label: "Owner Keys",
       icon: KeyRound,
       onSelect: () => setManaging(org),
-      unavailableReason: org.api_key_id ? undefined : "No owner yet: transfer it to a key first",
+      unavailableReason: org.api_key_id ? keysUnavailable : "No owner yet: transfer it to a key first",
     },
     {
       id: "transfer-owner",
       label: "Transfer Owner",
       icon: ArrowRightLeft,
       onSelect: () => setTransferring(org),
+      unavailableReason: keysUnavailable,
     },
   ];
 
   let body: React.ReactNode;
   if (orgsQuery.isLoading) {
     body = <Skeleton className="h-40 rounded-lg" />;
-  } else if (orgsQuery.error) {
+  } else if (orgsQuery.error && !orgsQuery.data) {
     body = (
-      <EmptyState
-        icon={RotateCcw}
-        title="Could not load synced organizations"
-        description={(orgsQuery.error as Error).message}
-        action={
-          <Button size="sm" onClick={() => void orgsQuery.refetch()}>
-            Retry
-          </Button>
-        }
-      />
+      <ReadErrorState noun="synced organizations" error={orgsQuery.error} onRetry={() => void orgsQuery.refetch()} />
     );
   } else if (rows.length === 0) {
     body = (
@@ -170,7 +172,7 @@ function SyncedOrganizationsContent() {
   } else {
     body = (
       <div className="space-y-4">
-        <TableToolbar filters={filters} noun="organizations" />
+        <TableToolbar filters={filters} noun="organizations" pageSize={pageSize} />
         <Table>
           <TableHeader>
             <TableRow>
@@ -182,15 +184,18 @@ function SyncedOrganizationsContent() {
                 direction={sortDirection} onSort={handleSort} />
               <SortableTableHead label="Owner State" field="state" currentField={sortField}
                 direction={sortDirection} onSort={handleSort} />
-              <TableHead pinned="end" className="w-12 text-right">
-                <span className="sr-only">Actions</span>
-              </TableHead>
+              {/* Partners read this list; a column of empty cells for them said nothing. */}
+              {isAdmin && (
+                <TableHead pinned="end" className="w-12 text-right">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
             {paginated.length === 0 ? (
               <TableEmptyRow
-                colSpan={COLUMN_COUNT}
+                colSpan={columnCount(isAdmin)}
                 icon={Building2}
                 title="No organization matches the current filters"
                 description={`${plural(filters.activeFilterCount, "filter")} active`}
@@ -227,11 +232,11 @@ function SyncedOrganizationsContent() {
                         <TableSubText wrap>Only administrators see this owner key, and partners of the key&apos;s own organization once it has provisioned a buyer.</TableSubText>
                       )}
                     </TableCell>
-                    <TableCell pinned="end" className="text-right">
-                      {isAdmin && (
+                    {isAdmin && (
+                      <TableCell pinned="end" className="text-right">
                         <RowActions triggerLabel={`Actions for ${org.slug}`} actions={actionsFor(org)} />
-                      )}
-                    </TableCell>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })
@@ -256,7 +261,8 @@ function SyncedOrganizationsContent() {
   }
 
   return (
-    <Card id="synced-organizations" tabIndex={-1} className="scroll-mt-4 focus:outline-none">
+    // note: scroll-mt-20 clears the sticky header (h-14, md:h-16) when the Review jump scrolls here.
+    <Card id="synced-organizations" tabIndex={-1} className="scroll-mt-20 focus:outline-none">
       <CardHeader>
         <CardTitle className="text-lg">Synced Organizations</CardTitle>
         <CardDescription>
@@ -287,7 +293,8 @@ function SyncedOrganizationsContent() {
       )}
       {transferring && (
         <TransferOwnerKeyDialog
-          organization={transferring}
+          // the current row, so a background re-read is not hidden behind a snapshot
+          organization={rows.find((org) => org.id === transferring.id) ?? transferring}
           keys={keysQuery.data?.keys ?? []}
           onOpenChange={(open) => {
             if (!open) setTransferring(null);
