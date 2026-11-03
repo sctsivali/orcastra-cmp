@@ -85,6 +85,11 @@ export function useInstanceFilesEnabled(): boolean | undefined {
   return useSystemSettings().data?.instance_files_enabled;
 }
 
+/** Whether this deployment offers the guest credentials panel, on the same three-state rule. */
+export function useGuestCredentialsEnabled(): boolean | undefined {
+  return useSystemSettings().data?.guest_credentials_enabled;
+}
+
 /**
  * Whether this deployment mounted the task journal routes, on the same three-state rule: only
  * an explicit `false` hides the task panel.

@@ -385,6 +385,9 @@ jobs:
       - name: SPICE client
         run: node scripts/checks/check-spice-client.mjs .
 
+      - name: Guest credentials secrets
+        run: node scripts/checks/check-guest-credentials-secrets.mjs .
+
       - name: Task journal behavior
         run: node scripts/checks/check-task-journal-behavior.mjs .
 

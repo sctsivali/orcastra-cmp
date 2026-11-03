@@ -13,6 +13,7 @@ import * as React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useCredentialsUnavailableReason } from "@/hooks/use-guest-credentials";
 import { useFilesUnavailableReason } from "@/hooks/use-instance-files";
 import { toast } from "@/hooks/use-toast";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
@@ -34,7 +35,7 @@ import { OnScreenKeyboard } from "./on-screen-keyboard";
 import { OnScreenCursor } from "./on-screen-cursor";
 import { ClipboardManager, rememberClipboard } from "./clipboard-manager";
 import { ConsoleResourceBar } from "./resource-bar";
-import { ConflictNotice, FilesPane, SearchBar, terminalSequence, useFullscreenChrome } from "./console-workspace-parts";
+import { ConflictNotice, GuestPane, isGuestPaneTab, SearchBar, terminalSequence, useFullscreenChrome, type GuestPaneTab } from "./console-workspace-parts";
 
 export interface ConsoleWorkspaceProps {
   consoleId: string;
@@ -121,7 +122,7 @@ export function ConsoleWorkspace({
   });
   const [textStatus, setTextStatus] = useState<ConsoleConnectionStatus>("connecting");
   const [serialStatus, setSerialStatus] = useState<ConsoleConnectionStatus>("connecting");
-  const [filesStatus, setFilesStatus] = useState<ConsoleConnectionStatus>("connecting");
+  const [paneStatus, setPaneStatus] = useState<Record<GuestPaneTab, ConsoleConnectionStatus>>({ files: "connecting", credentials: "connecting" });
   const chrome = useFullscreenChrome(getFullscreenTarget);
 
   const { hasPermission, termReadOnlyReason } = useTenantAccess();
@@ -129,6 +130,11 @@ export function ConsoleWorkspace({
   const canUseConsole = hasPermission(host, project, instanceName, "console");
   const operateReason = termReadOnlyReason(host, project, instanceName);
   const filesUnavailableReason = useFilesUnavailableReason(host, project, instanceName);
+  const credentialsUnavailableReason = useCredentialsUnavailableReason(host, project, instanceName);
+  const onPaneStatus = useCallback(
+    (tab: GuestPaneTab, status: ConsoleConnectionStatus) => setPaneStatus((current) => (current[tab] === status ? current : { ...current, [tab]: status })),
+    [],
+  );
 
   useEffect(() => setResizeGuest(readResizePreference()), []);
 
@@ -193,9 +199,9 @@ export function ConsoleWorkspace({
     else if (activeTab === "graphics") onConnectionStatus?.(graphicsToConnection(graphics.status));
     else if (activeTab === "text") onConnectionStatus?.(textStatus);
     else if (activeTab === "serial") onConnectionStatus?.(serialStatus);
-    else if (activeTab === "files") onConnectionStatus?.(filesStatus);
+    else if (isGuestPaneTab(activeTab)) onConnectionStatus?.(paneStatus[activeTab]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, capsError, graphics.status, textStatus, serialStatus, filesStatus]);
+  }, [activeTab, capsError, graphics.status, textStatus, serialStatus, paneStatus]);
 
   // Keyboard focus follows the front tab.
   useEffect(() => {
@@ -314,7 +320,14 @@ export function ConsoleWorkspace({
       onFocusCapture={chrome.reveal}
       onBlurCapture={chrome.conceal}
     >
-      <ConsoleTabs activeTab={activeTab} onTabChange={onTabChange} instanceType={instanceType} capabilities={capabilities} filesUnavailableReason={filesUnavailableReason} />
+      <ConsoleTabs
+        activeTab={activeTab}
+        onTabChange={onTabChange}
+        instanceType={instanceType}
+        capabilities={capabilities}
+        filesUnavailableReason={filesUnavailableReason}
+        credentialsUnavailableReason={credentialsUnavailableReason}
+      />
       {(isGraphics || isTerminal) && (
         <ConsoleToolbar
           instanceName={instanceName}
@@ -462,16 +475,20 @@ export function ConsoleWorkspace({
               <ISOManagerPanel consoleId={consoleId} instanceName={instanceName} host={host} project={project} />
             </div>
           )}
-          {mounted.has("files") && !filesUnavailableReason && (
-            <FilesPane
-              hidden={activeTab !== "files"}
-              active={visible && activeTab === "files"}
-              host={host}
-              project={project}
-              instanceName={instanceName}
-              onTabChange={onTabChange}
-              onStatus={setFilesStatus}
-            />
+          {([["files", filesUnavailableReason], ["credentials", credentialsUnavailableReason]] as const).map(([tab, reason]) =>
+            mounted.has(tab) && !reason ? (
+              <GuestPane
+                key={tab}
+                tab={tab}
+                hidden={activeTab !== tab}
+                active={visible && activeTab === tab}
+                host={host}
+                project={project}
+                instanceName={instanceName}
+                onTabChange={onTabChange}
+                onStatus={onPaneStatus}
+              />
+            ) : null,
           )}
           {isTerminal && panels.search && (
             <SearchBar
@@ -501,8 +518,8 @@ export function ConsoleWorkspace({
           instanceName={instanceName}
           host={host}
           project={project}
-          connectionStatus={isGraphics ? graphicsToConnection(graphics.status) : activeTab === "serial" ? serialStatus : activeTab === "files" ? filesStatus : textStatus}
-          protocol={isGraphics ? "graphics" : activeTab === "files" ? "files" : "terminal"}
+          connectionStatus={isGraphics ? graphicsToConnection(graphics.status) : activeTab === "serial" ? serialStatus : isGuestPaneTab(activeTab) ? paneStatus[activeTab] : textStatus}
+          protocol={isGraphics ? "graphics" : isGuestPaneTab(activeTab) ? activeTab : "terminal"}
           compact={!isFullPage}
         />
       )}

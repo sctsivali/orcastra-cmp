@@ -1,6 +1,7 @@
 /**
  * Small pieces of the console workspace: the terminal key map of the on-screen keyboard, the
- * output search bar, the "another console is open" notice and the full-screen chrome.
+ * output search bar, the "another console is open" notice, the full-screen chrome and the two
+ * guest panes (Files and Credentials).
  */
 
 "use client";
@@ -10,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, MonitorX, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CredentialsPanel } from "@/components/guest-credentials/credentials-panel";
 import { InstanceFileExplorer } from "@/components/instance-files/instance-file-explorer";
 import { cn, formatClockTime } from "@/lib/utils";
 import type { ActiveConsoleSession } from "@/lib/console-api";
@@ -153,8 +155,18 @@ export function useFullscreenChrome(getTarget: () => HTMLElement | null) {
   return { fullscreen, revealed, reveal, conceal };
 }
 
-/** The Files tab: mounted once like Text, so a half-typed path and a transfer list survive a switch. */
-export function FilesPane({
+export type GuestPaneTab = Extract<ConsoleTab, "files" | "credentials">;
+
+export function isGuestPaneTab(tab: ConsoleTab): tab is GuestPaneTab {
+  return tab === "files" || tab === "credentials";
+}
+
+/**
+ * The Files and Credentials tabs: each mounted once like Text, so a half-typed path, a transfer
+ * list or a chosen account survives a switch. Neither reads anything while it is not in front.
+ */
+export function GuestPane({
+  tab,
   hidden,
   active,
   host,
@@ -163,24 +175,19 @@ export function FilesPane({
   onTabChange,
   onStatus,
 }: {
+  tab: GuestPaneTab;
   hidden: boolean;
   active: boolean;
   host: string;
   project: string;
   instanceName: string;
   onTabChange: (tab: ConsoleTab) => void;
-  onStatus: (status: ConsoleConnectionStatus) => void;
+  onStatus: (tab: GuestPaneTab, status: ConsoleConnectionStatus) => void;
 }) {
+  const props = { host, project, instanceName, active, onOpenConsoleTab: onTabChange, onHealth: (status: ConsoleConnectionStatus) => onStatus(tab, status) };
   return (
     <div className={cn("absolute inset-0", hidden && "hidden")}>
-      <InstanceFileExplorer
-        host={host}
-        project={project}
-        instanceName={instanceName}
-        active={active}
-        onOpenConsoleTab={onTabChange}
-        onHealth={onStatus}
-      />
+      {tab === "files" ? <InstanceFileExplorer {...props} /> : <CredentialsPanel {...props} />}
     </div>
   );
 }

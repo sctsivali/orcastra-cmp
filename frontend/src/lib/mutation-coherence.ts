@@ -60,6 +60,7 @@ const QUERY_FAMILY_KEYS = {
   kernelAdvisories: [["kernelAdvisories"], ["kernelCveFeed"]],
   instanceFiles: [["instanceFiles"]],
   instanceFileContent: [["instanceFileContent"]],
+  guestCredentials: [["guestCredentials"]],
 } as const satisfies Record<string, readonly QueryKey[]>;
 
 export type QueryFamily = keyof typeof QUERY_FAMILY_KEYS;
@@ -416,6 +417,20 @@ export const MUTATION_IMPACTS = defineMutationImpacts({
       "instanceFilesAPI.uploadBundle",
     ],
   },
+  // Accounts, passwords, sudo and authorized_keys inside one guest. Every write re-reads what the
+  // panel shows; nothing outside the panel caches guest accounts.
+  "guest-credentials.change": {
+    completion: "response",
+    queryFamilies: ["guestCredentials"],
+    apiCalls: [
+      "guestCredentialsAPI.addKey",
+      "guestCredentialsAPI.removeKey",
+      "guestCredentialsAPI.setPassword",
+      "guestCredentialsAPI.lockPassword",
+      "guestCredentialsAPI.setSudo",
+      "guestCredentialsAPI.createUser",
+    ],
+  },
 } as const);
 
 export type MutationImpactId = keyof typeof MUTATION_IMPACTS;
@@ -445,6 +460,9 @@ export const MUTATION_CALL_EXCEPTIONS = {
   "instanceFilesAPI.patchChunk": "non-terminal streaming upload stage",
   "instanceFilesAPI.uploadStatus": "read of a streaming upload's state",
   "instanceFilesAPI.abortUpload": "streaming upload cancellation",
+  "guestCredentialsAPI.overview": "read sent as POST so a term-ended Partner cluster refuses it as it refuses the console",
+  "guestCredentialsAPI.sshServer": "read sent as POST so a term-ended Partner cluster refuses it as it refuses the console",
+  "guestCredentialsAPI.listKeys": "read sent as POST so a term-ended Partner cluster refuses it as it refuses the console",
 } as const;
 
 export interface ReconcileMutationOptions {

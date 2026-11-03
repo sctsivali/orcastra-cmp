@@ -22,7 +22,7 @@ import { getAccessToken } from "@/lib/api";
 import { isReauthenticating } from "@/lib/reauth";
 import { AgentActivityBadge } from "./components/agent-activity-badge";
 
-const TABS: ConsoleTab[] = ["graphics", "text", "serial", "iso", "files"];
+const TABS: ConsoleTab[] = ["graphics", "text", "serial", "iso", "files", "credentials"];
 
 function ConsoleLoading() {
   return (

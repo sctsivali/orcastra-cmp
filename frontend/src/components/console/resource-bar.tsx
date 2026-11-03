@@ -72,7 +72,7 @@ interface ConsoleResourceBarProps {
   /** Connection status from the console/terminal page */
   connectionStatus: "connecting" | "connected" | "disconnected" | "error" | "loading";
   /** Protocol type */
-  protocol?: "terminal" | "graphics" | "files";
+  protocol?: "terminal" | "graphics" | "files" | "credentials";
   /** Compact layout for inline/floating console windows (smaller expanded height, 2-col grid) */
   compact?: boolean;
 }
@@ -269,7 +269,9 @@ export function ConsoleResourceBar({
   // note: the display session is named as the Sessions page lists it, so the bar and the table
   // cannot drift apart again.
   const displayProtocol =
-    protocol === "graphics" ? sessionProtocolLabel(GRAPHICS_SESSION_PROTOCOL) : protocol === "files" ? "SFTP" : "WebSocket";
+    protocol === "graphics"
+      ? sessionProtocolLabel(GRAPHICS_SESSION_PROTOCOL)
+      : protocol === "files" ? "SFTP" : protocol === "credentials" ? "LXD exec" : "WebSocket";
 
   // Bandwidth from session stats
   const dlRate = sessionStats?.bandwidth?.download_rate_bps ?? 0;

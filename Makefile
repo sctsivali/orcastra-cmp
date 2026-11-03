@@ -388,6 +388,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-console-actions.mjs
 	@echo "$(COLOR_GREEN)Checking the SPICE client...$(COLOR_RESET)"
 	@node scripts/checks/check-spice-client.mjs
+	@echo "$(COLOR_GREEN)Checking where guest passwords and keys may go...$(COLOR_RESET)"
+	@node scripts/checks/check-guest-credentials-secrets.mjs
 	@echo "$(COLOR_GREEN)Checking task journal pagination and duration behavior...$(COLOR_RESET)"
 	@node scripts/checks/check-task-journal-behavior.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal theme...$(COLOR_RESET)"

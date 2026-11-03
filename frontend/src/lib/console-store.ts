@@ -43,7 +43,7 @@ export type ConsoleType = 'text' | 'graphics';
 export type GraphicsType = 'spice' | 'vnc' | 'none';
 
 // Active tab in console window
-export type ConsoleTab = 'text' | 'graphics' | 'serial' | 'boot' | 'iso' | 'files';
+export type ConsoleTab = 'text' | 'graphics' | 'serial' | 'boot' | 'iso' | 'files' | 'credentials';
 
 // LXD instance status
 export type InstanceStatus = 'Running' | 'Stopped' | 'Frozen' | 'Error' | 'Unknown' | 'Starting' | 'Stopping' | 'Restarting';

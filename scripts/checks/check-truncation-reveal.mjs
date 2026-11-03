@@ -67,7 +67,7 @@ const OWNERS = ['OverflowText', 'CopyableText', 'OverflowCell', 'Tooltip', 'Tool
 // components/ui/select.tsx carries Radix's own trigger contract, and removing it makes every
 // form row grow with its content. A hard ban here is a check that cannot pass, and a check that
 // cannot pass is a check somebody deletes.
-const CSS_TRUNCATION_BASELINE = 32;
+const CSS_TRUNCATION_BASELINE = 31;
 
 // Array previews that show the first N and are not id-shaped, so rule 1e skips them. The four
 // that remain are all legitimate: avatar initials from a name and from an email, the 63

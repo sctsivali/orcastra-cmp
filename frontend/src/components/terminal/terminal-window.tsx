@@ -23,7 +23,6 @@ import {
   ChevronDown,
   Pin,
   PinOff,
-  FolderOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,8 +39,7 @@ import {
 } from "@/lib/terminal-store";
 import { TerminalInstance, TerminalInstanceHandle } from "./terminal-instance";
 import { InstanceOperations } from "./instance-operations";
-import { InstanceFileExplorer } from "@/components/instance-files/instance-file-explorer";
-import { useFilesUnavailableReason } from "@/hooks/use-instance-files";
+import { GuestPanelOverlay, GuestPanelToggles, useGuestPanelAccess, type GuestPanel } from "./guest-panels";
 import { SessionStatusIcon } from "./session-status";
 
 interface TerminalWindowProps {
@@ -67,9 +65,10 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const terminalInstanceRef = useRef<TerminalInstanceHandle | null>(null);
   
-  // File upload state
-  const [showFiles, setShowFiles] = useState(false);
-  const canUseFiles = !useFilesUnavailableReason(terminal.host, terminal.project, terminal.instanceName);
+  // The file explorer or the Credentials panel, drawn over the terminal; one at a time.
+  const [panel, setPanel] = useState<GuestPanel>(null);
+  const panelAccess = useGuestPanelAccess(terminal);
+  const canUseFiles = panelAccess.files;
   
   // Track scroll offset for unpinned terminals
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
@@ -210,7 +209,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
   const handleFileDragOver = useCallback((e: React.DragEvent) => {
     if (canUseFiles && e.dataTransfer.types.includes("Files")) {
       e.preventDefault();
-      setShowFiles(true);
+      setPanel("files");
     }
   }, [canUseFiles]);
 
@@ -364,24 +363,8 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 <TooltipContent>Search (Ctrl+Shift+F)</TooltipContent>
               </Tooltip>
 
-              {/* Files in the instance */}
-              {canUseFiles && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-white hover:bg-white/10 touch-manipulation active:scale-95"
-                      aria-label={showFiles ? "Back to the terminal" : "Show files"}
-                      onClick={() => setShowFiles(!showFiles)}
-                      onTouchEnd={(e) => { e.preventDefault(); setShowFiles(!showFiles); }}
-                    >
-                      <FolderOpen className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{showFiles ? "Back to the terminal" : "Files in this instance"}</TooltipContent>
-                </Tooltip>
-              )}
+              {/* Files and logins in the instance */}
+              <GuestPanelToggles panel={panel} onPanel={setPanel} access={panelAccess} />
 
               {/* Expand to new tab */}
               <Tooltip>
@@ -496,7 +479,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
           </div>
         )}
 
-        {/* Terminal content, with the file explorer over it when open so xterm keeps its size */}
+        {/* Terminal content, with a guest panel over it when open so xterm keeps its size */}
         <div className="flex-1 overflow-hidden relative" onDragOver={handleFileDragOver}>
           <TerminalInstance
             ref={terminalInstanceRef}
@@ -505,11 +488,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
             host={terminal.host}
             project={terminal.project}
           />
-          {showFiles && canUseFiles && (
-            <div className="absolute inset-0 z-50 bg-background">
-              <InstanceFileExplorer host={terminal.host} project={terminal.project} instanceName={terminal.instanceName} />
-            </div>
-          )}
+          <GuestPanelOverlay panel={panel} access={panelAccess} target={terminal} />
         </div>
       </div>
     </Rnd>
