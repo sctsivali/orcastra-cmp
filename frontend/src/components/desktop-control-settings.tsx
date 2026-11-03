@@ -203,6 +203,19 @@ export function DesktopControlSettings() {
     },
   });
   const saving = saveMutation.isPending;
+  // important: claimed synchronously; a double click on Save sent the same consent twice.
+  const submitInFlightRef = React.useRef(false);
+  const handleSave = async () => {
+    if (submitInFlightRef.current || orgId === null) return;
+    submitInFlightRef.current = true;
+    try {
+      await saveMutation.mutateAsync({ id: orgId, values: draft });
+    } catch {
+      // the mutation's onError toasts why
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  };
 
   return (
     <Card>
@@ -305,7 +318,7 @@ export function DesktopControlSettings() {
 
             <div className="flex flex-wrap items-center gap-3">
               <Button
-                onClick={() => orgId !== null && saveMutation.mutate({ id: orgId, values: draft })}
+                onClick={() => void handleSave()}
                 disabled={!dirty || saving}
               >
                 {saving ? "Saving…" : "Save consent"}

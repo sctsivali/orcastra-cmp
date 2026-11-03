@@ -1,7 +1,7 @@
 "use client";
 
 import { formatDate, plural } from "@/lib/utils";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog, DialogBody, DialogContent, DialogDescription,
@@ -221,22 +221,54 @@ export function TenantAccessDialog({
 
   // ── Handlers ──
 
-  const handleQuickAssign = (policyId: number) => {
-    // find org for this policy
+  // important: claimed synchronously; isPending disables a button only on the next render, so a
+  // double click assigned, revoked or created twice.
+  const assignInFlightRef = useRef(false);
+  const revokeInFlightRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+
+  const handleQuickAssign = async (policyId: number) => {
     const policy = allPolicies.find((p) => p.id === policyId);
-    if (!policy) return;
-    assignMutation.mutate({
-      policy_id: policyId,
-      user_email: userEmail,
-      organization_id: policy.organization_id,
-    });
+    if (!policy || assignInFlightRef.current) return;
+    assignInFlightRef.current = true;
+    try {
+      await assignMutation.mutateAsync({
+        policy_id: policyId,
+        user_email: userEmail,
+        organization_id: policy.organization_id,
+      });
+    } catch {
+      // the mutation's onError toasts why
+    } finally {
+      assignInFlightRef.current = false;
+    }
   };
 
-  const handlePolicySubmit = (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => {
-    if (isEdit && editPolicyObj) {
-      updatePolicyMutation.mutate({ id: editPolicyObj.id, data: data as PolicyUpdateRequest });
-    } else {
-      createPolicyMutation.mutate(data as PolicyCreateRequest);
+  const handleRevoke = async (assignmentId: number) => {
+    if (revokeInFlightRef.current) return;
+    revokeInFlightRef.current = true;
+    try {
+      await revokeMutation.mutateAsync(assignmentId);
+    } catch {
+      // the mutation's onError toasts why
+    } finally {
+      revokeInFlightRef.current = false;
+    }
+  };
+
+  const handleSubmit = async (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    try {
+      if (isEdit && editPolicyObj) {
+        await updatePolicyMutation.mutateAsync({ id: editPolicyObj.id, data: data as PolicyUpdateRequest });
+      } else {
+        await createPolicyMutation.mutateAsync(data as PolicyCreateRequest);
+      }
+    } catch {
+      // the mutation's onError toasts why
+    } finally {
+      submitInFlightRef.current = false;
     }
   };
 
@@ -326,7 +358,7 @@ export function TenantAccessDialog({
                               clusters={clusters}
                               revokeId={revokeId}
                               onSetRevokeId={setRevokeId}
-                              onRevoke={() => revokeMutation.mutate(a.id)}
+                              onRevoke={() => void handleRevoke(a.id)}
                               isRevoking={revokeMutation.isPending}
                               onEditPolicy={() => policy && setEditPolicyObj(policy)}
                             />
@@ -419,7 +451,7 @@ export function TenantAccessDialog({
                                 variant="default"
                                 size="sm"
                                 className="h-7 text-xs gap-1"
-                                onClick={() => handleQuickAssign(policy.id)}
+                                onClick={() => void handleQuickAssign(policy.id)}
                                 disabled={assignMutation.isPending}
                               >
                                 {assigningPolicyId === policy.id ? (
@@ -456,7 +488,7 @@ export function TenantAccessDialog({
         organizations={organizations}
         defaultOrganizationId={userOrgIds[0]}
         defaultPolicyHint="Auto-assign to new tenants"
-        onSubmit={handlePolicySubmit}
+        onSubmit={(data, isEdit) => void handleSubmit(data, isEdit)}
         isPending={createPolicyMutation.isPending}
       />
 
@@ -469,7 +501,7 @@ export function TenantAccessDialog({
           clusters={clusters}
           organizations={organizations}
           defaultPolicyHint="Auto-assign to new tenants"
-          onSubmit={handlePolicySubmit}
+          onSubmit={(data, isEdit) => void handleSubmit(data, isEdit)}
           isPending={updatePolicyMutation.isPending}
         />
       )}

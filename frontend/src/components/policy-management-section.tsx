@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useState, useMemo } from "react";
+import { Suspense, useCallback, useRef, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -267,11 +267,36 @@ function PolicyManagementSectionContent() {
     },
   });
 
-  const handlePolicySubmit = (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => {
-    if (isEdit && editPolicy) {
-      updateMutation.mutate({ id: editPolicy.id, data: data as PolicyUpdateRequest });
-    } else {
-      createMutation.mutate(data as PolicyCreateRequest);
+  // important: claimed synchronously; isPending disables the buttons only on the next render, so a
+  // double click created two policies or sent two deletes.
+  const submitInFlightRef = useRef(false);
+  const deleteInFlightRef = useRef(false);
+
+  const handleSubmit = async (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    try {
+      if (isEdit && editPolicy) {
+        await updateMutation.mutateAsync({ id: editPolicy.id, data: data as PolicyUpdateRequest });
+      } else {
+        await createMutation.mutateAsync(data as PolicyCreateRequest);
+      }
+    } catch {
+      // the mutation's onError toasts why
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (deleteInFlightRef.current) return;
+    deleteInFlightRef.current = true;
+    try {
+      await deleteMutation.mutateAsync(id);
+    } catch {
+      // the mutation's onError toasts why
+    } finally {
+      deleteInFlightRef.current = false;
     }
   };
 
@@ -459,7 +484,7 @@ function PolicyManagementSectionContent() {
                                       // note: held open until the answer, so a refusal is read in context
                                       onClick={(event) => {
                                         event.preventDefault();
-                                        deleteMutation.mutate(policy.id);
+                                        void handleDelete(policy.id);
                                       }}
                                       disabled={deleteMutation.isPending}
                                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -509,7 +534,7 @@ function PolicyManagementSectionContent() {
         clusters={clusters}
         organizations={organizations}
         defaultPolicyHint="Auto-assign to new tenants in this org"
-        onSubmit={handlePolicySubmit}
+        onSubmit={(data, isEdit) => void handleSubmit(data, isEdit)}
         isPending={createMutation.isPending}
       />
 
@@ -522,7 +547,7 @@ function PolicyManagementSectionContent() {
           clusters={clusters}
           organizations={organizations}
           defaultPolicyHint="Auto-assign to new tenants in this org"
-          onSubmit={handlePolicySubmit}
+          onSubmit={(data, isEdit) => void handleSubmit(data, isEdit)}
           isPending={updateMutation.isPending}
         />
       )}

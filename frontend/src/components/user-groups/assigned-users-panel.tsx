@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useId, useMemo, useState } from "react";
+import { Suspense, useCallback, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Loader2, Plus, ShieldCheck, Trash2, Users } from "lucide-react";
 import {
@@ -191,6 +191,11 @@ function AssignedUsersPanelContent() {
     },
   });
 
+  // important: claimed synchronously. isPending reaches the button only on the next render, so a
+  // double click (or Enter twice) used to send two requests; the e2e spec caught two DELETEs.
+  const submitInFlightRef = useRef(false);
+  const removeInFlightRef = useRef(false);
+
   const orgRequired = role === "partner" || role === "tenant";
   const trimmedEmail = email.trim().toLowerCase();
   const emailInvalid = trimmedEmail !== "" && !isValidEmail(trimmedEmail);
@@ -205,14 +210,33 @@ function AssignedUsersPanelContent() {
     setAssignOpen(true);
   }
 
-  function handleAssign() {
-    if (!canAssign) return;
-    assignMutation.mutate({
-      user_email: trimmedEmail,
-      role,
-      organization_id: orgId ? Number(orgId) : undefined,
-    });
-  }
+  const handleSubmit = async () => {
+    if (submitInFlightRef.current || !canAssign) return;
+    submitInFlightRef.current = true;
+    try {
+      await assignMutation.mutateAsync({
+        user_email: trimmedEmail,
+        role,
+        organization_id: orgId ? Number(orgId) : undefined,
+      });
+    } catch {
+      // shown in the dialog from assignMutation.error
+    } finally {
+      submitInFlightRef.current = false;
+    }
+  };
+
+  const handleRemove = async (userEmail: string) => {
+    if (removeInFlightRef.current) return;
+    removeInFlightRef.current = true;
+    try {
+      await removeMutation.mutateAsync(userEmail);
+    } catch {
+      // shown in the dialog from removeMutation.error
+    } finally {
+      removeInFlightRef.current = false;
+    }
+  };
 
   return (
     <Card>
@@ -373,7 +397,7 @@ function AssignedUsersPanelContent() {
             className="space-y-4 py-2"
             onSubmit={(event) => {
               event.preventDefault();
-              handleAssign();
+              void handleSubmit();
             }}
           >
             <div className="space-y-2">
@@ -495,7 +519,7 @@ function AssignedUsersPanelContent() {
               // 502 when the identity provider did not confirm) is read here, not lost with the dialog
               onClick={(event) => {
                 event.preventDefault();
-                if (removing) removeMutation.mutate(removing);
+                if (removing) void handleRemove(removing);
               }}
               disabled={removeMutation.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
