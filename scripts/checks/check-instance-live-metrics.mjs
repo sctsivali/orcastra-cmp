@@ -25,8 +25,8 @@ const files = {
   types: "frontend/src/types/api.ts",
   stream: "frontend/src/hooks/use-instance-stream.ts",
   sidebar: "frontend/src/components/sidebar/nav-config.tsx",
-  tenantAccess: "frontend/src/components/tenant-access-dialog.tsx",
-  policyManagement: "frontend/src/components/policy-management-section.tsx",
+  // The one rule editor Access Policies and Tenant Access share (2026-11-03).
+  ruleEditor: "frontend/src/components/access-policies/rule-editor.tsx",
   pendingCreates: "frontend/src/lib/pending-creates.ts",
   createForm: "frontend/src/components/instance-create-form.tsx",
   instancesPage: "frontend/src/app/inventory/instances/page.tsx",
@@ -132,8 +132,7 @@ const checks = [
         bodies.stream,
       ) &&
       /queryKeys\.instancesFor\(actorScope, undefined\)/.test(bodies.sidebar) &&
-      /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.tenantAccess) &&
-      /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.policyManagement),
+      /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.ruleEditor),
     "an instance-list producer or consumer is not isolated by actor scope",
   ],
   [
@@ -146,7 +145,7 @@ const checks = [
   ],
   [
     !/queryKey:\s*\["instances",\s*(?:undefined|host|hostId)\]/.test(
-      [bodies.stream, bodies.sidebar, bodies.tenantAccess, bodies.policyManagement].join("\n"),
+      [bodies.stream, bodies.sidebar, bodies.ruleEditor].join("\n"),
     ),
     "a concrete instance-list query still uses an unscoped browser-cache key",
   ],

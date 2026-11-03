@@ -49,8 +49,8 @@ const PICKERS = new Map([
   // The Generate Key dialog moved out of the page into its own component (2026-10-27).
   ['app/my-keys/components/create-key-dialog.tsx', { kind: 'hook', notice: true }],
   ['app/inventory/snapshots/components/take-snapshot-dialog.tsx', { kind: 'hook', notice: true }],
-  ['components/tenant-access-dialog.tsx', { kind: 'meta', notice: false }],
-  ['components/policy-management-section.tsx', { kind: 'meta', notice: false }],
+  // Access Policies and Tenant Access share this one rule editor since 2026-11-03.
+  ['components/access-policies/rule-editor.tsx', { kind: 'meta', notice: false }],
   ['app/inventory/clustering/members/page.tsx', { kind: 'meta', notice: false }],
   ['components/monitoring/node-filter-select.tsx', { kind: 'meta', notice: false }],
   // Closed. /api/v1/integrations/available-clusters now sends status, reason and checked_at, so

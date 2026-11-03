@@ -6,485 +6,44 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import { SearchableSelect } from "@/components/ui/searchable-select";
-import { clusterStatusMeta, clusterSublabel } from "@/lib/cluster-status";
-import { ClusterStatus } from "@/types/api";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 import { OrphanRulesNotice } from "@/components/tenant-access/orphan-rules-notice";
 import { PolicyTermStatus } from "@/components/tenant-access/policy-term-status";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
-  DialogHeader, DialogTitle, DialogTrigger,
-} from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
   Loader2, Plus, Trash2, ChevronDown,
-  ChevronRight, Edit, Building2, ShieldCheck,
+  ChevronRight, Edit, ShieldCheck,
 } from "lucide-react";
-import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
+import { api, integrationsAPI } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
-import { queryKeys, useClusters } from "@/hooks/use-lxd";
-import { readInstanceList } from "@/lib/instance-reconciliation";
-import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { PolicyEditorDialog } from "@/components/access-policies/policy-editor-dialog";
+import type { PolicyCluster } from "@/components/access-policies/rule-editor";
 import type {
-  AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
-  TenantPermission, IntegrationOrganization,
-} from "@/types";
-import {
-  TENANT_PERMISSION_LABELS, TENANT_PERMISSION_DESCRIPTIONS,
-  ALL_TENANT_PERMISSIONS,
+  AccessPolicy, PolicyCreateRequest, PolicyUpdateRequest, IntegrationOrganization,
 } from "@/types";
 import { plural } from "@/lib/utils";
-
-// filter out snapshot (not ready yet)
-const VISIBLE_PERMISSIONS = ALL_TENANT_PERMISSIONS.filter((p) => p !== "snapshot");
-
-/** compact permission badges (no icons) */
-function PermissionBadges({ permissions }: { permissions: string[] }) {
-  return (
-    <div className="flex gap-1 flex-wrap">
-      {(permissions as TenantPermission[])
-        .filter((p) => p !== "snapshot")
-        .map((p) => (
-          <Badge key={p} variant="secondary" className="px-2 py-0">
-            {TENANT_PERMISSION_LABELS[p].split(" ")[0]}
-          </Badge>
-        ))}
-    </div>
-  );
-}
-
-/** permission checkbox group */
-function PermissionCheckboxGroup({
-  selected,
-  onChange,
-}: {
-  selected: TenantPermission[];
-  onChange: (perms: TenantPermission[]) => void;
-}) {
-  const toggle = (perm: TenantPermission) => {
-    if (selected.includes(perm)) {
-      if (selected.length > 1) {
-        onChange(selected.filter((p) => p !== perm));
-      }
-    } else {
-      onChange([...selected, perm]);
-    }
-  };
-
-  return (
-    <div className="space-y-1.5">
-      {VISIBLE_PERMISSIONS.map((perm) => (
-        <label
-          key={perm}
-          className="flex items-start gap-2.5 p-1.5 rounded-md hover:bg-muted/50 cursor-pointer"
-        >
-          <Checkbox
-            checked={selected.includes(perm)}
-            onCheckedChange={() => toggle(perm)}
-            className="mt-0.5"
-          />
-          <div>
-            <div className="text-xs font-medium">
-              {TENANT_PERMISSION_LABELS[perm]}
-            </div>
-            <p className="text-[10px] text-muted-foreground leading-tight">
-              {TENANT_PERMISSION_DESCRIPTIONS[perm]}
-            </p>
-          </div>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-/** single rule editor with project/instance dropdowns */
-function RuleEditor({
-  rule, index, clusters, onUpdate, onRemove,
-}: {
-  rule: Omit<PolicyRule, "id">;
-  index: number;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
-  onUpdate: (index: number, rule: Omit<PolicyRule, "id">) => void;
-  onRemove: (index: number) => void;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const { scopeKey, isAuthenticated } = useActorQueryScope();
-
-  // find the selected cluster for display & data fetching
-  const selectedCluster = clusters.find((c) => c.cluster_id === rule.cluster_id);
-  const hostId = rule.cluster_id !== "*" ? rule.cluster_id : "";
-
-  // fetch projects for this cluster (API expects cluster_id as host)
-  const { data: projectsData, isLoading: projectsLoading } = useQuery({
-    queryKey: queryKeys.projectsFor(scopeKey, hostId),
-    queryFn: () => projectAPI.list(hostId),
-    enabled: isAuthenticated && !!hostId,
-    staleTime: 60_000, // cache for 60s to avoid refetch on re-expand
-  });
-
-  // fetch instances for this cluster (through the pending-delete filter: this key is the
-  // per-host instance list other pages read too)
-  const instanceQueryClient = useQueryClient();
-  const { data: instancesData, isLoading: instancesLoading } = useQuery({
-    queryKey: queryKeys.instancesFor(scopeKey, hostId),
-    queryFn: () => readInstanceList(instanceQueryClient, scopeKey, () => instanceAPI.list(hostId)),
-    enabled: isAuthenticated && !!hostId,
-    staleTime: 60_000,
-  });
-
-  const projects = projectsData?.projects || [];
-
-  // filter instances by selected project
-  const instances = useMemo(() => {
-    const allInstances = instancesData?.vms || [];
-    if (rule.project_name && rule.project_name !== "*") {
-      return allInstances.filter((i: any) => i.project === rule.project_name);
-    }
-    return allInstances;
-  }, [instancesData, rule.project_name]);
-
-  return (
-    <div className="border rounded-lg p-2.5 space-y-2 bg-muted/30">
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1.5 text-xs font-medium hover:text-primary"
-        >
-          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          Rule {index + 1}
-          <span className="text-muted-foreground font-normal">
-            - {rule.cluster_id === "*" ? "All Clusters" : clusters.find(c => c.cluster_id === rule.cluster_id)?.display_name || rule.cluster_id}
-            {rule.project_name !== "*" && ` / ${rule.project_name}`}
-            {rule.instance_name !== "*" && ` / ${rule.instance_name}`}
-          </span>
-        </button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 text-destructive hover:text-destructive"
-          onClick={() => onRemove(index)}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
-
-      {expanded && (
-        <div className="grid gap-2.5 pl-5">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Cluster</Label>
-              <SearchableSelect
-                value={rule.cluster_id}
-                onValueChange={(v) => onUpdate(index, {
-                  ...rule,
-                  cluster_id: v,
-                  project_name: "*",
-                  instance_name: "*",
-                })}
-                className="h-7 text-xs"
-                searchPlaceholder="Search clusters…"
-                options={[
-                  { value: "*", label: "* (All Clusters)" },
-                  // note: a scope picker, not a target picker. An offline cluster is a
-                  // perfectly valid thing to write a rule about, so the status is marked but
-                  // never disabled and never warned about. Disabling here would block a rule
-                  // an operator is writing precisely because the cluster is down.
-                  ...clusters.map((c) => {
-                    const meta = clusterStatusMeta(c.status);
-                    return {
-                      value: c.cluster_id,
-                      label: c.display_name || c.cluster_id,
-                      sublabel: clusterSublabel(c.cluster_id, c.display_name, c.endpoint),
-                      status: {
-                        label: meta.label,
-                        tone: meta.tone,
-                      },
-                    };
-                  }),
-                ]}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Project</Label>
-              <Select
-                value={rule.project_name}
-                onValueChange={(v) => onUpdate(index, { ...rule, project_name: v, instance_name: "*" })}
-                disabled={rule.cluster_id === "*"}
-              >
-                <SelectTrigger className="h-7 text-xs">
-                  <SelectValue placeholder={projectsLoading ? "Loading…" : "* (all)"} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="*">* (All Projects)</SelectItem>
-                  {projectsLoading ? (
-                    <div className="flex items-center justify-center py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      <span className="ml-1.5 text-xs text-muted-foreground">Loading projects…</span>
-                    </div>
-                  ) : (
-                    projects.map((p: any) => (
-                      <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Instance</Label>
-              <Select
-                value={rule.instance_name}
-                onValueChange={(v) => onUpdate(index, { ...rule, instance_name: v })}
-                disabled={rule.cluster_id === "*"}
-              >
-                <SelectTrigger className="h-7 text-xs">
-                  <SelectValue placeholder={instancesLoading ? "Loading…" : "* (all)"} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="*">* (All Instances)</SelectItem>
-                  {instancesLoading ? (
-                    <div className="flex items-center justify-center py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      <span className="ml-1.5 text-xs text-muted-foreground">Loading instances…</span>
-                    </div>
-                  ) : (
-                    instances.map((i: any) => (
-                      <SelectItem key={i.name} value={i.name}>
-                        {i.name}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Permissions</Label>
-            <PermissionCheckboxGroup
-              selected={rule.permissions as TenantPermission[]}
-              onChange={(perms) => onUpdate(index, { ...rule, permissions: perms })}
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============================================
-// Policy Editor Dialog
-// ============================================
-
-function PolicyEditorDialog({
-  open, onOpenChange, editPolicy, clusters, organizations, onSubmit, isPending,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  editPolicy?: AccessPolicy | null;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
-  organizations: IntegrationOrganization[];
-  onSubmit: (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => void;
-  isPending: boolean;
-}) {
-  const isEdit = !!editPolicy;
-
-  const [name, setName] = useState(editPolicy?.name || "");
-  const [description, setDescription] = useState(editPolicy?.description || "");
-  const [orgId, setOrgId] = useState<string>(
-    editPolicy ? String(editPolicy.organization_id) : ""
-  );
-  const [isDefault, setIsDefault] = useState(editPolicy?.is_default || false);
-  const [rules, setRules] = useState<Omit<PolicyRule, "id">[]>(
-    editPolicy?.rules?.map(({ cluster_id, project_name, instance_name, permissions }) => ({
-      cluster_id, project_name, instance_name, permissions,
-    })) || [{ cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]
-  );
-
-  const handleOpenChange = (v: boolean) => {
-    if (v && editPolicy) {
-      setName(editPolicy.name);
-      setDescription(editPolicy.description || "");
-      setOrgId(String(editPolicy.organization_id));
-      setIsDefault(editPolicy.is_default);
-      setRules(
-        editPolicy.rules?.map(({ cluster_id, project_name, instance_name, permissions }) => ({
-          cluster_id, project_name, instance_name, permissions,
-        })) || []
-      );
-    } else if (v && !editPolicy) {
-      setName("");
-      setDescription("");
-      setOrgId("");
-      setIsDefault(false);
-      setRules([{ cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]);
-    }
-    onOpenChange(v);
-  };
-
-  const addRule = () => {
-    setRules([...rules, { cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]);
-  };
-
-  const updateRule = (idx: number, rule: Omit<PolicyRule, "id">) => {
-    const updated = [...rules];
-    updated[idx] = rule;
-    setRules(updated);
-  };
-
-  const removeRule = (idx: number) => {
-    if (rules.length > 1) setRules(rules.filter((_, i) => i !== idx));
-  };
-
-  const canSubmit = name.trim() && (isEdit || orgId) && rules.length > 0;
-
-  const handleSubmit = () => {
-    if (!canSubmit) return;
-    if (isEdit) {
-      onSubmit(
-        { name: name.trim(), description: description.trim() || undefined, is_default: isDefault, rules } as PolicyUpdateRequest,
-        true,
-      );
-    } else {
-      onSubmit(
-        {
-          name: name.trim(),
-          description: description.trim() || undefined,
-          organization_id: parseInt(orgId),
-          is_default: isDefault,
-          rules,
-        } as PolicyCreateRequest,
-        false,
-      );
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>
-            {isEdit ? "Edit Policy" : "Create Policy"}
-          </DialogTitle>
-          <DialogDescription>
-            {isEdit
-              ? "Update the policy rules and settings."
-              : "Define cluster, project, and instance-level access rules for tenants."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <DialogBody className="-mr-2 pr-2">
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="mgmt-policy-name" className="text-xs">Policy Name</Label>
-              <Input
-                id="mgmt-policy-name"
-                placeholder="for example, Production Read-Only"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={100}
-                className="h-8 text-sm"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="mgmt-policy-desc" className="text-xs">Description (Optional)</Label>
-              <Textarea
-                id="mgmt-policy-desc"
-                placeholder="Describe what this policy allows…"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                maxLength={500}
-                className="resize-none h-14 text-sm"
-              />
-            </div>
-
-            {!isEdit && (
-              <div className="space-y-1.5">
-                <Label className="text-xs">
-                  Organization <span className="text-destructive">(required)</span>
-                </Label>
-                <Select value={orgId || "__none__"} onValueChange={(v) => setOrgId(v === "__none__" ? "" : v)}>
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue placeholder="Select organization…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__" disabled>Select organization…</SelectItem>
-                    {organizations.map((org) => (
-                      <SelectItem key={org.id} value={String(org.id)}>{org.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            <div className="flex items-center gap-3">
-              <Switch checked={isDefault} onCheckedChange={setIsDefault} />
-              <div>
-                <Label className="text-xs">Default Policy</Label>
-                <p className="text-[10px] text-muted-foreground">Auto-assign to new tenants in this org</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-medium">Access Rules ({rules.length})</Label>
-                <Button variant="outline" size="sm" onClick={addRule} className="h-6 text-[10px] px-2">
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add Rule
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {rules.map((rule, idx) => (
-                  <RuleEditor
-                    key={idx}
-                    rule={rule}
-                    index={idx}
-                    clusters={clusters}
-                    onUpdate={updateRule}
-                    onRemove={removeRule}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        </DialogBody>
-
-        <DialogFooter className="shrink-0 pt-3 border-t">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" onClick={handleSubmit} disabled={!canSubmit || isPending}>
-            {isPending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-            {isEdit ? "Save Changes" : "Create Policy"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ============================================
 // Main Exported Component
@@ -571,6 +130,8 @@ function PolicyManagementSectionContent() {
   const {
     data: policiesData,
     isLoading: policiesLoading,
+    error: policiesError,
+    refetch: refetchPolicies,
   } = useQuery({
     queryKey: ["tenant-access-policies"],
     queryFn: () => api.tenantAccess.listPolicies(),
@@ -588,9 +149,9 @@ function PolicyManagementSectionContent() {
     queryFn: () => api.organizations.list(),
   });
 
-  const clusters = useMemo(() => {
+  const clusters = useMemo<PolicyCluster[]>(() => {
     if (!clustersData?.clusters) return [];
-    return clustersData.clusters.map((c: any) => ({
+    return clustersData.clusters.map((c) => ({
       cluster_id: c.cluster_id,
       display_name: c.display_name || c.cluster_id,
       endpoint: c.endpoint || "",
@@ -756,9 +317,13 @@ function PolicyManagementSectionContent() {
             <OrphanRulesNotice />
             {policiesLoading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
                 <span className="ml-2 text-sm text-muted-foreground">Loading policies…</span>
               </div>
+            ) : policiesError && !policiesData ? (
+              // A failed read is not an empty list: "No access policies yet" here once told an
+              // operator to create policies that already existed.
+              <ReadErrorState noun="access policies" error={policiesError} onRetry={() => void refetchPolicies()} />
             ) : policies.length === 0 ? (
               <EmptyState
                 icon={ShieldCheck}
@@ -870,52 +435,58 @@ function PolicyManagementSectionContent() {
                                       size="icon"
                                       className="h-7 w-7"
                                       onClick={() => setEditPolicy(policy)}
+                                      aria-label={`Edit policy ${policy.name}`}
                                     >
-                                      <Edit className="h-3.5 w-3.5" />
+                                      <Edit className="h-3.5 w-3.5" aria-hidden="true" />
                                     </Button>
                                   </TooltipTrigger>
                                   <TooltipContent side="top"><p className="text-xs">Edit</p></TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>
-                              <Dialog
+                              <AlertDialog
                                 open={deleteId === policy.id}
                                 onOpenChange={(open) => setDeleteId(open ? policy.id : null)}
                               >
-                                <DialogTrigger asChild>
+                                <AlertDialogTrigger asChild>
                                   <Button
                                     variant="ghost"
                                     size="icon"
                                     className="h-7 w-7 text-destructive hover:text-destructive"
+                                    aria-label={`Delete policy ${policy.name}`}
                                   >
-                                    <Trash2 className="h-3.5 w-3.5" />
+                                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                                   </Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                  <DialogHeader className="pb-4">
-                                    <DialogTitle>Delete Policy</DialogTitle>
-                                    <DialogDescription>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Delete Policy</AlertDialogTitle>
+                                    <AlertDialogDescription>
                                       Delete <strong>&quot;{policy.name}&quot;</strong>?
                                       {policy.assignments_count > 0 && (
                                         <> This will remove {plural(policy.assignments_count, "assignment")}.</>
                                       )}
                                       {" "}This cannot be undone.
-                                    </DialogDescription>
-                                  </DialogHeader>
-                                  <DialogFooter>
-                                    <Button variant="outline" onClick={() => setDeleteId(null)}>Cancel</Button>
-                                    <Button
-                                      variant="destructive"
-                                      onClick={() => deleteMutation.mutate(policy.id)}
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      // note: held open until the answer, so a refusal is read in context
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        deleteMutation.mutate(policy.id);
+                                      }}
                                       disabled={deleteMutation.isPending}
+                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                     >
                                       {deleteMutation.isPending && (
-                                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" aria-hidden="true" />
                                       )}
                                       Delete
-                                    </Button>
-                                  </DialogFooter>
-                                </DialogContent>
-                              </Dialog>
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -953,6 +524,7 @@ function PolicyManagementSectionContent() {
         onOpenChange={setCreateOpen}
         clusters={clusters}
         organizations={organizations}
+        defaultPolicyHint="Auto-assign to new tenants in this org"
         onSubmit={handlePolicySubmit}
         isPending={createMutation.isPending}
       />
@@ -965,6 +537,7 @@ function PolicyManagementSectionContent() {
           editPolicy={editPolicy}
           clusters={clusters}
           organizations={organizations}
+          defaultPolicyHint="Auto-assign to new tenants in this org"
           onSubmit={handlePolicySubmit}
           isPending={updateMutation.isPending}
         />

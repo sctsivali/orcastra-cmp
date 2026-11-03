@@ -38,13 +38,12 @@ const CONVERTED = new Map([
 // Files that still map a data-driven list into <SelectItem>, each with the reason it waits.
 const DEFERRED = new Map([
   [
-    'components/policy-management-section.tsx',
-    'rule rows are compact (h-7 text-xs) and SearchableSelect has no size variant yet; the ' +
-      'organisation list is bounded and carries a __none__ sentinel row',
+    'components/access-policies/rule-editor.tsx',
+    'rule rows are compact (h-7 text-xs) and SearchableSelect has no size variant yet',
   ],
   [
-    'components/tenant-access-dialog.tsx',
-    'same compact rule rows and organisation list as policy-management-section.tsx',
+    'components/access-policies/policy-editor-dialog.tsx',
+    'bounded organisation list with a disabled __none__ sentinel row',
   ],
   ['components/org-personalization-settings.tsx', 'bounded organisation list with a "via app" sublabel'],
   ['components/user-groups-settings.tsx', 'bounded organisation list with a __none__ sentinel row'],

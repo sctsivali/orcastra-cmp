@@ -130,7 +130,7 @@ const BADGE_BASELINE = 16;
 // console surfaces laid out to fixed gutters, which need a layout pass rather than a find and
 // replace. May fall, never rise.
 // 68 to 67: the dead components/vm-table.tsx was deleted with its one arbitrary size.
-const ARBITRARY_BASELINE = 67;
+const ARBITRARY_BASELINE = 41;
 let badgesInBodies = 0;
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");

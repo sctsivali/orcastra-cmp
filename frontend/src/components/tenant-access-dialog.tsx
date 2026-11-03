@@ -4,25 +4,14 @@ import { formatDate, plural } from "@/lib/utils";
 import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
+  Dialog, DialogBody, DialogContent, DialogDescription,
   DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import { SearchableSelect } from "@/components/ui/searchable-select";
-import { clusterStatusMeta, clusterSublabel } from "@/lib/cluster-status";
-import { ClusterStatus } from "@/types/api";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table, TableBody, TableCell, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
@@ -30,460 +19,33 @@ import {
   Loader2, Plus, Trash2, ChevronDown,
   ChevronRight, Edit, X, Check,
 } from "lucide-react";
-import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
+import { api, integrationsAPI } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
-import { queryKeys, useClusters } from "@/hooks/use-lxd";
-import { readInstanceList } from "@/lib/instance-reconciliation";
-import { useActorQueryScope } from "@/hooks/use-query-scope";
+import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { PolicyEditorDialog } from "@/components/access-policies/policy-editor-dialog";
+import { PermissionList } from "@/components/access-policies/permission-list";
+import type { PolicyCluster } from "@/components/access-policies/rule-editor";
 import type {
-  AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
+  AccessPolicy, PolicyCreateRequest, PolicyUpdateRequest,
   PolicyAssignment, AssignmentCreateRequest, TenantPermission,
-  IntegrationOrganization,
-} from "@/types";
-import {
-  TENANT_PERMISSION_LABELS, TENANT_PERMISSION_DESCRIPTIONS,
-  ALL_TENANT_PERMISSIONS,
+  IntegrationOrganization, PolicyRule,
 } from "@/types";
 
-// filter out snapshot (not ready yet)
-const VISIBLE_PERMISSIONS = ALL_TENANT_PERMISSIONS.filter((p) => p !== "snapshot");
+/** One rule of an assigned policy, named by the policy it came from. */
+type EffectiveRule = Omit<PolicyRule, "id"> & { permissions: TenantPermission[]; policy_name: string };
 
-// ============================================
-// Sub-components
-// ============================================
-
-/** render permission badges (compact, no icons) */
-function PermissionBadges({ permissions }: { permissions: string[] }) {
-  return (
-    <div className="flex gap-1 flex-wrap">
-      {(permissions as TenantPermission[])
-        .filter((p) => p !== "snapshot")
-        .map((p) => (
-          <Badge key={p} variant="secondary" className="px-2 py-0">
-            {TENANT_PERMISSION_LABELS[p].split(" ")[0]}
-          </Badge>
-        ))}
-    </div>
-  );
-}
-
-/** Inline permission checkbox group */
-function PermissionCheckboxGroup({
-  selected,
-  onChange,
-}: {
-  selected: TenantPermission[];
-  onChange: (perms: TenantPermission[]) => void;
-}) {
-  const toggle = (perm: TenantPermission) => {
-    if (selected.includes(perm)) {
-      if (selected.length > 1) {
-        onChange(selected.filter((p) => p !== perm));
-      }
-    } else {
-      onChange([...selected, perm]);
-    }
-  };
-
-  return (
-    <div className="space-y-1.5">
-      {VISIBLE_PERMISSIONS.map((perm) => (
-        <label
-          key={perm}
-          className="flex items-start gap-2.5 p-1.5 rounded-md hover:bg-muted/50 cursor-pointer"
-        >
-          <Checkbox
-            checked={selected.includes(perm)}
-            onCheckedChange={() => toggle(perm)}
-            className="mt-0.5"
-          />
-          <div>
-            <div className="text-xs font-medium">
-              {TENANT_PERMISSION_LABELS[perm]}
-            </div>
-            <p className="text-[10px] text-muted-foreground leading-tight">
-              {TENANT_PERMISSION_DESCRIPTIONS[perm]}
-            </p>
-          </div>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-/** Single rule editor with project/instance dropdowns */
-function RuleEditor({
-  rule, index, clusters, onUpdate, onRemove,
-}: {
-  rule: Omit<PolicyRule, "id">;
-  index: number;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
-  onUpdate: (index: number, rule: Omit<PolicyRule, "id">) => void;
-  onRemove: (index: number) => void;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const { scopeKey, isAuthenticated } = useActorQueryScope();
-
-  // find the selected cluster for display & data fetching
-  const selectedCluster = clusters.find((c) => c.cluster_id === rule.cluster_id);
-  const hostId = rule.cluster_id !== "*" ? rule.cluster_id : "";
-
-  // fetch projects for this cluster (API expects cluster_id as host)
-  const { data: projectsData, isLoading: projectsLoading } = useQuery({
-    queryKey: queryKeys.projectsFor(scopeKey, hostId),
-    queryFn: () => projectAPI.list(hostId),
-    enabled: isAuthenticated && !!hostId,
-    staleTime: 60_000,
-  });
-
-  // fetch instances for this cluster (through the pending-delete filter: this key is the
-  // per-host instance list other pages read too)
-  const instanceQueryClient = useQueryClient();
-  const { data: instancesData, isLoading: instancesLoading } = useQuery({
-    queryKey: queryKeys.instancesFor(scopeKey, hostId),
-    queryFn: () => readInstanceList(instanceQueryClient, scopeKey, () => instanceAPI.list(hostId)),
-    enabled: isAuthenticated && !!hostId,
-    staleTime: 60_000,
-  });
-
-  const projects = projectsData?.projects || [];
-
-  // filter instances by selected project if one is chosen
-  const instances = useMemo(() => {
-    const allInstances = instancesData?.vms || [];
-    if (rule.project_name && rule.project_name !== "*") {
-      return allInstances.filter((i: any) => i.project === rule.project_name);
-    }
-    return allInstances;
-  }, [instancesData, rule.project_name]);
-
-  return (
-    <div className="border rounded-lg p-2.5 space-y-2 bg-muted/30">
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1.5 text-xs font-medium hover:text-primary"
-        >
-          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          Rule {index + 1}
-          <span className="text-muted-foreground font-normal">
-            - {rule.cluster_id === "*" ? "All Clusters" : clusters.find(c => c.cluster_id === rule.cluster_id)?.display_name || rule.cluster_id}
-            {rule.project_name !== "*" && ` / ${rule.project_name}`}
-            {rule.instance_name !== "*" && ` / ${rule.instance_name}`}
-          </span>
-        </button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 text-destructive hover:text-destructive"
-          onClick={() => onRemove(index)}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
-
-      {expanded && (
-        <div className="grid gap-2.5 pl-5">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Cluster</Label>
-              <SearchableSelect
-                value={rule.cluster_id}
-                onValueChange={(v) => onUpdate(index, {
-                  ...rule,
-                  cluster_id: v,
-                  project_name: "*",
-                  instance_name: "*",
-                })}
-                className="h-7 text-xs"
-                searchPlaceholder="Search clusters…"
-                options={[
-                  { value: "*", label: "* (All Clusters)" },
-                  // note: a scope picker, not a target picker. An offline cluster is a
-                  // perfectly valid thing to write a rule about, so the status is marked but
-                  // never disabled and never warned about. Disabling here would block a rule
-                  // an operator is writing precisely because the cluster is down.
-                  ...clusters.map((c) => {
-                    const meta = clusterStatusMeta(c.status);
-                    return {
-                      value: c.cluster_id,
-                      label: c.display_name || c.cluster_id,
-                      sublabel: clusterSublabel(c.cluster_id, c.display_name, c.endpoint),
-                      status: {
-                        label: meta.label,
-                        tone: meta.tone,
-                      },
-                    };
-                  }),
-                ]}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Project</Label>
-              <Select
-                value={rule.project_name}
-                onValueChange={(v) => onUpdate(index, { ...rule, project_name: v, instance_name: "*" })}
-                disabled={rule.cluster_id === "*"}
-              >
-                <SelectTrigger className="h-7 text-xs">
-                  <SelectValue placeholder={projectsLoading ? "Loading…" : "* (all)"} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="*">* (All Projects)</SelectItem>
-                  {projectsLoading ? (
-                    <div className="flex items-center justify-center py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      <span className="ml-1.5 text-xs text-muted-foreground">Loading projects…</span>
-                    </div>
-                  ) : (
-                    projects.map((p: any) => (
-                      <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Instance</Label>
-              <Select
-                value={rule.instance_name}
-                onValueChange={(v) => onUpdate(index, { ...rule, instance_name: v })}
-                disabled={rule.cluster_id === "*"}
-              >
-                <SelectTrigger className="h-7 text-xs">
-                  <SelectValue placeholder={instancesLoading ? "Loading…" : "* (all)"} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="*">* (All Instances)</SelectItem>
-                  {instancesLoading ? (
-                    <div className="flex items-center justify-center py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                      <span className="ml-1.5 text-xs text-muted-foreground">Loading instances…</span>
-                    </div>
-                  ) : (
-                    instances.map((i: any) => (
-                      <SelectItem key={i.name} value={i.name}>
-                        {i.name}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Permissions</Label>
-            <PermissionCheckboxGroup
-              selected={rule.permissions as TenantPermission[]}
-              onChange={(perms) => onUpdate(index, { ...rule, permissions: perms })}
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============================================
-// Inline Policy Editor (nested dialog)
-// ============================================
-
-function InlinePolicyEditor({
-  open, onOpenChange, editPolicy, clusters, organizations, orgIdFilter,
-  onSubmit, isPending,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  editPolicy?: AccessPolicy | null;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
-  organizations: IntegrationOrganization[];
-  orgIdFilter?: number;
-  onSubmit: (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => void;
-  isPending: boolean;
-}) {
-  const isEdit = !!editPolicy;
-
-  const [name, setName] = useState(editPolicy?.name || "");
-  const [description, setDescription] = useState(editPolicy?.description || "");
-  const [orgId, setOrgId] = useState<string>(
-    editPolicy ? String(editPolicy.organization_id)
-    : orgIdFilter ? String(orgIdFilter)
-    : ""
-  );
-  const [isDefault, setIsDefault] = useState(editPolicy?.is_default || false);
-  const [rules, setRules] = useState<Omit<PolicyRule, "id">[]>(
-    editPolicy?.rules?.map(({ cluster_id, project_name, instance_name, permissions }) => ({
-      cluster_id, project_name, instance_name, permissions,
-    })) || [{ cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]
-  );
-
-  // reset when dialog opens
-  const handleOpenChange = (v: boolean) => {
-    if (v && editPolicy) {
-      setName(editPolicy.name);
-      setDescription(editPolicy.description || "");
-      setOrgId(String(editPolicy.organization_id));
-      setIsDefault(editPolicy.is_default);
-      setRules(
-        editPolicy.rules?.map(({ cluster_id, project_name, instance_name, permissions }) => ({
-          cluster_id, project_name, instance_name, permissions,
-        })) || []
-      );
-    } else if (v && !editPolicy) {
-      setName("");
-      setDescription("");
-      setOrgId(orgIdFilter ? String(orgIdFilter) : "");
-      setIsDefault(false);
-      setRules([{ cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]);
-    }
-    onOpenChange(v);
-  };
-
-  const addRule = () => {
-    setRules([...rules, { cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]);
-  };
-
-  const updateRule = (index: number, rule: Omit<PolicyRule, "id">) => {
-    const updated = [...rules];
-    updated[index] = rule;
-    setRules(updated);
-  };
-
-  const removeRule = (index: number) => {
-    if (rules.length > 1) setRules(rules.filter((_, i) => i !== index));
-  };
-
-  const canSubmit = name.trim() && (isEdit || orgId) && rules.length > 0;
-
-  const handleSubmit = () => {
-    if (!canSubmit) return;
-    if (isEdit) {
-      onSubmit(
-        { name: name.trim(), description: description.trim() || undefined, is_default: isDefault, rules } as PolicyUpdateRequest,
-        true,
-      );
-    } else {
-      onSubmit(
-        {
-          name: name.trim(),
-          description: description.trim() || undefined,
-          organization_id: parseInt(orgId),
-          is_default: isDefault,
-          rules,
-        } as PolicyCreateRequest,
-        false,
-      );
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>
-            {isEdit ? "Edit Policy" : "Create Policy"}
-          </DialogTitle>
-          <DialogDescription>
-            {isEdit
-              ? "Update the policy rules and settings."
-              : "Define cluster, project, and instance-level access rules for tenants."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <DialogBody className="-mr-2 pr-2">
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="inline-policy-name" className="text-xs">Policy Name</Label>
-              <Input
-                id="inline-policy-name"
-                placeholder="for example, Production Read-Only"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={100}
-                className="h-8 text-sm"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="inline-policy-desc" className="text-xs">Description (Optional)</Label>
-              <Textarea
-                id="inline-policy-desc"
-                placeholder="Describe what this policy allows…"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                maxLength={500}
-                className="resize-none h-14 text-sm"
-              />
-            </div>
-
-            {!isEdit && (
-              <div className="space-y-1.5">
-                <Label className="text-xs">
-                  Organization <span className="text-destructive">(required)</span>
-                </Label>
-                <Select value={orgId || "__none__"} onValueChange={(v) => setOrgId(v === "__none__" ? "" : v)}>
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue placeholder="Select organization…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__" disabled>Select organization…</SelectItem>
-                    {organizations.map((org) => (
-                      <SelectItem key={org.id} value={String(org.id)}>{org.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            <div className="flex items-center gap-3">
-              <Switch checked={isDefault} onCheckedChange={setIsDefault} />
-              <div>
-                <Label className="text-xs">Default Policy</Label>
-                <p className="text-[10px] text-muted-foreground">Auto-assign to new tenants</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs font-medium">Access Rules ({rules.length})</Label>
-                <Button variant="outline" size="sm" onClick={addRule} className="h-6 text-[10px] px-2">
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add Rule
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {rules.map((rule, idx) => (
-                  <RuleEditor
-                    key={idx}
-                    rule={rule}
-                    index={idx}
-                    clusters={clusters}
-                    onUpdate={updateRule}
-                    onRemove={removeRule}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        </DialogBody>
-
-        <DialogFooter className="shrink-0 pt-3 border-t">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" onClick={handleSubmit} disabled={!canSubmit || isPending}>
-            {isPending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-            {isEdit ? "Save Changes" : "Create Policy"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
+/** The cluster column sorts by the name the row shows, not the id. */
+function clusterSortName(clusters: PolicyCluster[], clusterId: string): string {
+  return clusterId === "*"
+    ? "All Clusters"
+    : clusters.find((c) => c.cluster_id === clusterId)?.display_name || clusterId;
 }
 
 // ============================================
@@ -510,7 +72,6 @@ export function TenantAccessDialog({
   const [createPolicyOpen, setCreatePolicyOpen] = useState(false);
   const [editPolicyObj, setEditPolicyObj] = useState<AccessPolicy | null>(null);
   const [revokeId, setRevokeId] = useState<number | null>(null);
-  const [deletePolicyId, setDeletePolicyId] = useState<number | null>(null);
 
   // ── Data fetching ──
 
@@ -518,6 +79,8 @@ export function TenantAccessDialog({
   const {
     data: assignmentsData,
     isLoading: assignmentsLoading,
+    error: assignmentsError,
+    refetch: refetchAssignments,
   } = useQuery({
     queryKey: ["tenant-access-assignments", userEmail],
     queryFn: () => api.tenantAccess.listAssignments(undefined, userEmail),
@@ -528,6 +91,8 @@ export function TenantAccessDialog({
   const {
     data: policiesData,
     isLoading: policiesLoading,
+    error: policiesError,
+    refetch: refetchPolicies,
   } = useQuery({
     queryKey: ["tenant-access-policies"],
     queryFn: () => api.tenantAccess.listPolicies(),
@@ -551,9 +116,9 @@ export function TenantAccessDialog({
     enabled: open,
   });
 
-  const clusters = useMemo(() => {
+  const clusters = useMemo<PolicyCluster[]>(() => {
     if (!clustersData?.clusters) return [];
-    return clustersData.clusters.map((c: any) => ({
+    return clustersData.clusters.map((c) => ({
       cluster_id: c.cluster_id,
       display_name: c.display_name || c.cluster_id,
       endpoint: c.endpoint || "",
@@ -583,13 +148,7 @@ export function TenantAccessDialog({
 
   // effective permissions: flatten all assigned policy rules
   const effectiveRules = useMemo(() => {
-    const rules: Array<{
-      cluster_id: string;
-      project_name: string;
-      instance_name: string;
-      permissions: TenantPermission[];
-      policy_name: string;
-    }> = [];
+    const rules: EffectiveRule[] = [];
     for (const a of assignments) {
       const policy = allPolicies.find((p) => p.id === a.policy_id);
       if (policy?.rules) {
@@ -660,18 +219,6 @@ export function TenantAccessDialog({
     },
   });
 
-  const deletePolicyMutation = useMutation({
-    mutationFn: (id: number) => api.tenantAccess.deletePolicy(id),
-    onSuccess: () => {
-      void reconcileMutationImpact(queryClient, "tenant-access.write").catch(() => undefined);
-      setDeletePolicyId(null);
-      toast({ title: "Policy deleted" });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Could not delete policy", description: err.message, variant: "destructive" });
-    },
-  });
-
   // ── Handlers ──
 
   const handleQuickAssign = (policyId: number) => {
@@ -694,6 +241,13 @@ export function TenantAccessDialog({
   };
 
   const isLoading = assignmentsLoading || policiesLoading;
+  // A failed read is not an empty one: "No policies assigned yet" over a failed read invited an
+  // operator to assign a second copy of what the tenant already holds.
+  const readError = (assignmentsError && !assignmentsData) ? assignmentsError
+    : (policiesError && !policiesData) ? policiesError
+    : null;
+  // note: per row. One shared isPending spun every Assign button while one request was out.
+  const assigningPolicyId = assignMutation.isPending ? assignMutation.variables?.policy_id : undefined;
 
   return (
     <>
@@ -711,7 +265,7 @@ export function TenantAccessDialog({
             </DialogHeader>
 
             {/* Summary stats */}
-            {!isLoading && (
+            {!isLoading && !readError && (
               <div className="flex items-center gap-4 mt-3">
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium text-foreground">{assignments.length}</span> {assignments.length === 1 ? "policy" : "policies"}
@@ -730,9 +284,18 @@ export function TenantAccessDialog({
           <DialogBody className="px-6 py-4 space-y-6">
               {isLoading ? (
                 <div className="flex items-center justify-center py-16">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
                   <span className="ml-2 text-muted-foreground text-sm">Loading access data…</span>
                 </div>
+              ) : readError ? (
+                <ReadErrorState
+                  noun="access policies"
+                  error={readError}
+                  onRetry={() => {
+                    void refetchAssignments();
+                    void refetchPolicies();
+                  }}
+                />
               ) : (
                 <>
                   {/* ── Section 1: Assigned Policies ── */}
@@ -740,7 +303,7 @@ export function TenantAccessDialog({
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-semibold flex items-center gap-2">
                         Assigned Policies
-                        <Badge variant="secondary" className="text-[10px] px-1.5">
+                        <Badge variant="secondary" className="text-xs px-1.5">
                           {assignments.length}
                         </Badge>
                       </h3>
@@ -749,7 +312,7 @@ export function TenantAccessDialog({
                     {assignments.length === 0 ? (
                       <div className="text-center py-8 text-muted-foreground border rounded-lg border-dashed">
                         <p className="text-xs">No policies assigned yet</p>
-                        <p className="text-[10px] mt-0.5">Assign a policy below to grant this tenant access.</p>
+                        <p className="text-xs mt-0.5">Assign a policy below to grant this tenant access.</p>
                       </div>
                     ) : (
                       <div className="space-y-3">
@@ -783,7 +346,7 @@ export function TenantAccessDialog({
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-semibold flex items-center gap-2">
                         Available Policies
-                        <Badge variant="outline" className="text-[10px] px-1.5">
+                        <Badge variant="outline" className="text-xs px-1.5">
                           {availablePolicies.length}
                         </Badge>
                       </h3>
@@ -844,8 +407,9 @@ export function TenantAccessDialog({
                                       size="icon"
                                       className="h-7 w-7"
                                       onClick={() => setEditPolicyObj(policy)}
+                                      aria-label={`Edit policy ${policy.name}`}
                                     >
-                                      <Edit className="h-3.5 w-3.5" />
+                                      <Edit className="h-3.5 w-3.5" aria-hidden="true" />
                                     </Button>
                                   </TooltipTrigger>
                                   <TooltipContent side="top"><p className="text-xs">Edit policy</p></TooltipContent>
@@ -857,11 +421,12 @@ export function TenantAccessDialog({
                                 className="h-7 text-xs gap-1"
                                 onClick={() => handleQuickAssign(policy.id)}
                                 disabled={assignMutation.isPending}
+                                aria-label={`Assign policy ${policy.name}`}
                               >
-                                {assignMutation.isPending ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                {assigningPolicyId === policy.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                                 ) : (
-                                  <Plus className="h-3 w-3" />
+                                  <Plus className="h-3 w-3" aria-hidden="true" />
                                 )}
                                 Assign
                               </Button>
@@ -885,24 +450,26 @@ export function TenantAccessDialog({
       </Dialog>
 
       {/* Nested: Create Policy */}
-      <InlinePolicyEditor
+      <PolicyEditorDialog
         open={createPolicyOpen}
         onOpenChange={setCreatePolicyOpen}
         clusters={clusters}
         organizations={organizations}
-        orgIdFilter={userOrgIds[0]}
+        defaultOrganizationId={userOrgIds[0]}
+        defaultPolicyHint="Auto-assign to new tenants"
         onSubmit={handlePolicySubmit}
         isPending={createPolicyMutation.isPending}
       />
 
       {/* Nested: Edit Policy */}
       {editPolicyObj && (
-        <InlinePolicyEditor
+        <PolicyEditorDialog
           open={!!editPolicyObj}
           onOpenChange={(open) => !open && setEditPolicyObj(null)}
           editPolicy={editPolicyObj}
           clusters={clusters}
           organizations={organizations}
+          defaultPolicyHint="Auto-assign to new tenants"
           onSubmit={handlePolicySubmit}
           isPending={updatePolicyMutation.isPending}
         />
@@ -920,7 +487,7 @@ function AssignedPolicyCard({
 }: {
   assignment: PolicyAssignment;
   policy: AccessPolicy | null;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
+  clusters: PolicyCluster[];
   revokeId: number | null;
   onSetRevokeId: (id: number | null) => void;
   onRevoke: () => void;
@@ -939,13 +506,10 @@ function AssignedPolicyCard({
   // rule table sorting (cluster column sorts by the resolved display name shown in the row)
   const ruleSortAccessors = useMemo(
     () => ({
-      cluster: (r: any) =>
-        r.cluster_id === "*"
-          ? "All Clusters"
-          : clusters.find((c) => c.cluster_id === r.cluster_id)?.display_name || r.cluster_id,
-      project: (r: any) => r.project_name,
-      instance: (r: any) => r.instance_name,
-      permissions: (r: any) => r.permissions?.length ?? 0,
+      cluster: (r: PolicyRule) => clusterSortName(clusters, r.cluster_id),
+      project: (r: PolicyRule) => r.project_name,
+      instance: (r: PolicyRule) => r.instance_name,
+      permissions: (r: PolicyRule) => r.permissions?.length ?? 0,
     }),
     [clusters],
   );
@@ -976,9 +540,11 @@ function AssignedPolicyCard({
           // control already announces it in full. The label states the action as well, because
           // "policy-name, button" does not say what the button does.
           aria-label={`${expanded ? "Hide" : "Show"} the rules in policy ${assignment.policy_name}`}
-          className="flex items-center gap-2 text-sm font-medium hover:text-primary flex-1 min-w-0 text-left"
+          className="flex items-center gap-2 rounded-sm text-sm font-medium flex-1 min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+          {expanded
+            ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+            : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
           <span className="truncate">{assignment.policy_name}</span>
           {policy?.is_default && (
             <Badge asChild variant="outline" className="shrink-0 px-2 py-0">
@@ -995,8 +561,14 @@ function AssignedPolicyCard({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEditPolicy}>
-                  <Edit className="h-3.5 w-3.5" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={onEditPolicy}
+                  aria-label={`Edit policy ${assignment.policy_name}`}
+                >
+                  <Edit className="h-3.5 w-3.5" aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="top"><p className="text-xs">Edit policy</p></TooltipContent>
@@ -1004,23 +576,28 @@ function AssignedPolicyCard({
           </TooltipProvider>
           {revokeId === assignment.id ? (
             <div className="flex items-center gap-1 bg-destructive/10 rounded-md px-2 py-0.5">
-              <span className="text-[10px] text-destructive font-medium">Revoke?</span>
+              <span className="text-xs text-destructive font-medium">Revoke?</span>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6 text-destructive hover:text-destructive"
                 onClick={onRevoke}
                 disabled={isRevoking}
+                aria-label={`Revoke policy ${assignment.policy_name}`}
               >
-                {isRevoking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                {isRevoking
+                  ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  : <Check className="h-3 w-3" aria-hidden="true" />}
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
                 onClick={() => onSetRevokeId(null)}
+                disabled={isRevoking}
+                aria-label="Keep this policy"
               >
-                <X className="h-3 w-3" />
+                <X className="h-3 w-3" aria-hidden="true" />
               </Button>
             </div>
           ) : (
@@ -1032,8 +609,9 @@ function AssignedPolicyCard({
                     size="icon"
                     className="h-7 w-7 text-destructive hover:text-destructive"
                     onClick={() => onSetRevokeId(assignment.id)}
+                    aria-label={`Revoke policy ${assignment.policy_name}`}
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top"><p className="text-xs">Revoke policy</p></TooltipContent>
@@ -1044,7 +622,7 @@ function AssignedPolicyCard({
       </div>
 
       {/* meta */}
-      <div className="px-3 py-1.5 border-t flex items-center gap-4 text-[10px] text-muted-foreground bg-muted/10">
+      <div className="px-3 py-1.5 border-t flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground bg-muted/10">
         <span>Organization: <strong className="text-foreground">{assignment.organization_name}</strong></span>
         <span>Assigned by: {assignment.assigned_by}</span>
         <span>{formatDate(assignment.assigned_at)}</span>
@@ -1109,7 +687,7 @@ function AssignedPolicyCard({
                     {r.instance_name === "*" ? <span className="text-muted-foreground ">All</span> : r.instance_name}
                   </TableCell>
                   <TableCell>
-                    <PermissionBadges permissions={r.permissions} />
+                    <PermissionList permissions={r.permissions} />
                   </TableCell>
                 </TableRow>
               ))}
@@ -1147,14 +725,8 @@ function EffectivePermissionsSection({
   rules,
   clusters,
 }: {
-  rules: Array<{
-    cluster_id: string;
-    project_name: string;
-    instance_name: string;
-    permissions: TenantPermission[];
-    policy_name: string;
-  }>;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
+  rules: EffectiveRule[];
+  clusters: PolicyCluster[];
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -1165,14 +737,11 @@ function EffectivePermissionsSection({
   // effective rules sorting (cluster column sorts by the resolved display name shown in the row)
   const effectiveSortAccessors = useMemo(
     () => ({
-      cluster: (r: any) =>
-        r.cluster_id === "*"
-          ? "All Clusters"
-          : clusters.find((c) => c.cluster_id === r.cluster_id)?.display_name || r.cluster_id,
-      project: (r: any) => r.project_name,
-      instance: (r: any) => r.instance_name,
-      permissions: (r: any) => r.permissions?.length ?? 0,
-      policy: (r: any) => r.policy_name,
+      cluster: (r: EffectiveRule) => clusterSortName(clusters, r.cluster_id),
+      project: (r: EffectiveRule) => r.project_name,
+      instance: (r: EffectiveRule) => r.instance_name,
+      permissions: (r: EffectiveRule) => r.permissions?.length ?? 0,
+      policy: (r: EffectiveRule) => r.policy_name,
     }),
     [clusters],
   );
@@ -1196,16 +765,19 @@ function EffectivePermissionsSection({
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between w-full mb-3"
+        aria-expanded={expanded}
+        className="flex flex-wrap items-center justify-between gap-2 w-full mb-3 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        <span className="text-sm font-semibold flex items-center gap-2">
+          {expanded
+            ? <ChevronDown className="h-4 w-4" aria-hidden="true" />
+            : <ChevronRight className="h-4 w-4" aria-hidden="true" />}
           Effective Permissions
-          <Badge variant="outline" className="text-[10px] px-1.5">
-            {plural(rules.length, "rule")}
+          <Badge asChild variant="outline" className="text-xs px-1.5">
+            <span>{plural(rules.length, "rule")}</span>
           </Badge>
-        </h3>
-        <span className="text-[10px] text-muted-foreground">
+        </span>
+        <span className="text-xs text-muted-foreground">
           Aggregated view of all active policy rules
         </span>
       </button>
@@ -1270,7 +842,7 @@ function EffectivePermissionsSection({
                     {r.instance_name === "*" ? <span className="text-muted-foreground ">All</span> : r.instance_name}
                   </TableCell>
                   <TableCell>
-                    <PermissionBadges permissions={r.permissions} />
+                    <PermissionList permissions={r.permissions} />
                   </TableCell>
                   <TableCell>
                     {r.policy_name}
