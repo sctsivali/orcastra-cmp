@@ -126,8 +126,9 @@ export function InstanceDistributionDialog({
         }}
       >
         <DialogHeader className="pb-4">
-          {/* pr-8 keeps the refresh control clear of the dialog's own close button. */}
-          <div className="flex items-start justify-between gap-3 pr-8">
+          {/* The padding keeps the refresh control clear of the dialog's own close button, which
+              is a 44px target at right-2 on a phone and smaller at right-4 from sm up. */}
+          <div className="flex items-start justify-between gap-3 pr-12 sm:pr-8">
             <div className="min-w-0 space-y-1.5">
               <DialogTitle>{filter ? TITLES[filter] : "Instances"}</DialogTitle>
               <DialogDescription>{description}</DialogDescription>
@@ -158,17 +159,19 @@ export function InstanceDistributionDialog({
               return (
                 <div
                   key={`${instance.host}:${project}:${instance.name}`}
-                  className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
+                  // Wraps rather than clipping: on a phone the badges move under the name instead of
+                  // running past the row's edge.
+                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3 rounded-lg border hover:bg-muted/50 transition-colors"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
                       {instance.type === "container" ? (
                         <Container className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
                       ) : (
                         <Monitor className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
                       )}
                     </div>
-                    <div>
+                    <div className="min-w-0 break-words">
                       {/* The hover tint on this row promised something for as long as it existed
                           and never delivered it. The name is now a real control. */}
                       <p className="font-medium">
@@ -182,7 +185,7 @@ export function InstanceDistributionDialog({
                       <p className="text-xs text-muted-foreground">{instance.host} / {project}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Badge variant={status.tone}>{status.label}</Badge>
                     <Badge variant="outline" className="text-xs">
                       {formatInstanceType(instance.type)}
