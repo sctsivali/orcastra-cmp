@@ -101,6 +101,9 @@ async function installApiFixtures(page, role, options = {}) {
     metricsMode: "success",
     metricsCalls: [],
     detailCalls: 0,
+    // The Monitoring page's fleet instance list (2026-11-03): `true` answers it, "unavailable"
+    // answers 503. Off by default so a page that must not read the fleet list still fails here.
+    monitoringInstanceList: options.monitoringInstanceList || false,
     tenantEmpty: options.tenantEmpty === true,
     nodeError: options.nodeError === true,
     instanceStatus: options.instanceStatus || "Running",
@@ -471,6 +474,25 @@ async function installApiFixtures(page, role, options = {}) {
       }
     } else if (path === "/warnings") {
       body = { total: 0, warnings: [], nodes: ["cluster-a"], unreachable_nodes: [] };
+    } else if (path === "/instances" && state.monitoringInstanceList && url.search.replace(/^\?/, "").split("&").every((pair) => pair === "" || pair === "fresh=true")) {
+      if (state.monitoringInstanceList === "unavailable") {
+        status = 503;
+        body = { detail: "The clusters did not answer the instance list" };
+      } else {
+        body = {
+          total: 1,
+          vms: [fullInstance(state.instanceStatus)],
+          nodes: ["cluster-a"],
+          lxd_count: 1,
+          microcloud_count: 0,
+          incus_count: 0,
+          offset: 0,
+          limit: 1,
+          has_more: false,
+          unreachable_nodes: [],
+          collected_at: iso(),
+        };
+      }
     } else if (path === "/instances/tenant-owned-vm") {
       state.detailCalls += 1;
       body = fullInstance(state.instanceStatus);

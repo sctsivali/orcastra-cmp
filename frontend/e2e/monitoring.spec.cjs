@@ -35,7 +35,7 @@ test("Monitoring pause freezes automation while manual refresh and resume still 
   // Partner deliberately exercises REST fallback. Admin's monitoring WebSocket is a separate
   // transport contract; pause semantics must also hold when normal polling is active.
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
 
   await page.goto("/inventory/monitoring");
   await expect(page.getByRole("heading", { level: 1, name: "Monitoring" })).toBeVisible();
@@ -106,7 +106,7 @@ test("Admin pause closes the monitoring WebSocket and resume opens a new stream"
   test.skip(testInfo.project.name !== "desktop-light", "The transport lifecycle only needs one browser profile");
 
   await authenticate(page.context(), "admin");
-  const api = await installApiFixtures(page, "admin", { monitoringWebSocket: true });
+  const api = await installApiFixtures(page, "admin", { monitoringInstanceList: true, monitoringWebSocket: true });
 
   await page.goto("/inventory/monitoring");
   await expect(page.getByRole("heading", { level: 1, name: "Monitoring" })).toBeVisible();
@@ -149,11 +149,19 @@ test("Admin pause closes the monitoring WebSocket and resume opens a new stream"
   await expectCleanHarness(api);
 });
 
-test("Top Consumer hydrates once and live Metrics preserve the last good sample", async ({ page }, testInfo) => {
-  await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner");
+// The page reads the fleet instance list itself (2026-11-03), so a consumer row opens from the
+// full record in that list instead of waiting for a detail read.
+function instanceListAnswered(page) {
+  return page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/api/v1/instances"));
+}
 
+test("Top Consumer opens from the cached record and live Metrics preserve the last good sample", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
+
+  const listed = instanceListAnswered(page);
   await page.goto("/inventory/monitoring");
+  await listed;
   const consumer = page.getByRole("button", {
     name: "Open resource details for tenant-owned-vm on cluster-a in project tenant-a",
   });
@@ -162,7 +170,8 @@ test("Top Consumer hydrates once and live Metrics preserve the last good sample"
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "tenant-owned-vm" })).toBeVisible();
-  await expect.poll(() => api.detailCalls).toBe(1);
+  await expect(dialog.getByRole("tab", { name: "Overview" })).toBeVisible();
+  expect(api.detailCalls, "the cached list record needs no detail read").toBe(0);
   await expect(dialog.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-state", "active");
   await expect(dialog.getByText("Resources", { exact: true })).toHaveCount(0);
   expect(api.metricsCalls).toHaveLength(0);
@@ -224,9 +233,9 @@ test("Top Consumer hydrates once and live Metrics preserve the last good sample"
   await expectCleanHarness(api);
 });
 
-test("stopped Top Consumer checks once, then only at the slow cadence", async ({ page }, testInfo) => {
+test("Top Consumer hydrates once when the instance list has not answered", async ({ page }) => {
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner", { instanceStatus: "Stopped" });
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: "unavailable" });
 
   await page.goto("/inventory/monitoring");
   await page
@@ -234,10 +243,30 @@ test("stopped Top Consumer checks once, then only at the slow cadence", async ({
       name: "Open resource details for tenant-owned-vm on cluster-a in project tenant-a",
     })
     .click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "tenant-owned-vm" })).toBeVisible();
+  await expect.poll(() => api.detailCalls).toBe(1);
+  await expect(dialog.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-state", "active");
+  await expectCleanHarness(api);
+});
+
+test("stopped Top Consumer checks once, then only at the slow cadence", async ({ page }, testInfo) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true, instanceStatus: "Stopped" });
+
+  const listed = instanceListAnswered(page);
+  await page.goto("/inventory/monitoring");
+  await listed;
+  await page
+    .getByRole("button", {
+      name: "Open resource details for tenant-owned-vm on cluster-a in project tenant-a",
+    })
+    .click();
 
   const dialog = page.getByRole("dialog");
-  await expect.poll(() => api.detailCalls).toBe(1);
   const dialogHeading = dialog.getByRole("heading", { name: "tenant-owned-vm" });
+  await expect(dialogHeading).toBeVisible();
+  expect(api.detailCalls, "the cached list record carries the state").toBe(0);
   await expect(
     dialogHeading.locator("xpath=..").getByText("Stopped", { exact: true }),
   ).toBeVisible();
@@ -287,7 +316,7 @@ test("tenant: Monitoring shows its instances and cluster status, no host figure"
   };
 
   await authenticate(page.context(), "tenant");
-  const api = await installApiFixtures(page, "tenant", { monitoringDashboard: tenantBody });
+  const api = await installApiFixtures(page, "tenant", { monitoringInstanceList: true, monitoringDashboard: tenantBody });
   await page.goto("/inventory/monitoring");
   const main = page.getByRole("main");
   await expect(main.getByText("Total Instances")).toBeVisible();
@@ -338,7 +367,7 @@ test("an instance without limits says so instead of showing the host's size", as
   });
 
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner", {
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true,
     monitoringDashboard: unlimitedDashboard,
     instanceMetrics: unlimitedMetrics,
   });
@@ -414,7 +443,7 @@ function oneOfTwoReporting() {
 
 test("no cluster reporting: every gauge says Unavailable under one caption", async ({ page }, testInfo) => {
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner", { monitoringDashboard: nothingReported });
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true, monitoringDashboard: nothingReported });
   await page.goto("/inventory/monitoring");
 
   const card = page.locator('[data-slot="resource-utilization"]');
@@ -437,7 +466,7 @@ test("no cluster reporting: every gauge says Unavailable under one caption", asy
 
 test("partial reporting says how many clusters, and a picked offline cluster says it is offline", async ({ page }) => {
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner", { monitoringDashboard: oneOfTwoReporting });
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true, monitoringDashboard: oneOfTwoReporting });
   await page.goto("/inventory/monitoring");
 
   const card = page.locator('[data-slot="resource-utilization"]');
@@ -475,7 +504,7 @@ test("clusters and pools read by display name, and pool members only when there 
     };
   };
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner", { monitoringDashboard: withSharedPool });
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true, monitoringDashboard: withSharedPool });
   await page.goto("/inventory/monitoring");
   const main = page.getByRole("main");
 
@@ -510,7 +539,7 @@ test("clusters and pools read by display name, and pool members only when there 
 
 test("alarm tiles speak the Warnings page's words and stay neutral at zero", async ({ page }) => {
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
   await page.goto("/inventory/monitoring");
 
   const alarms = page.locator('[data-slot="alarm-statistics"]');
@@ -530,7 +559,7 @@ test("Monitoring counts kernel findings in View All, as the dashboard does", asy
   const { kernelWarningRows } = require("./support/kernel-advisory-fixtures.cjs");
   const kernels = kernelWarningRows("exposed").length;
   await authenticate(page.context(), "partner");
-  const api = await installApiFixtures(page, "partner", { kernel: "exposed" });
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true, kernel: "exposed" });
   await page.goto("/inventory/monitoring");
 
   const alarms = page.locator('[data-slot="alarm-statistics"]');
@@ -539,5 +568,61 @@ test("Monitoring counts kernel findings in View All, as the dashboard does", asy
   await expect(alarms.getByRole("link", { name: `View All (${kernels})` })).toBeVisible();
   await expect(alarms.getByText("No active alarms")).toHaveCount(0);
   await capture(page, testInfo, "monitoring-alarms-kernel");
+  await expectCleanHarness(api);
+});
+
+// The Instance Distribution list (2026-11-03): it reads the list the page already holds, never a
+// forced fleet read on open, follows what it was opened for, and Refresh is the one live read.
+function freshListReads(api) {
+  return api.requests.filter((r) => r.path === "/instances" && /(^|[?&])fresh=true/.test(r.search)).length;
+}
+
+test("Instance Distribution opens from the page's list and refreshes only on demand", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: true });
+
+  const listed = instanceListAnswered(page);
+  await page.goto("/inventory/monitoring");
+  await listed;
+  await page.getByRole("button", { name: /^Running\s*1$/ }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Running Instances" })).toBeVisible();
+  await expect(dialog.getByText("1 instance found", { exact: true })).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "Show details for tenant-owned-vm on cluster-a in project tenant-a" }),
+  ).toBeVisible();
+  expect(freshListReads(api), "opening forces no fleet read").toBe(0);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "Refresh instances" }).click();
+  await expect.poll(() => freshListReads(api)).toBe(1);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await page.getByRole("button", { name: /^0\s*Containers$/ }).click();
+  await expect(dialog.getByRole("heading", { name: "Containers" })).toBeVisible();
+  await expect(dialog.getByText("0 instances found", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("No instances found", { exact: true })).toBeVisible();
+  expect(freshListReads(api)).toBe(1);
+  await expectCleanHarness(api);
+});
+
+test("Instance Distribution says a failed read failed, and Retry recovers", async ({ page }) => {
+  await authenticate(page.context(), "partner");
+  const api = await installApiFixtures(page, "partner", { monitoringInstanceList: "unavailable" });
+
+  await page.goto("/inventory/monitoring");
+  await page.getByRole("button", { name: /^Running\s*1$/ }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Could not load instances" })).toBeVisible({ timeout: 15_000 });
+  await expect(dialog.getByText(/instances? found/)).toHaveCount(0);
+  await expect(dialog.getByText("No instances found", { exact: true })).toHaveCount(0);
+
+  api.monitoringInstanceList = true;
+  await dialog.getByRole("button", { name: "Retry" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "Show details for tenant-owned-vm on cluster-a in project tenant-a" }),
+  ).toBeVisible();
+  await expect(dialog.getByText("1 instance found", { exact: true })).toBeVisible();
   await expectCleanHarness(api);
 });
