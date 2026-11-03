@@ -4,41 +4,39 @@ import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef 
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 
-import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container, Monitor, RefreshCw, TrendingUp, TrendingDown, Minus, Box, Pause, Play, Clock, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, RefreshCw, TrendingUp, TrendingDown, Minus, Pause, Play, Clock, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 
 // Dynamically import Lottie to avoid SSR issues
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Brush } from "recharts";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { NodeFilterSelect } from "@/components/monitoring/node-filter-select";
-import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
-import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import {
+  InstanceDistributionDialog,
+  filterDistribution,
+  type DistributionFilter,
+} from "./components/instance-distribution-dialog";
+import { queryKeys, useInstances, useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useClusterLabel } from "@/hooks/use-node-picker-options";
-import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
-import { cn, formatBytes, formatNetworkRate, formatInstanceType, plural } from "@/lib/utils";
-import { instanceStatusDisplay } from "@/lib/instance-status";
-import { InstanceMonitoringSummary, VMInfo } from "@/types";
+import { cn, formatBytes, formatNetworkRate, plural } from "@/lib/utils";
+import type { InstanceMonitoringSummary, VMInfo, VMListResponse } from "@/types";
 import type {
   MetricsHistoryPoint,
   MonitoringDashboardResponse,
   SystemWarningsResponse,
 } from "@/types/api";
-import { api } from "@/lib/api";
 
 type MonitoringDisplaySnapshot = {
   actorScope: string;
@@ -50,13 +48,6 @@ type MonitoringDisplaySnapshot = {
   dashboardLoading: boolean;
   historyLoading: boolean;
   updatedAt: number;
-};
-
-type MonitoringInstanceRequest = {
-  actorScope: string;
-  project: string;
-  epoch: number;
-  controller: AbortController;
 };
 
 const toVmInfoFromMonitoringSummary = (instance: InstanceMonitoringSummary): VMInfo => ({
@@ -453,142 +444,6 @@ const NODE_COLORS = [
   "#84cc16", // lime
 ];
 
-// Instance Details Dialog
-interface InstanceDetailsDialogProps {
-  open: boolean;
-  onClose: () => void;
-  filterType: "running" | "stopped" | "other" | "container" | "vm" | null;
-  instances: VMInfo[];
-  isLoading: boolean;
-  /** Opens the instance dialog for one row. This list closes first; modals do not stack. */
-  onSelectInstance: (instance: VMInfo) => void;
-}
-
-function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading, onSelectInstance }: InstanceDetailsDialogProps) {
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
-
-  // important: this dialog stays mounted between openings, so its page survives a close. The
-  // parent reopens it with a different filterType (running, then containers), which is a
-  // different list entirely, and without this an operator who was on page 3 lands on page 3 of
-  // a list they have not seen. Compared during render rather than in an effect, which would
-  // paint the wrong page once before correcting it.
-  // note: filterType only. Keying on the row count too would reset the page every time the
-  // poll saw an instance start or stop, throwing the operator back to page 1 mid-read. A list
-  // that merely shrank is what the clamp below is for.
-  const [lastFilterType, setLastFilterType] = useState(filterType);
-  if (lastFilterType !== filterType) {
-    setLastFilterType(filterType);
-    setPage(1);
-  }
-
-  // important: the list behind this dialog is live, so instances appear and vanish under the
-  // operator. Clamp the page on read rather than correcting it in an effect, or a shrinking
-  // list leaves them parked past the end painting nothing.
-  const totalPages = Math.max(1, Math.ceil(instances.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pagedInstances = instances.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-
-  const getTitle = () => {
-    switch (filterType) {
-      case "running": return "Running Instances";
-      case "stopped": return "Stopped Instances";
-      case "other": return "Other Instances";
-      case "container": return "Containers";
-      case "vm": return "Virtual Machines";
-      default: return "Instances";
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    const display = instanceStatusDisplay(status);
-    return <Badge variant={display.tone}>{display.label}</Badge>;
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader className="pb-4">
-          <DialogTitle>
-            {getTitle()}
-          </DialogTitle>
-          <DialogDescription>
-            {plural(instances.length, "instance")} found
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-2">
-          {isLoading ? (
-            <div className="space-y-2">
-              {[...Array(5)].map((_, i) => (
-                <Skeleton key={i} className="h-16 w-full" />
-              ))}
-            </div>
-          ) : instances.length > 0 ? (
-            pagedInstances.map((instance) => {
-              const project = instance.project || "default";
-              return (
-                <div
-                  key={`${instance.host}:${project}:${instance.name}`}
-                  className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
-                      {instance.type === "container" ? (
-                        <Container className="h-5 w-5 text-muted-foreground" />
-                      ) : (
-                        <Monitor className="h-5 w-5 text-muted-foreground" />
-                      )}
-                    </div>
-                    <div>
-                      {/* The hover tint on this row promised something for as long as it existed
-                          and never delivered it. The name is now a real control. */}
-                      <p className="font-medium">
-                        <TableLink
-                          onClick={() => onSelectInstance(instance)}
-                          aria-label={`Show details for ${instance.name} on ${instance.host} in project ${project}`}
-                        >
-                          {instance.name}
-                        </TableLink>
-                      </p>
-                      <p className="text-xs text-muted-foreground">{instance.host} / {project}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {getStatusBadge(instance.status)}
-                    <Badge variant="outline" className="text-xs">
-                      {formatInstanceType(instance.type)}
-                    </Badge>
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <EmptyState icon={Box} title="No instances found" className="py-8" />
-          )}
-        </div>
-        {/* Absent rather than disabled when everything fits on one page. Sits outside the
-            scroll area so paging does not require scrolling to the bottom first. */}
-        {totalPages > 1 && (
-          <div className="mt-4">
-            <DataTablePagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[...PANEL_PAGE_SIZES]}
-              totalItems={instances.length}
-              onPageChange={setPage}
-              onPageSizeChange={(size) => {
-                setPageSize(size);
-                setPage(1);
-              }}
-            />
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export default function MonitoringContent() {
   // important: this page has no role gate, but a Tenant reads only its own instances and the
   // clusters' status (owner decision 2026-10-26). The backend sends it every host figure as null
@@ -607,9 +462,7 @@ export default function MonitoringContent() {
   
   // Instance dialog state
   const [instanceDialogOpen, setInstanceDialogOpen] = useState(false);
-  const [instanceFilterType, setInstanceFilterType] = useState<"running" | "stopped" | "other" | "container" | "vm" | null>(null);
-  const [allInstances, setAllInstances] = useState<VMInfo[]>([]);
-  const [instancesLoading, setInstancesLoading] = useState(false);
+  const [instanceFilterType, setInstanceFilterType] = useState<DistributionFilter | null>(null);
   const [selectedTopConsumer, setSelectedTopConsumer] = useState<InstanceMonitoringSummary | null>(null);
   // A row picked out of the instance list dialog. Kept separate from the top-consumer path
   // because that one holds a monitoring summary and has to convert; this one already has the
@@ -618,8 +471,6 @@ export default function MonitoringContent() {
   const [monitoringUiActorScope, setMonitoringUiActorScope] = useState(actorScope);
   const previousActorScopeRef = useRef(actorScope);
   const activeActorScopeRef = useRef(actorScope);
-  const instanceRequestEpochRef = useRef(0);
-  const activeInstanceRequestRef = useRef<MonitoringInstanceRequest | null>(null);
   activeActorScopeRef.current = actorScope;
 
   // This route can survive a sign-out/sign-in transition without unmounting. Actor-owned UI
@@ -653,14 +504,10 @@ export default function MonitoringContent() {
 
   useEffect(() => {
     if (previousActorScopeRef.current === actorScope) return;
-    activeInstanceRequestRef.current?.controller.abort();
-    activeInstanceRequestRef.current = null;
     previousActorScopeRef.current = actorScope;
     setMonitoringUiActorScope(actorScope);
     setInstanceDialogOpen(false);
     setInstanceFilterType(null);
-    setAllInstances([]);
-    setInstancesLoading(false);
     setSelectedTopConsumer(null);
     setSelectedListInstance(null);
     setSelectedNode("all");
@@ -673,11 +520,6 @@ export default function MonitoringContent() {
     setPausedSnapshot(null);
   }, [actorScope]);
 
-  useEffect(() => () => {
-    activeInstanceRequestRef.current?.controller.abort();
-    activeInstanceRequestRef.current = null;
-  }, []);
-  
   // Transition for non-blocking time range switches
   const [isTimeRangePending, startTimeRangeTransition] = useTransition();
   
@@ -863,91 +705,51 @@ export default function MonitoringContent() {
     timeRange,
   ]);
 
+  // A consumer row carries only the summary its chart needs, so the detail dialog normally waits
+  // for one detail read. When the instance list is already cached it holds the full record, and
+  // the dialog opens from that without waiting.
   const openTopConsumer = useCallback((instance: InstanceMonitoringSummary) => {
     setMonitoringUiActorScope(actorScope);
-    setSelectedTopConsumer(instance);
-  }, [actorScope]);
-
-
-  // The distribution is fleet-wide, so project "*" is an explicit part of the request
-  // identity. Always force an authoritative read: the retired VM cache is not patched by the
-  // instance event stream and could otherwise survive indefinitely. The identity object, not
-  // actor scope alone, also fences a rapid A -> B -> A transition.
-  const fetchInstances = async (
-    filterType: "running" | "stopped" | "other" | "container" | "vm",
-    project?: string,
-  ) => {
-    const requestActorScope = actorScope;
-    const requestProject = project || "*";
-    const controller = new AbortController();
-    const request: MonitoringInstanceRequest = {
-      actorScope: requestActorScope,
-      project: requestProject,
-      epoch: ++instanceRequestEpochRef.current,
-      controller,
-    };
-    activeInstanceRequestRef.current?.controller.abort();
-    activeInstanceRequestRef.current = request;
-    setMonitoringUiActorScope(requestActorScope);
-    setInstanceFilterType(filterType);
-    setInstanceDialogOpen(true);
-    setAllInstances([]);
-    setInstancesLoading(true);
-    try {
-      const response = await api.instances.list(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        {
-          fresh: true,
-          signal: controller.signal,
-          ...(project ? { project } : {}),
-        },
+    const project = instance.project || "default";
+    const cached = queryClient
+      .getQueryData<VMListResponse>(queryKeys.instancesFor(actorScope))
+      ?.vms.find(
+        (vm) => vm.host === instance.host && (vm.project || "default") === project && vm.name === instance.name,
       );
-      if (
-        activeActorScopeRef.current !== requestActorScope ||
-        activeInstanceRequestRef.current !== request
-      ) return;
-      setAllInstances(filterInstanceList(response.vms, filterType));
-    } catch (error) {
-      if (
-        controller.signal.aborted ||
-        activeActorScopeRef.current !== requestActorScope ||
-        activeInstanceRequestRef.current !== request
-      ) return;
-      console.error("Failed to fetch instances:", error);
-      setAllInstances([]);
-    } finally {
-      if (
-        activeActorScopeRef.current === requestActorScope &&
-        activeInstanceRequestRef.current === request
-      ) {
-        activeInstanceRequestRef.current = null;
-        setInstancesLoading(false);
-      }
-    }
+    if (cached) setSelectedListInstance(cached);
+    else setSelectedTopConsumer(instance);
+  }, [actorScope, queryClient]);
+
+
+  // The list behind the distribution card reads the shared instance cache, the same key the
+  // Overview and Instances pages keep warm, so a click shows rows at once and the server's
+  // stale-while-revalidate cache refreshes behind it.
+  // important: this used to force `fresh=true` on every click, a live read of every cluster that
+  // waited for the slowest one (3.5-6 s on dev) and spent the forced-read budget. The dialog's
+  // Refresh button is the live read now, on demand.
+  // note: read while the page is open, not only once the dialog opens. A server cache nobody had
+  // read for 3.5 minutes still cost the first click a 4-8 s fan-out (dev access log, 2026-11-03);
+  // polling it like Overview does keeps the click on the cached path. Pause stops it with the
+  // rest of the page.
+  const instanceList = useInstances(undefined, {
+    enabled: monitoringUiIsCurrent && (!isPaused || instanceDialogOpen),
+  });
+  const instanceListData = monitoringUiIsCurrent ? instanceList.data : undefined;
+  const distributionRows = useMemo(
+    () =>
+      instanceFilterType && instanceListData
+        ? filterDistribution(instanceListData.vms, instanceFilterType, selectedNode)
+        : [],
+    [instanceListData, instanceFilterType, selectedNode],
+  );
+
+  const openInstanceList = (filter: DistributionFilter) => {
+    setMonitoringUiActorScope(actorScope);
+    setInstanceFilterType(filter);
+    setInstanceDialogOpen(true);
   };
 
-  const closeInstanceList = () => {
-    activeInstanceRequestRef.current?.controller.abort();
-    activeInstanceRequestRef.current = null;
-    setInstancesLoading(false);
-    setInstanceDialogOpen(false);
-  };
-
-  // Helper to filter instance list by type
-  const filterInstanceList = (vms: VMInfo[], filterType: string) => {
-    switch (filterType) {
-      case "running": return vms.filter(vm => vm.status === "Running");
-      case "stopped": return vms.filter(vm => vm.status === "Stopped");
-      case "other": return vms.filter(vm => vm.status !== "Running" && vm.status !== "Stopped");
-      case "container": return vms.filter(vm => vm.type === "container");
-      case "vm": return vms.filter(vm => vm.type === "virtual-machine");
-      default: return vms;
-    }
-  };
+  const closeInstanceList = () => setInstanceDialogOpen(false);
 
   // Get unique node names for dropdown - MUST be before any code using selectedNode
   const nodeNames = useMemo(() => {
@@ -2226,7 +2028,7 @@ export default function MonitoringContent() {
                 {instanceDistribution.map((item) => (
                   <button
                     key={item.name}
-                    onClick={() => fetchInstances(item.name.toLowerCase() as "running" | "stopped" | "other")}
+                    onClick={() => openInstanceList(item.name.toLowerCase() as DistributionFilter)}
                     className="flex items-center justify-between gap-3 py-2 px-2 rounded-lg hover:bg-muted transition-colors cursor-pointer text-left"
                   >
                     <div className="flex items-center gap-2">
@@ -2248,14 +2050,14 @@ export default function MonitoringContent() {
             </div>
             <div className="mt-4 pt-4 border-t grid grid-cols-2 gap-4">
               <button
-                onClick={() => fetchInstances("container")}
+                onClick={() => openInstanceList("container")}
                 className="text-center p-3 rounded-lg hover:bg-muted transition-colors cursor-pointer"
               >
                 <p className="text-2xl font-bold">{filteredStats?.container_count ?? data.container_count}</p>
                 <p className="text-sm text-muted-foreground">Containers</p>
               </button>
               <button
-                onClick={() => fetchInstances("vm")}
+                onClick={() => openInstanceList("vm")}
                 className="text-center p-3 rounded-lg hover:bg-muted transition-colors cursor-pointer"
               >
                 <p className="text-2xl font-bold">{filteredStats?.vm_count ?? data.vm_count}</p>
@@ -2322,13 +2124,20 @@ export default function MonitoringContent() {
         Data collection took {(data.collection_time_ms / 1000).toFixed(2)}s
       </div>
 
-      {/* Instance Details Dialog */}
-      <InstanceDetailsDialog
+      <InstanceDistributionDialog
         open={monitoringUiIsCurrent && instanceDialogOpen}
         onClose={closeInstanceList}
-        filterType={instanceFilterType}
-        instances={monitoringUiIsCurrent ? allInstances : []}
-        isLoading={monitoringUiIsCurrent && instancesLoading}
+        filter={instanceFilterType}
+        instances={distributionRows}
+        clusterLabel={selectedNode === "all" ? null : labelOf(selectedNode)}
+        // A retry after a failure is loading again, not still failed.
+        isLoading={!instanceListData && (!instanceList.isError || instanceList.isFetching)}
+        error={!instanceListData && !instanceList.isFetching ? instanceList.error : null}
+        onRetry={() => void instanceList.refetch()}
+        onRefresh={() => instanceList.refreshNow()}
+        lastUpdatedAt={instanceListData ? instanceList.dataUpdatedAt : null}
+        unreachableNodes={instanceListData?.unreachable_nodes}
+        nodeErrors={instanceListData?.node_errors}
         onSelectInstance={(instance) => {
           // Close the list before opening the detail. Stacking one modal on another is the
           // pattern being removed from member-resource-modal, not one to copy.

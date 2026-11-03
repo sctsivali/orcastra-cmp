@@ -2,7 +2,7 @@
 /**
  * Guard the instance detail split: Overview is static row detail, while Metrics owns live reads.
  * The Monitoring chart is the one exception because its top-consumer row is deliberately partial
- * and must opt into hydration. This check keeps that exception explicit and prevents a future
+ * and must opt into hydration, unless the cached instance list already holds the full record. This check keeps that exception explicit and prevents a future
  * cleanup from restoring an eager detail request for every dialog opening.
  *
  * Run: node scripts/checks/check-instance-live-metrics.mjs [repo-root]
@@ -18,6 +18,7 @@ const files = {
   dialog: "frontend/src/components/instance-detail/instance-detail-dialog.tsx",
   metrics: "frontend/src/components/instance-detail/instance-metrics-tab.tsx",
   monitoring: "frontend/src/app/inventory/monitoring/monitoring-content.tsx",
+  distribution: "frontend/src/app/inventory/monitoring/components/instance-distribution-dialog.tsx",
   overview: "frontend/src/components/instance-detail/instance-overview-tab.tsx",
   queryConfig: "frontend/src/lib/query-config.ts",
   queryScope: "frontend/src/hooks/use-query-scope.ts",
@@ -107,21 +108,22 @@ const checks = [
     /queryKeys\.instanceMetrics\(scopeKey, host, instanceName, project\)/.test(bodies.hooks) &&
       /queryKeys\.instanceDetail\(scopeKey, host, effectiveProject, name\)/.test(bodies.hooks) &&
       /queryKeys\.vmsFor\(scopeKey, host, status\)/.test(bodies.hooks) &&
-      /actorScope: requestActorScope/.test(bodies.monitoring) &&
-      /project: requestProject/.test(bodies.monitoring) &&
+      /getQueryData<VMListResponse>\(queryKeys\.instancesFor\(actorScope\)\)/.test(bodies.monitoring) &&
+      /instanceListData = monitoringUiIsCurrent \? instanceList\.data : undefined/.test(bodies.monitoring) &&
       /user\?\.id \?\? user\?\.email/.test(bodies.queryScope) &&
       /user\?\.groups/.test(bodies.queryScope),
     "live Metrics, Top Consumer hydration, or its VM list is not isolated by actor scope",
   ],
   [
+    // 2026-11-03: the distribution list reads the actor-scoped shared instance list (patched by
+    // the event stream, cleared by mutations) instead of forcing a live fleet read on every click.
+    // The live read is the dialog's Refresh, on demand, and the list follows the cluster filter.
     !/queryKeys\.vmsFor\(|vmAPI\.list\(|\["vms",/.test(bodies.monitoring) &&
-      /api\.instances\.list\([\s\S]{0,300}fresh: true,[\s\S]{0,80}signal: controller\.signal/.test(
-        bodies.monitoring,
-      ) &&
-      /activeInstanceRequestRef\.current !== request/.test(bodies.monitoring) &&
-      /epoch: \+\+instanceRequestEpochRef\.current/.test(bodies.monitoring) &&
-      /activeInstanceRequestRef\.current\?\.controller\.abort\(\)/.test(bodies.monitoring),
-    "Monitoring must bypass the stale legacy VM cache with a cancellable, authoritative actor/project-fenced read",
+      !/fresh: true/.test(bodies.monitoring) &&
+      /useInstances\(undefined, \{\s*enabled: monitoringUiIsCurrent && \(!isPaused \|\| instanceDialogOpen\)/.test(bodies.monitoring) &&
+      /onRefresh=\{\(\) => instanceList\.refreshNow\(\)\}/.test(bodies.monitoring) &&
+      /filterDistribution\(instanceListData\.vms, instanceFilterType, selectedNode\)/.test(bodies.monitoring),
+    "Monitoring's instance list must read the actor-scoped instance cache, follow the cluster filter, and force a live read only from Refresh",
   ],
   [
     /queryKeys\.instancesFor\(scopeKey, host, opts\?\.project\)/.test(bodies.hooks) &&
@@ -152,22 +154,21 @@ const checks = [
   [
     /previousActorScopeRef\.current === actorScope/.test(bodies.monitoring) &&
       /setInstanceDialogOpen\(false\)/.test(bodies.monitoring) &&
-      /setAllInstances\(\[\]\)/.test(bodies.monitoring) &&
+      /setInstanceFilterType\(null\)/.test(bodies.monitoring) &&
       /setSelectedTopConsumer\(null\)/.test(bodies.monitoring) &&
       /setSelectedListInstance\(null\)/.test(bodies.monitoring) &&
       /setSelectedNode\("all"\)/.test(bodies.monitoring) &&
       /setVisibleNodes\(\{\}\)/.test(bodies.monitoring) &&
       /setZoomLevel\(1\)/.test(bodies.monitoring) &&
-      /open=\{monitoringUiIsCurrent && instanceDialogOpen\}/.test(bodies.monitoring) &&
-      /activeActorScopeRef\.current !== requestActorScope/.test(bodies.monitoring),
+      /open=\{monitoringUiIsCurrent && instanceDialogOpen\}/.test(bodies.monitoring),
     "Monitoring dialogs or node/chart selections can retain another actor's local state",
   ],
   [
     /key=\{`\$\{instance\.host\}:\$\{project\}:\$\{instance\.name\}`\}/.test(
-      bodies.monitoring,
+      bodies.distribution,
     ) &&
-      /\{instance\.host\} \/ \{project\}/.test(bodies.monitoring) &&
-      /project \$\{project\}`\}/.test(bodies.monitoring) &&
+      /\{instance\.host\} \/ \{project\}/.test(bodies.distribution) &&
+      /project \$\{project\}`\}/.test(bodies.distribution) &&
       /key=\{keyFor\(instance\.host, instance\.project \|\| "default", instance\.name\)\}/.test(
         bodies.instancesTable,
       ) &&

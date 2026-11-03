@@ -22,7 +22,6 @@ const checks = [
     file: "frontend/src/app/inventory/monitoring/monitoring-content.tsx",
     required: [
       [/>Offline<\/span>/, "the chart tooltip must display Offline"],
-      [/instanceStatusDisplay\(status\)/, "instance status fallback must use its display map"],
       [
         /<RefreshButton[\s\S]{0,700}aria-label=\{isPaused \? "Resume automatic monitoring updates" : "Pause automatic monitoring updates"\}[\s\S]{0,200}aria-pressed=\{isPaused\}[\s\S]{0,700}<NodeFilterSelect/,
         "the toolbar must keep Refresh, Pause/Resume, then the node filter",
@@ -60,6 +59,15 @@ const checks = [
       [/>offline<\/span>/, "the chart tooltip renders lowercase offline"],
       [/<Square className="h-4 w-4" \/>/, "the monitoring toggle still uses a Stop glyph"],
     ],
+  },
+  {
+    // The distribution card's instance list, extracted from monitoring-content.tsx.
+    file: "frontend/src/app/inventory/monitoring/components/instance-distribution-dialog.tsx",
+    required: [
+      [/instanceStatusDisplay\(instance\.status\)/, "instance status fallback must use its display map"],
+      [/\{status\.label\}/, "the instance list must render the status display label"],
+    ],
+    forbidden: [[/\{instance\.status\}/, "the instance list renders a raw instance status"]],
   },
   {
     file: "frontend/src/app/technologies/components/tenant-instance-technologies.tsx",
