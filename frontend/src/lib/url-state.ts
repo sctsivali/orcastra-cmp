@@ -39,8 +39,9 @@ export function replaceQuery(pathname: string, params: URLSearchParams | string)
 }
 
 /**
- * Push `pathname?params` as a new history entry, for an overlay that Back should close (a dialog
- * opened from the page), not for state that Back should walk past.
+ * Push `pathname?params` as a new history entry, for state Back should return from: an overlay
+ * opened from the page (a dialog), or a settings section (?section=), which Back walks the way it
+ * walks the Settings tabs. Not for filter state, which Back should walk past.
  */
 export function pushQuery(pathname: string, params: URLSearchParams | string): void {
   if (typeof window === "undefined") return;

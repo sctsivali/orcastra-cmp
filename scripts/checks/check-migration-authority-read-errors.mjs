@@ -177,6 +177,8 @@ assert.equal(retryUnlessUnavailable(2, new TestAPIError("x", 502, "upstream")), 
 for (const file of [
   "frontend/src/components/integrations-settings.tsx",
   "frontend/src/components/integrations/synced-organizations-panel.tsx",
+  // the tab shell reads the same list for the count on its section switcher (2026-11-03)
+  "frontend/src/components/integrations/integrations-sections.tsx",
 ]) {
   const source = readFileSync(join(root, file), "utf8");
   assert.ok(source.includes('queryKey: ["integrations", "api-keys"]'), `${file} no longer observes the key list`);

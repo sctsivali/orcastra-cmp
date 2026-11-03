@@ -18,7 +18,7 @@ const src = join(root, 'frontend', 'src');
 
 // Hooks that read the query string and therefore carry the same prerender bailout. Listed by
 // name rather than by import path so a re-export cannot slip past.
-const READERS = [/\buseSearchParams\s*\(/, /\buseTableFilters\s*\(/];
+const READERS = [/\buseSearchParams\s*\(/, /\buseTableFilters\s*\(/, /\buseSettingsSection\s*\(/];
 // note: both spellings are legitimate and both appear in this tree. A guard that recognises
 // only the one its author had in mind is the blind spot table-conventions.md warns about.
 const BOUNDARY = /<(React\.)?Suspense[\s>]/;

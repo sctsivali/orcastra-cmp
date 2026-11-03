@@ -59,7 +59,9 @@ const src = join(root, 'frontend', 'src');
 // Lowered 46 -> 45 when the certificate row's cancel-renewal control was named. It sat beside a
 // Verify button on the same row and discarded a pending certificate, so "button" was not enough.
 // Lowered 45 -> 44 when the console toolbar's power buttons were named (2026-10-27).
-const BASELINE = 44;
+// Lowered 44 -> 19 when the access policy, tenant access and user group controls were named
+// (2026-11-03): rule removal, policy edit and delete, revoke confirm and cancel, user removal.
+const BASELINE = 19;
 
 // Empty since the dead components/vm-table.tsx was deleted; kept so a future dead file has a
 // documented place to go rather than a baseline bump.

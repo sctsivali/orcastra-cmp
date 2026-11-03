@@ -421,14 +421,13 @@ export function TenantAccessDialog({
                                 className="h-7 text-xs gap-1"
                                 onClick={() => handleQuickAssign(policy.id)}
                                 disabled={assignMutation.isPending}
-                                aria-label={`Assign policy ${policy.name}`}
                               >
                                 {assigningPolicyId === policy.id ? (
                                   <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                                 ) : (
                                   <Plus className="h-3 w-3" aria-hidden="true" />
                                 )}
-                                Assign
+                                Assign<span className="sr-only"> {policy.name}</span>
                               </Button>
                             </div>
                           </div>

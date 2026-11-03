@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { getAPIKeyStatus } from "@/lib/integration-display";
 import { formatKeyDate, openSyncedOrganizations, ownedKeySentence } from "@/lib/key-ownership-display";
+import { useRevealIntegrationsSection } from "@/components/integrations/integrations-section-context";
 import type { APIKeyInfo } from "@/types/api";
 import { plural } from "@/lib/utils";
 
@@ -99,13 +100,16 @@ export function TransferOwnershipFirst({
   isAdmin: boolean;
 }) {
   const jumpRef = useRef(false);
+  // Synced Organizations is its own section of the tab, so the jump switches to it first.
+  const reveal = useRevealIntegrationsSection();
   return (
     <AlertDialogContent
       onCloseAutoFocus={(event) => {
         if (!jumpRef.current) return;
         jumpRef.current = false;
         event.preventDefault();
-        openSyncedOrganizations();
+        if (reveal) reveal("organizations");
+        else openSyncedOrganizations();
       }}
     >
       <AlertDialogHeader>

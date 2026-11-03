@@ -28,6 +28,8 @@ async function installSettingsFixtures(page, role, options = {}) {
     // An Administrator's Personalization tab edits the deployment default (2026-10-27). Any
     // other role asking for it stays an unexpected request.
     ...(role === "admin" ? { "/branding/deployment": { settings: {}, updated_by: null, updated_at: null, version: "e2e-built-in" } } : {}),
+    // A spec that needs rows replaces a read here, ex; { "/user-groups": [...] }.
+    ...(options.reads || {}),
   };
 
   await page.route("**/api/v1/**", async (route) => {

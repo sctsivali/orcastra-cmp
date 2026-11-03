@@ -6,7 +6,6 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -25,10 +24,7 @@ import {
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  Loader2, Plus, Trash2, ChevronDown,
-  ChevronRight, Edit, ShieldCheck,
-} from "lucide-react";
+import { Loader2, Plus, Trash2, Edit, ShieldCheck } from "lucide-react";
 import { api, integrationsAPI } from "@/lib/api";
 import { reconcileMutationImpact } from "@/lib/mutation-coherence";
 import { useClusters } from "@/hooks/use-lxd";
@@ -124,7 +120,6 @@ function PolicyManagementSectionContent() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editPolicy, setEditPolicy] = useState<AccessPolicy | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [expanded, setExpanded] = useState(false);
 
   // data
   const {
@@ -286,34 +281,24 @@ function PolicyManagementSectionContent() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle className="text-base flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setExpanded(!expanded)}
-                  className="hover:text-primary"
-                >
-                  {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                </button>
-                Access Policies
-                <Badge variant="secondary" className="text-xs">
-                  {policies.length}
-                </Badge>
-              </CardTitle>
-              <CardDescription className="mt-1 text-xs ml-6">
-                Manage reusable access policy templates. Assign them to tenant users via the Access button.
+              {/* note: always open. The collapse existed because this card sat between the
+                  identity provider card and Assigned Users; it has its own section now. */}
+              <CardTitle>Access Policies</CardTitle>
+              <CardDescription className="mt-1.5">
+                Manage reusable access policy templates. Assign them to tenant users through the
+                Access button in Assigned Users.
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => setCreateOpen(true)} className="h-7 text-xs">
-                <Plus className="h-3.5 w-3.5 mr-1" />
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4 mr-1.5" aria-hidden="true" />
                 Create Policy
               </Button>
             </div>
           </div>
         </CardHeader>
 
-        {expanded && (
-          <CardContent>
+        <CardContent>
             <OrphanRulesNotice />
             {policiesLoading ? (
               <div className="flex items-center justify-center py-8">
@@ -343,10 +328,10 @@ function PolicyManagementSectionContent() {
               />
             ) : (
               <>
-                <TableToolbar filters={filters} noun="policies" className="mb-4" />
-                {/* note: named because the User Groups table sits above this one on the same
-                    screen, so "the table on this page" is ambiguous to anything reading the DOM.
-                    Same device as data-slot="projects-pagination" on the project grid. */}
+                <TableToolbar filters={filters} noun="policies" pageSize={pageSize} className="mb-4" />
+                {/* note: named because Assigned Users carries a table under the same tab, so "the
+                    table on this page" is ambiguous to anything reading the DOM. Same device as
+                    data-slot="projects-pagination" on the project grid. */}
                 <div className="rounded-md border" data-slot="policies-table">
                 <Table density="compact">
                   <TableHeader>
@@ -514,8 +499,7 @@ function PolicyManagementSectionContent() {
                 )}
               </>
             )}
-          </CardContent>
-        )}
+        </CardContent>
       </Card>
 
       {/* Create Policy Dialog */}

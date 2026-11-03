@@ -176,6 +176,13 @@ function card(page, name) {
   return page.locator("div.rounded-xl").filter({ has: page.getByRole("heading", { name, exact: true }) }).last();
 }
 
+/** Synced Organizations is a section of the tab (?section=organizations), mounted on first visit. */
+async function openSyncedOrganizations(page) {
+  await page.getByRole("navigation", { name: "Integrations sections" })
+    .getByRole("link", { name: /^Synced Organizations/ }).click();
+  await expect(page).toHaveURL(/\/settings\/integrations\?section=organizations$/);
+}
+
 test("an admin sees what each key owns and moves a frozen organization", async ({ page }, testInfo) => {
   await authenticate(page.context(), "admin");
   const { settings, state } = await installOwnership(page, "admin");
@@ -197,6 +204,8 @@ test("an admin sees what each key owns and moves a frozen organization", async (
   );
   await expect(explain.getByRole("button", { name: "Revoke" })).toHaveCount(0);
   await explain.getByRole("button", { name: "Open Synced Organizations" }).click();
+  // The jump switches section first, then lands focus on the list.
+  await expect(page).toHaveURL(/\/settings\/integrations\?section=organizations$/);
   await expect(page.locator("#synced-organizations")).toBeFocused();
 
   const panel = page.locator("#synced-organizations");
@@ -247,6 +256,7 @@ test("a partner reads ownership and cannot transfer", async ({ page }, testInfo)
   await expect(explain).toContainText("Ask an administrator to transfer them to another active key first");
   await expect(explain.getByRole("button", { name: "Open Synced Organizations" })).toHaveCount(0);
   await explain.getByRole("button", { name: "Close" }).click();
+  await openSyncedOrganizations(page);
 
   const panel = page.locator("#synced-organizations");
   await expect(panel.getByText("Ask an administrator to transfer this organization to an active key.")).toBeVisible();
@@ -339,6 +349,7 @@ test("an admin manages an organization's owner keys", async ({ page }, testInfo)
   await expect(card(page, "Hub Connection").getByText(
     "Another owner key also owns 1 of them, which keeps that organization syncing if this key ends.",
   )).toBeVisible();
+  await openSyncedOrganizations(page);
 
   const panel = page.locator("#synced-organizations");
   await panel.getByRole("button", { name: "Actions for fossgo" }).click();

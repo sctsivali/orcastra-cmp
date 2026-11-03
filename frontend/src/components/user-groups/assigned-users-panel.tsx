@@ -305,10 +305,9 @@ function AssignedUsersPanelContent() {
                                 size="sm"
                                 className="h-7 text-xs gap-1.5"
                                 onClick={() => setAccessUser({ email: user.user_email, orgIds: accessOrgIds })}
-                                aria-label={`Manage access for ${user.user_email}`}
                               >
                                 <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                                Access
+                                Access<span className="sr-only"> for {user.user_email}</span>
                               </Button>
                             )}
                             <Button

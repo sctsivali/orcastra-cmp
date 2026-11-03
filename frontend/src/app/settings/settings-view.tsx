@@ -10,8 +10,7 @@ import { DesktopControlSettings } from "@/components/desktop-control-settings";
 import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
 import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
 import { ReleaseStatusCard } from "@/components/release/release-status-card";
-import { IntegrationsSettings } from "@/components/integrations-settings";
-import { SyncedOrganizationsPanel } from "@/components/integrations/synced-organizations-panel";
+import { IntegrationsSections } from "@/components/integrations/integrations-sections";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
 import { LoadingLottie } from "@/components/loading-lottie";
@@ -184,15 +183,8 @@ export function SettingsView({ tab }: { tab: SettingsTab }) {
         {/* Integrations Tab - Admin + Partner */}
         {isPartner && (
         <TabsContent value="integrations" className="space-y-6">
-          <IntegrationsSettings />
-          {/* Which key owns each synced organization. Only the owner syncs it, so an owner that
-              stopped working freezes it, and this is where an administrator moves it. */}
-          <SyncedOrganizationsPanel />
-          {/* The consent that decides whether the desktop and guest-access capabilities on those
-              keys do anything. It stays a card of its own rather than a switch inside the create
-              dialog: it is one standing decision per organization, read on every call and shared
-              with every organization on the cluster, not a property of the key being made. */}
-          <DesktopControlSettings />
+          {/* API keys, Synced Organizations and Desktop Control as sections (?section=). */}
+          <IntegrationsSections />
         </TabsContent>
         )}
 

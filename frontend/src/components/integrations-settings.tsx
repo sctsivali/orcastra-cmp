@@ -383,9 +383,9 @@ function IntegrationsSettingsContent() {
     return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold">Integrations</h2>
+          <h3 className="text-lg font-semibold">API Keys</h3>
           <p className="text-sm text-muted-foreground">
-            Manage API keys for external applications
+            Keys external applications use to reach this control plane
           </p>
         </div>
         <VaultUnavailableNotice surface="API key management" />
@@ -398,9 +398,9 @@ function IntegrationsSettingsContent() {
     return (
       <div className="space-y-6">
         <div>
-          <h2 className="text-2xl font-bold">Integrations</h2>
+          <h3 className="text-lg font-semibold">API Keys</h3>
           <p className="text-sm text-muted-foreground">
-            Manage API keys for external applications
+            Keys external applications use to reach this control plane
           </p>
         </div>
         <ReadErrorState noun="API keys" error={keysError} onRetry={() => refetchKeys()} />
@@ -413,9 +413,9 @@ function IntegrationsSettingsContent() {
       {/* Header with actions */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Integrations</h2>
+          <h3 className="text-lg font-semibold">API Keys</h3>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage API keys for external applications
+            Keys external applications use to reach this control plane
           </p>
         </div>
         <div className="flex gap-2">
@@ -515,6 +515,7 @@ function IntegrationsSettingsContent() {
           <TableToolbar
             filters={filters}
             noun="API keys"
+            pageSize={pageSize}
             actions={
               <SortSelect
                 options={KEY_SORT_OPTIONS}
